@@ -4095,7 +4095,7 @@ export class CampaignManager {
       // resent instead of waved through.
       const deliveryBouncesSpent = milestone.deliveryVerificationBounces ?? (milestone.deliveryVerificationBounced ? 1 : 0);
       // DELIVERY NEEDS THE WHOLE SUITE. A verdict that merely EXISTS is not
-      // proof: the delivered PixelFlow campaign carried no verdict on any
+      // proof: the delivered test-game campaign carried no verdict on any
       // milestone, its filtered runs were green, and the one unfiltered run
       // reported 6 of 173 failing — including WinLevel_ReachesWonState
       // ("LevelWon event did not fire"). A green from a filter is the sprint
@@ -4468,7 +4468,7 @@ export class CampaignManager {
       }
       if (isLast) {
         // STRUCTURAL DELIVERY GATE (audited 2026-09-03): nothing in the
-        // pipeline ever asked what the delivered SCENES contain. PixelFlow
+        // pipeline ever asked what the delivered SCENES contain. The test game
         // shipped "game build complete" with an entry scene holding zero
         // renderer components, five runtime scripts drawing the world with
         // GameObject.CreatePrimitive, and 100 prefabs / 198 pngs / 62 models
@@ -4518,7 +4518,7 @@ export class CampaignManager {
             ...structure.lines,
           ];
         }
-        // SCENE HYGIENE GATE. Measured on the delivered PixelFlow tree
+        // SCENE HYGIENE GATE. Measured on the delivered test-game tree
         // 2026-09-03: 14 scenes enabled in Build Settings, most of them
         // single-purpose verification scaffolding, and the person who opened
         // the delivery could not find the game. The COUNT always reaches the
@@ -6014,10 +6014,10 @@ export class CampaignManager {
     // at all, so the producer's 45-second default cut every round short and
     // the requirement could not be met by any run (Codex 2026-09-12 W#9).
     // …AND WHAT A LABEL/VALUE TABLE STATES. The vehicle's durations live in
-    // one ("Median level duration" / "60–150 s (Normal), 150–300 s (Hard)"),
+    // one ("Typical round length" / "45–120 s (Easy), 120–240 s (Expert)"),
     // which no prose pattern sees, so the run kept the producer's 45-second
-    // default and cut a legal 150-second round short (Codex 2026-09-12 AB,
-    // Job 3.6). An allowance, never a gate: a median is not a ceiling.
+    // default and cut a legal two-minute round short (Codex 2026-09-12 AB,
+    // Job 3.6). An allowance, never a gate: a typical length is not a ceiling.
     const longestSession = Math.max(
       claims.filter((c) => c.kind === "session_seconds").reduce((max, c) => Math.max(max, c.value), 0),
       extractSessionAllowanceSeconds(text) ?? 0,
@@ -7910,7 +7910,7 @@ export class CampaignManager {
     if (!now) return undefined;
     // Real art added under NEW names counts as much as a placeholder replaced.
     // Measured 2026-09-07 15:15: the first sprint to draw real sprites wrote
-    // Ufo.png and SeatRed.png beside the 410 placeholders — the placeholder
+    // Comet.png and Banner.png beside the 410 placeholders — the placeholder
     // count alone would have bounced the one attempt that did the work.
     const realBefore = start.sprites - start.placeholders;
     const realNow = now.sprites - now.placeholders;
@@ -7941,7 +7941,7 @@ export class CampaignManager {
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
       // The GDD's own dimensionality against the scenes (audited 2026-09-03):
-      // it asked for "plump, glossy 3D-feel pigs" and nothing ever checked.
+      // it asked for 3D-feel characters and nothing ever checked.
       // DELIVERY is judged against the whole GDD, so the whole text is read.
       const gddText =
         campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
@@ -8134,7 +8134,7 @@ export class CampaignManager {
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
-    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). The measured campaign went green six
+    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). A measured campaign went green six
     // times on prose and no line here said which GDD rows any sprint had been
     // held to. A campaign the scope gate never saw reads exactly as before.
     const scopeMode = this.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE;
@@ -9292,7 +9292,7 @@ export class CampaignManager {
    * `/campaign rejudge [campaign id]`: replay the scope judge on every settled
    * milestone, from its stored verdict's input or rebuilt from the record.
    * Read-only: nothing is stored, sent or changed, so a finished campaign
-   * (the measured campaign) can be judged again without touching it.
+   * (a measured one) can be judged again without touching it.
    */
   rejudgeByCommand(chatId?: string, campaignId?: string): string | undefined {
     const id = campaignId?.trim();
@@ -9400,7 +9400,7 @@ export function gddNameDistance(rel: string): number {
   const stem = file.replace(/\.md$/i, "");
   const marker = /gdd|game[ _-]?design[ _-]?doc(?:ument)?/i.exec(stem);
   if (!marker) return 99;
-  // Whatever follows the marker: "PixelFlow_GDD" has nothing, an audit has
+  // Whatever follows the marker: "SampleGame_GDD" has nothing, an audit has
   // "Audit_2026-09-02".
   const after = stem.slice(marker.index + marker[0].length).replace(/^[ _-]+/, "");
   const extraTokens = after.length === 0 ? 0 : after.split(/[ _-]+/).filter(Boolean).length;

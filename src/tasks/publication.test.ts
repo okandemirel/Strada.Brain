@@ -38,7 +38,7 @@ describe("what a lease commit delivered (Codex 2026-09-12 AE#4)", () => {
  * OUTPUT A COMPILER REGENERATES IS NOT WORK THAT WAS LOST.
  *
  * Measured live 2026-09-16 19:03: two goals that had done real work were
- * failed because `Tools/PixelFlowCoreBuild/obj/PixelFlow.Core.csproj.nuget.dgspec.json`
+ * failed because `Tools/GameCoreBuild/obj/SampleGame.Core.csproj.nuget.dgspec.json`
  * — a NuGet restore graph the project rebuilds for itself — conflicted with
  * the lease's copy. 261 authored files published in one of them.
  */
@@ -46,12 +46,12 @@ describe("a conflict on generated output", () => {
   it("is disclosed, and the publication stands", () => {
     const verdict = judgePublication({
       written: Array.from({ length: 261 }, (_unused, i) => `Assets/Scripts/File${i}.cs`),
-      conflicts: ["Tools/PixelFlowCoreBuild/obj/PixelFlow.Core.csproj.nuget.dgspec.json"],
+      conflicts: ["Tools/GameCoreBuild/obj/SampleGame.Core.csproj.nuget.dgspec.json"],
       quarantined: 1,
     });
     expect(verdict.loss).toBeUndefined();
     expect(verdict.note).toContain("the project builds these for itself");
-    expect(verdict.note).toContain("PixelFlow.Core.csproj.nuget.dgspec.json");
+    expect(verdict.note).toContain("SampleGame.Core.csproj.nuget.dgspec.json");
   });
 
   it("…while a conflict on anything the run AUTHORED is still a loss", () => {
@@ -74,17 +74,17 @@ describe("a conflict on generated output", () => {
   it("an authored AssemblyInfo.cs in the game's own obj/ folder is a LOSS, not a note", () => {
     const verdict = judgePublication({
       written: ["Assets/Scripts/Other.cs"],
-      conflicts: ["Assets/obj/PixelFlow.Runtime.AssemblyInfo.cs"],
+      conflicts: ["Assets/obj/SampleGame.Runtime.AssemblyInfo.cs"],
       quarantined: 1,
     });
     expect(verdict.note).toBeUndefined();
-    expect(verdict.loss).toContain("Assets/obj/PixelFlow.Runtime.AssemblyInfo.cs");
+    expect(verdict.loss).toContain("Assets/obj/SampleGame.Runtime.AssemblyInfo.cs");
     expect(verdict.loss).toContain("did not reach the project");
   });
 
   it("…and the same file where the compiler really writes it is disclosed, not lost", () => {
     const verdict = judgePublication({
-      conflicts: ["Tools/X/obj/Debug/net8.0/PixelFlow.Runtime.AssemblyInfo.cs"],
+      conflicts: ["Tools/X/obj/Debug/net8.0/SampleGame.Runtime.AssemblyInfo.cs"],
       quarantined: 1,
     });
     expect(verdict.loss).toBeUndefined();

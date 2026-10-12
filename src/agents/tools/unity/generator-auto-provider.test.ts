@@ -41,7 +41,7 @@ function installModel(root: string, id: string): void {
  * Measured 2026-09-06: sd15 and TripoSR were installed (6.7 GB of weights
  * under ~/.strada/assets-local) and across a whole campaign `provider:
  * "local"` was requested zero times. Every sprite the game shipped was a
- * procedural blob — "Pig.png" is a red circle with two white squares —
+ * procedural blob — "Frog.png" is a red circle with two white squares —
  * because "procedural" was the default and nothing told the sprint otherwise.
  */
 /** A runner that is "installed" but refuses to draw — exercises the local branch without a model. */
@@ -106,37 +106,37 @@ describe("the installed model is the default; the placeholder is the fallback", 
     // localAvailable says yes and the stub runner refuses to draw, so the
     // local branch errors and the fallback is exercised without a model.
     const { root, ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog" }, ctx);
     expect(r.isError).toBeFalsy();
-    expect(existsSync(join(root, "Assets/Art/Generated/Pig.png"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/Frog.png"))).toBe(true);
     expect(String(r.content)).toContain("PLACEHOLDER");
     expect(String(r.content)).toContain("local model failed");
   });
 
   it("sprite: with nothing installed, AUTO is procedural and SAYS it is a placeholder", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Pig" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Frog" }, ctx);
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).toContain("PLACEHOLDER: no local text-to-image model is installed");
   });
 
   it("sprite: a knowing 'procedural' is refused while a local model is installed — unless accepted", async () => {
-    // Measured 2026-09-07 12:21: eight pig sprites regenerated procedurally
+    // Measured 2026-09-07 12:21: eight character sprites regenerated procedurally
     // (335 → 170 bytes) with sd15 installed; the delivery gate then counted
     // them as placeholder art.
     const { ctx } = project();
     const tool = new SpriteGenerateTool({ localAvailable: () => true, runner: refusing });
-    const refused = await tool.execute({ name: "Pig", provider: "procedural" }, ctx);
+    const refused = await tool.execute({ name: "Frog", provider: "procedural" }, ctx);
     expect(refused.isError).toBe(true);
     expect(refused.content).toContain("placeholder-grade");
     expect(refused.content).toContain("acceptPlaceholder");
-    const accepted = await tool.execute({ name: "Pig", provider: "procedural", acceptPlaceholder: true }, ctx);
+    const accepted = await tool.execute({ name: "Frog", provider: "procedural", acceptPlaceholder: true }, ctx);
     expect(accepted.isError).toBeFalsy();
   });
 
   it("mesh: a knowing 'procedural' is refused while a local model is installed", async () => {
     const { ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig", shape: "sphere", provider: "procedural" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", shape: "sphere", provider: "procedural" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("acceptPlaceholder");
   });
@@ -159,21 +159,21 @@ describe("the installed model is the default; the placeholder is the fallback", 
       }),
     } as unknown as LocalRunnerLike;
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
-      { batch: [{ name: "PigRed" }, { name: "PigBlue", prompt: "a blue pig" }, { name: "PigGold" }] },
+      { batch: [{ name: "FrogRed" }, { name: "FrogBlue", prompt: "a blue frog" }, { name: "FrogGold" }] },
       ctx,
     );
     expect(batchCalls).toEqual([3]);
     expect(runner.textToImage).not.toHaveBeenCalled();
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("2 of 3 sprites written");
-    expect(r.content).toContain("✓ Assets/Art/Generated/PigRed.png");
-    expect(r.content).toContain("✗ Assets/Art/Generated/PigGold.png");
-    expect(existsSync(join(root, "Assets/Art/Generated/PigBlue.png.meta"))).toBe(true);
-    expect(existsSync(join(root, "Assets/Art/Generated/PigGold.png.meta"))).toBe(false); // orphan meta removed
+    expect(r.content).toContain("✓ Assets/Art/Generated/FrogRed.png");
+    expect(r.content).toContain("✗ Assets/Art/Generated/FrogGold.png");
+    expect(existsSync(join(root, "Assets/Art/Generated/FrogBlue.png.meta"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/FrogGold.png.meta"))).toBe(false); // orphan meta removed
   });
 
   it("sprite: a blank draw is retried once with another seed, and reported ✗ when still blank", async () => {
-    // Measured 2026-09-07 15:02: rembg wiped a green pig off its green
+    // Measured 2026-09-07 15:02: rembg wiped a green character off its green
     // background — 19 KB of alpha specks reported as ✓.
     const { root, ctx } = project();
     // A flat square reads as blank; drawn noise is real.
@@ -187,20 +187,20 @@ describe("the installed model is the default; the placeholder is the fallback", 
       textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string; seed?: number }>) => {
         calls++;
         for (const j of jobs) {
-          // Retry (a seed is set) succeeds for PigA, PigB stays blank forever.
-          if (j.seed !== undefined && j.out.endsWith("PigA.png")) real(j.out);
-          else if (j.out.endsWith("PigA.png")) blank(j.out);
+          // Retry (a seed is set) succeeds for FrogA, FrogB stays blank forever.
+          if (j.seed !== undefined && j.out.endsWith("FrogA.png")) real(j.out);
+          else if (j.out.endsWith("FrogA.png")) blank(j.out);
           else blank(j.out);
         }
         return { ok: true, detail: `${jobs.length} written`, written: jobs.map((j) => j.out), missing: [], keptBackground: [] };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "PigA" }, { name: "PigB" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "FrogA" }, { name: "FrogB" }] }, ctx);
     expect(calls).toBe(2); // one batch, one retry of the blanks
-    expect(r.content).toContain("✓ Assets/Art/Generated/PigA.png");
-    expect(r.content).toContain("✗ Assets/Art/Generated/PigB.png — drew nothing usable twice");
-    expect(existsSync(join(root, "Assets/Art/Generated/PigB.png"))).toBe(false);
-    expect(existsSync(join(root, "Assets/Art/Generated/PigB.png.meta"))).toBe(false);
+    expect(r.content).toContain("✓ Assets/Art/Generated/FrogA.png");
+    expect(r.content).toContain("✗ Assets/Art/Generated/FrogB.png — drew nothing usable twice");
+    expect(existsSync(join(root, "Assets/Art/Generated/FrogB.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/FrogB.png.meta"))).toBe(false);
   });
 
   it("sprite: a kept background is said, not hidden", async () => {
@@ -214,7 +214,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
         return { ok: true, detail: "1 written", written: jobs.map((j) => j.out), missing: [], keptBackground: [jobs[0]!.out] };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "Pig" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "Frog" }] }, ctx);
     expect(r.content).toContain("background KEPT");
   });
 
@@ -230,29 +230,29 @@ describe("the installed model is the default; the placeholder is the fallback", 
 
   it("sprite: an accepted explicit placeholder is honoured and carries no placeholder note", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig", provider: "procedural", acceptPlaceholder: true }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", provider: "procedural", acceptPlaceholder: true }, ctx);
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).not.toContain("PLACEHOLDER");
   });
 
   it("sprite: explicit local does NOT silently fall back", async () => {
     const { root, ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
-    expect(existsSync(join(root, "Assets/Art/Generated/Pig.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/Frog.png"))).toBe(false);
   });
 
   it("mesh: AUTO with a local model falls back WITH a note when it fails", async () => {
     const { root, ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Pig", shape: "sphere" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", shape: "sphere" }, ctx);
     expect(r.isError).toBeFalsy();
-    expect(existsSync(join(root, "Assets/Art/Generated/Meshes/Pig.obj"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/Meshes/Frog.obj"))).toBe(true);
     expect(String(r.content)).toContain("PLACEHOLDER");
   });
 
   it("mesh: AUTO with nothing installed says it is a placeholder", async () => {
     const { ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Pig", shape: "sphere" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Frog", shape: "sphere" }, ctx);
     expect(String(r.content)).toContain("PLACEHOLDER: no local image-to-3D model is installed");
   });
 });
@@ -316,10 +316,10 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
   it("cuts at the first | and drops verification/config sentences", async () => {
     const { styleNotesForPrompt } = await import("./sprite-generate.js");
     const notes =
-      "Use crisp flat pixel-art canvases against softly rendered dimensional stages, with thick friendly outlines, and plump glossy pigs. " +
+      "Use flat cut-paper shapes over a painted, softly lit lake, with thick friendly outlines, and round lacquered frogs. " +
       "| verification: visual assets for areas integrated into PresentationModule config and prefab references verified.";
     const out = styleNotesForPrompt(notes);
-    expect(out).toContain("plump glossy pigs");
+    expect(out).toContain("round lacquered frogs");
     expect(out).not.toMatch(/verif|config|prefab/i);
   });
 
@@ -334,7 +334,7 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
         outline: { width: 2, color: "#3a2a2a" },
         shading: "flat",
         references: [],
-        notes: "warm toy-like palette. | verification: prefab references verified.",
+        notes: "warm pastel palette. | verification: prefab references verified.",
       }),
     );
     const prompts: string[] = [];
@@ -347,8 +347,8 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
       }),
       imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
     } as unknown as LocalRunnerLike;
-    await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ name: "Pig" }, ctx);
-    expect(prompts[0]).toContain("warm toy-like palette");
+    await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ name: "Frog" }, ctx);
+    expect(prompts[0]).toContain("warm pastel palette");
     expect(prompts[0]).not.toMatch(/verif|prefab/i);
   });
 });
@@ -362,11 +362,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("a failed regeneration keeps the previous sprite AND its .meta (the guid every prefab references)", async () => {
     const { root, ctx } = project();
-    const png = join(root, "Assets/Art/Generated/Pig.png");
+    const png = join(root, "Assets/Art/Generated/Frog.png");
     mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
     writeFileSync(png, pngFixture("noise"));
     writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Pig", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Frog", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("previous drawn sprite and its .meta were kept");
     expect(readFileSync(`${png}.meta`, "utf8")).toContain("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -378,11 +378,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("AUTO does not overwrite drawn art with a placeholder when the model fails", async () => {
     const { root, ctx } = project();
-    const png = join(root, "Assets/Art/Generated/Pig.png");
+    const png = join(root, "Assets/Art/Generated/Frog.png");
     mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
     writeFileSync(png, pngFixture("noise"));
     writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Pig" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Frog" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("was KEPT");
     expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
@@ -391,11 +391,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("a blank-twice regeneration restores the previous good sprite instead of deleting it", async () => {
     const { root, ctx } = project();
-    const png = join(root, "Assets/Art/Generated/Pig.png");
+    const png = join(root, "Assets/Art/Generated/Frog.png");
     mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
     writeFileSync(png, pngFixture("noise"));
     writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("flat"))), specFor }).execute({ name: "Pig", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("flat"))), specFor }).execute({ name: "Frog", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("previous drawn sprite was kept");
     expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
@@ -403,11 +403,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("a cut-out that removed the subject (alpha specks) is not a usable sprite", async () => {
     const { root, ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("specks", 128))), specFor }).execute({ name: "GreenPig", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("specks", 128))), specFor }).execute({ name: "GreenFrog", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("opaque");
-    expect(existsSync(join(root, "Assets/Art/Generated/GreenPig.png"))).toBe(false);
-    expect(existsSync(join(root, "Assets/Art/Generated/GreenPig.png.meta"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/GreenFrog.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/GreenFrog.png.meta"))).toBe(false);
   });
 
   it("a batch that drew nothing over earlier files reports 0 written, not 3", async () => {
@@ -459,7 +459,7 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("repeated names in a batch are refused up front", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing, specFor }).execute({ batch: [{ name: "Pig" }, { name: "Pig" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing, specFor }).execute({ batch: [{ name: "Frog" }, { name: "Frog" }] }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("repeat");
   });
@@ -485,7 +485,7 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
       }),
     } as unknown as LocalRunnerLike;
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
-      { batch: [{ name: "Pig" }, { name: "Rocket" }, { name: "Tree" }] },
+      { batch: [{ name: "Frog" }, { name: "Rocket" }, { name: "Tree" }] },
       ctx,
     );
     // The duplicates were redrawn rather than counted as distinct artwork.
@@ -530,7 +530,7 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
     } as unknown as LocalRunnerLike;
 
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
-      { batch: [{ name: "Pig" }, { name: "Rocket" }, { name: "Tree" }] },
+      { batch: [{ name: "Frog" }, { name: "Rocket" }, { name: "Tree" }] },
       ctx,
     );
 

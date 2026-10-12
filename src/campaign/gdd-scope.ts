@@ -53,7 +53,7 @@ export const TRIVIAL_HEADING_RE =
 /**
  * A section ASKING for something, as opposed to describing it: an imperative
  * or an obligation. A bare verb list kept "This document describes the design
- * of Pixel Flow" as work, because "design" is a noun far more often than a
+ * of Grid Quest" as work, because "design" is a noun far more often than a
  * verb in a design document.
  */
 export const WORK_DEMAND_RE =
@@ -214,8 +214,8 @@ export function headingClaimedBy(heading: string, claims: readonly string[]): bo
  * who opens the entry scene is playing, not staring at an idle screen", and
  * the delivery report called an idle first screen a defect. That is one game
  * shape imposed on all of them: a document may specify a home, menu or lobby
- * as its first screen, and the vehicle's does — "cold boot ≤ 6 s to Home"
- * (Codex 2026-09-12 V, Job 3.9). What must be proven then is not auto-start
+ * as its first screen, and the vehicle's does — its cold-boot budget names
+ * the screen it reaches (Codex 2026-09-12 V, Job 3.9). What must be proven then is not auto-start
  * but the ROUTE from that screen into play.
  */
 const BOOTS_TO_SCREEN_RE =

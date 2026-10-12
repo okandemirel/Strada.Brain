@@ -238,7 +238,7 @@ export function leaseOwnerRootOf(projectRoot: string): string | undefined {
  * An absolute path into the lease's REAL checkout, rewritten into the lease.
  * Measured 2026-09-08 07:17-07:27: five file_read/list_directory calls in
  * ten minutes refused as "outside the project directory" because the model
- * named the checkout it knows (/Users/…/PixelFlow-Clean/Assets/…) while the
+ * named the checkout it knows (/Users/…/SampleGame/Assets/…) while the
  * run's project was its lease under the temp directory. The MCP tools have
  * redirected that case since 2026-09-07; the built-in tools refused it.
  */

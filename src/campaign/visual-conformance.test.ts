@@ -32,20 +32,20 @@ describe("look description", () => {
     // the real section, both matching the same heading.
     const gdd = [
       "CONTENTS",
-      "11.  ECONOMY",
-      "12.  ART DIRECTION",
-      "13.  AUDIO DESIGN",
+      "7.  ECONOMY",
+      "8.  ART DIRECTION",
+      "9.  AUDIO DESIGN",
       ...Array.from({ length: 40 }, (_, i) => `filler line ${i}`),
-      "12.  ART DIRECTION",
-      "12.1 Visual Style",
-      "Two-layer look: crisp flat pixel-art canvases on softly rendered dimensional stages, ",
-      "plus plump, glossy 3D-feel pigs with 2D-animation snappiness that read instantly against ",
-      "the destructible layer, in bright warm colour with heavy contrast for readability.",
+      "8.  ART DIRECTION",
+      "8.1 Visual Style",
+      "Two-layer look: flat cut-paper lanterns drifting over a painted, softly lit lake, ",
+      "plus round lacquered shrine figures with springy hand-drawn motion that stand out against ",
+      "the dark water, in warm amber light with strong contrast for readability.",
     ].join("\n");
 
     const look = extractLookDescription(gdd);
     expect(look.found).toBe(true);
-    expect(look.text).toContain("pixel-art canvases");
+    expect(look.text).toContain("cut-paper lanterns");
     expect(look.text).not.toContain("AUDIO DESIGN");
   });
 
@@ -100,13 +100,13 @@ describe("frame selection", () => {
 });
 
 describe("the judgement", () => {
-  const look = { found: true, text: "flat pixel-art canvases and glossy 3D-feel pigs" };
+  const look = { found: true, text: "cut-paper lanterns on a painted lake and lacquered shrine figures" };
 
   it("asks the provider and reports its one-line answer", async () => {
     const root = tmp();
     const frame = join(root, "f.png");
     writeFileSync(frame, "x".repeat(64));
-    const chat = vi.fn(async () => ({ text: "No — the frame shows a plain grid of flat squares with no pigs." }));
+    const chat = vi.fn(async () => ({ text: "No — the frame shows a plain grid of flat squares with no lanterns." }));
 
     const result = await judgeVisualConformance({
       look, frame: { path: frame },
@@ -122,7 +122,7 @@ describe("the judgement", () => {
     const root = tmp();
     const frame = join(root, "f.jpg");
     writeFileSync(frame, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]));
-    const chat = vi.fn(async (_system: string, _messages: unknown) => ({ text: "Pigs, as described.\nMATCH: yes" }));
+    const chat = vi.fn(async (_system: string, _messages: unknown) => ({ text: "Lanterns, as described.\nMATCH: yes" }));
     await judgeVisualConformance({
       look, frame: { path: frame },
       visionProvider: { provider: { chat, capabilities: { vision: true } } as never, name: "claude" },
@@ -142,7 +142,7 @@ describe("the judgement", () => {
     const bytes = Buffer.alloc(limit + 1);
     bytes.set([0x89, 0x50, 0x4e, 0x47]);
     writeFileSync(frame, bytes);
-    const chat = vi.fn(async () => ({ text: "Pigs.\nMATCH: yes" }));
+    const chat = vi.fn(async () => ({ text: "Lanterns.\nMATCH: yes" }));
     const result = await judgeVisualConformance({
       look, frame: { path: frame },
       visionProvider: { provider: { chat, capabilities: { vision: true } } as never, name: "claude" },
@@ -166,15 +166,15 @@ describe("the judgement", () => {
     writeFileSync(frame, "x".repeat(64));
     const no = await judgeVisualConformance({
       look, frame: { path: frame },
-      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "The frame shows a flat grid, no pigs.\nMATCH: no" })), capabilities: { vision: true } } as never, name: "claude" },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "The frame shows a flat grid, no lanterns.\nMATCH: no" })), capabilities: { vision: true } } as never, name: "claude" },
     });
-    expect(no).toMatchObject({ status: "checked", matches: false, detail: "The frame shows a flat grid, no pigs." });
+    expect(no).toMatchObject({ status: "checked", matches: false, detail: "The frame shows a flat grid, no lanterns." });
     expect(renderVisualConformance(no, { path: frame })).toContain("NO MATCH — The frame shows a flat grid");
     const yes = await judgeVisualConformance({
       look, frame: { path: frame },
-      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "MATCH: yes\nPlump pigs on a dimensional stage, as described." })), capabilities: { vision: true } } as never, name: "claude" },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "MATCH: yes\nLacquered shrines on a painted lake, as described." })), capabilities: { vision: true } } as never, name: "claude" },
     });
-    expect(yes).toMatchObject({ status: "checked", matches: true, detail: "Plump pigs on a dimensional stage, as described." });
+    expect(yes).toMatchObject({ status: "checked", matches: true, detail: "Lacquered shrines on a painted lake, as described." });
     const none = await judgeVisualConformance({
       look, frame: { path: frame },
       visionProvider: { provider: { chat: vi.fn(async () => ({ text: "Looks about right." })), capabilities: { vision: true } } as never, name: "claude" },

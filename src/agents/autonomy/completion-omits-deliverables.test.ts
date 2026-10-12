@@ -4,7 +4,7 @@ import { completionOmitsNamedDeliverables } from "./completion-review.js";
 
 // The task text below is run 20's actual prompt: this is the case the check exists for.
 const TASK = [
-  "Continue building the game described in PixelFlow_GDD.docx.",
+  "Continue building the game described in SampleGame_GDD.docx.",
   "",
   "The document asks for things the project still does not have:",
   "- Power-ups: 0 files. Implement them as the GDD specifies.",

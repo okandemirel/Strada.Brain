@@ -10,7 +10,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 
 /**
  * Measured live 2026-09-12 00:21: "build the game in the GDD" started a
- * campaign from docs/PixelFlow_GDD_Traceability_Checklist.md — a document the
+ * campaign from docs/SampleGame_GDD_Traceability_Checklist.md — a document the
  * system itself had written ABOUT the design — because the picker took the
  * newest file whose name contains "gdd". The whole ladder would have been
  * planned from a checklist instead of the game's design.
@@ -49,45 +49,45 @@ describe("which document is THE GDD", () => {
   };
 
   it("takes the design document, not the newest report about it", () => {
-    write("PixelFlow_GDD.md", "# GDD\n\n".padEnd(40_000, "design prose\n"), 600);
-    write("PixelFlow_GDD_Traceability_Checklist.md", "# Checklist\n\n- [ ] R-01\n", 1);
-    write("PixelFlow_GDD_Audit_2026-09-02.md", "# Audit\n\nFindings.\n", 2);
-    write("PixelFlow_GDD_Analysis.md", "# Analysis\n\nNotes.\n", 3);
+    write("SampleGame_GDD.md", "# GDD\n\n".padEnd(40_000, "design prose\n"), 600);
+    write("SampleGame_GDD_Traceability_Checklist.md", "# Checklist\n\n- [ ] R-01\n", 1);
+    write("SampleGame_GDD_Audit_2026-09-02.md", "# Audit\n\nFindings.\n", 2);
+    write("SampleGame_GDD_Analysis.md", "# Analysis\n\nNotes.\n", 3);
 
     const found = (manager() as unknown as { findNewestGddPath(): string | undefined }).findNewestGddPath();
 
-    expect(found).toBe("docs/PixelFlow_GDD.md");
+    expect(found).toBe("docs/SampleGame_GDD.md");
   });
 
   it("a report in the system's own run-notes folder never outranks the design", () => {
     // Measured live 2026-09-12 00:29, the second attempt: the picker took
-    // docs/run-notes/PixelFlow_GDD_Implementation_Baseline_2026-08-28.md.
-    write("PixelFlow_GDD.md", "# GDD\n\n".padEnd(40_000, "design prose\n"), 600);
-    write("run-notes/PixelFlow_GDD_Implementation_Baseline_2026-08-28.md", "# Baseline\n\nWhat we built.\n", 1);
+    // docs/run-notes/SampleGame_GDD_Implementation_Baseline_2026-08-28.md.
+    write("SampleGame_GDD.md", "# GDD\n\n".padEnd(40_000, "design prose\n"), 600);
+    write("run-notes/SampleGame_GDD_Implementation_Baseline_2026-08-28.md", "# Baseline\n\nWhat we built.\n", 1);
 
     expect((manager() as unknown as { findNewestGddPath(): string | undefined }).findNewestGddPath())
-      .toBe("docs/PixelFlow_GDD.md");
+      .toBe("docs/SampleGame_GDD.md");
   });
 
   it("scores a name by how far it is from being a GDD and nothing else", () => {
-    expect(gddNameDistance("docs/PixelFlow_GDD.md")).toBe(0);
+    expect(gddNameDistance("docs/SampleGame_GDD.md")).toBe(0);
     expect(gddNameDistance("docs/Game_Design_Document.md")).toBe(0);
-    expect(gddNameDistance("docs/PixelFlow_GDD_Traceability_Checklist.md"))
-      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD.md"));
-    expect(gddNameDistance("docs/run-notes/PixelFlow_GDD_Implementation_Baseline_2026-08-28.md"))
-      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD_v2.md"));
+    expect(gddNameDistance("docs/SampleGame_GDD_Traceability_Checklist.md"))
+      .toBeGreaterThan(gddNameDistance("docs/SampleGame_GDD.md"));
+    expect(gddNameDistance("docs/run-notes/SampleGame_GDD_Implementation_Baseline_2026-08-28.md"))
+      .toBeGreaterThan(gddNameDistance("docs/SampleGame_GDD_v2.md"));
     expect(gddNameDistance("docs/CHANGELOG.md")).toBe(99);
     // AN ARCHIVE is not where the live design lives: docs/archive/GDD.md used
     // to score better than a dated copy in docs/ purely on token count
     // (Codex 2026-09-12 P#14).
     expect(gddNameDistance("docs/archive/GDD.md"))
-      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD_2026_09_12.md"));
+      .toBeGreaterThan(gddNameDistance("docs/SampleGame_GDD_2026_09_12.md"));
     // …and the structure decides even when no derivative WORD appears: a copy
     // in a subfolder, and a name with more said after "GDD", both rank behind.
-    expect(gddNameDistance("docs/run-notes/PixelFlow_GDD.md"))
-      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD.md"));
-    expect(gddNameDistance("docs/PixelFlow_GDD_Implementation_Details.md"))
-      .toBeGreaterThan(gddNameDistance("docs/PixelFlow_GDD_v2.md"));
+    expect(gddNameDistance("docs/run-notes/SampleGame_GDD.md"))
+      .toBeGreaterThan(gddNameDistance("docs/SampleGame_GDD.md"));
+    expect(gddNameDistance("docs/SampleGame_GDD_Implementation_Details.md"))
+      .toBeGreaterThan(gddNameDistance("docs/SampleGame_GDD_v2.md"));
   });
 
   it("prefers a newer design document over an older one", () => {
@@ -99,9 +99,9 @@ describe("which document is THE GDD", () => {
   });
 
   it("falls back to a derivative when that is all there is", () => {
-    write("PixelFlow_GDD_Audit.md", "# Audit\n\nFindings.\n", 4);
+    write("SampleGame_GDD_Audit.md", "# Audit\n\nFindings.\n", 4);
 
     expect((manager() as unknown as { findNewestGddPath(): string | undefined }).findNewestGddPath())
-      .toBe("docs/PixelFlow_GDD_Audit.md");
+      .toBe("docs/SampleGame_GDD_Audit.md");
   });
 });

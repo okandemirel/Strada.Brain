@@ -218,8 +218,8 @@ const GDD_SCHEDULING_MORE = [
   "",
   "| Unlock | Element | Notes |",
   "| ------ | ------- | ----- |",
-  "| L21 | Rocket | blasts a row |",
-  "| L36 | Ice Block | freezes a cell |",
+  "| L18 | Firefly | lights a row |",
+  "| L30 | Frost Tile | freezes a cell |",
   "| L48 | Colour Bomb | clears a colour |",
   "",
 ].join("\n");

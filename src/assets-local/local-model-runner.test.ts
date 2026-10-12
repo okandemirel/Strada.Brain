@@ -949,7 +949,7 @@ describe("isModelInstalled measures the weights, not just the marker (item 2.15)
     // The draw asks the pipeline for the same revision…
     (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
     calls.length = 0;
-    await runner.textToImage(pinned, "a pig", join(dir, "pig.png"));
+    await runner.textToImage(pinned, "a frog", join(dir, "frog.png"));
     expect(calls.at(-1)!.args).toContain(`--revision=${rev}`);
     // …and the readiness check verifies that commit's snapshot, not "main"'s.
     venv();
@@ -1115,7 +1115,7 @@ describe("weights are pinned to the commit the first download was served (CMP-13
   /** A draw's args (the stub draws nothing, so only the arguments matter). */
   const drawArgs = async (runner: LocalModelRunner, calls: Array<{ cmd: string; args: string[] }>, spec = getModelSpec("sd15")!): Promise<string[]> => {
     calls.length = 0;
-    await runner.textToImage(spec, "a pig", join(dir, "pig.png"));
+    await runner.textToImage(spec, "a frog", join(dir, "frog.png"));
     return calls.find((c) => c.args.some((a) => a.endsWith("txt2img.py")))!.args;
   };
 
@@ -1218,7 +1218,7 @@ describe("weights are pinned to the commit the first download was served (CMP-13
     const spec = catalog.getModelSpec("sd15")!;
     expect(runner.isModelInstalled("sd15")).toBe(true);
     calls.length = 0;
-    await runner.textToImage(spec, "a pig", join(dir, "pig.png"));
+    await runner.textToImage(spec, "a frog", join(dir, "frog.png"));
     expect(calls.find((c) => c.args.some((a) => a.endsWith("txt2img.py")))!.args).toContain(`--revision=${SHA_A}`);
     await runner.install(spec);
     expect(fetchCall(calls)).toContain(`--revision=${SHA_A}`);
@@ -1354,7 +1354,7 @@ describe("weights cached before the lock existed are pinned from disk, offline (
     expect(runner.isModelInstalled("sd15")).toBe(true);
     expect(existsSync(lockPath()), "nothing pinned the weights already on disk").toBe(true);
     expect(readLock().models["sd15"]).toMatchObject({ weightsRef: getModelSpec("sd15")!.weightsRef, revision: SHA_A, origin: "disk" });
-    await runner.textToImage(getModelSpec("sd15")!, "a pig", join(dir, "pig.png"));
+    await runner.textToImage(getModelSpec("sd15")!, "a frog", join(dir, "frog.png"));
     expect(argsOf(calls, "txt2img.py")).toContain(`--revision=${SHA_A}`);
     // The next install asks the hub for that commit, not for wherever main is now.
     await runner.install(getModelSpec("sd15")!);
@@ -1483,7 +1483,7 @@ describe("weights cached before the lock existed are pinned from disk, offline (
     const runner = new LocalModelRunner(spawn);
     expect(modelWeightsPresent(catalogPinned)).toBe(false); // SHA_C is not cached
     (runner as unknown as { isModelInstalled: () => boolean }).isModelInstalled = () => true;
-    await runner.textToImage(catalogPinned, "a pig", join(dir, "pig.png"));
+    await runner.textToImage(catalogPinned, "a frog", join(dir, "frog.png"));
     expect(argsOf(calls, "txt2img.py")).toContain(`--revision=${SHA_C}`);
     expect(argsOf(calls, "txt2img.py")).not.toContain(`--revision=${SHA_A}`);
   });

@@ -23,7 +23,7 @@ function setup(): { project: string; outside: string } {
 
   const elsewhere = mkdtempSync(join(os.tmpdir(), "authz-outside-"));
   const outside = join(elsewhere, "gdd.md");
-  writeFileSync(outside, "# PixelFlow\nAn 8x8 match-3 board.");
+  writeFileSync(outside, "# GridQuest\nAn 8x8 match-3 board.");
   writeFileSync(join(elsewhere, "secrets.txt"), "do not read me");
   return { project, outside };
 }

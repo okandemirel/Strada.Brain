@@ -1,7 +1,7 @@
 /**
  * Spec scope coverage — the system checks the DESIGN DOC against the CODE.
  *
- * Measured 2026-08-24 (PixelFlow): the GDD's section 4 schedules sixteen game
+ * Measured 2026-08-24 (the test game): its GDD schedules sixteen game
  * elements in a literal markdown table; runs kept delivering a subset and
  * calling it done, because every gate looked at CODE health and none compared
  * code against the SPEC. The decomposition could not carry this either — a
@@ -18,18 +18,18 @@ import { join } from "node:path";
 import { stripCsComments } from "./csharp-source.js";
 
 export interface ScheduledElement {
-  /** Unlock level tag from the schedule table, e.g. "L36". */
+  /** Unlock level tag from the schedule table, e.g. "L30". */
   readonly unlock: string;
-  /** Element name as the spec spells it, e.g. "Ice Block". */
+  /** Element name as the spec spells it, e.g. "Frost Tile". */
   readonly name: string;
 }
 
 /** Strip formatting from a spec element name for code search. */
 export function elementCodeTokens(name: string): string[] {
   const tokens = new Set<string>();
-  // A PARENTHETICAL IS AN ANNOTATION, not part of the name. "Caged (Locked)
-  // Pig" produced only CagedLockedPig/cagedlockedpig, so a project whose code
-  // says `CagedPig` was reported as missing the element it had implemented —
+  // A PARENTHETICAL IS AN ANNOTATION, not part of the name. "Caged (Sealed)
+  // Lantern" produced only CagedSealedLantern/cagedsealedlantern, so a project whose code
+  // says `CagedLantern` was reported as missing the element it had implemented —
   // the real two-element false refusal on the vehicle (Codex 2026-09-12 Y).
   // The annotated spelling stays a candidate: some code keeps it.
   const spellings = new Set<string>([name]);
@@ -53,7 +53,7 @@ export function elementCodeTokens(name: string): string[] {
  *
  * Recognizes markdown pipe tables whose rows start with an unlock tag
  * (e.g. `L21`) followed by an element name — the shape GDDs in this genre
- * use for their element schedule (PixelFlow §4.1).
+ * use for their element schedule, the test game's among them.
  */
 // The walker lives in csharp-source.ts, shared by every C# rule; re-exported
 // here for the callers that import it from this module.
@@ -374,11 +374,11 @@ export function assessSpecScopeOfText(
     .join("\n");
   const corpus = rawCorpus.toLowerCase();
 
-  // A long token anywhere in the code is a signal; a short one ("Cube",
-  // "Pig", "Tray") only as a whole identifier word — as a substring it would
-  // match "cubemap" or "pigment", but ignoring it outright reported every
-  // short-named element as missing (measured 2026-09-10: "Cube" with a
-  // `public class Cube` in the tree).
+  // A long token anywhere in the code is a signal; a short one ("Reed",
+  // "Wick", "Dock") only as a whole identifier word — as a substring it would
+  // match "reedbed" or "wickerwork", but ignoring it outright reported every
+  // short-named element as missing (measured 2026-09-10: a 4-letter element
+  // with its own `public class` in the tree).
   // A TOKEN TWO ELEMENTS SHARE PROVES NEITHER. "Gate (one-way)" and "Gate
   // (two-way)" both strip to "Gate", so one `class Gate` covered both
   // scheduled variants (Codex 2026-09-12 Z#8). A shared candidate is dropped

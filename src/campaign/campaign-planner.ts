@@ -3,7 +3,7 @@
  *
  * One LLM pass that turns a GDD into the milestone ladder — the ordered list
  * of self-contained sprint prompts the campaign will walk. This replaces the
- * hand-authored per-sprint kick prompts that drove PixelFlow (Sprint B, then
+ * hand-authored per-sprint kick prompts that drove the test game (Sprint B, then
  * Sprint C hours later, by hand). The rules below are the distilled shape of
  * those prompts.
  */
@@ -30,7 +30,7 @@ import {
 /**
  * GDD windowing. The old 10k-head + 6k-tail window elided the MIDDLE of a
  * large GDD — which is where the element schedules, level structure, and
- * system tables actually live (the PixelFlow requirements summary put its
+ * system tables actually live (the test game's requirements summary put its
  * whole element table at 40–60% depth). A ladder planned from a document
  * whose schedule was cut out cannot cover the game. Now: documents up to
  * FULL_CHARS go through whole; larger ones keep a big head and tail plus a
@@ -775,8 +775,8 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // 2026-09-12 Z#4). Whitespace still is not identity.
     const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
     // THE MEASURED LINES ONLY. The membership test searched the whole summary,
-    // so a requirement's own TITLE ("Dragon boss: absent") and a failed
-    // sprint's prose ("the dragon boss is NOT delivered") were both accepted
+    // so a requirement's own TITLE ("Storm boss: absent") and a failed
+    // sprint's prose ("the storm boss is NOT delivered") were both accepted
     // as the evidence that closed it (Codex 2026-09-12 W#3).
     // …AND ONLY THE LINES THAT SAY SOMETHING ABOUT CONTENT. A sprint's own
     // "status: failed" is fourteen characters of the record, so it was a
@@ -1264,7 +1264,7 @@ function milestoneEvidence(m: {
 }): string {
   const facts = milestoneFacts(m);
   // The worker's own report travels for CONTEXT, and it is deliberately kept
-  // out of the quotable record below: a failed sprint's sentence "the dragon
+  // out of the quotable record below: a failed sprint's sentence "the storm
   // boss is NOT delivered" was quoted back as the evidence that closed it
   // (Codex 2026-09-12 W#3).
   if (m.resultExcerpt) facts.push(`report: ${m.resultExcerpt.slice(0, 300)}`);

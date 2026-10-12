@@ -584,7 +584,7 @@ describe("TelegramChannel", () => {
         message: {
           document: {
             file_id: "doc-1",
-            file_name: "PixelFlow_GDD.docx",
+            file_name: "SampleGame_GDD.docx",
             mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           },
           caption: "build this game",
@@ -592,7 +592,7 @@ describe("TelegramChannel", () => {
         },
         reply: replyMock,
         api: {
-          getFile: vi.fn().mockResolvedValue({ file_id: "doc-1", file_path: "documents/PixelFlow_GDD.docx" }),
+          getFile: vi.fn().mockResolvedValue({ file_id: "doc-1", file_path: "documents/SampleGame_GDD.docx" }),
           sendChatAction: vi.fn().mockResolvedValue(undefined),
         },
       });
@@ -600,7 +600,7 @@ describe("TelegramChannel", () => {
       expect(handler).not.toHaveBeenCalled();
       expect(replyMock).toHaveBeenCalledTimes(1);
       const text = String(replyMock.mock.calls[0]?.[0]);
-      expect(text).toContain("PixelFlow_GDD.docx");
+      expect(text).toContain("SampleGame_GDD.docx");
       expect(text).toContain("Unsupported media type");
     });
 

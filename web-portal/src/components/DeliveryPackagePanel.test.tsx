@@ -41,7 +41,7 @@ function pkg(overrides: Partial<DeliveryPackage> = {}): DeliveryPackage {
         summary: '2 lines: 1 met, 1 open.',
         source: 'the milestone ladder',
         items: [
-          { text: 'Pigs must flee', state: 'open', source: 'sprint m3', cause: 'the sprint ended failed' },
+          { text: 'Frogs must flee', state: 'open', source: 'sprint m3', cause: 'the sprint ended failed' },
           { text: 'at least 60 fps: MET — 61.2 fps', state: 'met', source: 'the GDD claim check' },
         ],
         itemsOmitted: 4,
@@ -81,7 +81,7 @@ describe('DeliveryPackagePanel', () => {
     expect(diff).toContain('git -C /proj diff --stat abc~1..def')
     expect(diff).toContain('abc123456789 the change itself')
     const checklist = screen.getByTestId('package-piece-checklist').textContent ?? ''
-    expect(checklist).toContain('Pigs must flee')
+    expect(checklist).toContain('Frogs must flee')
     expect(checklist).toContain('the sprint ended failed')
     expect(checklist).toContain('+4 more not listed here')
   })

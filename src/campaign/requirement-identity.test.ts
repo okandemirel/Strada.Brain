@@ -272,10 +272,10 @@ describe("reconcileRequirements across GDD revisions", () => {
   });
 
   it("links a positional rewording that still shares the ask, and never carries its evidence", () => {
-    const before = reconcileRequirements({ texts: ["Dragon boss spawns in the final wave: absent"] }).identities;
+    const before = reconcileRequirements({ texts: ["Storm boss spawns in the final wave: absent"] }).identities;
     const after = reconcileRequirements({
       previous: before,
-      texts: ["The dragon boss must spawn during the final wave of the last level"],
+      texts: ["The storm boss must spawn during the final wave of the last level"],
       proven: new Set([before[0]!.id]),
     });
     expect(after.identities[0]!.lineage).toBe(before[0]!.lineage);
@@ -394,7 +394,7 @@ describe("campaign-planner: the requirement–evidence predicate, exported for t
     expect(closingFact("Save progress across restarts: absent", facts)).toBe(
       "landed: 2 commit(s): Assets/Scripts/SaveSystem.cs",
     );
-    expect(closingFact("Dragon boss: absent", facts)).toBeUndefined();
+    expect(closingFact("Storm boss: absent", facts)).toBeUndefined();
   });
 
   it("reads a requirement through its identity tail — the id is not part of the ask", () => {

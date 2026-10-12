@@ -4,7 +4,7 @@
  * dispose() released every outstanding lease without committing it, so a task
  * interrupted mid-run lost its files along with the workspace. Measured: a run
  * stopped by SIGINT had written
- * Modules/PixelFlow/Tests/Runtime/DomainModelTests.cs into its lease; after
+ * Modules/SampleGame/Tests/Runtime/DomainModelTests.cs into its lease; after
  * "Strada Brain stopped. Shutdown complete." the file existed neither in the
  * project nor anywhere under the lease root. An hour of work, gone at exit.
  *
@@ -61,11 +61,11 @@ describe("shutdown", () => {
     const leases = manager(root);
     const lease = await leases.acquireLease({ preferGitWorktree: true });
 
-    mkdirSync(join(lease.path, "Assets", "Modules", "PixelFlow", "Tests", "Runtime"), {
+    mkdirSync(join(lease.path, "Assets", "Modules", "SampleGame", "Tests", "Runtime"), {
       recursive: true,
     });
     writeFileSync(
-      join(lease.path, "Assets", "Modules", "PixelFlow", "Tests", "Runtime", "DomainModelTests.cs"),
+      join(lease.path, "Assets", "Modules", "SampleGame", "Tests", "Runtime", "DomainModelTests.cs"),
       "// the agent's work\n",
     );
 
@@ -75,7 +75,7 @@ describe("shutdown", () => {
       root,
       "Assets",
       "Modules",
-      "PixelFlow",
+      "SampleGame",
       "Tests",
       "Runtime",
       "DomainModelTests.cs",

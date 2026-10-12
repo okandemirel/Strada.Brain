@@ -410,7 +410,7 @@ function flagProgram(
   // the conformance gate could tell a worker "move this code under
   // Assets/Modules/<Name>Module/" and this gate would then forbid removing the
   // empty directory it had just left behind: measured live 2026-09-18, 14
-  // refusals of `rmdir Assets/PixelFlow/Core/Sim/Data …` in ten minutes.
+  // refusals of `rmdir Assets/SampleGame/Core/Sim/Data …` in ten minutes.
   // What stays refused: a RECURSIVE rmdir, which on Windows (`rmdir /s`, or
   // PowerShell's `-Recurse`) really is rm -rf.
   if (name === "rmdir" || name === "rd") {

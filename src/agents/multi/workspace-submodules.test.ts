@@ -8,7 +8,7 @@
  * other: every project set up the supported way handed its agent a workspace
  * with no framework in it.
  *
- * Measured on a full Pixel Flow build: 295 Strada.Core .cs files in the project,
+ * Measured on a full test-game build: 295 Strada.Core .cs files in the project,
  * zero in the workspace. The agent looked — `list_directory Packages/Submodules/
  * Strada.Core` answered "directory not found", the source glob found nothing,
  * `shell_exec` there failed on a missing parent — and then wrote its own

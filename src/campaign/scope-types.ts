@@ -3,7 +3,7 @@
  *
  * A milestone is green only when its own GDD rows, and every row that passed
  * before, pass checks the system owns, in one acceptance run the system
- * admits, on the committed revision. In the measured campaign six of six milestones
+ * admits, on the committed revision. In a measured campaign six of six milestones
  * went green on prose: a worker's report, the verifier's flags, its own
  * tests. These are the shapes every part of the replacement shares — the
  * requirement ledger, the checks, the run, the judge's input and its verdict

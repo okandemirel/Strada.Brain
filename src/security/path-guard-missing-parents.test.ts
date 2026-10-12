@@ -44,9 +44,9 @@ const allow = { allowMissingParents: true };
 
 describe("allowMissingParents", () => {
   it("accepts a target several directories below an existing one", async () => {
-    const result = await validatePath(project, "Assets/Scripts/PixelFlow/Core/Models/GameState.cs", allow);
+    const result = await validatePath(project, "Assets/Scripts/SampleGame/Core/Models/GameState.cs", allow);
     expect(result.valid).toBe(true);
-    expect(result.fullPath).toBe(join(project, "Assets/Scripts/PixelFlow/Core/Models/GameState.cs"));
+    expect(result.fullPath).toBe(join(project, "Assets/Scripts/SampleGame/Core/Models/GameState.cs"));
   });
 
   it("still rejects it without the option", async () => {

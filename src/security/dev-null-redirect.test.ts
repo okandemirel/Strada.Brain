@@ -6,7 +6,7 @@
  * it throws output away — and it matched.
  *
  * Measured on a live run: the agent proposed
- *   find /Users/okan/…/PixelFlow4 -name "Strada.Core" -type d 2>/dev/null | head -20
+ *   find /Users/okan/…/SampleGame4 -name "Strada.Core" -type d 2>/dev/null | head -20
  * a read-only search, and the safety review answered "shell command looks
  * destructive". Execution stopped, five goals were skipped, and 98 minutes ended
  * with nothing written.
@@ -23,7 +23,7 @@ const shell = (command: string): boolean => isDestructiveOperation("shell_exec",
 describe("redirects under /dev", () => {
   it("allows the read-only search that was blocked", () => {
     expect(
-      shell('find /Users/okan/Documents/PixelFlow4 -name "Strada.Core" -type d 2>/dev/null | head -20'),
+      shell('find /Users/okan/Documents/SampleGame4 -name "Strada.Core" -type d 2>/dev/null | head -20'),
     ).toBe(false);
   });
 

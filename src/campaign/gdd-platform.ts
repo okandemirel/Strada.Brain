@@ -86,7 +86,7 @@ function isExcluded(text: string, at: number): boolean {
 /**
  * A "PC" that names a DISTRIBUTION, not a build target.
  *
- * "Android; Google Play Games on PC compatible" asked for an Android product
+ * "Android; Google Play Games on PC, too" asked for an Android product
  * that Google's own compatibility layer also runs on a desktop — and the
  * reader added a native Windows target for it. Nobody builds that target, so
  * the delivery gate then reported a platform the document never asked for as
@@ -100,9 +100,9 @@ const PC_VIA_STORE_RE =
 /** "PC compatible", "PC-compatible", "compatible with PC" — a compatibility statement. */
 const PC_COMPATIBLE_AFTER_RE = /^\s*[-–—]?\s*compatib\w*/i;
 const PC_COMPATIBLE_BEFORE_RE = /\bcompatib\w*\s+(?:with\s+)?$/i;
-/** "Windows/PC play (Google Play Games on PC)" — the layer named just after. */
+/** "Windows/PC builds (via Google Play Games)" — the layer named just after. */
 const PC_LAYER_RE = /\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b/gi;
-/** …and the same layer named in parentheses right after it: "Windows/PC play (Google Play Games on PC)". */
+/** …and the same layer named in parentheses right after it: "Windows/PC builds (via Google Play Games)". */
 const PC_LAYER_PAREN_RE =
   /^[^.\n)]{0,24}?\([^)\n]{0,40}?\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b/i;
 
@@ -113,8 +113,8 @@ function pcNamesDistributionOnly(text: string, at: number, length: number): bool
     return true;
   }
   // A LAYER NAMED AFTER THE OS QUALIFIES IT ONLY WITHOUT A COORDINATOR
-  // between them, the same rule storefronts already follow: "Windows/PC play
-  // (Google Play Games on PC)" is one distribution, while "Release on Windows
+  // between them, the same rule storefronts already follow: "Windows/PC
+  // builds (via Google Play Games)" is one distribution, while "Release on Windows
   // and Google Play" is two platforms (Codex 2026-09-11 K#14).
   if (PC_LAYER_PAREN_RE.test(text.slice(at + length, at + length + 72))) return true;
   const clause = clauseAfter(text.slice(at + length, at + length + 48));
@@ -269,8 +269,8 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
     }
   };
   // A DESKTOP OS NAMED AS A COMPATIBILITY LAYER is not a build target either:
-  // "Windows/PC play (Google Play Games on PC) uses the same account" is a
-  // sentence about one account across devices, and it put a Windows build on
+  // "Windows/PC builds (via Google Play Games) share the save" is a
+  // sentence about one save across devices, and it put a Windows build on
   // the delivery gate's list of platforms nobody had built (Codex 2026-09-12
   // U#F3). Every occurrence is still examined, so a native mention elsewhere
   // in the document still names the target.

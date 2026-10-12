@@ -5,11 +5,10 @@ import { tmpdir } from "node:os";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 
 /**
- * Measured on the delivered PixelFlow tree 2026-09-03: 14 scenes enabled in
+ * Measured on the delivered test-game tree 2026-09-03: 14 scenes enabled in
  * Build Settings, and the person who opened it could not tell which one is
- * the game. These fixtures carry that tree's REAL shape — every enabled path
- * and its real GameObject count, read off
- * /Users/okan/Documents/MaxedOutEntertainment/PixelFlow-Clean.
+ * the game. These fixtures carry that tree's REAL shape — every enabled scene
+ * and its real GameObject count — under neutral names.
  */
 const dirs: string[] = [];
 function tmp(): string {
@@ -45,17 +44,17 @@ function project(scenes: ReadonlyArray<[string, number]>, disabled: readonly str
 const REAL_DELIVERY: ReadonlyArray<[string, number]> = [
   ["Assets/Scenes/Gameplay.unity", 3],
   ["Assets/Scenes/Main.unity", 6],
-  ["Assets/Scenes/UfoShowcase.unity", 5],
+  ["Assets/Scenes/CometShowcase.unity", 5],
   ["Assets/Scenes/AssembledGame.unity", 2],
   ["Assets/Scenes/ModuleBoundary.unity", 3],
   ["Assets/InitTestScene4abd18f9-8be4-4a53-81df-6a2e7a8dfc19.unity", 5],
   ["Assets/Scenes/LiveOpsAssembled.unity", 3],
   ["Assets/Scenes/AssembledMain.unity", 3],
-  ["Assets/Scenes/AssembledUfoRuntime.unity", 3],
+  ["Assets/Scenes/AssembledCometRuntime.unity", 3],
   ["Assets/Modules/LiveOpsModule/Scenes/LiveOpsVisualAssembly.unity", 1],
   ["Assets/Scenes/LiveOpsVisualsVerified.unity", 3],
   ["Assets/Scenes/LiveOpsPresentation.unity", 4],
-  ["Assets/Scenes/TargetedLevel151Verification.unity", 5],
+  ["Assets/Scenes/TargetedLevel42Verification.unity", 5],
   ["Assets/Scenes/ProductionMain.unity", 17],
 ];
 
@@ -82,12 +81,12 @@ describe("scene hygiene — the real delivered shape", () => {
         "Assets/Modules/LiveOpsModule/Scenes/LiveOpsVisualAssembly.unity",
         "Assets/Scenes/AssembledGame.unity",
         "Assets/Scenes/AssembledMain.unity",
-        "Assets/Scenes/AssembledUfoRuntime.unity",
+        "Assets/Scenes/AssembledCometRuntime.unity",
         "Assets/Scenes/LiveOpsAssembled.unity",
         "Assets/Scenes/LiveOpsVisualsVerified.unity",
         "Assets/Scenes/ModuleBoundary.unity",
-        "Assets/Scenes/TargetedLevel151Verification.unity",
-        "Assets/Scenes/UfoShowcase.unity",
+        "Assets/Scenes/TargetedLevel42Verification.unity",
+        "Assets/Scenes/CometShowcase.unity",
       ].sort(),
     );
     // Gameplay is now the entry (build index 0), so the non-entry
@@ -106,7 +105,7 @@ describe("scene hygiene — the real delivered shape", () => {
     expect(text).toContain("10 of them");
     expect(text).toContain("verification scaffolding");
     // A count with no names is not a disclosure a person can act on.
-    expect(text).toContain("TargetedLevel151Verification.unity");
+    expect(text).toContain("TargetedLevel42Verification.unity");
     // The three that match neither rule are named too — silence about them
     // would read as "the other 13 are all disposable".
     expect(text).toContain("3 match neither");

@@ -9,7 +9,7 @@
  * registered vaults".
  *
  * Measured on a live run: `vault_search` for "MatchResolver ScoreService
- * PixelFlow" returned 10 hits `searched=[unity:5b4164ac, self:strada-brain,
+ * GridQuest" returned 10 hits `searched=[unity:5b4164ac, self:strada-brain,
  * knowledge:57dbef1a]` carrying the hint "No vault indexed for projectPath". It
  * found the project's code only because the fallback happened to include the
  * project vault — while spending the token budget on Strada.Brain's own source
@@ -25,7 +25,7 @@ beforeAll(() => {
   createLogger("error", "test.log");
 });
 
-const PROJECT = "/tmp/pixelflow";
+const PROJECT = "/tmp/samplegame";
 const LEASE = "/tmp/strada-workspaces/task-abc";
 
 /** A vault that reports which query it was asked, and owns `root`. */

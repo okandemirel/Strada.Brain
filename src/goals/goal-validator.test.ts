@@ -273,12 +273,12 @@ describe("judgePlanShape", () => {
   it("rejects the seven-node exploration plan measured 2026-09-08 (30 minutes, 55 reads, nothing produced)", () => {
     const nodes = [
       "Explore project structure: vault_search for GDD, modules, scenes, prefabs, audio, and existing patterns",
-      "vault_search for GDD files including PixelFlow_GDD.md",
+      "vault_search for GDD files including SampleGame_GDD.md",
       "vault_search for module definitions and scripts",
       "vault_search for scene files",
       "vault_search for prefab files",
       "vault_search for audio assets",
-      "Read PixelFlow_GDD.md structure and extract key game design requirements",
+      "Read SampleGame_GDD.md structure and extract key game design requirements",
     ].map((task) => ({ task }));
     const verdict = judgePlanShape(nodes);
     expect(verdict.explorationOnly).toBe(true);
@@ -313,7 +313,7 @@ describe("a read-only request is not an exploration-only failure (Codex review 2
     for (const t of [
       "Review the audio module and report what is short or duplicated",
       "Audit the shipped scenes against the GDD",
-      "Analyze why the tray module stalls",
+      "Analyze why the dock module stalls",
       "Please summarize the delivery report",
       "Report on placeholder art coverage",
     ]) expect(isReadOnlyRequest(t), t).toBe(true);

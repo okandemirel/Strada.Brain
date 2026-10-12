@@ -1,13 +1,13 @@
 /**
  * unity_prerender_frames — the prerendered-frames pipeline as a tool.
  *
- * The GDD's actual art spec ("plump, glossy 3D-feel ... with 2D-animation
- * snappiness") describes the casual-game industry standard: render a 3D
- * character once, ship glossy 2D frames. This tool runs the proven pipeline
+ * A GDD that asks for 3D-feel characters animated like snappy 2D describes
+ * the casual-game industry standard: render a 3D character once, ship glossy
+ * 2D frames. This tool runs the proven pipeline
  * against any prefab the agent points at: instantiate in a tuned 3-point-lit
  * scene, stylize for the game's look (chibi proportions + pastel toon-glossy
- * material + inverted-hull outline — measured on the boar cub: realistic
- * wild boar in, cartoon pig out), and capture N angles synchronously through
+ * material + inverted-hull outline — measured on an animal cub: realistic
+ * model in, cartoon character out), and capture N angles synchronously through
  * an offscreen RenderTexture (CaptureScreenshot never lands in batchmode).
  *
  * The editor script is written into the TARGET project for the run and
@@ -514,7 +514,7 @@ export class PrerenderFramesTool implements ITool {
         content:
           `${frames.length} frames rendered to ${outRel} (+ sprite .meta each): ${frames.join(", ")}. ` +
           "These are the glossy game-ready angles — use them as the element's view sprites, and animate " +
-          "between them for the '2D-animation snappiness' the GDD asks for." +
+          "between them when the design asks for snappy 2D-style motion." +
           (retemplated.length > 0 ? ` Existing frame .meta re-templated (guid kept) — ${retemplated.join("; ")}.` : ""),
       };
     } catch (err) {

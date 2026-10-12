@@ -8,7 +8,7 @@
  * and re-verified against the live endpoints here on 2026-08-27:
  *
  *   - Store catalog search:  GET kharma.unity3d.com/api/en-US/search/results.json?q=..
- *                            (no auth; verified: "pig" → 1105 results)
+ *                            (no auth; verified: one animal name → 1105 results)
  *   - Token:                 POST {identityHost}/v1/oauth2/token
  *                            grant_type=refresh_token, client_id "packman",
  *                            client_secret from the Editor's own UnityConnect

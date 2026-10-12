@@ -2,7 +2,7 @@
  * The path the user named has to be remembered where the message arrives.
  *
  * Measured 2026-08-20 across four runs. The request said
- * "/Users/okan/Downloads/PixelFlow_GDD.docx" and every read of that file came
+ * "/Users/okan/Downloads/SampleGame_GDD.docx" and every read of that file came
  * back "Path resolves outside the project directory" — the document the whole
  * task was about, refused to the agent doing the task.
  *
@@ -20,12 +20,12 @@ import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js
 
 describe("what the wiring must remember before routing", () => {
   const REQUEST =
-    "Continue building the game described in /Users/okan/Downloads/PixelFlow_GDD.docx in this Unity project.";
+    "Continue building the game described in /Users/okan/Downloads/SampleGame_GDD.docx in this Unity project.";
 
   it("finds the path in the request that starts a run", () => {
     // Resolved: on Windows a rooted path lands on the current drive.
     expect(extractUserAuthorizedPaths(REQUEST)).toEqual([
-      resolve("/Users/okan/Downloads/PixelFlow_GDD.docx"),
+      resolve("/Users/okan/Downloads/SampleGame_GDD.docx"),
     ]);
   });
 

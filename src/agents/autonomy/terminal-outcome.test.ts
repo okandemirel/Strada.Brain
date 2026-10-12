@@ -42,7 +42,7 @@ describe("which terminals are failures", () => {
 });
 
 /**
- * In campaign 18d4t five of six milestone tips ended on the system's own
+ * In a measured campaign five of six milestone tips ended on the system's own
  * "task_stuck" notice and all six went green: how a run ended existed only as
  * the sentence it showed the user (GDD-drift plan W01).
  */
@@ -202,7 +202,7 @@ describe("the system's own stamps in a stored result", () => {
     }
   });
 
-  it("finds a stamp whose start the 500-character excerpt cut off (18d4t m1)", () => {
+  it("finds a stamp whose start the 500-character excerpt cut off (a measured m1)", () => {
     expect(
       systemStampsIn("fter multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."),
     ).toEqual(["task_stuck"]);
@@ -240,7 +240,7 @@ describe("the system's own stamps in a stored result", () => {
 describe("a terminal failure report, read with the system's stamps", () => {
   it("is not read off the stamp by default — W01 changes no decision", () => {
     // campaign-manager settles a completed milestone as failed on this
-    // predicate; reading stamps by default would flip 18d4t's greens before
+    // predicate; reading stamps by default would flip a measured campaign's greens before
     // the scope gate (W09) decides how to use them.
     for (const text of renderingsOf("task_stuck")) {
       expect(isTerminalFailureReport(text), text).toBe(false);

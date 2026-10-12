@@ -13,7 +13,7 @@ import {
   WORK_DEMAND_RE,
 } from "./gdd-scope.js";
 
-const BIG = `# Sky Pigs
+const BIG = `# Sky Frogs
 ## Table of Contents
 ## 1. Overview
 ## 2. Core Loop
@@ -27,15 +27,15 @@ const BIG = `# Sky Pigs
 | L4 | Torus | ring |
 | L5 | Prism | light |
 | L6 | Cone | |
-| L7 | Dragon Boss | set piece |
-| L8 | Ice Block | |
+| L7 | Storm Boss | set piece |
+| L8 | Frost Tile | |
 | L9 | Lava | |
 ## 4. Levels
 There are 100 levels across four worlds.
 ## 5. Screens
 Main menu, level select, pause menu, results screen and a HUD.
 ## 6. Audio
-Music base loop per area; SFX for tap, merge and win.
+Music: one calm loop per pond; SFX for tap, merge and win.
 ## 7. Progression and saving
 Progress is saved to the cloud; a tutorial (FTUE) runs on first launch. Settings screen has accessibility toggles.
 ## 8. Performance
@@ -47,7 +47,7 @@ Target 60 fps; loads in under 3 seconds. Android APK and iOS.
 describe("extractHeadings", () => {
   it("keeps section headings in order and drops document apparatus", () => {
     const h = extractHeadings(BIG);
-    expect(h[0]).toBe("Sky Pigs");
+    expect(h[0]).toBe("Sky Frogs");
     expect(h).toContain("2. Core Loop");
     expect(h).toContain("2.1 Merging");
     expect(h).toContain("8. Performance");
@@ -102,15 +102,16 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
       "1.1 Executive Summary",
       "1.2 Purpose of This Document",
       "1.3 Scope",
-      "1.5 Market Position & Reference Titles",
-      "2. GAME OVERVIEW",
-      "3. CORE GAMEPLAY SYSTEM",
-      "9. RELEASE & LIVE OPS",
+      "1.4 Competitive Analysis",
+      "1.5 Reference Titles",
+      "2. THE GAME AT A GLANCE",
+      "3. CORE RULES",
+      "9. LAUNCH PLAN",
     ].join("\n");
 
     const headings = extractHeadings(gdd);
 
-    expect(headings).toEqual(["GAME OVERVIEW", "CORE GAMEPLAY SYSTEM", "RELEASE & LIVE OPS"].map((h) => expect.stringContaining(h)));
+    expect(headings).toEqual(["THE GAME AT A GLANCE", "CORE RULES", "LAUNCH PLAN"].map((h) => expect.stringContaining(h)));
   });
 
   it("keeps a section whose name only LOOKS like apparatus but names work", () => {
@@ -136,9 +137,9 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
     // …while a section that DESCRIBES is still apparatus.
     expect(extractHeadings([
       "## Introduction",
-      "This document describes the design of Pixel Flow.",
+      "This document describes the design of Grid Quest.",
       "## Core Loop",
-      "Merge pigs.",
+      "Merge frogs.",
     ].join("\n"))).toEqual(["Core Loop"]);
 
     // A section's own body decides, not the NEXT section's: without the

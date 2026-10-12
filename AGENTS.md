@@ -90,5 +90,6 @@ When `config.vault.enabled=true`, the **Codebase Memory Vault** is how agents sh
 - Do NOT modify test infrastructure (`scripts/run-vitest-batches.mjs`)
 - Do NOT add new npm dependencies — the project maintains a minimal dependency policy
 - Do NOT skip or disable existing tests to make new code pass
+- Do NOT name a product a run was measured on, quote its design document, or commit its campaign export — not in code, comments, tests, fixtures, docs or commit messages. Write "the test game" and invented data; real exports and the vehicle's term list belong in the gitignored `tests/fixtures/local/` (`src/universality.test.ts` enforces this)
 - Channel-specific code stays in its own `src/channels/{name}/` directory
 - Core orchestrator changes require careful review — it coordinates the entire agent lifecycle

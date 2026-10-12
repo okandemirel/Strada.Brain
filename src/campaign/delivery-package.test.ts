@@ -239,11 +239,11 @@ describe("the checklist and the gaps", () => {
   it("states a repair sprint's requirement as the AUDIT closed it, not as the sprint ended", () => {
     const pkg = assembleDeliveryPackage({
       campaign: campaign({
-        milestones: [milestone({ id: "m9", title: "Repair — pigs", status: "failed", coverageGap: "Pigs must flee the player", coverageClosed: true, coverageClosedRevision: "b".repeat(40) })],
+        milestones: [milestone({ id: "m9", title: "Repair — frogs", status: "failed", coverageGap: "Frogs must flee the player", coverageClosed: true, coverageClosedRevision: "b".repeat(40) })],
       }),
     });
     const item = pieceOf(pkg, "checklist").items?.[0];
-    expect(item).toMatchObject({ text: "Pigs must flee the player", state: "met", source: "the evidence audit" });
+    expect(item).toMatchObject({ text: "Frogs must flee the player", state: "met", source: "the evidence audit" });
     expect(item?.cause).toContain("the sprint ended failed");
   });
 
@@ -251,17 +251,17 @@ describe("the checklist and the gaps", () => {
     const encoded = encodeRequirement({
       id: "req-4-abc123",
       lineage: "req-4-abc123",
-      text: "Pigs must flee the player",
+      text: "Frogs must flee the player",
       gddSha256: "c".repeat(64),
       gddRevision: 2,
     });
     const pkg = assembleDeliveryPackage({
       campaign: campaign({
-        milestones: [milestone({ id: "m9", title: "Repair — pigs", status: "completed", coverageGap: encoded, coverageClosed: true })],
+        milestones: [milestone({ id: "m9", title: "Repair — frogs", status: "completed", coverageGap: encoded, coverageClosed: true })],
       }),
     });
     const item = pieceOf(pkg, "checklist").items?.[0];
-    expect(item?.text).toBe("Pigs must flee the player");
+    expect(item?.text).toBe("Frogs must flee the player");
     expect(renderDeliveryPackage(pkg)).not.toContain("rid:");
   });
 

@@ -10,7 +10,7 @@ import { createLogger } from "../utils/logger.js";
 
 beforeAll(() => { createLogger("error", "test.log"); });
 
-const GDD = "# Pigs\n## 1. Core Loop\nMerge pigs.\n## 2. Levels\nThere are 30 levels.\n## 3. Audio\nMusic and SFX for merge.\n";
+const GDD = "# Frogs\n## 1. Core Loop\nMerge frogs.\n## 2. Levels\nThere are 30 levels.\n## 3. Audio\nMusic and SFX for merge.\n";
 const sprint = (title: string, sections: string[], prompt = "Build it end to end, compile green, PlayMode green unfiltered, capture a frame, commit per unit.") =>
   ({ title, prompt, coveredSections: sections, deliverables: [`${title} scene`] });
 
@@ -45,12 +45,12 @@ describe("plannerSystem", () => {
 describe("CampaignPlanner.planMilestones", () => {
   it("returns the structure and asks once more for a section nobody claimed", async () => {
     const first = JSON.stringify({ milestones: [sprint("Sprint A — Foundations", ["1. Core Loop"]), sprint("Sprint B — Levels", ["2. Levels"]), sprint("Sprint C — Delivery", ["2. Levels"])], excluded: [] });
-    const second = JSON.stringify({ milestones: [sprint("Sprint A — Foundations", ["1. Core Loop"]), sprint("Sprint B — Levels + audio", ["2. Levels", "3. Audio"]), sprint("Sprint C — Delivery", ["Pigs"])], excluded: ["leaderboards: the GDD says none in v1"] });
+    const second = JSON.stringify({ milestones: [sprint("Sprint A — Foundations", ["1. Core Loop"]), sprint("Sprint B — Levels + audio", ["2. Levels", "3. Audio"]), sprint("Sprint C — Delivery", ["Frogs"])], excluded: ["leaderboards: the GDD says none in v1"] });
     const fake = fakeProvider([first, second]);
     const planner = new CampaignPlanner(fake.provider as never);
     const ladder = await planner.planMilestones(GDD, "docs/GDD.md");
     expect(fake.calls).toHaveLength(2);
-    expect(fake.calls[1]).toContain('claimed no milestone for these GDD sections: "Pigs", "3. Audio"');
+    expect(fake.calls[1]).toContain('claimed no milestone for these GDD sections: "Frogs", "3. Audio"');
     expect(ladder.milestones[1]!.coveredSections).toEqual(["2. Levels", "3. Audio"]);
     expect(ladder.milestones[1]!.deliverables).toEqual(["Sprint B — Levels + audio scene"]);
     expect(ladder.excluded).toEqual(["leaderboards: the GDD says none in v1"]);
@@ -60,10 +60,10 @@ describe("CampaignPlanner.planMilestones", () => {
   });
 
   it("names the GDD's path when it has one, and says there is none rather than inventing one (audit campaign#1)", async () => {
-    const ladder = JSON.stringify({ milestones: [sprint("A", ["Pigs", "1. Core Loop"]), sprint("B", ["2. Levels"]), sprint("C", ["3. Audio"])] });
+    const ladder = JSON.stringify({ milestones: [sprint("A", ["Frogs", "1. Core Loop"]), sprint("B", ["2. Levels"]), sprint("C", ["3. Audio"])] });
     const onDisk = fakeProvider([ladder]);
-    await new CampaignPlanner(onDisk.provider as never).planMilestones(GDD, "docs/Pigs_GDD.md");
-    expect(onDisk.calls[0]).toContain("GDD project-relative path: docs/Pigs_GDD.md\n");
+    await new CampaignPlanner(onDisk.provider as never).planMilestones(GDD, "docs/Frogs_GDD.md");
+    expect(onDisk.calls[0]).toContain("GDD project-relative path: docs/Frogs_GDD.md\n");
     const textOnly = fakeProvider([ladder]);
     await new CampaignPlanner(textOnly.provider as never).planMilestones(GDD, undefined);
     expect(textOnly.calls[0]).toContain("GDD project-relative path: none — this design is not saved in the project");
@@ -71,9 +71,9 @@ describe("CampaignPlanner.planMilestones", () => {
   });
 
   it("does not tell the planner to reference a path a text-only GDD does not have (review campaign-artifacts P3)", async () => {
-    const ladder = JSON.stringify({ milestones: [sprint("A", ["Pigs", "1. Core Loop"]), sprint("B", ["2. Levels"]), sprint("C", ["3. Audio"])] });
+    const ladder = JSON.stringify({ milestones: [sprint("A", ["Frogs", "1. Core Loop"]), sprint("B", ["2. Levels"]), sprint("C", ["3. Audio"])] });
     const onDisk = fakeProvider([ladder]);
-    await new CampaignPlanner(onDisk.provider as never).planMilestones(GDD, "docs/Pigs_GDD.md");
+    await new CampaignPlanner(onDisk.provider as never).planMilestones(GDD, "docs/Frogs_GDD.md");
     expect(onDisk.systems[0]).toContain("Reference the GDD by its project-relative path");
     const textOnly = fakeProvider([ladder]);
     await new CampaignPlanner(textOnly.provider as never).planMilestones(GDD, undefined);
@@ -89,7 +89,7 @@ describe("CampaignPlanner.planMilestones", () => {
     const fake = fakeProvider([first, worse]);
     const ladder = await new CampaignPlanner(fake.provider as never).planMilestones(GDD, "docs/GDD.md");
     expect(ladder.milestones.map((m) => m.title)).toEqual(["A", "B", "C"]);
-    expect(ladder.uncoveredSections).toEqual(["Pigs", "3. Audio"]);
+    expect(ladder.uncoveredSections).toEqual(["Frogs", "3. Audio"]);
   });
 
   it("a ladder without the new fields still validates (defaults), so an older model reply is not a failed campaign", async () => {

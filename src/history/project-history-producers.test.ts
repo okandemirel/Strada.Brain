@@ -42,13 +42,13 @@ function openStorage(): DaemonStorage {
 describe("createProjectHistoryRecorder", () => {
   it("records against the project it was built for and returns the stored event", () => {
     const storage = openStorage();
-    const record = createProjectHistoryRecorder(storage, { projectId: "PixelFlow" });
+    const record = createProjectHistoryRecorder(storage, { projectId: "SampleGame" });
     const event = record({
       kind: "milestone",
       summary: "art pass done",
       owner: { userId: "alice" },
     });
-    expect(event!.projectId).toBe("PixelFlow");
+    expect(event!.projectId).toBe("SampleGame");
     const store = new ProjectHistoryStore(storage);
     expect(store.get(event!.id, "alice")).toBeDefined();
     expect(store.get(event!.id, "bob")).toBeUndefined();
@@ -135,7 +135,7 @@ describe("ApprovalQueue records decisions in the durable history", () => {
   function queueWithHistory(): { queue: ApprovalQueue; storage: DaemonStorage; store: ProjectHistoryStore } {
     const storage = openStorage();
     const queue = new ApprovalQueue(storage, 30);
-    queue.setProjectHistoryRecorder(createProjectHistoryRecorder(storage, { projectId: "PixelFlow" }));
+    queue.setProjectHistoryRecorder(createProjectHistoryRecorder(storage, { projectId: "SampleGame" }));
     return { queue, storage, store: new ProjectHistoryStore(storage) };
   }
 

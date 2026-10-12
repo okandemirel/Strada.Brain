@@ -137,8 +137,8 @@ describe("the hint reaches the system prompt with real counts", () => {
     // would not catch the orchestrator failing to call it with counts.
     const orchestrator = orchestratorWithVault(
       vaultWith([
-        "Assets/Modules/PixelFlow/Domain/GridPosition.cs",
-        "Assets/Modules/PixelFlow/Domain/BoardSize.cs",
+        "Assets/Modules/SampleGame/Domain/GridPosition.cs",
+        "Assets/Modules/SampleGame/Domain/BoardSize.cs",
         "Packages/Submodules/Strada.Core/Runtime/Modules/ModuleConfig.cs",
       ]),
     );

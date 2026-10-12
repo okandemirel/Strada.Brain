@@ -1,10 +1,10 @@
 /**
  * Procedural low-poly MESH generation — the 3D counterpart of the sprite tool.
  *
- * Measured 2026-08-27 (user: "iyi de oyun 3d idi"): the GDD's visual style is
- * two-layer — flat pixel-art puzzle canvases (covered by unity_generate_sprite)
- * on "softly rendered dimensional stages", with "plump, glossy 3D-feel"
- * characters. Everything the pipeline had produced was flat 2D; nothing could
+ * Measured 2026-08-27 (user: "iyi de oyun 3d idi"): the test game's GDD asks
+ * for a two-layer look — flat 2D puzzle pieces (covered by unity_generate_sprite)
+ * on rendered 3D stages, with 3D-feel characters. Everything the pipeline had
+ * produced was flat 2D; nothing could
  * originate a mesh. The user's Asset Store cache holds exactly one 3D package
  * (an off-theme racing car), so the procedural floor matters here too.
  *
@@ -77,7 +77,7 @@ function spherify(x: number, y: number, z: number): Vec3 {
 /**
  * Rounded box: a subdivided cube whose surface points are lerped toward their
  * sphere projection. `roundness` 0 = sharp cube, 1 = sphere; ~0.4 reads as a
- * "softly rendered" pillow-edged block.
+ * soft, pillow-edged block.
  */
 function roundedBox(size: number, subdivisions: number, roundness: number): Mesh {
   const half = size / 2;
@@ -272,7 +272,7 @@ function capsule(radius: number, height: number, segments: number, rings: number
 }
 
 // =============================================================================
-// ORGANIC — metaball fields + marching tetrahedra (the "plump glossy" tier)
+// ORGANIC — metaball fields + marching tetrahedra (the soft, rounded tier)
 // =============================================================================
 
 /** One blob of an organic build: an ellipsoid field centred at pos. */
@@ -927,7 +927,7 @@ export class MeshGenerateTool implements ITool {
     }
 
     // The game's own style profile shapes the silhouette: `plump` squashes
-    // X/Z outward and Y down — the "plump, glossy 3D-feel" the GDD asks for.
+    // X/Z outward and Y down — the rounder body a toon style asks for.
     // Explicit `plump` input wins; no profile = natural proportions.
     try {
       const { loadStyleProfile } = await import("../../style/style-profile.js");

@@ -791,8 +791,8 @@ describe("CommandHandler build commands (/campaign, /measure, /guardian)", () =>
     await handler.handle("chat-1", "campaign", ["satırlar"]);
     expect(describeRows).toHaveBeenLastCalledWith("chat-1", undefined);
 
-    await handler.handle("chat-1", "campaign", ["rejudge", "campaign_1787904962170_18d4t"]);
-    expect(rejudgeByCommand).toHaveBeenCalledWith("chat-1", "campaign_1787904962170_18d4t");
+    await handler.handle("chat-1", "campaign", ["rejudge", "campaign_1700000000000_a1b2c"]);
+    expect(rejudgeByCommand).toHaveBeenCalledWith("chat-1", "campaign_1700000000000_a1b2c");
     expect(String(sendMarkdown.mock.calls.at(-1)?.[1])).toContain("0 of 6");
   });
 

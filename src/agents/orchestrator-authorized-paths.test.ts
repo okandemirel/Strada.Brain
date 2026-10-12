@@ -28,7 +28,7 @@ vi.mock("./context/strada-knowledge.js", () => ({
 }));
 
 const OUTSIDE = "/tmp/strada-outside/other-repo/config.yaml";
-const NAMED_BY_USER = "/tmp/strada-outside/PixelFlow_GDD.docx";
+const NAMED_BY_USER = "/tmp/strada-outside/SampleGame_GDD.docx";
 /** What extraction keeps: the resolved path (on Windows, on the current drive). */
 const AUTHORIZED = resolve(NAMED_BY_USER);
 

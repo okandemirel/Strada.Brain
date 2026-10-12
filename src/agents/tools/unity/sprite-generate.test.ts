@@ -67,10 +67,10 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("is deterministic in shape/colour when only a name is given", async () => {
-    const r1 = await tool.execute({ name: "FrozenPig" }, makeContext(dir));
-    const png1 = readFileSync(join(dir, "Assets", "Art", "Generated", "FrozenPig.png"));
-    const r2 = await tool.execute({ name: "FrozenPig" }, makeContext(dir));
-    const png2 = readFileSync(join(dir, "Assets", "Art", "Generated", "FrozenPig.png"));
+    const r1 = await tool.execute({ name: "FrozenFrog" }, makeContext(dir));
+    const png1 = readFileSync(join(dir, "Assets", "Art", "Generated", "FrozenFrog.png"));
+    const r2 = await tool.execute({ name: "FrozenFrog" }, makeContext(dir));
+    const png2 = readFileSync(join(dir, "Assets", "Art", "Generated", "FrozenFrog.png"));
     expect(r1.isError).toBeFalsy();
     expect(r2.isError).toBeFalsy();
     // Same name → same shape, same palette, byte-identical render.
@@ -90,9 +90,9 @@ describe("SpriteGenerateTool", () => {
     const a = await tool.execute({ name: "Status/ClaimFeedback", path: "Assets/Modules/LiveOpsModule/Art" }, makeContext(dir));
     expect(a.isError, String(a.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png"))).toBe(true);
-    const b = await tool.execute({ name: "Assets/Art/Generated/Pig.png" }, makeContext(dir));
+    const b = await tool.execute({ name: "Assets/Art/Generated/Frog.png" }, makeContext(dir));
     expect(b.isError, String(b.content)).toBeFalsy();
-    expect(existsSync(join(dir, "Assets/Art/Generated/Pig.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Frog.png"))).toBe(true);
     const c = await tool.execute({ path: "Assets/Art/Generated", batch: [{ name: "Ball.png" }, { name: "Icons/Hand" }] }, makeContext(dir));
     expect(c.isError, String(c.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Art/Generated/Ball.png"))).toBe(true);
@@ -186,11 +186,11 @@ describe("SpriteGenerateTool", () => {
     // Pre-create the meta-less dir chain the way a module would.
     writeFileSync(join(dir, "Assets", "Modules", "BoardModule", "Sprites", "keep.txt"), "x");
     const result = await tool.execute(
-      { name: "Pig_Red", path: "Assets/Modules/BoardModule/Sprites" },
+      { name: "Frog_Red", path: "Assets/Modules/BoardModule/Sprites" },
       makeContext(dir),
     );
     expect(result.isError).toBeFalsy();
-    expect(existsSync(join(dir, "Assets", "Modules", "BoardModule", "Sprites", "Pig_Red.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets", "Modules", "BoardModule", "Sprites", "Frog_Red.png"))).toBe(true);
   });
 });
 

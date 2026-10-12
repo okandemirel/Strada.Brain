@@ -41,15 +41,15 @@ const PARTICLES = "--- !u!198 &302\nParticleSystem:\n  serializedVersion: 8\n  l
 const CLIP = "33333333333333333333333333333333";
 const CONTROLLER = "44444444444444444444444444444444";
 const GDD =
-  "# GDD\n\n## Audio\nMusic base loop per area; SFX for tap, merge and win; audio ducks on pause.\n" +
-  "## Feel\nPigs use squash-and-stretch animation; every merge is animated with a tween.\n" +
-  "## Effects\nConfetti particles on level clear, a sparkle on merge, screen shake on the boss.\n";
+  "# GDD\n\n## Audio\nMusic: one calm loop per pond; SFX for tap, match and win; audio ducks on pause.\n" +
+  "## Feel\nLanterns use squash-and-stretch animation; every match is animated with a tween.\n" +
+  "## Effects\nEmber particles on level clear, a sparkle on match, screen shake on the storm pond.\n";
 
 function withScene(body: string, extraFiles?: (root: string) => void): ReturnType<typeof assessBuiltAsSpecified> {
   const root = project();
   buildSettings(root, ["Assets/Scenes/Main.unity"]);
   put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA}${SPRITE}${body}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-  put(root, "Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+  put(root, "Assets/Art/lantern.png", "pixels", "22222222222222222222222222222222");
   extraFiles?.(root);
   return assessBuiltAsSpecified(root);
 }
@@ -59,7 +59,7 @@ describe("built-as-specified counts sound, motion and effects", () => {
   it("counts AudioSource/Animator/Animation/ParticleSystem and which are bound", () => {
     const r = withScene(`${AUDIO(CLIP)}${AUDIO()}${ANIMATOR(CONTROLLER)}${ANIMATOR()}${PARTICLES}`, (root) => {
       withClip(root);
-      put(root, "Assets/Anim/Pig.controller", "controller", CONTROLLER);
+      put(root, "Assets/Anim/Lantern.controller", "controller", CONTROLLER);
       put(root, "Assets/Anim/Squash.anim", "clip");
     });
     expect(r.shippedAudioSources).toBe(2);
@@ -192,7 +192,7 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     // sentence is the ONLY thing that could exempt the game — and it must not.
     const doc =
       "Every hit carries its own sfx id. The mix ducks audio on pause. Combos raise the sfx pitch. " +
-      "Play without sound is fully equivalent (no audio-only cues); haptics individually toggleable.";
+      "Playing without sound loses nothing, since every cue is mirrored on screen (no audio-only signals); vibration has its own toggle.";
     const d = describeMedia(doc, report);
     // The clips are there and no shipped scene reaches one: that is silent.
     expect(d.refusal).toContain("the delivery is silent");
@@ -208,7 +208,7 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     const report = assessBuiltAsSpecified(root);
     const doc =
       "# GDD\n\nNo music in v1.\n\n## Audio\nEvent / Visual / Audio / Haptic\n" +
-      "Tap pig | ring pulse | pop_tap | Light\nPig lands | slot flash | thump_land | Light\n";
+      "Tap shrine | glow ring | chime_tap | Light\nLantern docks | dock flash | splash_dock | Light\n";
     expect(describeMedia(doc, report).refusal).toContain("the delivery is silent");
   });
 

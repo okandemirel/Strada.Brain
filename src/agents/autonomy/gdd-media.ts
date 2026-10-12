@@ -1,9 +1,9 @@
 /**
  * Sound, motion and effects: what the GDD asks for against what ships.
  *
- * Until 2026-09-10 a GDD's cue list ("music base loop, area variations, a
- * complete SFX list"), its animation brief ("squash-and-stretch pigs") and
- * its effects ("confetti on level clear") were measured by nothing: the
+ * Until 2026-09-10 a GDD's cue list (a music loop per area, a full SFX
+ * list), its animation brief (squash-and-stretch characters) and its effects
+ * (particles when a level is cleared) were measured by nothing: the
  * structural gate counted renderers and sprites, the art inventory counted
  * clips on disk, and a silent, static delivery read as complete.
  *
@@ -39,7 +39,7 @@ export interface MediaDisclosure {
  * Does the document ASK FOR SILENCE — as against asking that the game be
  * PLAYABLE in silence?
  *
- * "Play without sound is fully equivalent (no audio-only cues)" is an
+ * A promise that playing muted loses nothing ("no audio-only cues") is an
  * accessibility requirement, and it matched the denial, so the vehicle's whole
  * audio gate was switched off on a project with twenty-nine imported clips and
  * none reachable from a shipped scene (Codex 2026-09-12 V). An accessibility
@@ -68,7 +68,7 @@ export function deniesSoundAnywhere(documentText: string): boolean {
 
 /**
  * Does the document ask for sound anywhere? A prose cue ("SFX for the tap"),
- * a labelled list or column ("Audio: pop_tap"), or a section of its own — the
+ * a labelled list or column ("Audio: chime_tap"), or a section of its own — the
  * vehicle states its cues as an Event/Visual/Audio/Haptic table, which no
  * prose pattern can see (Codex 2026-09-12 V).
  */

@@ -33,7 +33,7 @@ describe("shouldGenerateMeta across a symlinked project root", () => {
 
   it("accepts a symlinked file path when the project is given by its real path", () => {
     const { real, link } = linkedProject();
-    expect(shouldGenerateMeta(join(link, "Assets", "Art", "Pig.png"), real)).toBe(true);
+    expect(shouldGenerateMeta(join(link, "Assets", "Art", "Frog.png"), real)).toBe(true);
   });
 
   it("still refuses what is outside Assets/, in either form", () => {

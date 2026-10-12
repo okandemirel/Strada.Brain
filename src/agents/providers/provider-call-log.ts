@@ -14,7 +14,7 @@ import { getLogger } from "../../utils/logger.js";
 
 /**
  * How much of the request the tool schemas are. Measured 2026-09-08 03:40
- * on a PixelFlow sprint turn: 121k prompt chars + 104 tools = 57-64k input
+ * on a test-game sprint turn: 121k prompt chars + 104 tools = 57-64k input
  * tokens, and the prompt alone accounts for roughly 30k of them — the rest
  * is tools and messages, and only a measurement says which.
  */

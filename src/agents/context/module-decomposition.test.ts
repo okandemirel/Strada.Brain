@@ -4,7 +4,7 @@
  *
  * The preamble showed a two-module tree (CoreModule, CombatModule) and said
  * nothing about deciding boundaries. Measured on a live run: asked to build a
- * grid game, the agent produced ONE PixelFlow module and split it internally
+ * grid game, the agent produced ONE game module and split it internally
  * into Core/Domain/Application/Infrastructure/Presentation — five folders, five
  * assemblies, one concern. Board state, match detection, gravity, scoring, input
  * and presentation all shipped as a single module, so nothing could be replaced,
@@ -72,7 +72,7 @@ describe("module decomposition guidance", () => {
   });
 
   it("rejects a wrapper named after the game", () => {
-    // Measured: a run created Assets/Modules/PixelFlowModule/ and started
+    // Measured: a run created Assets/Modules/SampleGameModule/ and started
     // placing real modules inside it. The game is not a concern, so it owns
     // nothing and the wrapper only hides its children.
     expect(STRADA_AGENT_PREAMBLE).toMatch(/named after the game or the feature set/);

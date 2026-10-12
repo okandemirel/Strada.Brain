@@ -39,7 +39,7 @@ const FRAMEWORK_DIR = /^net(?:standard|coreapp)?[0-9][0-9.]*(?:-[a-z0-9.]+)?$/i;
  * directory that happens to be called obj — and source is the category where a
  * wrong "derived" verdict destroys hand-written work.
  *
- * Measured 2026-09-17: `Assets/obj/PixelFlow.Runtime.AssemblyInfo.cs`, an
+ * Measured 2026-09-17: `Assets/obj/SampleGame.Runtime.AssemblyInfo.cs`, an
  * authored file, matched the intermediate-name list below and was reported as
  * "nothing the run authored was lost".
  */
@@ -70,7 +70,7 @@ const INTERMEDIATE_NAME = new RegExp(
  * Compiler output, at ANY depth.
  *
  * Path-only excludes used to look at a path's FIRST segment, so
- * `Tools/PixelFlowCoreBuild/obj/Debug/…` and its `bin/Debug/…` twin travelled
+ * `Tools/GameCoreBuild/obj/Debug/…` and its `bin/Debug/…` twin travelled
  * with every lease — and since the project builds them too, all thirteen came
  * back as CONFLICTS and the whole commit published nothing (measured live
  * 2026-09-12 11:26 and 11:51). These are derived from the sources beside them;

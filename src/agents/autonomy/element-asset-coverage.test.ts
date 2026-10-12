@@ -1,7 +1,7 @@
 /**
  * The per-element art-coverage gate.
  *
- * Measured 2026-08-26 (PixelFlow, user-reported): scenes kept shipping empty
+ * Measured 2026-08-26 (the test game, user-reported): scenes kept shipping empty
  * even when prefab structures nominally existed, and no gate ever forced the
  * TARGET GAME'S OWN assets to exist — the unsourced gate only asks "did you
  * check what the user owns", and the nothing-drawn gate only looks at frames
@@ -35,8 +35,8 @@ const GDD = [
   "",
   "| Unlock | Element | Notes |",
   "| ------ | ------- | ----- |",
-  "| L21 | Rocket | blasts a row |",
-  "| L36 | Ice Block | freezes a cell |",
+  "| L18 | Firefly | lights a row |",
+  "| L30 | Frost Tile | freezes a cell |",
   "",
 ].join("\n");
 
@@ -106,7 +106,7 @@ function guardFor(root: string): StradaConformanceGuard {
 /** Drive the guard to the phase where the coverage gate is allowed to speak. */
 function runToPlayedPhase(guard: StradaConformanceGuard, codePath: string): void {
   guard.trackToolCall("file_write", { path: codePath }, false);
-  guard.trackToolCall("unity_my_assets_cloud", { query: "rocket sprite" }, false);
+  guard.trackToolCall("unity_my_assets_cloud", { query: "firefly sprite" }, false);
   guard.trackToolCall("unity_playmode_verify", {}, false);
 }
 
@@ -118,25 +118,25 @@ describe("element asset coverage", () => {
 
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain(GATE);
-    expect(prompt).toContain("Rocket");
-    expect(prompt).toContain("Ice Block");
+    expect(prompt).toContain("Firefly");
+    expect(prompt).toContain("Frost Tile");
     expect(prompt).toContain("unity_generate_sprite");
     // THE DESIGN'S OWN WORDS, never one game's. The prompt quoted the test
-    // vehicle's art direction — "softly rendered dimensional stages", "plump,
-    // glossy 3D-feel" — at every game the system builds (Codex 2026-09-12
-    // R#10, and the standing rule that no vehicle's wording belongs in system
-    // behaviour).
-    expect(prompt).not.toMatch(/softly rendered|plump|glossy|3D-feel|PixelFlow/i);
+    // vehicle's art direction — its stage and character adjectives — at
+    // every game the system builds (Codex 2026-09-12 R#10, and the standing
+    // rule that no vehicle's wording belongs in system behaviour). This GDD
+    // states no look, so the prompt may carry none.
+    expect(prompt).not.toMatch(/glossy|3D-feel|rendered stage/i);
     expect(prompt).toContain("THIS design describes as dimensional");
   });
 
   it("names elements whose art exists but is bound to nothing", () => {
     const { root, codePath } = assembledProject();
-    const rocketGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    addSprite(root, "Rocket", rocketGuid); // on disk, referenced by nothing
+    const fireflyGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    addSprite(root, "Firefly", fireflyGuid); // on disk, referenced by nothing
     const iceGuid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    addSprite(root, "IceBlock", iceGuid);
-    addPrefab(root, [iceGuid]); // only IceBlock is bound
+    addSprite(root, "FrostTile", iceGuid);
+    addPrefab(root, [iceGuid]); // only FrostTile is bound
 
     const guard = guardFor(root);
     runToPlayedPhase(guard, codePath);
@@ -144,17 +144,17 @@ describe("element asset coverage", () => {
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain(GATE);
     expect(prompt).toContain("no prefab/asset/scene references");
-    expect(prompt).toContain("Rocket");
-    expect(prompt).not.toContain("Ice Block");
+    expect(prompt).toContain("Firefly");
+    expect(prompt).not.toContain("Frost Tile");
   });
 
   it("stays silent when every element has art bound into a prefab", () => {
     const { root, codePath } = assembledProject();
-    const rocketGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const fireflyGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const iceGuid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    addSprite(root, "Rocket", rocketGuid);
-    addSprite(root, "IceBlock", iceGuid);
-    addPrefab(root, [rocketGuid, iceGuid]);
+    addSprite(root, "Firefly", fireflyGuid);
+    addSprite(root, "FrostTile", iceGuid);
+    addPrefab(root, [fireflyGuid, iceGuid]);
 
     const guard = guardFor(root);
     runToPlayedPhase(guard, codePath);

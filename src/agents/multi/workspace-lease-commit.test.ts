@@ -128,14 +128,14 @@ function makeUnreadable(target: string): () => void {
 describe("workspace lease commit", () => {
   it("copies a file the agent created back into the project", async () => {
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace PixelFlow { }", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace SampleGame { }", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.written).toContain(join("Assets", "Scripts", "Board.cs"));
     expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe(
-      "namespace PixelFlow { }",
+      "namespace SampleGame { }",
     );
   });
 
@@ -649,11 +649,11 @@ describe("seed snapshot resilience", () => {
     chmodSync(join(source, "Assets", "Sealed"), 0o444);
     try {
       const lease = await gitManager().acquireLease({ label: "seed-walk" });
-      writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace PixelFlow { }", "utf8");
+      writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace SampleGame { }", "utf8");
       const result = await lease.commit();
       await lease.release();
       expect(result.written).toContain(join("Assets", "Scripts", "Board.cs"));
-      expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("namespace PixelFlow { }");
+      expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("namespace SampleGame { }");
     } finally {
       chmodSync(join(source, "Assets", "Sealed"), 0o755);
     }
@@ -913,7 +913,7 @@ describe("capture retention rides the commit", () => {
 });
 
 describe("deletions of the system's own files are applied; the user's stay", () => {
-  // Measured 2026-09-07: every attempt deleted Assets/Scripts/PlayfieldBuilder.cs
+  // Measured 2026-09-07: every attempt deleted Assets/Scripts/BoardBuilder.cs
   // (a duplicate the conformance gate forbids editing) and the InitTestScene
   // scaffolding the hygiene gate demands removed; every commit put them back.
   it("does not delete a file someone CHANGED while the worker ran, nor split its pair (Codex 2026-09-11 N#7)", async () => {
@@ -969,7 +969,7 @@ describe("deletions of the system's own files are applied; the user's stay", () 
   it("removes a scaffolding scene and a campaign-authored duplicate, keeps a user file", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
-    writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "dup", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"), "dup", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "mine", "utf8");
     commitAll("campaign: Sprint 1 — foundations");
     appendFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "more\n");
@@ -977,45 +977,45 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     gitAt(source, "commit", "-qm", "my own tweak");
     const lease = await gitManager().acquireLease({ label: "t" });
     rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
-    rmSync(join(lease.path, "Assets", "Scripts", "PlayfieldBuilder.cs"));
+    rmSync(join(lease.path, "Assets", "Scripts", "BoardBuilder.cs"));
     rmSync(join(lease.path, "Assets", "Scripts", "UserNotes.cs"));
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.deleted.map((d) => d.split(" — ")[0])).toEqual(
-      expect.arrayContaining([join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "Scripts", "PlayfieldBuilder.cs")]),
+      expect.arrayContaining([join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "Scripts", "BoardBuilder.cs")]),
     );
     expect(result.deleted.join("\n")).toContain("scaffolding scene");
     expect(result.deleted.join("\n")).toContain("every commit that touched it was the system's own");
     expect(result.removed).toEqual([join("Assets", "Scripts", "UserNotes.cs")]);
     expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity"))).toBe(false);
-    expect(existsSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"))).toBe(false);
     expect(existsSync(join(source, "Assets", "Scripts", "UserNotes.cs"))).toBe(true);
   });
 });
 
 describe("a loose script with a module twin is the system's own duplicate", () => {
-  // Measured 2026-09-07 15:58: Assets/Scripts/PlayfieldBuilder.cs, with a
+  // Measured 2026-09-07 15:58: Assets/Scripts/BoardBuilder.cs, with a
   // user-worded history, came back on every attempt while the module copy
   // held the real one and the framework-paths refusal said "delete it".
   it("applies the deletion even when the history is not campaign-only", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     mkdirSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
     // Byte-identical: a duplicate by content, whatever its history says.
-    writeFileSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"), "module copy", "utf8");
-    writeFileSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts", "PlayfieldBuilder.cs"), "module copy", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"), "module copy", "utf8");
+    writeFileSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts", "BoardBuilder.cs"), "module copy", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "Solo.cs"), "no twin", "utf8");
-    commitAll("feat: construct PlayfieldBuilder runtime");
+    commitAll("feat: construct BoardBuilder runtime");
     const lease = await gitManager().acquireLease({ label: "t" });
-    rmSync(join(lease.path, "Assets", "Scripts", "PlayfieldBuilder.cs"));
+    rmSync(join(lease.path, "Assets", "Scripts", "BoardBuilder.cs"));
     rmSync(join(lease.path, "Assets", "Scripts", "Solo.cs"));
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(result.deleted.join("\n")).toContain("PlayfieldBuilder.cs — loose duplicate of Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs");
-    expect(existsSync(join(source, "Assets", "Scripts", "PlayfieldBuilder.cs"))).toBe(false);
+    expect(result.deleted.join("\n")).toContain("BoardBuilder.cs — loose duplicate of Assets/Modules/PresentationModule/Scripts/BoardBuilder.cs");
+    expect(existsSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"))).toBe(false);
     expect(result.removed).toEqual([join("Assets", "Scripts", "Solo.cs")]); // no twin: stays, reported
   });
 });
@@ -1599,7 +1599,7 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
 describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () => {
   it("does not carry, publish or conflict on bin/obj build output", async () => {
     // Measured live 2026-09-12 11:26 and 12:03: thirteen files under
-    // Tools/PixelFlowCoreBuild/{bin,obj}/Debug differed between the lease and
+    // Tools/GameCoreBuild/{bin,obj}/Debug differed between the lease and
     // the project — both had built them — so every one came back a CONFLICT,
     // the commit published nothing, and the whole node failed.
     mkdirSync(join(source, "Tools", "CoreBuild", "obj", "Debug"), { recursive: true });

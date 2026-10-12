@@ -41,7 +41,7 @@ const node = (id: string, task: string) =>
 
 const nodes = [
   node("n1", "write the board service"),
-  node("n2", "write the pig service"),
+  node("n2", "write the frog service"),
   node("n3", "write the scoring service"),
 ] as never[];
 

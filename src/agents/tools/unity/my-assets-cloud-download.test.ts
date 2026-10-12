@@ -31,8 +31,8 @@ function fetchFor(opts: { body?: Buffer; downloadStatus?: number; seen?: Array<{
     if (url.includes("legacy-package-download-info")) {
       return new Response(JSON.stringify({
         result: { download: {
-          url: "https://cdn.test/signed/pigs.unitypackage?sig=1",
-          filename_safe_package_name: "Plump Pigs Pack",
+          url: "https://cdn.test/signed/frogs.unitypackage?sig=1",
+          filename_safe_package_name: "Plump Frogs Pack",
           filename_safe_publisher_name: "Soak Games",
           filename_safe_category_name: "3D Characters",
         } },
@@ -62,7 +62,7 @@ describe("unity_my_assets_cloud download", () => {
     const result = await tool.execute({ action: "download", productId: "12345" }, ctx);
     expect(result.isError).toBeFalsy();
 
-    const expected = join(cache, "Soak Games", "3D Characters", "Plump Pigs Pack.unitypackage");
+    const expected = join(cache, "Soak Games", "3D Characters", "Plump Frogs Pack.unitypackage");
     expect(existsSync(expected)).toBe(true);
     expect(readFileSync(expected).equals(PKG)).toBe(true);
     expect(String(result.content)).toContain(expected);

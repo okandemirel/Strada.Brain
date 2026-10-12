@@ -510,7 +510,7 @@ const ASSETS_UNSOURCED_GATE_LIMIT = 2;
  * sibling above — the fix it names is concrete and cheap to attempt.
  *
  * This is the gate for the measured "prefab yapısı sözde oluşturulsa bile
- * sahneler hep boş" failure (PixelFlow, 2026-08-26): code and even prefab
+ * sahneler hep boş" failure (the test game, 2026-08-26): code and even prefab
  * FILES existed while no element had art and nothing rendered. SPEC SCOPE
  * checks code against the schedule; this checks the schedule against ART.
  */
@@ -951,7 +951,7 @@ export class StradaConformanceGuard {
    * test can reach Presentation, no layer can be tested in isolation, and a
    * change anywhere rebuilds everything.
    *
-   * Measured: a PixelFlow module with five code assemblies — Domain (22 files),
+   * Measured: a test-game module with five code assemblies — Domain (22 files),
    * Application (9), Infrastructure (8), Presentation (2), Core (1) — carried
    * one Tests assembly at the module root that referenced all five. Four of the
    * five assemblies had no test of their own.
@@ -973,8 +973,8 @@ export class StradaConformanceGuard {
    *
    * Measured: asked to add tests, an agent created the framework's
    * Tests/Runtime + Tests/Editor pair AND kept its own habit of a Tests/ root
-   * assembly, ending with Tests/YourGame.PixelFlow.Tests.asmdef and
-   * Tests/Runtime/YourGame.PixelFlow.Tests.asmdef claiming one name — plus six
+   * assembly, ending with Tests/YourGame.SampleGame.Tests.asmdef and
+   * Tests/Runtime/YourGame.SampleGame.Tests.asmdef claiming one name — plus six
    * test files at the Tests root, belonging to neither mode.
    */
   private duplicateAssemblyNames(): string[] {
@@ -1049,7 +1049,7 @@ export class StradaConformanceGuard {
    * proves the game, and nothing here had ever asked for one.
    */
   /**
-   * The design document is the checklist. Measured 2026-08-24 (PixelFlow):
+   * The design document is the checklist. Measured 2026-08-24 (the test game):
    * the GDD schedules sixteen elements in a literal table; runs delivered a
    * subset and called it done because no gate compared code against spec.
    * Fires only after real code exists (module roots touched) so early boots
@@ -1173,7 +1173,7 @@ export class StradaConformanceGuard {
     if (digests.size === 0) return null;
     if (digests.size === 1) return `all ${frames.length} captured frames are identical`;
 
-    // Two ways a game can fake "drawing", both measured on PixelFlow:
+    // Two ways a game can fake "drawing", both measured on the test game:
     //   1. HUD-only variation — sixty frames differed ONLY by the progress bar
     //      filling over an empty sky (8 distinct of 60 = 13%).
     //   2. Scene-census gaming — a runtime-construction project keeps the scene
@@ -1634,7 +1634,7 @@ export class StradaConformanceGuard {
       const matchIdx = artNames.findIndex((n) => tokens.some((t) => n.includes(t)));
       if (matchIdx === -1) {
         // No art file NAMED after the element — but sourced (purchased) art
-        // rarely is: an element "Pig" satisfied by Boar_cub_IP.fbx matches no
+        // rarely is: an element "Frog" satisfied by Toad_cub_IP.fbx matches no
         // token. Before accusing, check whether a prefab/scene NAMED after the
         // element references ANY art guid: bound art under a different name
         // is coverage, not a gap.
@@ -2000,7 +2000,7 @@ export class StradaConformanceGuard {
 
     // Per-element art coverage: a run can clear "assets sourced" and "frames
     // differ" while its scheduled elements have no sprites at all — measured
-    // (PixelFlow, 2026-08-26): prefab structures existed on paper, scenes
+    // (the test game, 2026-08-26): prefab structures existed on paper, scenes
     // stayed empty, and no gate ever forced the target game's own assets to
     // exist. SPEC SCOPE checks code against the schedule; this gate checks
     // the schedule against ART — each element needs a sprite that exists AND

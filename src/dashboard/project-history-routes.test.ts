@@ -48,7 +48,7 @@ function fixture(): Fixture {
   const store = new ProjectHistoryStore(storage);
   const alice = store.record({
     kind: "decision",
-    projectId: "PixelFlow",
+    projectId: "SampleGame",
     summary: "Approved build 41",
     owner: { scope: "user", userId: "alice" },
     version: { campaignRevision: "rev-41", commitSha: "a1b2c3d4e5f6" },
@@ -56,14 +56,14 @@ function fixture(): Fixture {
   });
   const build = store.record({
     kind: "delivery",
-    projectId: "PixelFlow",
+    projectId: "SampleGame",
     summary: "Build 41 delivered",
     owner: { scope: "user", userId: "alice" },
     version: { campaignRevision: "rev-41", commitSha: "a1b2c3d4e5f6" },
   });
   const bob = store.record({
     kind: "milestone",
-    projectId: "PixelFlow",
+    projectId: "SampleGame",
     summary: "bob's milestone",
     owner: { scope: "user", userId: "bob" },
   });
@@ -176,7 +176,7 @@ describe("handleProjectHistoryRoutes — the newest events for the caller", () =
 
   it("filters by kind and project, and refuses an unknown kind", () => {
     const f = fixture();
-    const ok = get(`${PROJECT_HISTORY_ROUTE_PREFIX}?kind=delivery&project=PixelFlow`, f.ctx, as("alice"));
+    const ok = get(`${PROJECT_HISTORY_ROUTE_PREFIX}?kind=delivery&project=SampleGame`, f.ctx, as("alice"));
     expect((responseJson(ok.res) as { events: ProjectHistoryEvent[] }).events.map((e) => e.id)).toEqual([f.build.id]);
 
     const otherProject = get(`${PROJECT_HISTORY_ROUTE_PREFIX}?project=SomethingElse`, f.ctx, as("alice"));

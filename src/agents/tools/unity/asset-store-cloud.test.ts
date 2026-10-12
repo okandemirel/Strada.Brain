@@ -44,14 +44,14 @@ describe("UnityAssetStoreClient", () => {
         return TOKEN_OK;
       },
       "https://pkg.test/-/api/purchases": () => [
-        { productId: "1", title: "Pig Pack", publisher: "Acme" },
+        { productId: "1", title: "Frog Pack", publisher: "Acme" },
       ],
     });
     const client = new UnityAssetStoreClient(LINK, f);
 
     const a = await client.listPurchases();
     const b = await client.listPurchases();
-    expect(a[0]!.title).toBe("Pig Pack");
+    expect(a[0]!.title).toBe("Frog Pack");
     expect(b).toHaveLength(1);
     expect(tokenCalls).toBe(1);
   });
@@ -89,14 +89,14 @@ describe("UnityAssetStoreClient", () => {
     const f: FetchLike = async (url) => {
       seenUrl = url;
       return new Response(
-        JSON.stringify({ total: 2, results: [{ id: 27821, title: "Pig" }, { id: 176353, title: "Pig Family" }] }),
+        JSON.stringify({ total: 2, results: [{ id: 27821, title: "Frog" }, { id: 176353, title: "Frog Family" }] }),
         { status: 200 },
       );
     };
     const client = new UnityAssetStoreClient(LINK, f);
-    const hits = await client.searchStore("pig character", 5);
+    const hits = await client.searchStore("frog character", 5);
     expect(hits).toHaveLength(2);
-    expect(seenUrl).toContain("q=pig%20character");
+    expect(seenUrl).toContain("q=frog%20character");
     expect(seenUrl).toContain("rows=5");
     expect(seenUrl.startsWith("https://kharma.unity3d.com/")).toBe(true);
   });
@@ -129,13 +129,13 @@ describe("UnityAssetStoreClient", () => {
       "https://id.test/v1/oauth2/token": () => TOKEN_OK,
       "https://pkg.test/-/api/legacy-package-download-info/27821": () => ({
         url: "https://signed.example/pkg.unitypackage?sig=abc",
-        filename: "pig.unitypackage",
+        filename: "frog.unitypackage",
       }),
     });
     const client = new UnityAssetStoreClient(LINK, f);
     const info = await client.getDownloadInfo("27821");
     expect(info.url).toContain("signed.example");
-    expect(info.filename).toBe("pig.unitypackage");
+    expect(info.filename).toBe("frog.unitypackage");
   });
 });
 
@@ -144,7 +144,7 @@ describe("markDownloaded", () => {
     const merged = markDownloaded(
       [
         { productId: "1", title: "ARCADE FREE Racing Car", downloadedLocally: false },
-        { productId: "2", title: "Some Pig Pack", downloadedLocally: false },
+        { productId: "2", title: "Some Frog Pack", downloadedLocally: false },
       ],
       ["ARCADE - FREE Racing Car", "20 Logo Templates"],
     );
@@ -163,13 +163,13 @@ describe("MyAssetsCloudTool", () => {
   it("search action lists catalog hits", async () => {
     const f = makeFetch({
       "https://kharma.unity3d.com/api/en-US/search/results.json": () => ({
-        results: [{ id: 27821, title: "Pig", publisher: "Acme" }],
+        results: [{ id: 27821, title: "Frog", publisher: "Acme" }],
       }),
     });
     const tool = toolWith(new UnityAssetStoreClient(LINK, f));
-    const result = await tool.execute({ action: "search", query: "pig" }, ctx);
+    const result = await tool.execute({ action: "search", query: "frog" }, ctx);
     expect(result.isError).toBeFalsy();
-    expect(String(result.content)).toContain("Pig");
+    expect(String(result.content)).toContain("Frog");
     expect(String(result.content)).toContain("27821");
   });
 

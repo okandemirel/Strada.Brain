@@ -54,12 +54,12 @@ let lease: string;
 beforeEach(() => {
   // Lexical tmpdir form on purpose: on macOS it is /var/..., realpath /private/var/...
   base = mkdtempSync(join(tmpdir(), "strada-vwn-lease-"));
-  project = join(base, "PixelFlow");
+  project = join(base, "SampleGame");
   mkdirSync(join(project, "Packages", "Submodules", "Strada.Core"), { recursive: true });
   mkdirSync(join(project, "Packages", "Submodules", "Strada.MCP"), { recursive: true });
   mkdirSync(join(project, ".strada", "knowledge"), { recursive: true });
   mkdirSync(join(base, "strada-brain"));
-  projectLink = join(base, "PixelFlow-link");
+  projectLink = join(base, "SampleGame-link");
   symlinkSync(project, projectLink, "dir");
   lease = join(base, "strada-workspaces", "task-abc");
   mkdirSync(lease, { recursive: true });

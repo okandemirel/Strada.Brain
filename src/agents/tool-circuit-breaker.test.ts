@@ -36,7 +36,7 @@ describe("what counts as a broken tool", () => {
   it("keeps the tool when each failure is a different target", () => {
     const b = breaker();
 
-    for (const module of ["Pig", "Board", "Level", "Input", "UI", "Scoring", "GameFlow"]) {
+    for (const module of ["Frog", "Board", "Level", "Input", "UI", "Scoring", "GameFlow"]) {
       b.trackToolError("c", "file_read", true, `Assets/Modules/${module}Module/Missing.cs`);
     }
 

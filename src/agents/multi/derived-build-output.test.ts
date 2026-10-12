@@ -24,7 +24,7 @@ describe("isDerivedBuildOutput: what a build directory looks like, and what mere
     // NuGet's restore graph: it was NOT in this list, so it travelled with
     // every lease, the project restored its own copy, and the conflict failed
     // the goal that had done the work (measured live 2026-09-16 19:03).
-    expect(isDerivedBuildOutput(join("Tools", "PixelFlowCoreBuild", "obj", "PixelFlow.Core.csproj.nuget.dgspec.json"))).toBe(true);
+    expect(isDerivedBuildOutput(join("Tools", "GameCoreBuild", "obj", "SampleGame.Core.csproj.nuget.dgspec.json"))).toBe(true);
     expect(isDerivedBuildOutput(join("Tools", "X", "bin", "Release", "a.dll"))).toBe(true);
     // …while the names .NET actually writes there still count, whatever the extension.
     expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Core.assets.cache"))).toBe(true);
@@ -42,7 +42,7 @@ describe("isDerivedBuildOutput: what a build directory looks like, and what mere
     // either, whatever its extension (Codex 2026-09-12 T#10).
     expect(isDerivedBuildOutput(join("Assets", "obj", "terrain.cache"))).toBe(false);
     expect(isDerivedBuildOutput(join("Assets", "Models", "obj", "Hero.cache"))).toBe(false);
-    expect(isDerivedBuildOutput(join("Assets", "obj", "Pig", "body.fbx"))).toBe(false);
+    expect(isDerivedBuildOutput(join("Assets", "obj", "Frog", "body.fbx"))).toBe(false);
     // …and a game's own file that merely ends in dgspec.json is not NuGet's.
     expect(isDerivedBuildOutput(join("Assets", "Data", "obj", "levels.dgspec.json"))).toBe(false);
     // `bin/` is derived only when it holds a build configuration.
@@ -58,7 +58,7 @@ describe("isDerivedBuildOutput: what a build directory looks like, and what mere
     // MSBuild writes `<Assembly>.AssemblyInfo.cs` into obj/<Config>/<Tfm>/, so
     // the name alone (directly under an obj/ the game owns) proves nothing.
     it("a deliberately authored AssemblyInfo.cs in the game's own obj/ folder is authored", () => {
-      expect(isDerivedBuildOutput(join("Assets", "obj", "PixelFlow.Runtime.AssemblyInfo.cs"))).toBe(false);
+      expect(isDerivedBuildOutput(join("Assets", "obj", "SampleGame.Runtime.AssemblyInfo.cs"))).toBe(false);
       expect(isDerivedBuildOutput(join("Assets", "Modules", "CoreModule", "obj", "Core.AssemblyInfo.cs"))).toBe(false);
       // The same file where the compiler really writes it: still derived.
       expect(isDerivedBuildOutput(join("Tools", "X", "obj", "Debug", "net8.0", "Core.AssemblyInfo.cs"))).toBe(true);
@@ -74,7 +74,7 @@ describe("isDerivedBuildOutput: what a build directory looks like, and what mere
 
     it("an AssemblyInfo.cs outside any obj/ is authored wherever it lives", () => {
       expect(isDerivedBuildOutput(join("Properties", "AssemblyInfo.cs"))).toBe(false);
-      expect(isDerivedBuildOutput(join("Assets", "Scripts", "PixelFlow.Runtime.AssemblyInfo.cs"))).toBe(false);
+      expect(isDerivedBuildOutput(join("Assets", "Scripts", "SampleGame.Runtime.AssemblyInfo.cs"))).toBe(false);
     });
   });
 

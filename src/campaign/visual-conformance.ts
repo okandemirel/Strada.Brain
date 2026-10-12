@@ -3,7 +3,7 @@
  *
  * The capture gate proves a frame exists (size + a distinct hash). It cannot
  * say what is in it: 11351 frames of a flat coloured grid satisfied it while
- * the GDD asked for pixel-art canvases and glossy 3D-feel pigs (audited
+ * the GDD asked for drawn, stylised characters on a rendered stage (audited
  * 2026-09-03).
  *
  * This is DISCLOSURE, not a gate. A stylised look is a judgement call, the

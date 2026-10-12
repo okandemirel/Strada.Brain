@@ -32,10 +32,10 @@ describe("MeshGenerateTool", () => {
   });
 
   it("writes a valid OBJ and a model .meta under Assets/", async () => {
-    const result = await tool.execute({ name: "PigBody", shape: "capsule" }, makeContext(dir));
+    const result = await tool.execute({ name: "FrogBody", shape: "capsule" }, makeContext(dir));
     expect(result.isError).toBeFalsy();
 
-    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "PigBody.obj");
+    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "FrogBody.obj");
     expect(existsSync(objPath)).toBe(true);
     const parsed = parseObj(readFileSync(objPath, "utf8"));
     expect(parsed.verts).toBeGreaterThan(30);
@@ -106,7 +106,7 @@ describe("MeshGenerateTool", () => {
   });
 
   it("organic: fuses metaball fields into one smooth closed mesh", async () => {
-    // A rough pig: body + head + two ears + snout.
+    // A rough frog: body + head + two ears + snout.
     const fields = [
       { pos: [0, 0.3, 0], radii: [0.3, 0.26, 0.24] },
       { pos: [0, 0.62, 0.06], radii: [0.2, 0.18, 0.17] },
@@ -114,10 +114,10 @@ describe("MeshGenerateTool", () => {
       { pos: [0.1, 0.78, 0.02], radii: [0.05, 0.07, 0.03] },
       { pos: [0, 0.6, 0.22], radii: [0.08, 0.07, 0.08] },
     ];
-    const result = await tool.execute({ name: "PigOrganic", shape: "organic", fields }, makeContext(dir));
+    const result = await tool.execute({ name: "FrogOrganic", shape: "organic", fields }, makeContext(dir));
     expect(result.isError).toBeFalsy();
 
-    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "PigOrganic.obj");
+    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "FrogOrganic.obj");
     const parsed = parseObj(readFileSync(objPath, "utf8"));
     expect(parsed.verts).toBeGreaterThan(200);
     expect(parsed.normals).toBe(parsed.verts);

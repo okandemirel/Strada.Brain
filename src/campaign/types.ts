@@ -9,7 +9,7 @@
  *   1. Idea mode: no GDD yet — the first task WRITES the GDD, then the run
  *      stops at exactly one human gate (the approved design) before building.
  *   2. Sprint-to-sprint drive: when a milestone task lands, the next one is
- *      submitted automatically. Measured 2026-08-26 (PixelFlow): Sprint B→C
+ *      submitted automatically. Measured 2026-08-26 (the test game): Sprint B→C
  *      advanced only because a person hand-carried a 562-char kick prompt
  *      into the CLI hours later. The campaign is that kick, in code.
  *
@@ -128,7 +128,7 @@ export interface CampaignMilestone {
   /**
    * The full self-contained sprint kick prompt submitted to the task pipeline
    * when this milestone starts — the same shape as the hand-carried sprint
-   * prompts that drove PixelFlow (scope, verification demands, commit
+   * prompts that drove the test game (scope, verification demands, commit
    * discipline, delivery expectations).
    */
   prompt: string;
@@ -173,7 +173,7 @@ export interface CampaignMilestone {
   testVerdict?: string;
   /**
    * Whether that verdict came from the WHOLE suite rather than a filtered
-   * run. A filtered green is not the suite passing: the delivered PixelFlow
+   * run. A filtered green is not the suite passing: the delivered test-game
    * build's filtered runs were green while its one unfiltered run reported
    * 6 of 173 failing (audited 2026-09-03).
    */
@@ -273,7 +273,7 @@ export interface CampaignMilestone {
   deliveryProofsMissing?: string[];
   /**
    * How many times the scene-hygiene gate has bounced this milestone. The
-   * delivered PixelFlow tree left 14 scenes enabled in Build Settings and the
+   * delivered test-game tree left 14 scenes enabled in Build Settings and the
    * user could not tell which one is the game (measured 2026-09-03). The gate
    * refuses ONLY the unopenable cases — no enabled scene at all, or no entry
    * scene that can be named — because deleting a user's scenes is not this

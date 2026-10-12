@@ -72,7 +72,7 @@ describe("what the user asked to be read", () => {
 
   it("is not thrown off by apostrophes or by quoted words that are not paths", () => {
     expect(extractUserAuthorizedPaths("it's the user's doc at /a/b.md, isn't it")).toEqual([resolve("/a/b.md")]);
-    expect(extractUserAuthorizedPaths('call the game "Pixel Flow" and read /a/b.md')).toEqual([resolve("/a/b.md")]);
+    expect(extractUserAuthorizedPaths('call the game "Grid Quest" and read /a/b.md')).toEqual([resolve("/a/b.md")]);
   });
 
   it("finds nothing in a message with no path", () => {

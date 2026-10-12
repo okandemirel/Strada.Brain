@@ -134,7 +134,7 @@ describe("handleBackgroundLoopRecovery", () => {
     tracker.incrementTextOnlyGate();
     const base = makeBaseParams({
       tracker,
-      strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Stop reflecting and edit PlayfieldBuilder.cs"}'),
+      strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Stop reflecting and edit BoardBuilder.cs"}'),
     });
     base.state.stepResults.push({
       toolName: "file_edit",
@@ -255,7 +255,7 @@ describe("handleBackgroundLoopRecovery", () => {
         tracker,
         availableToolNames: [],
         maxRecoveryEpisodes: 2,
-        strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Edit PlayfieldBuilder.cs next"}'),
+        strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Edit BoardBuilder.cs next"}'),
       });
       if (withEdit) {
         // An edit 20 minutes ago: after the last intervention, but older than the
@@ -269,7 +269,7 @@ describe("handleBackgroundLoopRecovery", () => {
     const withEdit = await handleBackgroundLoopRecovery(blockedParams(true), makeDeps());
     expect(withEdit.action).toBe("replan");
     expect(withEdit.gate).toContain("[MEASURED PROGRESS] 1 successful edit(s)");
-    expect(withEdit.gate).toContain("Required next action: Edit PlayfieldBuilder.cs next");
+    expect(withEdit.gate).toContain("Required next action: Edit BoardBuilder.cs next");
 
     const noEdit = await handleBackgroundLoopRecovery(blockedParams(false), makeDeps());
     expect(noEdit.action).toBe("blocked");

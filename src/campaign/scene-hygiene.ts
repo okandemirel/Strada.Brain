@@ -4,9 +4,9 @@ import { basename, join } from "node:path";
 /**
  * Which scene is the game, and what else the delivery left in the build.
  *
- * Measured on the first real delivery (PixelFlow, 2026-09-03): 20 scenes on
+ * Measured on the first real delivery (the test game, 2026-09-03): 20 scenes on
  * disk, 14 of them ENABLED in Build Settings — InitTestScene<guid>,
- * TargetedLevel151Verification, UfoShowcase, ModuleBoundary, Assembled*,
+ * TargetedLevel42Verification, CometShowcase, ModuleBoundary, Assembled*,
  * LiveOps* — and the report said only "game build complete". The person who
  * opened it could not find the game.
  *

@@ -72,7 +72,7 @@ export function markDownloaded(
     downloadedLocally: normalizedCache.some((c) => {
       const title = normalizeTitle(p.title);
       // Bare bidirectional substring flagged false ON DISK matches (a cached
-      // "pig" marked every pig package downloaded) — require equality, or a
+      // animal name marked every package with it in the title downloaded) — require equality, or a
       // containment where the shorter side is a distinctive name (>= 6 chars).
       if (title.length === 0 || c.length === 0) return false;
       if (c === title) return true;

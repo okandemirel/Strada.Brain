@@ -662,7 +662,7 @@ describe("the fix task is told the errors, not the whole verdict", () => {
           { type: "error", message: "Assets/Modules/RocketModule/Scripts/RocketModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
           { type: "log", message: "## Script Compilation Error for: Csc Library/Bee/artifacts/200b0aE.dag/Game.Modules.Rocket.dll (+2 others)" },
           { type: "log", message: "UnityEngine.StackTraceUtility:ExtractStackTrace () (at /Users/bokken/build/output/unity/unity/Runtime/Export/Scripting/StackTrace.cs:35)" },
-          { type: "log", message: "Assembly for Assembly Definition File 'Assets/Modules/UfoModule/Tests/Editor/Game.Modules.Ufo.Editor.Tests.asmdef' will not be compiled, because it has no scripts associated with it." },
+          { type: "log", message: "Assembly for Assembly Definition File 'Assets/Modules/CometModule/Tests/Editor/Game.Modules.Comet.Editor.Tests.asmdef' will not be compiled, because it has no scripts associated with it." },
         ],
       },
     },
@@ -675,7 +675,7 @@ describe("the fix task is told the errors, not the whole verdict", () => {
     expect(compact.split("error CS1061")).toHaveLength(2);
     expect(compact).toMatch(/1 warning\(s\)[^\n]*\n- .*warning CS0108/);
     expect(compact).not.toContain("StackTraceUtility");
-    expect(compact).not.toContain("Ufo.Editor.Tests.asmdef");
+    expect(compact).not.toContain("Comet.Editor.Tests.asmdef");
     expect(compact.length).toBeLessThan(700);
   });
 

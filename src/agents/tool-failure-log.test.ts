@@ -88,7 +88,7 @@ describe("a verdict buried under its own evidence", () => {
       console: {
         entries: [
           { message: "Mono: successfully reloaded assembly", type: "Log" },
-          { message: "Assets/Modules/Conveyor.cs(14,9): error CS0246", type: "Error" },
+          { message: "Assets/Modules/Spawner.cs(14,9): error CS0246", type: "Error" },
         ],
       },
     },
@@ -129,8 +129,8 @@ describe("what the call was aimed at", () => {
   // found" and "list_directory: directory not found" with no path in any of
   // them — indistinguishable from progress.
   it("names the path a read missed", () => {
-    expect(failureTarget({ path: "Assets/Modules/Tray/TrayModule.cs" })).toBe(
-      "Assets/Modules/Tray/TrayModule.cs",
+    expect(failureTarget({ path: "Assets/Modules/Dock/DockModule.cs" })).toBe(
+      "Assets/Modules/Dock/DockModule.cs",
     );
   });
 

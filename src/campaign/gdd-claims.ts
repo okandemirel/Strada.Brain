@@ -116,9 +116,9 @@ const BOOT_RE =
 const BOOT_REVERSED_RE =
   /\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b[^.;\n]{0,40}?\b(?:to\s+)?(?:load(?:ing)?|boot(?:ing)?|start-?up|launch|first\s+frame|interactive)\b/gi;
 /**
- * A count with its separators and an optional "+": "20 levels", "3,000+
+ * A count with its separators and an optional "+": "20 levels", "2,400+
  * levels", "1.200 Level" — a four-digit catalogue used to match nothing at
- * all, so a document asking for 3,000 levels stated no level count and the
+ * all, so a document asking for 2,400 levels stated no level count and the
  * delivery was measured against whatever smaller number the prose held
  * (Codex 2026-09-12 U#F3).
  */
@@ -178,7 +178,7 @@ function countValue(digits: string): number {
  * by exactly 20 and failed on 21 (Codex 2026-09-12 U#F3).
  */
 export function countComparator(text: string, at: number, matched: string, qualifier: string): "min" | "max" | "eq" {
-  // "3,000+", "3,000 or more" — the qualifier sits between the number and the
+  // "2,400+", "2,400 or more" — the qualifier sits between the number and the
   // noun, so the count regex carries it.
   if (qualifier.includes("+") || /\bor\s+more\b/i.test(qualifier)) return "min";
   if (/\bor\s+(?:fewer|less)\b/i.test(qualifier)) return "max";
@@ -284,7 +284,7 @@ export function extractNumericClaims(gddText: string): {
     for (const m of text.matchAll(re)) {
       const value = toSeconds(Number(m[1]), m[2] ?? "s");
       if (value <= 0 || value > 600) continue;
-      // A LEVEL LOAD IS NOT A COLD BOOT. "Cold boot ≤ 6 s; level load ≤ 1.5 s"
+      // A LEVEL LOAD IS NOT A COLD BOOT. "Cold boot ≤ 5 s; level load ≤ 2.5 s"
       // produced two boot claims, and the stricter one won: the boot gate then
       // demanded that the whole game start in the time one level may take to
       // open (Codex 2026-09-12 U#F3, U#F10). They are separate intervals, and
@@ -421,10 +421,10 @@ export function extractActionBudget(gddText: string): number | undefined {
  * gate.
  *
  * The vehicle's document states its durations in a label/value table
- * ("Median level duration" / "60–150 s (Normal), 150–300 s (Hard)"), which no
+ * ("Typical round length" / "45–120 s (Easy), 120–240 s (Expert)"), which no
  * prose pattern can see, so `playerRunSpec` derived no deadline and the
- * producer's 45-second default cut a legal 150-second round short as
- * unfinished (Codex 2026-09-12 AB, Job 3.6). A MEDIAN is not an every-level
+ * producer's 45-second default cut a legal two-minute round short as
+ * unfinished (Codex 2026-09-12 AB, Job 3.6). A TYPICAL length is not an every-level
  * ceiling, so this is deliberately not a claim: it only tells the run how long
  * it may keep playing.
  */
@@ -454,13 +454,13 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
   const lines = text.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
   for (let i = 0; i < lines.length; i++) {
     if (!DURATION_LABEL_RE.test(lines[i] ?? "")) continue;
-    // WITHIN THE CLAUSE THE LABEL INTRODUCES. "Session length | Levels of 1–4
-    // minutes; ~10 sessions and ~60 minutes of play per DAU per day" gave an
-    // hour-long session allowance, because the sentence goes on to talk about
-    // a DAY (measured on the vehicle's document).
-    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "60–150 s (Normal);
-    // 150–300 s (Hard)" lost Hard mode to the first semicolon, so the run cut
-    // a legal 300-second round short (Codex 2026-09-13 AF#13). A clause that
+    // WITHIN THE CLAUSE THE LABEL INTRODUCES. "Session length | Rounds of 2–5
+    // minutes; ~40 minutes of play per DAU per day" gave the day's total as
+    // the session allowance, because the sentence goes on to talk about a DAY
+    // (measured on the vehicle's document).
+    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "45–120 s (Easy);
+    // 120–240 s (Expert)" lost Expert mode to the first semicolon, so the run cut
+    // a legal 240-second round short (Codex 2026-09-13 AF#13). A clause that
     // changes the subject — to a DAY, a WEEK, a SITTING — ends the read.
     const OTHER_SUBJECT_RE = /\b(?:per\s+(?:day|week|month|dau|user|player)|daily|weekly|sitting|session\s+count|retention)\b/i;
     const clauseOf = (line: string): string =>
@@ -1083,8 +1083,8 @@ export function describeClaims(
   });
   if (otherLevelCounts.length > 0) {
     // WHICH RELEASE THIS IS. The largest count wins so that one catalog can
-    // satisfy every mention, but a document that names 200 for an MVP and
-    // 3,000 for a live target is naming release PHASES — and choosing one of
+    // satisfy every mention, but a document that names 150 for an alpha and
+    // 2,400 for a live target is naming release PHASES — and choosing one of
     // those silently is choosing what to ship (Codex 2026-09-12 V).
     const chosen = assessments.find((a) => a.claim.kind === "level_count")?.claim.value;
     lines.push(

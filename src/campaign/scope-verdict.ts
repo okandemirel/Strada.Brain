@@ -1,7 +1,7 @@
 /**
  * The scope gate's judge (GDD-drift plan W08, M2 + M3).
  *
- * In the measured campaign six of six milestones went green on prose: a worker's
+ * In a measured campaign six of six milestones went green on prose: a worker's
  * report, the verifier's flags, its own tests. Five of their tips carried the
  * system's own "I got stuck" stamp. Here a milestone is green only when two
  * things pass in one acceptance run the system admitted, on the committed
@@ -500,7 +500,7 @@ export type StampDecoder = (text: string) => readonly TerminalKey[];
  * the system wrote into its full result. No stamp is `done`.
  *
  * The decoder is a parameter, and a required one: a default that finds
- * nothing would read every stuck run as `done`, which is how the measured campaign went
+ * nothing would read every stuck run as `done`, which is how a measured campaign went
  * green. The settle path passes W01's `systemStampsIn`.
  */
 export function legacyRunIntegrity(tipResult: string | null | undefined, stampsIn: StampDecoder): RunIntegrity {

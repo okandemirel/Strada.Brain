@@ -1,10 +1,10 @@
 /**
  * GDD dimensionality — what the design asks for, against what the scenes hold.
  *
- * Audited 2026-09-03. The PixelFlow GDD says "plump, glossy 3D-feel pigs" on
- * "softly rendered dimensional stages"; the delivered entry scene had no mesh
- * renderers and bound none of the project's 62 imported models. Nothing in the
- * pipeline ever compared the two.
+ * Audited 2026-09-03. The test game's GDD asks for 3D-feel characters on
+ * rendered stages; the delivered entry scene had no mesh renderers and bound
+ * none of the project's 62 imported models. Nothing in the pipeline ever
+ * compared the two.
  *
  * The expectation is DERIVED FROM THE GDD TEXT, never hardcoded: the terms
  * below are counted across the whole document and reported with their own
@@ -49,7 +49,7 @@ const DIMENSION_TERMS: ReadonlyArray<{ term: string; re: RegExp }> = [
   { term: "isometric", re: /\bisometric\b/giu },
   { term: "orthographic", re: /\borthographic\b/giu },
   { term: "perspective", re: /\bperspective\b/giu },
-  { term: "pixel-art canvas", re: /\bpixel[- ]art canvas(?:es)?\b/giu },
+  { term: "pixel art", re: /\bpixel[- ]art\b/giu },
 ];
 
 export function describeDimensionality(
@@ -86,7 +86,7 @@ export function describeDimensionality(
   }
   if (signals.length === 0) {
     lines.push(
-      "Dimensionality: the GDD states none of 3D / 2D / isometric / orthographic / perspective / pixel-art canvas — " +
+      "Dimensionality: the GDD states none of 3D / 2D / isometric / orthographic / perspective / pixel art — " +
         "nothing to compare the scenes against.",
     );
     return { asksFor3D: false, signals, lines };

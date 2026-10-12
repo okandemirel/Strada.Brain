@@ -87,7 +87,7 @@ export class FileEditTool implements ITool {
         content = await readFile(pathCheck.fullPath, "utf-8");
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-          // Measured 2026-08-23 (PixelFlow): a run whose earlier writes were
+          // Measured 2026-08-23 (the test game): a run whose earlier writes were
           // lost burned turn after turn editing files it remembered creating.
           // The generic old_string miss hid the real fact — the file is not on
           // disk at all. Say so, and name the tool that creates files.

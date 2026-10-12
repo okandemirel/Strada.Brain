@@ -2,7 +2,7 @@
  * Deterministic project-scoped shell allowlist — consulted BEFORE the LLM shell
  * reviewer.
  *
- * Measured 2026-08-23 (PixelFlow run): the conformance gate demanded
+ * Measured 2026-08-23 (test-game run): the conformance gate demanded
  * "GAME NEVER RUN — run the game", the agent answered with exactly the right
  * command (Unity -batchmode -runTests against its own project), and the LLM
  * shell reviewer rejected it twice — once "inconclusive", once "looks

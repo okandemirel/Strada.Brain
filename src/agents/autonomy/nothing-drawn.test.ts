@@ -111,7 +111,7 @@ describe('a game that has never been seen to draw', () => {
   });
 
   it('objects when frame variety is HUD-level (below the distinctiveness bar)', () => {
-    // Measured 2026-08-24 (PixelFlow): sixty frames, only 8 distinct (13%) —
+    // Measured 2026-08-24 (the test game): sixty frames, only 8 distinct (13%) —
     // the variety was the progress bar filling over an empty sky. The gate
     // requires >= 25% distinct digests as evidence of real drawing.
     const frames = [...Array(10).fill('same-pixels'), 'progress-bar-moved'];

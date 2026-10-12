@@ -2,16 +2,16 @@ import { describe, it, expect } from "vitest";
 import { extractScheduledElements, extractFlattenedSchedule, elementCodeTokens, assessSpecScope, findDesignDoc, scheduleLooksPresent, stripCsComments } from "./spec-scope.js";
 
 const GDD_SNIPPET = `
-## 4. GAME ELEMENTS
+## 5. OBSTACLES
 
-### 4.1 Element Introduction Schedule
+### 5.1 Element schedule
 
 | Unlock | Element | One-line pitch |
 |--------|---------|----------------|
-| L21 | Hard Pixel | Armored cube, 2 hits |
-| L36 | Ice Block | Encased cube |
-| L46 | Wall | Indestructible shaping cell |
-| L61 | Lock & Key | Region sealed until key cleared |
+| L18 | Stone Tile | Takes two matches to clear |
+| L30 | Frost Tile | Sealed until a neighbour clears |
+| L42 | Reed Wall | Never clears; shapes the pond |
+| L55 | Bell & Rope | Pond closed until the bell rings |
 `;
 
 describe("spec scope — the design document is the checklist", () => {
@@ -19,17 +19,17 @@ describe("spec scope — the design document is the checklist", () => {
     const gdd = [
       "| Unlock | Element | Notes |",
       "| --- | --- | --- |",
-      "| Level 21 | Ice Block | slides |",
+      "| Level 21 | Frost Tile | slides |",
       "| Chapter 1 | Fire Wall | burns |",
     ].join("\n");
-    expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Ice Block", "Fire Wall"]);
+    expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Frost Tile", "Fire Wall"]);
     // A staffing table is not a game schedule.
     const staffing = ["| # | Who | Role |", "| --- | --- | --- |", "| 1 | Alice (producer) | plans |"].join("\n");
     expect(extractScheduledElements(staffing)).toEqual([]);
     // A string containing "//" does not swallow the rest of the file…
-    expect(stripCsComments('class C { string separator="//"; void IceBlock() {} }')).toContain("IceBlock");
+    expect(stripCsComments('class C { string separator="//"; void FrostTile() {} }')).toContain("FrostTile");
     // …and a comment after a label is still a comment.
-    expect(stripCsComments("void M() { retry:// TODO IceBlock\n }")).not.toContain("IceBlock");
+    expect(stripCsComments("void M() { retry:// TODO FrostTile\n }")).not.toContain("FrostTile");
   });
 
   it("an unlock id in any shape, and a comment is not an implementation (Codex 2026-09-11 B#18)", () => {
@@ -47,13 +47,13 @@ describe("spec scope — the design document is the checklist", () => {
 
   it("extracts the element schedule from a GDD-style table", () => {
     const els = extractScheduledElements(GDD_SNIPPET);
-    expect(els.map((e) => e.name)).toEqual(["Hard Pixel", "Ice Block", "Wall", "Lock & Key"]);
-    expect(els[0]?.unlock).toBe("L21");
+    expect(els.map((e) => e.name)).toEqual(["Stone Tile", "Frost Tile", "Reed Wall", "Bell & Rope"]);
+    expect(els[0]?.unlock).toBe("L18");
   });
 
   it("builds code-token shapes an implementation might use", () => {
-    expect(elementCodeTokens("Ice Block")).toContain("IceBlock");
-    expect(elementCodeTokens("Lock & Key")).toContain("LockKey");
+    expect(elementCodeTokens("Frost Tile")).toContain("FrostTile");
+    expect(elementCodeTokens("Bell & Rope")).toContain("BellRope");
   });
 
   it("names scheduled elements missing from Assets code", () => {
@@ -68,11 +68,11 @@ describe("spec scope — the design document is the checklist", () => {
       writeFileSync(gdd, GDD_SNIPPET + "\n# rest of a large document\n" + "x".repeat(500));
       const scripts = join(root, "Assets", "Modules", "M", "Scripts");
       mkdirSync(scripts, { recursive: true });
-      writeFileSync(join(scripts, "IceBlock.cs"), "public class IceBlock {}");
+      writeFileSync(join(scripts, "FrostTile.cs"), "public class FrostTile {}");
 
       const report = assessSpecScope(root);
       expect(report.scheduled).toBe(4);
-      expect(report.missing.map((m) => m.name)).toEqual(["Hard Pixel", "Wall", "Lock & Key"]);
+      expect(report.missing.map((m) => m.name)).toEqual(["Stone Tile", "Reed Wall", "Bell & Rope"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -91,7 +91,7 @@ describe("findDesignDoc runs in this ESM module", () => {
     const root = mkdtempSync(join(tmpdir(), "spec-scope-"));
     try {
       mkdirSync(join(root, "docs"));
-      writeFileSync(join(root, "docs", "Game_GDD.md"), "# GDD\n\nElement schedule: pig, ball");
+      writeFileSync(join(root, "docs", "Game_GDD.md"), "# GDD\n\nElement schedule: lantern, shrine");
       expect(findDesignDoc(root)).toBe(join(root, "docs", "Game_GDD.md"));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -99,7 +99,7 @@ describe("findDesignDoc runs in this ESM module", () => {
   });
 });
 
-describe("short element names count as whole words (measured 2026-09-10: 'Cube' with `public class Cube` reported missing)", () => {
+describe("short element names count as whole words (measured 2026-09-10: a 4-letter element with its own class reported missing)", () => {
   it("finds a 4-letter element as an identifier and not inside another word", async () => {
     const { assessSpecScope } = await import("./spec-scope.js");
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
@@ -109,11 +109,11 @@ describe("short element names count as whole words (measured 2026-09-10: 'Cube' 
     try {
       mkdirSync(join(root, "docs"));
       mkdirSync(join(root, "Assets"));
-      writeFileSync(join(root, "docs", "GDD.md"), "| L1 | Cube |\n| L2 | Pig |\n| L3 | Tray |\n");
-      writeFileSync(join(root, "Assets", "A.cs"), "public class Cube {} // pigment\nclass Tray {}\n");
+      writeFileSync(join(root, "docs", "GDD.md"), "| L1 | Reed |\n| L2 | Wick |\n| L3 | Dock |\n");
+      writeFileSync(join(root, "Assets", "A.cs"), "public class Reed {} // wickerwork\nclass Dock {}\n");
       const report = assessSpecScope(root, join(root, "docs", "GDD.md"));
       expect(report.scheduled).toBe(3);
-      expect(report.missing.map((m) => m.name)).toEqual(["Pig"]); // "pigment" is not Pig
+      expect(report.missing.map((m) => m.name)).toEqual(["Wick"]); // "wickerwork" is not Wick
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -122,50 +122,50 @@ describe("short element names count as whole words (measured 2026-09-10: 'Cube' 
 
 /**
  * A schedule table that lost its pipes. Measured by Codex 2026-09-12 (W#12)
- * on the real vehicle document: its whole element schedule — sixteen blockers
- * and special mechanics — read as ZERO scheduled elements, because a document
+ * on the real vehicle document: its whole element schedule — sixteen game
+ * elements — read as ZERO scheduled elements, because a document
  * converted out of Google Docs arrives as one cell per LINE. Zero suppresses
  * the coverage check entirely, so none of that content was ever compared to
  * the code.
  */
 describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
   const flattened = [
-    "4.1 Element Introduction Schedule",
+    "5.1 Element schedule",
     "Unlock",
     "Element",
     "One-line pitch",
     "Side",
-    "L6",
-    "Dual conveyor",
-    "Second belt row; queue reads as a grid",
-    "Belt",
-    "L21",
-    "Hard Pixel",
-    "Armored cube, 2 hits",
-    "Canvas",
-    "L36",
-    "Ice Block",
-    "Encased cube; break via adjacent clears",
-    "Canvas",
+    "L5",
+    "Twin current",
+    "Two currents run side by side",
+    "Water",
+    "L18",
+    "Stone Tile",
+    "Takes two matches to clear",
+    "Bank",
+    "L30",
+    "Frost Tile",
+    "Sealed until a neighbour clears",
+    "Bank",
     "",
-    "4.2 Designer usage",
-    "Introduce each element alone, in a friendly level.",
+    "5.2 Designer notes",
+    "Each new element first appears on its own, in an easy level.",
   ].join("\n");
 
   it("reads the rows a converter flattened, with the right column for each", () => {
     expect(extractScheduledElements(flattened)).toEqual([
-      { unlock: "L6", name: "Dual conveyor" },
-      { unlock: "L21", name: "Hard Pixel" },
-      { unlock: "L36", name: "Ice Block" },
+      { unlock: "L5", name: "Twin current" },
+      { unlock: "L18", name: "Stone Tile" },
+      { unlock: "L30", name: "Frost Tile" },
     ]);
   });
 
   it("stops at the end of the table and does not invent elements from prose", () => {
     const after = `${flattened}\nL99\nnot a table row at all — this is a sentence about L99.`;
     expect(extractScheduledElements(after).map((e) => e.name)).toEqual([
-      "Dual conveyor",
-      "Hard Pixel",
-      "Ice Block",
+      "Twin current",
+      "Stone Tile",
+      "Frost Tile",
     ]);
     // A document with no schedule still yields none.
     expect(extractScheduledElements("# GDD\n\nA puzzle game with 12 levels.")).toEqual([]);
@@ -177,30 +177,30 @@ describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
 
   it("still reads an ordinary pipe table", () => {
     expect(extractScheduledElements(GDD_SNIPPET).map((e) => e.name)).toEqual([
-      "Hard Pixel",
-      "Ice Block",
-      "Wall",
-      "Lock & Key",
+      "Stone Tile",
+      "Frost Tile",
+      "Reed Wall",
+      "Bell & Rope",
     ]);
   });
 });
 
 /**
  * The real two-element false refusal on the vehicle (Codex 2026-09-12 Y):
- * "Caged (Locked) Pig" and "Dragon (boss)" produced only the annotated
- * spellings, so a project whose code says `CagedPig` and `Dragon` was
+ * "Caged (Sealed) Lantern" and "Storm (boss)" produced only the annotated
+ * spellings, so a project whose code says `CagedLantern` and `Storm` was
  * reported as missing the elements it had implemented.
  */
 describe("a parenthetical is an annotation, not part of the name (Codex 2026-09-12 Y)", () => {
   it("offers the name without its notes as well as with them", () => {
-    expect(elementCodeTokens("Caged (Locked) Pig")).toEqual(
-      expect.arrayContaining(["CagedLockedPig", "CagedPig", "cagedpig"]),
+    expect(elementCodeTokens("Caged (Sealed) Lantern")).toEqual(
+      expect.arrayContaining(["CagedSealedLantern", "CagedLantern", "cagedlantern"]),
     );
-    expect(elementCodeTokens("Dragon (boss)")).toEqual(expect.arrayContaining(["Dragon", "dragon", "DragonBoss"]));
-    expect(elementCodeTokens("Frozen Pig (+ moving belt)")).toEqual(expect.arrayContaining(["FrozenPig"]));
+    expect(elementCodeTokens("Storm (boss)")).toEqual(expect.arrayContaining(["Storm", "storm", "StormBoss"]));
+    expect(elementCodeTokens("Frozen Lantern (+ moving current)")).toEqual(expect.arrayContaining(["FrozenLantern"]));
     // A name with no annotation is unchanged.
-    expect(elementCodeTokens("Ice Block")).toEqual(["IceBlock", "iceblock"]);
-    expect(elementCodeTokens("Lock & Key")).toEqual(["LockKey", "lockkey"]);
+    expect(elementCodeTokens("Frost Tile")).toEqual(["FrostTile", "frosttile"]);
+    expect(elementCodeTokens("Bell & Rope")).toEqual(["BellRope", "bellrope"]);
   });
 });
 
@@ -223,7 +223,7 @@ describe("a shared stripped name covers no variant (Codex 2026-09-12 Z#8)", () =
     return root;
   };
   const twoGates =
-    "\n## 4. GAME ELEMENTS\n\n### 4.1 Element Introduction Schedule\n\n" +
+    "\n## 5. OBSTACLES\n\n### 5.1 Element schedule\n\n" +
     "| Unlock | Element | Pitch |\n|---|---|---|\n| L1 | Gate (one-way) | in only |\n| L2 | Gate (two-way) | both |\n";
 
   it("reports both variants missing when only the shared name exists", () => {
@@ -264,7 +264,7 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
     // Two columns, and the vehicle's four: the width is whatever makes the
     // rows line up, not a number this reader assumes.
     ["two columns", "Unlock\nElement\nL1\nIce"],
-    ["four columns", "Unlock\nElement\nPitch\nSide\nL1\nIce\nFreezes\nCanvas"],
+    ["four columns", "Unlock\nElement\nPitch\nSide\nL1\nIce\nFreezes\nBank"],
     // Two shapes AT ONCE: each worked alone and they failed together, because
     // the header walk stepped straight into a blank (Codex 2026-09-12 AB J2.5).
     ["the element column first AND blank-separated", "Element\n\nUnlock\n\nPitch\n\nIce\n\nL1\n\nFreezes"],

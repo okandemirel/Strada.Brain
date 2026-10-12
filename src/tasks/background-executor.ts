@@ -2825,7 +2825,7 @@ export class BackgroundExecutor {
     // old key hashed the prompt — but every retry resubmits with a replay
     // preface prepended, so the key changed each round, the attempt counter
     // reset to 0 forever, and the backoff never grew past its floor. Measured
-    // 2026-08-27 (PixelFlow): a fresh full decomposition every 30–60s for
+    // 2026-08-27 (the test game): a fresh full decomposition every 30–60s for
     // twenty minutes, sixteen plan files deep, cap never reached.
     const key = `mission:${this.lineageRootTaskId(task)}`;
     const attempt = this.missionRetries.get(key) ?? 0;

@@ -36,7 +36,7 @@ async function decompositionPrompt(): Promise<string> {
   const { provider, prompts } = recordingProvider();
   await new GoalDecomposer(provider, 3).decomposeProactive(
     "s",
-    "Build the game in PixelFlow_GDD.docx",
+    "Build the game in SampleGame_GDD.docx",
   );
   return prompts();
 }

@@ -459,7 +459,7 @@ describe("jaccardSimilarity", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("dedup merges only true duplicates, and supersession is soft (D43 / audit 04.5)", () => {
   const TRIGGER = "CS0246: The type or namespace name 'BoardView' could not be found";
-  const PROJECT = "/projects/pixelflow";
+  const PROJECT = "/projects/samplegame";
 
   function instinct(overrides: Partial<Instinct>): Instinct {
     return {
@@ -469,7 +469,7 @@ describe("dedup merges only true duplicates, and supersession is soft (D43 / aud
       status: "active",
       confidence: 0.8,
       triggerPattern: TRIGGER,
-      action: "Add using PixelFlow.Board;",
+      action: "Add using GridQuest.Board;",
       contextConditions: [],
       stats: { timesSuggested: 4, timesApplied: 3, timesFailed: 1, successRate: 0.75, averageExecutionMs: 0 },
       createdAt: Date.now(),
@@ -519,7 +519,7 @@ describe("dedup merges only true duplicates, and supersession is soft (D43 / aud
   });
 
   it("a true duplicate is superseded — soft-retired, pointing at its successor, never deleted", async () => {
-    const { storage, matcher } = await harness("Add using PixelFlow.Board;");
+    const { storage, matcher } = await harness("Add using GridQuest.Board;");
 
     await matcher.findSimilarInstincts(TRIGGER, { scope });
 
@@ -532,7 +532,7 @@ describe("dedup merges only true duplicates, and supersession is soft (D43 / aud
   });
 
   it("a superseded instinct is out of retrieval and out of the match list (legitimate dedup kept)", async () => {
-    const { storage, matcher } = await harness("Add using PixelFlow.Board;");
+    const { storage, matcher } = await harness("Add using GridQuest.Board;");
 
     const matches = await matcher.findSimilarInstincts(TRIGGER, { scope });
     expect(matches.some((m) => m.id === "instinct-loser"), "the merged loser stayed in the results").toBe(false);
@@ -544,7 +544,7 @@ describe("dedup merges only true duplicates, and supersession is soft (D43 / aud
   });
 
   it("the superseded instinct's scopes reach the winner (legitimate behaviour kept)", async () => {
-    const { storage, matcher } = await harness("Add using PixelFlow.Board;");
+    const { storage, matcher } = await harness("Add using GridQuest.Board;");
     storage.addInstinctScope("instinct-loser", "/projects/other");
 
     await matcher.findSimilarInstincts(TRIGGER, { scope });

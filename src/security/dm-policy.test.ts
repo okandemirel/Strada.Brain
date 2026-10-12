@@ -366,10 +366,10 @@ describe("a destructive ACT and a merely suspicious SHAPE are different question
     // Measured live 2026-09-18: the conformance gate told a worker to move game
     // code under Assets/Modules/<Name>Module/, and this gate then refused the
     // removal of the empty directory it had just left behind — 14 refusals of
-    // `rmdir Assets/PixelFlow/Core/Sim/Data …` in ten minutes, the sprint
+    // `rmdir Assets/SampleGame/Core/Sim/Data …` in ten minutes, the sprint
     // spending its turns on a cleanup nothing would allow. POSIX rmdir removes
     // only EMPTY directories and fails with ENOTEMPTY otherwise.
-    expect(destructiveShellFlag("rmdir Assets/PixelFlow/Core/Sim/Data Assets/PixelFlow/Core")).toBeNull();
+    expect(destructiveShellFlag("rmdir Assets/SampleGame/Core/Sim/Data Assets/SampleGame/Core")).toBeNull();
     expect(destructiveShellFlag("rmdir -p Assets/Modules/Old/Empty")).toBeNull();
     // A path that merely CONTAINS the word is not a command either.
     expect(destructiveShellFlag("cat docs/rmdir-notes.md")).toBeNull();
@@ -443,7 +443,7 @@ describe("a recursive delete is refused however it is spelled (round 15 #10)", (
 
   it("still lets the inspection those tools exist for through (guard)", () => {
     expect(destructiveShellFlag("find Assets -name '*.cs'")).toBeNull();
-    expect(destructiveShellFlag("rmdir Assets/PixelFlow/Core")).toBeNull();
+    expect(destructiveShellFlag("rmdir Assets/SampleGame/Core")).toBeNull();
     expect(destructiveShellFlag("cat docs/rmdir-notes.md")).toBeNull();
   });
 });
@@ -532,7 +532,7 @@ describe("the home and system-config protection holds for macOS spellings", () =
 
   // Tightening cuts both ways: on macOS the work itself lives under
   // /Users/<me>, and runs name it by absolute path (measured: campaign
-  // commands write into /Users/okan/Documents/…/PixelFlow-Clean). Refusing
+  // commands write into /Users/okan/Documents/…/SampleGame). Refusing
   // every write under /Users would refuse the work.
   it.each([
     "dotnet build > /Users/okan/Documents/Game/build.log 2>&1",

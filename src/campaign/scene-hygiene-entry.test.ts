@@ -62,18 +62,18 @@ describe("scene hygiene entry selection", () => {
   it("names the scene the BUILD opens, and the richer one beside it (Codex 2026-09-11 C#26)", () => {
     const report = assessSceneHygiene("/p", io({
       "ProjectSettings/EditorBuildSettings.asset": settings([
-        "Assets/Scenes/UfoShowcase.unity",
+        "Assets/Scenes/CometShowcase.unity",
         "Assets/Scenes/ProductionMain.unity",
       ]),
       // The scaffolding scene is RICHER, so a count-only rule would pick it.
-      "Assets/Scenes/UfoShowcase.unity": Array.from({ length: 9 }, () => "GameObject:").join("\n"),
+      "Assets/Scenes/CometShowcase.unity": Array.from({ length: 9 }, () => "GameObject:").join("\n"),
       "Assets/Scenes/ProductionMain.unity": Array.from({ length: 4 }, () => "GameObject:").join("\n"),
     }) as never);
 
     // Unity loads build index 0, so that is the scene a person gets — saying
     // "open ProductionMain" described a game nobody would see. The richer
     // scene is named beside it with what to do about it.
-    expect(report.entry?.path).toBe("Assets/Scenes/UfoShowcase.unity");
+    expect(report.entry?.path).toBe("Assets/Scenes/CometShowcase.unity");
     expect(report.richest?.path).toBe("Assets/Scenes/ProductionMain.unity");
     expect(renderSceneHygiene(report)).toContain("NOT what the build opens");
   });

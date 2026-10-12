@@ -22,9 +22,9 @@ import {
 import { buildPlanningPrompt } from "./paor-prompts.js";
 
 const GREENFIELD =
-  "Pixel Flow adinda 2D bir Unity oyunu gelistir. Izgara yonetimi, akis mantigi, eslestirme ve puanlama kur.";
+  "Grid Quest adinda 2D bir Unity oyunu gelistir. Izgara yonetimi, akis mantigi, eslestirme ve puanlama kur.";
 const WITH_TARGET =
-  "Assets/Scripts altina PixelFlow namespace'inde Board.cs adli tek bir C# dosyasi yaz.";
+  "Assets/Scripts altina GridQuest namespace'inde Board.cs adli tek bir C# dosyasi yaz.";
 
 describe("buildCreationExecutionDirective", () => {
   it("fires for a creation request that names no files", () => {

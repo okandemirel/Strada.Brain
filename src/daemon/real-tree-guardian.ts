@@ -2,7 +2,7 @@
  * Real-Tree Guardian — the autonomous detect-and-fix loop for the PROJECT,
  * not for leases.
  *
- * Measured 2026-08-27 (user-reported): the real PixelFlow tree sat RED for
+ * Measured 2026-08-27 (user-reported): the real test-game tree sat RED for
  * ~25 hours — a salvage merge had landed two parallel Rocket implementations
  * (CS0101) and a broken EditMode test. Every verification loop in the system
  * runs against workspace leases, so nothing ever looked at the tree the user

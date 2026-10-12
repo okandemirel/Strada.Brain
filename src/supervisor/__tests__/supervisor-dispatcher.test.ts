@@ -256,7 +256,7 @@ describe("SupervisorDispatcher", () => {
     const emit = vi.fn();
     const executeNode = vi.fn().mockResolvedValue({
       ...makeOkResult("A"),
-      output: "Generated 3 sprites under Assets/Art/Pigs (provider local).",
+      output: "Generated 3 sprites under Assets/Art/Frogs (provider local).",
     });
     const dispatcher = new SupervisorDispatcher({
       executeNode,
@@ -270,7 +270,7 @@ describe("SupervisorDispatcher", () => {
     expect(emit).toHaveBeenCalledWith("monitor:task_update", expect.objectContaining({
       nodeId: "A",
       status: "completed",
-      output: "Generated 3 sprites under Assets/Art/Pigs (provider local).",
+      output: "Generated 3 sprites under Assets/Art/Frogs (provider local).",
     }));
   });
 

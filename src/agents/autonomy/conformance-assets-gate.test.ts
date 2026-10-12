@@ -1,8 +1,8 @@
 /**
  * The gate that asks what the user already owns.
  *
- * Measured on PixelFlow: 25 sprites and zero meshes shipped for a design whose
- * own words are "softly rendered dimensional stages", while three Asset Store
+ * Measured on the test game: 25 sprites and zero meshes shipped for a design whose
+ * own words ask for rendered 3D stages, while three Asset Store
  * packages the user had already downloaded sat on disk — one of them a vehicle
  * package containing two .fbx meshes. The tool that finds them, unity_my_assets_cloud,
  * was registered, advertised to the model in every phase, and described as

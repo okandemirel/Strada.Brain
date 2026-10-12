@@ -22,7 +22,7 @@ function state(steps: ReadonlyArray<{ toolName: string; success?: boolean }>): A
   const now = Date.now();
   return {
     phase: AgentPhase.EXECUTING,
-    taskDescription: "Generate the pig sprite and bind it",
+    taskDescription: "Generate the frog sprite and bind it",
     iteration: 2,
     plan: null,
     stepResults: steps.map((s, i) => ({
@@ -48,8 +48,8 @@ describe("work done through any writer is work evidence (AUT-6)", () => {
   ])("%j", (tools) => {
     resetNoWorkEvidenceGates();
     const plan = planVerifierPipeline({
-      prompt: "Generate the pig sprite and bind it to the pig prefab",
-      draft: "Generated the pig sprite and bound it.\nDONE",
+      prompt: "Generate the frog sprite and bind it to the frog prefab",
+      draft: "Generated the frog sprite and bound it.\nDONE",
       state: state(tools.map((toolName) => ({ toolName }))),
       task: { type: "code-generation", complexity: "moderate", criticality: "medium" },
       verificationState: { pendingFiles: new Set(), touchedFiles: new Set(), hasCompilableChanges: false, lastBuildOk: null, lastVerificationAt: null },

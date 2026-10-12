@@ -384,7 +384,7 @@ describe("recovery guidance respects who owns a rule", () => {
   let storage: LearningStorage;
   let hooks: ErrorLearningHooks;
   let tempDir: string;
-  const PROJECT = "/projects/pixelflow";
+  const PROJECT = "/projects/samplegame";
 
   function rule(id: string, action: string, scope: "user" | "project", owner?: string): void {
     storage.createInstinct({

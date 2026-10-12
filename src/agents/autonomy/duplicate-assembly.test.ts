@@ -9,8 +9,8 @@
  *
  * Measured on a live run: asked to add tests, the agent created the framework's
  * Tests/Runtime + Tests/Editor pair and also kept its own habit of a Tests/ root
- * assembly. It ended with Tests/YourGame.PixelFlow.Tests.asmdef and
- * Tests/Runtime/YourGame.PixelFlow.Tests.asmdef claiming one name, and six test
+ * assembly. It ended with Tests/YourGame.SampleGame.Tests.asmdef and
+ * Tests/Runtime/YourGame.SampleGame.Tests.asmdef claiming one name, and six test
  * files at the Tests root belonging to neither mode.
  */
 
@@ -30,17 +30,17 @@ const DEPS = {
 
 // The guard resolves module roots natively ("D:\proj\..." on Windows), so the
 // fixture names the directory the same way.
-const MODULE_DIR = resolve("/proj/Assets/Modules/PixelFlow");
+const MODULE_DIR = resolve("/proj/Assets/Modules/SampleGame");
 
 function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
   const guard = new StradaConformanceGuard(DEPS, {
     projectPath: "/proj",
-    listDir: () => ["PixelFlowModuleConfig.cs", "PixelFlow.asmdef"],
+    listDir: () => ["SampleGameModuleConfig.cs", "SampleGame.asmdef"],
     listAsmdefs: (dir: string) => (dir === MODULE_DIR ? asmdefs : []),
   });
   guard.trackToolCall(
     "file_write",
-    { path: "Assets/Modules/PixelFlow/Tests/GridTests.cs", content: "class X {}" },
+    { path: "Assets/Modules/SampleGame/Tests/GridTests.cs", content: "class X {}" },
     false,
     "written",
   );
@@ -51,27 +51,27 @@ describe("duplicate assembly names", () => {
   it("reports both locations of the clashing name", () => {
     // The measured shape, verbatim.
     const guard = guardSeeing([
-      "PixelFlow.asmdef",
-      "Tests/YourGame.PixelFlow.Tests.asmdef",
-      "Tests/Runtime/YourGame.PixelFlow.Tests.asmdef",
-      "Tests/Editor/YourGame.PixelFlow.Editor.Tests.asmdef",
+      "SampleGame.asmdef",
+      "Tests/YourGame.SampleGame.Tests.asmdef",
+      "Tests/Runtime/YourGame.SampleGame.Tests.asmdef",
+      "Tests/Editor/YourGame.SampleGame.Editor.Tests.asmdef",
     ]);
 
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain("STRADA DUPLICATE ASSEMBLY");
-    expect(prompt).toContain("YourGame.PixelFlow.Tests");
+    expect(prompt).toContain("YourGame.SampleGame.Tests");
     // Naming one location would leave the agent guessing which to remove.
-    expect(prompt).toContain("Tests/YourGame.PixelFlow.Tests.asmdef");
-    expect(prompt).toContain("Tests/Runtime/YourGame.PixelFlow.Tests.asmdef");
+    expect(prompt).toContain("Tests/YourGame.SampleGame.Tests.asmdef");
+    expect(prompt).toContain("Tests/Runtime/YourGame.SampleGame.Tests.asmdef");
   });
 
   it("takes precedence over the test-coverage advice", () => {
     // With a duplicate present nothing in the project compiles, so telling the
     // agent about missing test assemblies first would be advice it cannot act on.
     const guard = guardSeeing([
-      "Domain/YourGame.PixelFlow.Domain.asmdef",
-      "Tests/YourGame.PixelFlow.Tests.asmdef",
-      "Tests/Runtime/YourGame.PixelFlow.Tests.asmdef",
+      "Domain/YourGame.SampleGame.Domain.asmdef",
+      "Tests/YourGame.SampleGame.Tests.asmdef",
+      "Tests/Runtime/YourGame.SampleGame.Tests.asmdef",
     ]);
 
     const prompt = guard.getPrompt() ?? "";
@@ -81,9 +81,9 @@ describe("duplicate assembly names", () => {
 
   it("stays quiet when every assembly name is distinct", () => {
     const guard = guardSeeing([
-      "PixelFlow.asmdef",
-      "Tests/Runtime/PixelFlow.Tests.asmdef",
-      "Tests/Editor/PixelFlow.Editor.Tests.asmdef",
+      "SampleGame.asmdef",
+      "Tests/Runtime/SampleGame.Tests.asmdef",
+      "Tests/Editor/SampleGame.Editor.Tests.asmdef",
     ]);
 
     expect(guard.getPrompt()).toBeNull();
@@ -92,7 +92,7 @@ describe("duplicate assembly names", () => {
   it("does not confuse same-named files in different modules", () => {
     // Uniqueness is checked per module here; a second module's own Tests
     // assembly is a different name because it carries that module's namespace.
-    const guard = guardSeeing(["PixelFlow.asmdef", "Tests/Runtime/PixelFlow.Tests.asmdef"]);
+    const guard = guardSeeing(["SampleGame.asmdef", "Tests/Runtime/SampleGame.Tests.asmdef"]);
     expect(guard.getPrompt()).toBeNull();
   });
 });

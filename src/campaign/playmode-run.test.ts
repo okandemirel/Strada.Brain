@@ -75,9 +75,9 @@ describe("readPlaymodeRun", () => {
   });
 
   it("red with names, and a filtered run says which filter", () => {
-    write({ total: 215, passed: 205, failed: 10, failedNames: ["A.B.WinLevel_ReachesWonState", "A.B.Other"], filter: "PixelFlow.*", unfiltered: false });
+    write({ total: 215, passed: 205, failed: 10, failedNames: ["A.B.WinLevel_ReachesWonState", "A.B.Other"], filter: "SampleGame.*", unfiltered: false });
     const r = readPlaymodeRun(root, 0);
-    expect(r.detail).toBe("PlayMode verification FAILED: 10 of 215 tests failed (filter: PixelFlow.*)");
+    expect(r.detail).toBe("PlayMode verification FAILED: 10 of 215 tests failed (filter: SampleGame.*)");
     expect(r.failedNames).toEqual(["A.B.WinLevel_ReachesWonState", "A.B.Other"]);
     expect(r.unfiltered).toBe(false);
     write({ total: 0, passed: 0, failed: 0, unfiltered: true });

@@ -2,7 +2,7 @@
  * Requirement rows (GDD-drift plan W04, M3): the approved GDD read into rows
  * by code, and each row given to the milestone that owns it.
  *
- * In campaign 18d4t nothing turned a GDD rule into a row the system owned:
+ * In a measured campaign nothing turned a GDD rule into a row the system owned:
  * R-07 was closed by a worker's prose, and the §3.9 constants were
  * never held against anything. These tests pin the deterministic extraction
  * (no model), the add-only pass (a model may only ADD rows that quote the

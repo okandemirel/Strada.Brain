@@ -1,7 +1,7 @@
 /**
  * How a run ended, as data rather than as a sentence.
  *
- * In campaign 18d4t every milestone tip but one carried the system's own
+ * In a measured campaign every milestone tip but one carried the system's own
  * "task_stuck" stamp, and all six went green: the only record of how a run
  * ended was the localized text it showed the user, and the gate read prose.
  * The key is carried from the agent runtime to the task's verification

@@ -64,7 +64,7 @@ if not jobs or any(not j.get("prompt") or not j.get("out") for j in jobs):
 import torch
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 # fp16 on MPS is the classic black-image NaN trap for SD1.5/SDXL (measured
-# live: a full-black pig sprite). fp32 on MPS is correct and cheap enough at
+# live: a full-black character sprite). fp32 on MPS is correct and cheap enough at
 # 512²; FLUX is the exception — it is built for bfloat16.
 if a.family == "flux":
     from diffusers import FluxPipeline
@@ -95,8 +95,8 @@ for job in jobs:
         # "plain white background" in the prompt is a coin flip the model loses.
         from rembg import remove
         cut = remove(image)
-        # Measured 2026-09-07: a green pig on the green background the model
-        # drew anyway — rembg removed the pig with the background and left 19 KB
+        # Measured 2026-09-07: a green character on the green background the model
+        # drew anyway — rembg removed the character with the background and left 19 KB
         # of alpha specks. A cut-out that kept under 3% of the pixels is not a
         # sprite; the raw draw with its background is, and says so.
         try:

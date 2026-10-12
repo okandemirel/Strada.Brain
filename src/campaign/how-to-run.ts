@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 /**
  * HOW_TO_RUN.md — the file the person who opens the delivery reads first.
  *
- * Measured 2026-09-03: the delivered PixelFlow tree had 20 scenes, 14 of them
+ * Measured 2026-09-03: the delivered test-game tree had 20 scenes, 14 of them
  * enabled in the build, no README of any kind, and the user opened a scene of
  * flat coloured squares expecting a game. The delivery report is a chat
  * message that scrolls away; the project itself said nothing.

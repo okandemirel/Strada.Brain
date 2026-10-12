@@ -22,7 +22,7 @@ function put(root: string, rel: string, body: string, guid?: string): void {
   if (guid) writeFileSync(`${abs}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
 }
 
-/** A tree shaped like the delivered PixelFlow: an empty entry scene, art nothing reaches. */
+/** A tree shaped like the delivered test game: an empty entry scene, art nothing reaches. */
 function emptyGameProject(): string {
   const root = mkdtempSync(join(tmpdir(), "structprompt-"));
   dirs.push(root);
@@ -40,12 +40,12 @@ function emptyGameProject(): string {
   );
   put(
     root,
-    "Assets/Prefabs/Pig.prefab",
-    "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Pig\n" +
+    "Assets/Prefabs/Frog.prefab",
+    "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Frog\n" +
       "--- !u!212 &8\nSpriteRenderer:\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n",
     "11111111111111111111111111111111",
   );
-  put(root, "Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+  put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
   return root;
 }
 
@@ -66,7 +66,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("REFUSED:");
     expect(prompt).toContain("render NOTHING");
     // The art it must bind, named — a count alone is not a starting point.
-    expect(prompt).toContain("Assets/Prefabs/Pig.prefab");
+    expect(prompt).toContain("Assets/Prefabs/Frog.prefab");
     // And the entry scene's own emptiness, from the same measurement.
     expect(prompt).toContain("1 GameObject");
     // The anti-audit directive rides with it: it used to live ONLY in the

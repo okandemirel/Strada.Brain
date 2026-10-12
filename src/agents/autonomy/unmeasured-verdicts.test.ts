@@ -226,7 +226,7 @@ describe("a configuration or listing tool compiles nothing (autonomy#2)", () => 
 
 describe("an inconclusive answer moves nothing (autonomy#3)", () => {
   it("keeps an earlier failed step in the completion review", () => {
-    const v = wrote("Assets/Art/Pig.png");
+    const v = wrote("Assets/Art/Frog.png");
     const failedAt = Date.now() - 1_000;
     v.track("unity_compile_status", {}, ok('{"status":"unknown"}'));
     expect(v.getState().lastVerificationAt).toBeNull();
@@ -432,17 +432,17 @@ describe("a verifier call that measured nothing is not work done (autonomy#0, re
   it("asks for targeted verification of an error logged after the last verdict, and not of one logged before it", () => {
     const verifiedAt = Date.now() - 5_000;
     const planWithLog = (loggedAt: number) => planVerifierPipeline({
-      prompt: "Add the pig and its sprite",
-      draft: "Added the pig controller and its sprite; the project compiles. Done.",
+      prompt: "Add the frog and its sprite",
+      draft: "Added the frog controller and its sprite; the project compiles. Done.",
       state: createState([
-        step("file_write", true, "wrote Assets/Scripts/PigController.cs", verifiedAt - 1_000),
+        step("file_write", true, "wrote Assets/Scripts/FrogController.cs", verifiedAt - 1_000),
         step("unity_verify_change", true, "compile green", verifiedAt),
-        step("unity_generate_sprite", true, "generated Assets/Art/Pig.png", verifiedAt + 500),
+        step("unity_generate_sprite", true, "generated Assets/Art/Frog.png", verifiedAt + 500),
       ]),
       task: DEBUG_TASK,
       verificationState: {
         pendingFiles: new Set<string>(),
-        touchedFiles: new Set(["Assets/Scripts/PigController.cs"]),
+        touchedFiles: new Set(["Assets/Scripts/FrogController.cs"]),
         hasCompilableChanges: false,
         lastBuildOk: true,
         lastVerificationAt: verifiedAt,
@@ -452,7 +452,7 @@ describe("a verifier call that measured nothing is not work done (autonomy#0, re
       logEntries: [{
         timestamp: new Date(loggedAt).toISOString(),
         level: "error",
-        message: "NullReferenceException in PigController.Update",
+        message: "NullReferenceException in FrogController.Update",
         meta: { chatId: "chat-unmeasured" },
       }],
       chatId: "chat-unmeasured",

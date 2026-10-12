@@ -2950,7 +2950,7 @@ describe("a permanent instinct can be quarantined (improvement on audit 04.6)", 
   let tempDir: string;
   let eventBus: TypedEventBus<any>;
   let quarantined: any[];
-  const PROJECT = "/projects/pixelflow";
+  const PROJECT = "/projects/samplegame";
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "pipeline-quarantine-"));

@@ -144,7 +144,7 @@ const RENDERER_CLASSES: ReadonlySet<string> = new Set([
 /**
  * Renderers that draw UI or video, not the game world. They are counted and
  * reported, but the "renders NOTHING" refusal looks past them: review
- * 2026-09-07 — one HUD Text (a CanvasRenderer) on the audited PixelFlow
+ * 2026-09-07 — one HUD Text (a CanvasRenderer) on the audited test-game
  * shape lifted the refusal while the world was still CreatePrimitive cubes.
  */
 const NON_WORLD_RENDERER_CLASSES: ReadonlySet<string> = new Set(["CanvasRenderer", "VideoPlayer"]);
@@ -265,7 +265,7 @@ export interface SceneStructure {
    *
    * Audited 2026-09-04: the refusal could say "the shipped scenes render
    * NOTHING" and the sprint still had nowhere to start, because the number it
-   * was given was a zero. PixelFlow's one enabled scene held a camera and a
+   * was given was a zero. The test game's one enabled scene held a camera and a
    * `GameBootstrapper` whose config listed no modules — two GameObjects, no
    * prefab instance — and naming that is the difference between "something is
    * wrong" and "this is the scene you have to fill".
@@ -294,7 +294,7 @@ export interface ArtInventory {
   readonly sprites: number;
   /**
    * Sprite textures whose PNG compresses below PLACEHOLDER_BYTES_PER_PIXEL —
-   * flat procedural shapes, not drawn art. Measured 2026-09-06 on the PixelFlow
+   * flat procedural shapes, not drawn art. Measured 2026-09-06 on the test game's
    * lease: 409 of 428 sprites, median 281 bytes at 64×64, every one produced by
    * the procedural generator and every one counted as "a sprite texture" by
    * the line below. A project whose art is 95% solid squares had passed this
@@ -303,10 +303,10 @@ export interface ArtInventory {
   readonly placeholderSprites: number;
   /**
    * Audio clips under Assets/, and what their bytes say. Measured 2026-09-07
-   * on the PixelFlow project: 19 WAVs — six 90-second "music" loops and
+   * on the test game's project: 19 WAVs — six 90-second "music" loops and
    * thirteen 0.15-second SFX blips, four of them byte-identical to another —
-   * counted nowhere, while the GDD scheduled a music base loop, area
-   * variations and a complete SFX cue list.
+   * counted nowhere, while the GDD scheduled music per area and a full SFX
+   * cue list.
    */
   readonly audio: number;
   /** Clips whose bytes equal another clip's — the same sound under two names. */
@@ -1510,7 +1510,7 @@ export async function assessBuiltAsSpecifiedAsync(
  *        nothing by any route; or
  *    A2. runtime scripts build the visible world with GameObject.
  *        CreatePrimitive — what the player sees is engine primitives, not the
- *        project's art. This is the delivered PixelFlow build exactly: 0
+ *        project's art. This is the delivered test-game build exactly: 0
  *        renderers placed across 13 non-scaffolding scenes, five scripts
  *        calling CreatePrimitive, and a grid of flat squares with four spheres
  *        on screen.
@@ -1649,7 +1649,7 @@ function structuralRefusal(
 /**
  * Compressed bytes per pixel below which a PNG is a flat shape rather than art.
  *
- * Measured 2026-09-06 across the 428 sprites of the PixelFlow lease: 409 sat
+ * Measured 2026-09-06 across the 428 sprites of the test game's lease: 409 sat
  * under 0.1 (median 0.07 — 281 bytes for 64×64), the 19 drawn ones between
  * 0.28 and 0.67, and nothing in between. A real 64×64 sprite cannot compress
  * to 400 bytes; a solid square with an outline always does.

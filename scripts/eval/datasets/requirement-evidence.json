@@ -101,27 +101,27 @@
       "source": "src/campaign/campaign-planner.ts (quotableFacts: suite lines must be unfiltered)"
     },
     {
-      "id": "dragon-by-shipped-prefab",
-      "requirement": "Dragon boss: absent",
-      "evidence": { "status": "green", "structureFindings": ["Assets/Prefabs/DragonBoss.prefab present"] },
+      "id": "storm-by-shipped-prefab",
+      "requirement": "Storm boss: absent",
+      "evidence": { "status": "green", "structureFindings": ["Assets/Prefabs/StormBoss.prefab present"] },
       "expected": "proven",
       "rationale": "The shipped tree holds the boss prefab the requirement names.",
       "source": "src/campaign/campaign-planner.test.ts:83"
     },
     {
-      "id": "dragon-by-status-failed",
-      "requirement": "Dragon boss: absent",
+      "id": "storm-by-status-failed",
+      "requirement": "Storm boss: absent",
       "evidence": { "status": "failed" },
       "expected": "not_proven",
-      "rationale": "'status: failed' is fourteen characters of the record and says how the sprint ended, nothing about the dragon (Codex 2026-09-12 AD#1).",
+      "rationale": "'status: failed' is fourteen characters of the record and says how the sprint ended, nothing about the storm (Codex 2026-09-12 AD#1).",
       "source": "src/campaign/campaign-planner.ts (quotableFacts: status lines are never quotable)"
     },
     {
-      "id": "dragon-by-multi-file-commit",
-      "requirement": "Dragon boss: absent",
-      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab" },
+      "id": "storm-by-multi-file-commit",
+      "requirement": "Storm boss: absent",
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Storm.cs, Assets/Prefabs/Storm.prefab" },
       "expected": "proven",
-      "rationale": "A note listing several files closes each requirement it names; both files are the dragon's.",
+      "rationale": "A note listing several files closes each requirement it names; both files are the storm's.",
       "source": "src/campaign/coverage-audit-retry.test.ts:44"
     },
     {
@@ -511,7 +511,7 @@
     {
       "id": "fun-by-anything",
       "requirement": "The game is fun: absent",
-      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Dragon.cs, Assets/Prefabs/Dragon.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Storm.cs, Assets/Prefabs/Storm.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_measured",
       "rationale": "An aspiration, not scheduled content. The coverage system is instructed to be lenient about these, and no evidence kind settles it.",
       "source": "src/campaign/campaign-planner.ts (COVERAGE_SYSTEM: strict about scheduled content, lenient about aspiration)"

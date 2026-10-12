@@ -214,8 +214,8 @@ describe("the play-through verdict the campaign reads back (measured 2026-09-10:
   });
 
   it("the runtime dump rides along in the evidence (2026-09-10)", () => {
-    write({ ...ok, record: { ...ok.record, runtime: { renderers: 3, worldRenderers: 2, spriteRenderers: 2, meshRenderers: 0, canvases: 1, particleSystems: 0, audioSources: 1, audioPlaying: 0, sprites: ["pig"], meshes: [], primitiveMeshes: 0 } } });
-    expect(readPlaythroughVerdict(root, 0).runtime).toEqual({ renderers: 3, worldRenderers: 2, spriteRenderers: 2, meshRenderers: 0, canvases: 1, particleSystems: 0, audioSources: 1, audioPlaying: 0, sprites: ["pig"], meshes: [], primitiveMeshes: 0 });
+    write({ ...ok, record: { ...ok.record, runtime: { renderers: 3, worldRenderers: 2, spriteRenderers: 2, meshRenderers: 0, canvases: 1, particleSystems: 0, audioSources: 1, audioPlaying: 0, sprites: ["frog"], meshes: [], primitiveMeshes: 0 } } });
+    expect(readPlaythroughVerdict(root, 0).runtime).toEqual({ renderers: 3, worldRenderers: 2, spriteRenderers: 2, meshRenderers: 0, canvases: 1, particleSystems: 0, audioSources: 1, audioPlaying: 0, sprites: ["frog"], meshes: [], primitiveMeshes: 0 });
     write(ok);
     expect(readPlaythroughVerdict(root, 0).runtime).toBeUndefined();
   });

@@ -22,7 +22,7 @@ import {
 import type { IMemoryManager, RetrievalResult } from "../memory/memory.interface.js";
 import type { ReRetrievalConfig } from "../config/config.js";
 
-const PROJECT = "/projects/pixelflow";
+const PROJECT = "/projects/samplegame";
 const CHAT = "chat-1";
 
 const ALICE_NOTE = "alice ships from the staging branch";

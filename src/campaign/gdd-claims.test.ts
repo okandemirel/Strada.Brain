@@ -9,7 +9,7 @@ import { assessNumericClaims, claimsRefusal, describeClaims, documentRequiresAnO
 import { PLAY_RUN_BUDGET_MS, sessionsThatFitOneRun } from "./producer-evidence.js";
 import type { PlaythroughEvidence } from "./types.js";
 
-const GDD = `# Sky Pigs
+const GDD = `# Sky Lanterns
 Target 60 fps on mid-range phones. The game must load in under 3 seconds from a cold start.
 There are 12 levels in the first world. Each level lasts 30-90 seconds.
 Frame rate is 60 FPS (again). The menu appears within 500 ms of launch.`;
@@ -385,9 +385,9 @@ describe("a per-session requirement is measured per session (Codex 2026-09-12 T#
 
 /**
  * The document's own numbers, read the way it wrote them. Measured by Codex
- * 2026-09-12 (U#F3) against the real GDD: "Cold boot ≤ 6 s" stated no timing
- * requirement at all, "ship at least 20 levels" meant exactly twenty, "3,000+
- * levels" meant nothing, and the level count the delivery was held to came
+ * 2026-09-12 (U#F3) against the real GDD: a "Cold boot ≤ N s" stated no timing
+ * requirement at all, "ship at least 20 levels" meant exactly twenty, a
+ * four-digit "N,000+ levels" meant nothing, and the level count the delivery was held to came
  * from a sentence about how far ahead of the player the queue runs.
  */
 describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
@@ -395,22 +395,22 @@ describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
     extractNumericClaims(text).claims.map((c) => [c.kind, c.comparator, c.value]);
 
   it("reads a symbol comparator — the word boundary before ≤ could never match", () => {
-    expect(kinds("Cold boot ≤ 6 s to Home on a mid device.")).toEqual([["boot_seconds", "max", 6]]);
+    expect(kinds("Cold boot ≤ 5 s to the title screen on a mid-range phone.")).toEqual([["boot_seconds", "max", 5]]);
     expect(kinds("Boot <= 4s.")).toEqual([["boot_seconds", "max", 4]]);
     // …and the worded form still reads as before.
     expect(kinds("The game must load in under 3 seconds.")).toEqual([["boot_seconds", "max", 3]]);
   });
 
   it("a LEVEL load is not a cold boot: two intervals, not one stricter boot budget", () => {
-    expect(kinds("Cold boot ≤ 6 s to Home on mid device; level load ≤ 1.5 s.")).toEqual([
-      ["boot_seconds", "max", 6],
-      ["level_load_seconds", "max", 1.5],
+    expect(kinds("Cold boot ≤ 5 s to the title screen on a mid-range phone; level load ≤ 2.5 s.")).toEqual([
+      ["boot_seconds", "max", 5],
+      ["level_load_seconds", "max", 2.5],
     ]);
     expect(kinds("Loading a stage takes under 2 seconds.")).toEqual([["level_load_seconds", "max", 2]]);
   });
 
   it("names the level-load requirement as unmeasured, because no producer records it", () => {
-    const claim = extractNumericClaims("Level load ≤ 1.5 s.").claims[0]!;
+    const claim = extractNumericClaims("Level load ≤ 2.5 s.").claims[0]!;
     const [assessed] = assessNumericClaims([claim], evidence());
     expect(assessed!.status).toBe("unmeasured");
     expect(assessed!.blocking).toBe(false);
@@ -419,12 +419,12 @@ describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
 
   it("reads which way a count points, and reads thousands", () => {
     expect(kinds("Ship at least 20 levels.")).toEqual([["level_count", "min", 20]]);
-    expect(kinds("Ship 3,000+ levels.")).toEqual([["level_count", "min", 3000]]);
-    expect(kinds("3,000 or more levels at launch.")).toEqual([["level_count", "min", 3000]]);
+    expect(kinds("Ship 2,400+ levels.")).toEqual([["level_count", "min", 2400]]);
+    expect(kinds("2,400 or more levels at launch.")).toEqual([["level_count", "min", 2400]]);
     expect(kinds("Up to 20 levels.")).toEqual([["level_count", "max", 20]]);
     expect(kinds("The game ships 12 levels.")).toEqual([["level_count", "eq", 12]]);
     // The largest count is still the game's own (Codex 2026-09-11 F#2).
-    expect(kinds("Launch depth: 2,000 levels. The tutorial has 3 puzzles.")).toEqual([["level_count", "eq", 2000]]);
+    expect(kinds("Release scope: 1,500 levels. The tutorial has 3 puzzles.")).toEqual([["level_count", "eq", 1500]]);
   });
 
   it("a game that ships MORE than its floor is delivered, and one that ships fewer is not", () => {
@@ -453,17 +453,17 @@ describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
  */
 describe("the release the delivery is measured against (Codex 2026-09-12 V)", () => {
   it("names the other counts the document states instead of dropping them", () => {
-    const doc = "MVP: 200 certified levels. Global launch: 800+ levels. Launch depth: 2,000 levels. Live target: 3,000 levels.";
+    const doc = "Alpha: 150 reviewed levels. Soft launch: 600+ levels. Release scope: 1,500 levels. Live target: 2,400 levels.";
     const read = extractNumericClaims(doc);
     // One count is measured — one catalogue cannot satisfy four at once — and
     // it is the largest, so nothing is quietly shipped short.
-    expect(read.claims.filter((c) => c.kind === "level_count").map((c) => c.value)).toEqual([3000]);
-    expect(read.otherLevelCounts).toEqual([2000, 800, 200]);
+    expect(read.claims.filter((c) => c.kind === "level_count").map((c) => c.value)).toEqual([2400]);
+    expect(read.otherLevelCounts).toEqual([1500, 600, 150]);
 
     const lines = describeClaims(assessNumericClaims(read.claims, evidence()), read.truncated, read.otherLevelCounts);
     const said = lines.find((l) => l.startsWith("GDD level count:"))!;
-    expect(said).toContain("measured against 3000");
-    expect(said).toContain("2000, 800, 200");
+    expect(said).toContain("measured against 2400");
+    expect(said).toContain("1500, 600, 150");
     // A document with ONE count says nothing about releases.
     const single = extractNumericClaims("The game ships 12 levels.");
     expect(single.otherLevelCounts).toEqual([]);
@@ -509,8 +509,8 @@ describe("clause boundaries and the comparators the rest of the document uses (C
   });
 
   it("reads a count through the words that describe it, and a STRICT bound as the next whole number", () => {
-    expect(kinds("Ship 200 certified levels.")).toEqual([["level_count", "eq", 200]]);
-    expect(kinds("Ship 3,000+ handcrafted deterministic levels.")).toEqual([["level_count", "min", 3000]]);
+    expect(kinds("Ship 150 reviewed levels.")).toEqual([["level_count", "eq", 150]]);
+    expect(kinds("Ship 2,400+ hand-tuned seeded levels.")).toEqual([["level_count", "min", 2400]]);
     expect(kinds("More than 12 levels.")).toEqual([["level_count", "min", 13]]);
     expect(kinds("Fewer than 12 levels.")).toEqual([["level_count", "max", 11]]);
     expect(kinds("At most 12 levels.")).toEqual([["level_count", "max", 12]]);
@@ -563,7 +563,7 @@ describe("the comparators and boundaries round W found (Codex 2026-09-12 W#7)", 
     expect(kinds("Players aged 18 complete levels.")).toEqual([]);
     expect(kinds("Most players finish 30 levels.")).toEqual([]);
     // …and a real descriptor still reads.
-    expect(kinds("Ship 200 certified levels.")).toEqual([["level_count", "eq", 200]]);
+    expect(kinds("Ship 150 reviewed levels.")).toEqual([["level_count", "eq", 150]]);
   });
 });
 
@@ -764,53 +764,52 @@ describe("a clause is a requirement's scope, and a session's own clock is its le
 });
 
 /**
- * The vehicle's durations live in a label/value table ("Median level
- * duration" / "60–150 s (Normal), 150–300 s (Hard)"), which no prose pattern
- * can see — so the run kept the producer's 45-second default and cut a legal
- * 150-second round short as unfinished (Codex 2026-09-12 AB, Job 3.6). An
- * ALLOWANCE, never a gate: a median is not a ceiling.
+ * The vehicle's durations live in a label/value table (a typical round
+ * length per difficulty), which no prose pattern can see — so the run kept
+ * the producer's 45-second default and cut a legal two-minute round short as
+ * unfinished (Codex 2026-09-12 AB, Job 3.6). An ALLOWANCE, never a gate: a
+ * typical length is not a ceiling.
  */
 describe("how long a run may keep playing one session (Codex 2026-09-12 AB)", () => {
   it("reads a label/value duration table, and the prose it already knew", () => {
     expect(
       extractSessionAllowanceSeconds(
-        "2.4 Session Design\nParameter\nTarget\nRationale\nMedian level duration\n60–150 s (Normal), 150–300 s (Hard)\nFits coffee-break sessions",
+        "3.2 Pacing\nParameter\nTarget\nWhy\nTypical round length\n45–120 s (Easy), 120–240 s (Expert)\nShort enough for a bus ride",
       ),
-    ).toBe(300);
+    ).toBe(240);
     expect(extractSessionAllowanceSeconds("Each round lasts 30-60 seconds.")).toBe(60);
     expect(extractSessionAllowanceSeconds("Session length: 4 minutes")).toBe(240);
     expect(extractSessionAllowanceSeconds("A puzzle game with 12 levels.")).toBeUndefined();
   });
 
   it("stops at the clause the label introduces, and never asks for a sitting", () => {
-    // "Levels of 1–4 minutes; ~10 sessions and ~60 minutes of play per DAU per
-    // day" gave an HOUR-long session allowance (measured on the vehicle's
-    // document).
+    // A label whose sentence goes on to a DAY's play gave the day's total as
+    // the session allowance (measured on the vehicle's document).
     expect(
       extractSessionAllowanceSeconds(
-        "Session length\nLevels of 1–4 minutes; ~10 sessions and ~60 minutes of play per DAU per day",
+        "Session length\nRounds of 2–5 minutes; ~6 sessions and ~40 minutes of play per DAU per day",
       ),
-    ).toBe(240);
+    ).toBe(300);
     // …and an explicitly enormous figure is bounded — by what ONE RUN may
     // spend on ONE session, not by a judgement about how long a game may be.
-    expect(extractSessionAllowanceSeconds("Median level duration\n90 minutes")).toBe(MAX_SESSION_ALLOWANCE_SECONDS);
+    expect(extractSessionAllowanceSeconds("Typical round length\n90 minutes")).toBe(MAX_SESSION_ALLOWANCE_SECONDS);
     // A LEGAL LONG SESSION IS NOT CUT SHORT: a 30-minute round is a game
     // design, and the ten-minute ceiling made its play-through unfinishable
     // (Codex 2026-09-13 AF#13).
-    expect(extractSessionAllowanceSeconds("Median level duration\n30 min")).toBe(1800);
+    expect(extractSessionAllowanceSeconds("Typical round length\n30 min")).toBe(1800);
   });
 
   it("reads the value across blank lines and every mode the label covers (Codex 2026-09-13 AF#13)", () => {
     // A converter that leaves two blank lines hid the value entirely, and a
     // semicolon between difficulty modes lost the longer one.
-    expect(extractSessionAllowanceSeconds("Median level duration\n\n\n60–150 s")).toBe(150);
-    expect(extractSessionAllowanceSeconds("Median level duration\n60–150 s (Normal); 150–300 s (Hard)")).toBe(300);
+    expect(extractSessionAllowanceSeconds("Typical round length\n\n\n45–120 s")).toBe(120);
+    expect(extractSessionAllowanceSeconds("Typical round length\n45–120 s (Easy); 120–240 s (Expert)")).toBe(240);
     // …while a clause that changes the subject is still not a session length.
-    expect(extractSessionAllowanceSeconds("Session length\n1–4 minutes; ~60 minutes of play per day")).toBe(240);
+    expect(extractSessionAllowanceSeconds("Session length\n2–5 minutes; ~40 minutes of play per day")).toBe(300);
   });
 
   it("is not a claim: nothing is judged against it", () => {
-    const doc = "Median level duration\n60–150 s (Normal), 150–300 s (Hard)";
+    const doc = "Typical round length\n45–120 s (Easy), 120–240 s (Expert)";
     expect(extractNumericClaims(doc).claims.filter((c) => c.kind === "session_seconds")).toEqual([]);
   });
 });
@@ -1130,9 +1129,9 @@ describe("the level count follows the document's outcome contract", () => {
  * A BOOT FIGURE ANSWERS WHAT IT MEASURED (Codex 2026-09-13 AI#12).
  *
  * Every producer reports the same thing: launch (or scene load) until the
- * bootstrapper's services exist. PixelFlow's "cold boot ≤ 6 s to Home on a
- * mid device" was reported MET from that number alone — Home could become
- * usable at ten seconds without changing the input.
+ * bootstrapper's services exist. The test game's cold-boot budget, to a named
+ * screen on a class of device, was reported MET from that number alone — the
+ * screen could become usable at ten seconds without changing the input.
  */
 describe("the boot claim and what nobody measures", () => {
   const boot = (seconds: number, medium = "player"): PlaythroughEvidence => ({
@@ -1144,7 +1143,7 @@ describe("the boot claim and what nobody measures", () => {
       .find((a) => a.claim.kind === "boot_seconds")!;
 
   it("discloses a screen the document names and no producer records", () => {
-    const home = judge("# G\nCold boot to Home in under 6 seconds.", 1);
+    const home = judge("# G\nCold boot to the title screen in under 6 seconds.", 1);
     expect(home).toMatchObject({ status: "unmeasured", blocking: false, measured: 1 });
     expect(home.note).toContain("to the bootstrapper's services");
     expect(home.note).toContain("the time to a screen the player can use");
@@ -1162,9 +1161,9 @@ describe("the boot claim and what nobody measures", () => {
     const mid = judge("# G\nThe game boots in under 6 seconds on a mid-range phone.", 1);
     expect(mid).toMatchObject({ status: "unmeasured", blocking: false });
     expect(mid.note).toContain("a class of device nothing here establishes");
-    // The vehicle's own wording, which names no article and no hyphen — and
-    // asks for BOTH a screen and a device (Codex 2026-09-13 AI#12).
-    const both = judge("# G\nCold boot \u2264 6 s to Home on mid device;", 1);
+    // A wording that names no article and no hyphen — the vehicle's shape —
+    // and asks for BOTH a screen and a device (Codex 2026-09-13 AI#12).
+    const both = judge("# G\nCold boot \u2264 6 s to menu on low spec handset;", 1);
     expect(both).toMatchObject({ status: "unmeasured", blocking: false });
     expect(both.note).toContain("the time to a screen the player can use and a class of device nothing here establishes");
   });
@@ -1180,7 +1179,7 @@ describe("the boot claim and what nobody measures", () => {
     // Services are published before any screen, so a boot already over the
     // figure cannot meet it later. This must stay blocking: a stricter read
     // of the endpoint must not hide a real failure.
-    const late = judge("# G\nCold boot to Home in under 6 seconds on a mid device.", 9);
+    const late = judge("# G\nCold boot to the menu in under 6 seconds on a low-end phone.", 9);
     expect(late).toMatchObject({ status: "not_met", blocking: true, measured: 9 });
     expect(claimsRefusal([late])).toContain("boot time");
   });

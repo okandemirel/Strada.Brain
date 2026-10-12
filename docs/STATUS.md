@@ -46,7 +46,7 @@ observations) and consensus being advisory-only.
 
 ## Addendum — 2026-08-28/30 campaign-autonomy hardening
 
-The PixelFlow campaign (GDD → milestone ladder → autonomous sprints) ran
+The test game's campaign (GDD → milestone ladder → autonomous sprints) ran
 continuously across these two days as the live proving ground: Sprints 1–2
 delivered green (453-file and 12-file envelope commits `69bb0c1`/`3fd5258`,
 1110 verification frames), Sprint 3 in flight. The run surfaced — and closed,

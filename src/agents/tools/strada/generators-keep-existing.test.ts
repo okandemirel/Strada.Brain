@@ -146,19 +146,19 @@ describe("strada_create_module in a module that already holds code", () => {
     // A kept root .asmdef named something else is the module's assembly; test
     // assemblies referencing Game.Modules.Board reference nothing.
     const root = project();
-    put(root, `${MODULE}/PixelFlow.Board.asmdef`, JSON.stringify({ name: "PixelFlow.Board" }));
+    put(root, `${MODULE}/GridQuest.Board.asmdef`, JSON.stringify({ name: "GridQuest.Board" }));
 
     const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath: root } as never);
 
     expect(result.isError, `refused: ${result.content}`).toBeFalsy();
     const runtime = readdirSync(join(root, MODULE, "Tests", "Runtime")).filter((f) => f.endsWith(".asmdef"));
-    expect(runtime).toEqual(["PixelFlow.Board.Tests.asmdef"]);
-    const asmdef = JSON.parse(read(root, `${MODULE}/Tests/Runtime/PixelFlow.Board.Tests.asmdef`)) as {
+    expect(runtime).toEqual(["GridQuest.Board.Tests.asmdef"]);
+    const asmdef = JSON.parse(read(root, `${MODULE}/Tests/Runtime/GridQuest.Board.Tests.asmdef`)) as {
       name: string;
       references: string[];
     };
-    expect(asmdef.name).toBe("PixelFlow.Board.Tests");
-    expect(asmdef.references).toContain("PixelFlow.Board");
+    expect(asmdef.name).toBe("GridQuest.Board.Tests");
+    expect(asmdef.references).toContain("GridQuest.Board");
     expect(asmdef.references).not.toContain("Game.Modules.Board");
   });
 

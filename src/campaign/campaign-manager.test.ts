@@ -523,10 +523,10 @@ describe("CampaignManager", () => {
   });
 
   it("idea mode: drafts the GDD, gates on approval, builds after 'evet'", async () => {
-    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
     expect(campaign.state).toBe("drafting-gdd");
     expect(tasks.submitted).toHaveLength(1);
-    expect(tasks.submitted[0]!.prompt).toContain("pigs fly");
+    expect(tasks.submitted[0]!.prompt).toContain("frogs fly");
 
     // Draft completes; the GDD file exists in docs/.
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
@@ -1119,7 +1119,7 @@ describe("CampaignManager", () => {
 
   it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
     runRecordOnSettle = undefined; // this sprint leaves no NUnit record
-    // Audited 2026-09-03: the delivered PixelFlow build's filtered runs were
+    // Audited 2026-09-03: the delivered test-game build's filtered runs were
     // green while its one unfiltered run reported 6 of 173 failing, including
     // WinLevel_ReachesWonState ("LevelWon event did not fire").
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
@@ -1131,7 +1131,7 @@ describe("CampaignManager", () => {
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 2 of 2 tests passed (filter: PixelFlowGameplayWinLossTests)",
+      detail: "PlayMode verification passed: 2 of 2 tests passed (filter: GameplayWinLossTests)",
       unfiltered: false,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1157,7 +1157,7 @@ describe("CampaignManager", () => {
       testsGreen: true,
       detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
-      failedTests: ["YourGame.PixelFlow.PlayModeTests.PixelFlowGameplayWinLossTests.WinLevel_ReachesWonState"],
+      failedTests: ["YourGame.SampleGame.PlayModeTests.GameplayWinLossTests.WinLevel_ReachesWonState"],
       failedTestsOmitted: 5,
     } as never);
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1378,9 +1378,9 @@ describe("CampaignManager", () => {
   it("a document that opens on a menu is not reported as broken for doing so (Codex 2026-09-12 V, Job 3.9)", async () => {
     // The system told every final sprint to make the game start playing by
     // itself and called an idle first screen a defect — one game's shape
-    // imposed on all of them. The vehicle's own document says "cold boot
-    // ≤ 6 s to Home"; the report called that a defect.
-    const gdd = "# GDD\n\nCold boot ≤ 6 s to Home on a mid device. Tap PLAY on Home to start a level.";
+    // imposed on all of them. The vehicle's own document names the screen its
+    // cold boot reaches; the report called that a defect.
+    const gdd = "# GDD\n\nCold boot ≤ 5 s to the lobby on a mid-range phone. Tap PLAY in the lobby to start a level.";
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
@@ -1390,7 +1390,7 @@ describe("CampaignManager", () => {
 
     // The final sprint is told to prove the document's OWN entry route.
     const finalPrompt = tasks.submitted[2]!.prompt;
-    expect(finalPrompt).toContain("This document opens on Home, so play must NOT start by itself");
+    expect(finalPrompt).toContain("This document opens on lobby, so play must NOT start by itself");
     expect(finalPrompt).toContain("through the same controls a person uses");
 
     tasks.verifications.set("task_3", {
@@ -1406,7 +1406,7 @@ describe("CampaignManager", () => {
 
     const report = messages.map((m) => m.text).join("\n");
     expect(report).not.toContain("sees an idle screen");
-    expect(report).toContain("the game opens on Home, as the document specifies");
+    expect(report).toContain("the game opens on lobby, as the document specifies");
     // …and the route nobody drove is still named as unproven.
     expect(report).toContain("that route is NOT proven");
   });
@@ -1414,10 +1414,10 @@ describe("CampaignManager", () => {
   it("refuses delivery while a GDD-scheduled element has no trace in code, and delivers once it does (spec-scope wired 2026-09-10)", async () => {
     writeFileSync(
       join(projectRoot, "docs", "Game_GDD.md"),
-      "# GDD\n\n## Element schedule\n\n| Unlock | Element | Notes |\n|---|---|---|\n| L1 | Cube | basic |\n| L7 | Dragon Boss | set piece |\n",
+      "# GDD\n\n## Element schedule\n\n| Unlock | Element | Notes |\n|---|---|---|\n| L1 | Reed | basic |\n| L7 | Storm Boss | set piece |\n",
     );
     mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
-    writeFileSync(join(projectRoot, "Assets", "Scripts", "Cube.cs"), "public class Cube {}");
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "Reed.cs"), "public class Reed {}");
     const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1429,14 +1429,14 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
-    expect(prompt).toContain("L7 Dragon Boss");
+    expect(prompt).toContain("L7 Storm Boss");
     expect(prompt).toContain("the code never mentions");
     expect(storage.get(campaign.id)!.state).not.toBe("done");
     expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
 
-    writeFileSync(join(projectRoot, "Assets", "Scripts", "DragonBoss.cs"), "public class DragonBoss {}");
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "StormBoss.cs"), "public class StormBoss {}");
     tasks.verifications.set("task_4", green);
-    tasks.emit("task:completed", "task_4", "dragon built, shipping");
+    tasks.emit("task:completed", "task_4", "storm built, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("all 2 scheduled element(s) have a trace in code");
   });
@@ -1444,7 +1444,7 @@ describe("CampaignManager", () => {
   it("refuses a silent delivery: the GDD asks for audio, clips exist, no shipped scene reaches one (2026-09-10)", async () => {
     const HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
     const scene = (extra: string): string =>
-      `${HEADER}--- !u!1 &1\nGameObject:\n  m_Name: Main Camera\n--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 1\n--- !u!1 &2\nGameObject:\n  m_Name: Pig\n--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n${extra}`;
+      `${HEADER}--- !u!1 &1\nGameObject:\n  m_Name: Main Camera\n--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 1\n--- !u!1 &2\nGameObject:\n  m_Name: Frog\n--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n${extra}`;
     const meta = (rel: string, guid: string): void => writeFileSync(join(projectRoot, `${rel}.meta`), `fileFormatVersion: 2\nguid: ${guid}\n`);
     mkdirSync(join(projectRoot, "Assets", "Scenes"), { recursive: true });
     mkdirSync(join(projectRoot, "Assets", "Art"), { recursive: true });
@@ -1453,8 +1453,8 @@ describe("CampaignManager", () => {
     writeFileSync(join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"), "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
     writeFileSync(join(projectRoot, "Assets", "Scenes", "Main.unity"), scene(""));
     meta("Assets/Scenes/Main.unity", "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-    writeFileSync(join(projectRoot, "Assets", "Art", "pig.png"), "pixels");
-    meta("Assets/Art/pig.png", "22222222222222222222222222222222");
+    writeFileSync(join(projectRoot, "Assets", "Art", "frog.png"), "pixels");
+    meta("Assets/Art/frog.png", "22222222222222222222222222222222");
     writeFileSync(join(projectRoot, "Assets", "Audio", "merge.wav"), "RIFF");
     meta("Assets/Audio/merge.wav", "33333333333333333333333333333333");
     const gdd = "# GDD\n\n## Audio\nMusic base loop per area; SFX for tap, merge and win; audio ducks on pause.\n";
@@ -1803,12 +1803,12 @@ describe("CampaignManager", () => {
 
   it("a vision model's explicit NO bounces the final sprint once; a YES delivers with the match in the report (2026-09-10)", async () => {
     const gdd = [
-      "# GDD", "12.  ART DIRECTION", "12.1 Visual Style",
-      "Two-layer look: crisp flat pixel-art canvases on softly rendered dimensional stages, ",
-      "plus plump, glossy 3D-feel pigs with 2D-animation snappiness that read instantly against ",
-      "the destructible layer, in bright warm colour with heavy contrast for readability.",
+      "# GDD", "8.  ART DIRECTION", "8.1 Visual Style",
+      "Two-layer look: flat cut-paper lanterns drifting over a painted, softly lit lake, ",
+      "plus round lacquered shrine figures with springy hand-drawn motion that stand out against ",
+      "the dark water, in warm amber light with strong contrast for readability.",
     ].join("\n");
-    const answers = ["The frame shows a flat grey grid and no pigs.\nMATCH: no", "Plump pigs on a warm stage, as described.\nMATCH: yes"];
+    const answers = ["The frame shows a flat grey grid and no lanterns.\nMATCH: no", "Lacquered lanterns on a warm lake, as described.\nMATCH: yes"];
     let asked = 0;
     visionChat = async () => { asked++; return { text: answers.shift() ?? "MATCH: yes" }; };
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
@@ -1826,7 +1826,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(asked).toBe(1);
     expect(tasks.submitted[3]!.prompt).toContain("LOOK DOES NOT MATCH THE GDD: a vision model judged the newest captured frame");
-    expect(tasks.submitted[3]!.prompt).toContain("flat grey grid and no pigs");
+    expect(tasks.submitted[3]!.prompt).toContain("flat grey grid and no lanterns");
     expect(storage.get(campaign.id)!.milestones[2]!.visualMismatchBounces).toBe(1);
 
     // The retry captures its OWN frame: the judgement is of the game as it is
@@ -1839,7 +1839,7 @@ describe("CampaignManager", () => {
     // gathered and sent, so asserting on the state alone races the delivery
     // message (green locally, red in CI).
     await waitFor(
-      () => expect(messages.map((m) => m.text).join("\n")).toContain("MATCH — Plump pigs on a warm stage, as described."),
+      () => expect(messages.map((m) => m.text).join("\n")).toContain("MATCH — Lacquered lanterns on a warm lake, as described."),
       { timeout: 15_000 },
     );
   });
@@ -1873,7 +1873,7 @@ describe("CampaignManager", () => {
   });
 
   /**
-   * SCENE HYGIENE. Measured on the delivered PixelFlow tree 2026-09-03: 20
+   * SCENE HYGIENE. Measured on the delivered test-game tree 2026-09-03: 20
    * scenes on disk, 14 enabled in Build Settings, and the person who opened
    * the delivery could not tell which one is the game.
    */
@@ -1896,17 +1896,17 @@ describe("CampaignManager", () => {
   const REAL_DELIVERED_BUILD: ReadonlyArray<[string, number]> = [
     ["Assets/Scenes/Gameplay.unity", 3],
     ["Assets/Scenes/Main.unity", 6],
-    ["Assets/Scenes/UfoShowcase.unity", 5],
+    ["Assets/Scenes/CometShowcase.unity", 5],
     ["Assets/Scenes/AssembledGame.unity", 2],
     ["Assets/Scenes/ModuleBoundary.unity", 3],
     ["Assets/InitTestScene4abd18f9.unity", 5],
     ["Assets/Scenes/LiveOpsAssembled.unity", 3],
     ["Assets/Scenes/AssembledMain.unity", 3],
-    ["Assets/Scenes/AssembledUfoRuntime.unity", 3],
+    ["Assets/Scenes/AssembledCometRuntime.unity", 3],
     ["Assets/Modules/LiveOpsModule/Scenes/LiveOpsVisualAssembly.unity", 1],
     ["Assets/Scenes/LiveOpsVisualsVerified.unity", 3],
     ["Assets/Scenes/LiveOpsPresentation.unity", 4],
-    ["Assets/Scenes/TargetedLevel151Verification.unity", 5],
+    ["Assets/Scenes/TargetedLevel42Verification.unity", 5],
     ["Assets/Scenes/ProductionMain.unity", 17],
   ];
 
@@ -1948,12 +1948,12 @@ describe("CampaignManager", () => {
     buildSettings([["Assets/Scenes/Main.unity", 1]]);
     mkdirSync(join(projectRoot, "Assets", "Prefabs"), { recursive: true });
     writeFileSync(
-      join(projectRoot, "Assets", "Prefabs", "Pig.prefab"),
-      "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Pig\n" +
+      join(projectRoot, "Assets", "Prefabs", "Frog.prefab"),
+      "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Frog\n" +
         "--- !u!212 &8\nSpriteRenderer:\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n",
     );
     writeFileSync(
-      join(projectRoot, "Assets", "Prefabs", "Pig.prefab.meta"),
+      join(projectRoot, "Assets", "Prefabs", "Frog.prefab.meta"),
       "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\n",
     );
 
@@ -1962,7 +1962,7 @@ describe("CampaignManager", () => {
     const finalPrompt = tasks.submitted[2]!.prompt;
     expect(finalPrompt).toContain("MEASURED NOW");
     expect(finalPrompt).toContain("render NOTHING");
-    expect(finalPrompt).toContain("Assets/Prefabs/Pig.prefab");
+    expect(finalPrompt).toContain("Assets/Prefabs/Frog.prefab");
     // Earlier sprints are not judged on the whole tree's delivery shape.
     expect(tasks.submitted[0]!.prompt).not.toContain("MEASURED NOW");
   });
@@ -1984,7 +1984,7 @@ describe("CampaignManager", () => {
     expect(report).toContain("ProductionMain.unity");
     expect(report).toContain("13 other scenes are enabled");
     expect(report).toContain("10 of them");
-    expect(report).toContain("TargetedLevel151Verification.unity");
+    expect(report).toContain("TargetedLevel42Verification.unity");
     // The three that match neither rule are NOT called scaffolding.
     expect(report).toContain("3 match neither rule");
     // Untidy is disclosed, never refused — deleting a user's scenes is not
@@ -2066,7 +2066,7 @@ describe("CampaignManager", () => {
       join(projectRoot, "ProjectSettings", "ProjectVersion.txt"),
       "m_EditorVersion: 6000.3.22f1\nm_EditorVersionWithRevision: 6000.3.22f1 (1c726e1fb402)\n",
     );
-    const coreLoopGdd = "# GDD\n\nCore mechanic\nTap a pig on the conveyor to send it to a tray slot.\n";
+    const coreLoopGdd = "# GDD\n\nCore mechanic\nTap a shrine to pull the nearest lantern onto the pond.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), coreLoopGdd);
 
     // The document on disk is the approved one (plan 1.9): the intake is given the same text.
@@ -2082,10 +2082,10 @@ describe("CampaignManager", () => {
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
     expect(readme).toContain("6000.3.22f1");
     expect(readme).toContain("Assets/Scenes/ProductionMain.unity");
-    expect(readme).toContain("Tap a pig on the conveyor");
+    expect(readme).toContain("Tap a shrine to pull the nearest lantern");
     expect(readme).toContain("179 of 179");
     expect(readme).toContain("-testPlatform PlayMode");
-    expect(readme).toContain("TargetedLevel151Verification.unity");
+    expect(readme).toContain("TargetedLevel42Verification.unity");
     expect(readme).not.toContain("Unknown");
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
@@ -2100,7 +2100,7 @@ describe("CampaignManager", () => {
     buildSettings(REAL_DELIVERED_BUILD);
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
     writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.3.22f1\n");
-    const gdd = "# GDD\n\nCore mechanic\nTap a pig on the conveyor to send it to a tray slot.\n";
+    const gdd = "# GDD\n\nCore mechanic\nTap a shrine to pull the nearest lantern onto the pond.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
     const campaign = await reachFinalSprint(gdd);
     tasks.verifications.set("task_3", {
@@ -2260,8 +2260,8 @@ describe("CampaignManager", () => {
   };
   const UNITY_HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
   const CAMERA_DOC = "--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 0\n";
-  const PIG_PREFAB =
-    `${UNITY_HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Pig\n` +
+  const FROG_PREFAB =
+    `${UNITY_HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Frog\n` +
     "--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Materials:\n" +
     "  - {fileID: 2100000, guid: aaaabbbbccccddddeeeeffff00001111, type: 2}\n" +
     "  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n";
@@ -2274,15 +2274,15 @@ describe("CampaignManager", () => {
         .join("")}`,
     );
 
-  /** The delivered PixelFlow shape: a scene with a camera and nothing else. */
+  /** The delivered test-game shape: a scene with a camera and nothing else. */
   const writeSlopProject = (): void => {
     buildList(["Assets/Scenes/ProductionMain.unity"]);
     putAsset("Assets/Scenes/ProductionMain.unity", `${UNITY_HEADER}${CAMERA_DOC}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-    putAsset("Assets/Prefabs/Pig.prefab", PIG_PREFAB, "11111111111111111111111111111111");
-    putAsset("Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+    putAsset("Assets/Prefabs/Frog.prefab", FROG_PREFAB, "11111111111111111111111111111111");
+    putAsset("Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
     putAsset(
-      "Assets/Scripts/PlayfieldBuilder.cs",
-      "class PlayfieldBuilder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }",
+      "Assets/Scripts/BoardBuilder.cs",
+      "class BoardBuilder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }",
       "66666666666666666666666666666666",
     );
   };
@@ -2693,7 +2693,7 @@ describe("CampaignManager", () => {
     expect(prompt).toContain("DELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES");
     expect(prompt).toContain("Assets/Scenes/ProductionMain.unity");
     expect(prompt).toContain("0 renderer components");
-    expect(prompt).toContain("Assets/Prefabs/Pig.prefab");
+    expect(prompt).toContain("Assets/Prefabs/Frog.prefab");
     expect(prompt).toContain("GameObject.CreatePrimitive");
     expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
   });
@@ -2713,13 +2713,13 @@ describe("CampaignManager", () => {
   });
 
   it("discloses the GDD's own dimensionality against the shipped scenes, without refusing", async () => {
-    // Audited 2026-09-03: the GDD says "plump, glossy 3D-feel pigs" and the
+    // Audited 2026-09-03: the GDD asks for 3D-feel characters and the
     // delivered scenes had no mesh renderers and bound none of the project's
     // 62 imported models. A stylised 3D-feel look CAN be built from sprites,
     // so this is disclosure with counts — the reader judges.
     writeBuiltProject();
     const campaign = await runLadderToDelivery(
-      "# GDD\n\n12. ART DIRECTION\nplump, glossy 3D-feel pigs on softly rendered dimensional stages.",
+      "# GDD\n\n8. ART DIRECTION\nround, lacquered 3D-feel lanterns over a softly lit painted lake.",
     );
 
     settleMilestone("integrated, all 42 tests pass");
@@ -3240,7 +3240,7 @@ describe("CampaignManager", () => {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
       auditCoverage: vi
         .fn()
-        .mockResolvedValueOnce(["Dragon boss: no milestone implemented it"])
+        .mockResolvedValueOnce(["Storm boss: no milestone implemented it"])
         .mockResolvedValue([]),
       // The repair landed the boss, and the delivery audit says so: a GREEN
       // repair's requirement is judged on the evidence now, not waived by the
@@ -3272,18 +3272,18 @@ describe("CampaignManager", () => {
 
     settleMilestone("final report"); // last planned milestone → audit fires, finds a gap
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
-    expect(tasks.submitted[3]!.prompt).toContain("Dragon boss");
+    expect(tasks.submitted[3]!.prompt).toContain("Storm boss");
     expect(storage.get(campaign.id)!.state).toBe("executing");
 
     // The remediation sprint now inherits the visual-evidence gate (its bar
     // demands a captured frame), so a first completion with no frames on disk
     // bounces once — the gap-closing sprint is exactly the one that must not
     // be allowed to go green blind.
-    settleMilestone("dragon implemented");
+    settleMilestone("storm implemented");
     await waitFor(() => expect(tasks.submitted).toHaveLength(5));
     expect(tasks.submitted[4]!.prompt).toContain("VISUAL EVIDENCE MISSING");
 
-    settleMilestone("dragon implemented, frames captured");
+    settleMilestone("storm implemented, frames captured");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
   });
 
@@ -4834,18 +4834,18 @@ describe("CampaignManager", () => {
 
       it("the delivery's element schedule is the campaign's own, never the largest document in docs/ (P2)", () => {
         // docs/ holds ANOTHER game's GDD whose schedule this game never had:
-        // discovery read it and refused the delivery for its Dragon Boss.
-        writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), schedule("Other GDD", "| L7 | Dragon Boss | set piece |\n"));
+        // discovery read it and refused the delivery for its Storm Boss.
+        writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), schedule("Other GDD", "| L7 | Storm Boss | set piece |\n"));
         mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
-        writeFileSync(join(projectRoot, "Assets", "Scripts", "Cube.cs"), "public class Cube {}");
-        const own = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Cube GDD", "| L1 | Cube | basic |\n")));
+        writeFileSync(join(projectRoot, "Assets", "Scripts", "Reed.cs"), "public class Reed {}");
+        const own = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Reed GDD", "| L1 | Reed | basic |\n")));
         const ownText = `${own.refusal ?? ""}\n${own.lines.join("\n")}`;
-        expect(ownText).not.toContain("Dragon Boss");
+        expect(ownText).not.toContain("Storm Boss");
         expect(own.lines.join("\n")).toContain("all 1 scheduled element(s) have a trace in code");
         // …and the campaign's OWN schedule is still held against the code.
         const missing = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Rocket GDD", "| L3 | Rocket Launcher | late game |\n")));
         expect(missing.refusal).toContain("L3 Rocket Launcher");
-        expect(missing.refusal).not.toContain("Dragon Boss");
+        expect(missing.refusal).not.toContain("Storm Boss");
       });
 
       it("a docs/GDD.md that holds another document is never adopted as the campaign's path (P3)", async () => {
@@ -5097,7 +5097,7 @@ describe("CampaignManager", () => {
         .fn()
         .mockResolvedValueOnce([
           "Audio production: base music loop and SFX are not covered",
-          "Art production: pig skins and area backgrounds are not covered",
+          "Art production: frog skins and area backgrounds are not covered",
           "Story and theme content: area naming vignettes are not covered",
         ])
         .mockResolvedValue([]),
@@ -5151,7 +5151,7 @@ describe("CampaignManager", () => {
 
   /**
    * A campaign whose coverage-remediation sprint spends both attempts on
-   * "Dragon boss", and whose FINAL PROOF sprint then reports green. The
+   * "Storm boss", and whose FINAL PROOF sprint then reports green. The
    * evidence audit for the unclosed requirement answers with `resolve`.
    */
   const runToSpentRemediation = async (
@@ -5163,7 +5163,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, `campaigns-partial-${messages.length}.db`));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Dragon boss: no milestone implemented it"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Storm boss: no milestone implemented it"]),
       resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => resolve(reqs)),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
@@ -5207,7 +5207,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(6));
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(tasks.submitted[5]!.prompt).toContain("FINAL DELIVERY PROOFS");
-    expect(tasks.submitted[5]!.prompt).toContain("Dragon boss");
+    expect(tasks.submitted[5]!.prompt).toContain("Storm boss");
     expect(storage.get(campaign.id)!.milestones.at(-1)!.id).toMatch(/^mfinal-/);
     // The proof sprint captured a frame of the running game.
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
@@ -5225,7 +5225,7 @@ describe("CampaignManager", () => {
     // named either. So the ladder learned to run a final proof sprint and
     // report everything.
     // …and then it DELIVERED on those mechanical proofs with the feature
-    // still missing: "Dragon boss" was named in the report under a headline
+    // still missing: "Storm boss" was named in the report under a headline
     // that said the game was built (Codex 2026-09-12 U, Job 2.7). Exhaustion
     // stops the repair; it does not waive the requirement.
     const campaign = await runToSpentRemediation();
@@ -5236,13 +5236,13 @@ describe("CampaignManager", () => {
     expect(stopped.milestones.filter((m) => m.status === "green")).toHaveLength(4);
     expect(stopped.milestones.at(-1)!.status).toBe("green");
     expect(stopped.milestones.at(-2)!.status).toBe("failed");
-    expect(stopped.lastError).toContain("Dragon boss");
+    expect(stopped.lastError).toContain("Storm boss");
     expect(stopped.milestones.at(-1)!.deliveryFailureKinds).toContain("unclosedGaps");
 
     const report = messages.at(-1)!.text;
     expect(report).toContain("NOT DELIVERED");
     expect(report).toContain("Sprint A — Foundations");
-    expect(report).toContain("Dragon boss: no milestone implemented it");
+    expect(report).toContain("Storm boss: no milestone implemented it");
     expect(report).not.toContain("Campaign stopped");
     // No reviewer wired here: the report says so instead of implying a review.
     expect(report).toContain("Independent review");
@@ -5274,7 +5274,7 @@ describe("CampaignManager", () => {
     // sprint's own history stands, its requirement's closure is stated as
     // what it is (Codex 2026-09-12 V#7).
     expect(report).toContain("the evidence audit then found its requirement delivered");
-    expect(report).not.toMatch(/are NOT delivered: Dragon boss/);
+    expect(report).not.toMatch(/are NOT delivered: Storm boss/);
   });
 
   it("a stored closure from ANOTHER revision is judged again (Codex 2026-09-12 V#4)", async () => {
@@ -5291,7 +5291,7 @@ describe("CampaignManager", () => {
       (id) => {
         // A closure recorded on a revision this delivery is not.
         const live = storage.get(id)!;
-        const repair = live.milestones.find((m) => m.coverageGap?.includes("Dragon boss"))!;
+        const repair = live.milestones.find((m) => m.coverageGap?.includes("Storm boss"))!;
         repair.coverageClosed = true;
         repair.coverageClosedRevision = "0".repeat(40);
         storage.save(live);
@@ -5299,14 +5299,14 @@ describe("CampaignManager", () => {
     );
 
     await waitFor(() => expect(asked.length).toBeGreaterThan(0), { timeout: 15_000 });
-    expect(asked[0]![0]).toContain("Dragon boss");
+    expect(asked[0]![0]).toContain("Storm boss");
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
-    expect(`${after.lastError}`).toContain("Dragon boss");
+    expect(`${after.lastError}`).toContain("Storm boss");
     // …and the closure the audit has just WITHDRAWN is gone: left standing,
     // the report called the same requirement delivered on the sprint's line
     // and NOT DELIVERED in its headline (Codex 2026-09-12 W#8).
-    const repair = after.milestones.find((m) => m.coverageGap?.includes("Dragon boss"))!;
+    const repair = after.milestones.find((m) => m.coverageGap?.includes("Storm boss"))!;
     expect(repair.coverageClosed).toBeUndefined();
     expect(repair.coverageClosedRevision).toBeUndefined();
     expect(messages.at(-1)!.text).not.toContain("found delivered by the evidence audit");
@@ -5685,7 +5685,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-art-gate.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: pig skins are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: frog skins are not covered"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -5721,7 +5721,7 @@ describe("CampaignManager", () => {
     // bounce first; the art gate speaks on the completion that reaches it.
     for (let i = 0; i < 3 && !storage.get(campaign.id)!.milestones.at(-1)!.artBounced; i++) {
       const before = tasks.submitted.length;
-      settleMilestone("pig skins implemented and verified");
+      settleMilestone("frog skins implemented and verified");
       await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 15_000 });
     }
     const bounced = storage.get(campaign.id)!.milestones.at(-1)!;
@@ -5739,7 +5739,7 @@ describe("CampaignManager", () => {
     const mcov1 = () => storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!;
     for (let i = 0; i < 3 && mcov1().status === "running"; i++) {
       const before = tasks.submitted.length;
-      settleMilestone("pig skins drawn with the local model and bound");
+      settleMilestone("frog skins drawn with the local model and bound");
       await waitFor(
         () => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true),
         { timeout: 15_000 },
@@ -6212,13 +6212,13 @@ describe("CampaignManager", () => {
       "",
       "The game ships 3 levels.",
       "",
-      "2.4 Session Design",
+      "3.2 Pacing",
       "Parameter",
       "Target",
-      "Rationale",
-      "Median level duration",
-      "60–150 s (Normal), 150–300 s (Hard)",
-      "Fits coffee-break sessions",
+      "Why",
+      "Typical round length",
+      "45–120 s (Easy), 120–240 s (Expert)",
+      "Short enough for a bus ride",
     ].join("\n");
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
@@ -6229,8 +6229,8 @@ describe("CampaignManager", () => {
     settleMilestone("integrated, all 42 tests pass");
 
     await waitFor(() => expect(specs.length).toBeGreaterThan(0), { timeout: 15_000 });
-    // 300 s with the same headroom every allowance gets.
-    expect(specs[0]).toMatchObject({ deadlineSeconds: 465 });
+    // 240 s with the same headroom every allowance gets.
+    expect(specs[0]).toMatchObject({ deadlineSeconds: 375 });
     expect(storage.get(campaign.id)!.id).toBe(campaign.id);
   });
 
@@ -7995,7 +7995,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-cancel.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Dragon boss: no milestone implemented it"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Storm boss: no milestone implemented it"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage, planner,
@@ -8088,7 +8088,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-art-retry.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: pig skins are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: frog skins are not covered"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8129,14 +8129,14 @@ describe("CampaignManager", () => {
   });
 
   it("real sprites added under new names satisfy the art gate — no directive on the retry", async () => {
-    // Measured 2026-09-07 15:15: Ufo.png and SeatRed.png drawn beside the
+    // Measured 2026-09-07 15:15: Comet.png and Banner.png drawn beside the
     // 410 placeholders; the placeholder count alone would have bounced it.
     tasks = new FakeTaskManager();
     storage.close();
     storage = new CampaignStorage(join(dir, "campaigns-art-added.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: pig skins are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: frog skins are not covered"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8196,7 +8196,7 @@ describe("CampaignManager", () => {
       milestoneTimeBoxMs: 60 * 60_000,
       independentReviewer: async ({ prompt }) => {
         seenPrompts.push(prompt);
-        return { ok: true, model: "fake-astra", text: "VERDICT: NOT DELIVERABLE\nBLOCKERS: 1. no pigs", ms: 1234 };
+        return { ok: true, model: "fake-astra", text: "VERDICT: NOT DELIVERABLE\nBLOCKERS: 1. no frogs", ms: 1234 };
       },
     });
     manager.attachEvents();
@@ -8270,7 +8270,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-partial-refused.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Pig skins: no milestone made them"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Frog skins: no milestone made them"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8705,7 +8705,7 @@ describe("CampaignManager", () => {
     // while the executor's own retry ran untracked. Four blips failed the
     // campaign before a real draft was attempted; each blip also spent one
     // of the designer's revision rounds (same counter).
-    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
     expect(tasks.submitted).toHaveLength(1);
 
     const retryId = tasks.addRetry("task_1");
@@ -8734,7 +8734,7 @@ describe("CampaignManager", () => {
     registry.recordOverloaded("cm-draft", "quota wall");
     setLiveChainMemberNames(["cm-draft"]);
     try {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       // Dead retry promise (tip idle past its horizon) so the settle is judged.
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
@@ -8757,7 +8757,7 @@ describe("CampaignManager", () => {
     // so a lineage tip whose updatedAt kept refreshing (the promise never
     // reads dead) re-deferred every horizon forever — no draft, no failure,
     // no message, and the one-campaign-per-project slot held.
-    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
     expect(tasks.submitted).toHaveLength(1);
 
     // A live promise: the tip was touched just now, so it is not dead.
@@ -8787,7 +8787,7 @@ describe("CampaignManager", () => {
     // gated on state === "executing", so a drafting-gdd campaign whose draft
     // had completed fell through to submitDraft — a whole new LLM draft, no
     // revision note, no attempt charged, and the approval gate never opened.
-    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
     expect(tasks.submitted).toHaveLength(1);
     // The draft completed, but its settlement event died with the process.
     tasks.markTerminal("task_1", TaskStatus.completed, "wrote docs/Game_GDD.md");
@@ -8899,7 +8899,7 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
 
-    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
 
@@ -8937,7 +8937,7 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
 
-    const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"), { timeout: 15_000 });
     const before = tasks.submitted.length;
@@ -8962,7 +8962,7 @@ describe("CampaignManager", () => {
     // the ladder was planned from v2 and every sprint prompt pointed agents at
     // the v1 file. The whole build ran against the superseded design.
     const v1 = "# GDD v1\n" + "core loop: match three tiles and clear the board. ".repeat(8);
-    const v2 = "# GDD v2 REVISED\n" + "core loop: match FOUR tiles; a dragon boss guards level 5. ".repeat(8);
+    const v2 = "# GDD v2 REVISED\n" + "core loop: match FOUR tiles; a storm boss guards level 5. ".repeat(8);
     const share = (text: string): IncomingMessage =>
       ({
         channelType: "cli",
@@ -9346,7 +9346,7 @@ describe("CampaignManager", () => {
       userId: "u1",
       projectRoot,
       state: "planning",
-      ideaText: "a match-3 where pigs fly",
+      ideaText: "a match-3 where frogs fly",
       draftAttempts: 0,
       milestones: [],
       currentMilestone: 0,
@@ -9358,7 +9358,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     expect(planMilestones).not.toHaveBeenCalled();
-    expect(tasks.submitted[0]!.prompt).toContain("a match-3 where pigs fly");
+    expect(tasks.submitted[0]!.prompt).toContain("a match-3 where frogs fly");
     const fresh = storage.get("campaign_idea_1")!;
     expect(fresh.state).toBe("drafting-gdd");
     expect(fresh.gddPath).toBeUndefined(); // the other game's GDD was not adopted
@@ -9610,7 +9610,7 @@ describe("CampaignManager", () => {
 
     /** Idea → the first draft lands at the gate → the designer asks for a revision. */
     const toRevision = async (): Promise<string> => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       expect(await manager.tryHandleApproval("cli-local", "no, make it about cats")).toBe(true);
@@ -9647,7 +9647,7 @@ describe("CampaignManager", () => {
     });
 
     it("a campaign cancelled for its revision budget revives at the gate with a fresh budget", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       const spent = storage.get(campaign.id)!;
@@ -9678,7 +9678,7 @@ describe("CampaignManager", () => {
     });
 
     it("planning refuses an idea-mode campaign nobody approved, and a boot resume goes back to the gate", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
 
@@ -9799,7 +9799,7 @@ describe("CampaignManager", () => {
       (manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones;
 
     const atTheGate = async (): Promise<string> => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       expect(messages.at(-1)!.text).toContain("revise:");
@@ -10011,7 +10011,7 @@ describe("CampaignManager", () => {
     });
 
     it("a person's stop of the GDD draft stops the campaign instead of starting a new paid draft (campaign#4)", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       expect(tasks.submitted).toHaveLength(1);
       tasks.cancel("task_1", { reason: "user" });
       tasks.emit("task:cancelled", "task_1");
@@ -10033,7 +10033,7 @@ describe("CampaignManager", () => {
     });
 
     it("a draft stopped before a restart is not redrafted at boot (campaign#4)", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       tasks.cancel("task_1", { reason: "user" }); // the process died before the settle was handled
       await manager.resumeActive();
       await draftMoved(campaign.id);
@@ -10042,7 +10042,7 @@ describe("CampaignManager", () => {
     });
 
     it("a stopped revision revives at the gate without carrying the stopped lineage into the new generation (campaign#4)", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       expect(await manager.tryHandleIncoming(incoming("revise: make it about cats"))).toBe(true);
@@ -10150,34 +10150,34 @@ describe("CampaignManager", () => {
     it("the path the draft names wins, and a revision is told which file it revises", async () => {
       rmSync(join(projectRoot, "docs", "Game_GDD.md"));
       stale("docs/GDD.md", "# Another game's GDD\n");
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
-      writeFileSync(join(projectRoot, "docs", "Pig_Draft_GDD.md"), "# Pig GDD v1\n");
-      tasks.emit("task:completed", "task_1", "Wrote the GDD.\n\ndocs/Pig_Draft_GDD.md");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      writeFileSync(join(projectRoot, "docs", "Frog_Draft_GDD.md"), "# Frog GDD v1\n");
+      tasks.emit("task:completed", "task_1", "Wrote the GDD.\n\ndocs/Frog_Draft_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
-      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pig_Draft_GDD.md");
+      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Frog_Draft_GDD.md");
 
       expect(await manager.tryHandleApproval("cli-local", "add a boss level")).toBe(true);
       await waitFor(() => expect(tasks.submitted).toHaveLength(2));
-      expect(tasks.submitted[1]!.prompt).toContain("`docs/Pig_Draft_GDD.md` — revise THAT file in place");
+      expect(tasks.submitted[1]!.prompt).toContain("`docs/Frog_Draft_GDD.md` — revise THAT file in place");
     });
 
     it("a revision written beside the old draft is the one presented", async () => {
       rmSync(join(projectRoot, "docs", "Game_GDD.md"));
-      const campaign = manager.startFromIdea(ctx, "a match-3 where pigs fly");
-      writeFileSync(join(projectRoot, "docs", "Pig_GDD.md"), "# Pig GDD v1\n");
+      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      writeFileSync(join(projectRoot, "docs", "Frog_GDD.md"), "# Frog GDD v1\n");
       tasks.emit("task:completed", "task_1", "done");
-      await waitFor(() => expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pig_GDD.md"));
+      await waitFor(() => expect(storage.get(campaign.id)!.gddPath).toBe("docs/Frog_GDD.md"));
       // The first draft is history by the time the revision runs.
       const past = new Date(Date.now() - 60 * 60_000);
-      utimesSync(join(projectRoot, "docs", "Pig_GDD.md"), past, past);
+      utimesSync(join(projectRoot, "docs", "Frog_GDD.md"), past, past);
 
       expect(await manager.tryHandleApproval("cli-local", "make it about cats")).toBe(true);
       await waitFor(() => expect(tasks.submitted).toHaveLength(2));
-      writeFileSync(join(projectRoot, "docs", "Pig_GDD_v2.md"), "# Pig GDD v2 — cats\n");
+      writeFileSync(join(projectRoot, "docs", "Frog_GDD_v2.md"), "# Frog GDD v2 — cats\n");
       tasks.emit("task:completed", "task_2", "revised");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
-      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pig_GDD_v2.md");
-      expect(messages.at(-1)!.text).toContain("docs/Pig_GDD_v2.md");
+      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Frog_GDD_v2.md");
+      expect(messages.at(-1)!.text).toContain("docs/Frog_GDD_v2.md");
     });
   });
 

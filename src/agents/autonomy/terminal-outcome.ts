@@ -199,7 +199,7 @@ const STAMP_PIECES: ReadonlyMap<TerminalKey, readonly string[]> = new Map(
  * first. A result written before the key was carried says how its run ended
  * only through these; a sentence counts only when it is the system's own
  * template text, so a worker's report that mentions getting stuck is not one.
- * A piece survives an excerpt that cut the notice's start (18d4t m1 begins
+ * A piece survives an excerpt that cut the notice's start (a measured m1 begins
  * "fter multiple approaches…").
  */
 export function systemStampsIn(text: string | null | undefined): TerminalKey[] {

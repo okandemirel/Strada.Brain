@@ -301,13 +301,13 @@ describe("DelegationManager", () => {
         mode: "sync",
         toolContext: {
           ...TEST_TOOL_CONTEXT,
-          userAuthorizedPaths: ["/Users/okan/Downloads/PixelFlow_GDD.docx"],
+          userAuthorizedPaths: ["/Users/okan/Downloads/SampleGame_GDD.docx"],
         },
       });
 
       expect(seededAuthorizations, "the worker was handed nothing").toHaveLength(1);
       expect(seededAuthorizations[0]![0]).toMatch(/^delegation-/);
-      expect(seededAuthorizations[0]![1]).toEqual(["/Users/okan/Downloads/PixelFlow_GDD.docx"]);
+      expect(seededAuthorizations[0]![1]).toEqual(["/Users/okan/Downloads/SampleGame_GDD.docx"]);
     });
 
     it("hands down nothing when the parent held nothing", async () => {

@@ -1,7 +1,7 @@
 /**
  * The scope gate's pure judge (GDD-drift plan W08).
  *
- * In campaign 18d4t six of six milestones went green on prose. The judge is
+ * In a measured campaign six of six milestones went green on prose. The judge is
  * the replacement's one decision: green only when the milestone's own GDD
  * rows and every row that passed before pass the system's checks, in one run
  * the system admitted, on the committed revision — and the run ended `done`
@@ -752,7 +752,7 @@ describe("legacyRunIntegrity — a run settled before the key was carried, decod
     expect(legacyRunIntegrity(tip, decode).worst).toBe("task_stuck");
   });
 
-  it("red outranks the quota stamp beside it (18d4t m6: ten stuck stamps and a quota stop)", () => {
+  it("red outranks the quota stamp beside it (A measured m6: ten stuck stamps and a quota stop)", () => {
     const tip = [
       ...Array.from({ length: 10 }, () => getResilienceMessage("task_stuck", "en")),
       getResilienceMessage("provider_quota", "en", { provider: "opencode", detail: "limit reached." }),

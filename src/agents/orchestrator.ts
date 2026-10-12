@@ -928,8 +928,8 @@ export class Orchestrator {
    *
    * Authorization is a property of what the user typed, not of the instance
    * that happened to receive it. Measured 2026-08-20: goal decomposition
-   * rewrote "read /Users/okan/Downloads/PixelFlow_GDD.docx" into a sub-goal
-   * that said only "read PixelFlow_GDD.docx", so the sub-agent's Orchestrator
+   * rewrote "read /Users/okan/Downloads/SampleGame_GDD.docx" into a sub-goal
+   * that said only "read SampleGame_GDD.docx", so the sub-agent's Orchestrator
    * could derive nothing and refused the document its task was about. Keyed by
    * chat id, so sharing the store never widens who may read what.
    */
@@ -1851,7 +1851,7 @@ export class Orchestrator {
     //
     // Measured, with the threshold at "complex":
     //   "write one C# file under Assets/Scripts…"  113 chars, moderate -> direct
-    //   the four-script Pixel Flow request          313 chars, complex  -> supervisor
+    //   the four-script test-game request          313 chars, complex  -> supervisor
     const isDecomposable = this.goalDecomposer?.shouldDecompose(coarsePlanningPrompt) ?? false;
     const meetsComplexity = classification
       ? this.shouldActivateSupervisor(classification)
@@ -2025,7 +2025,7 @@ export class Orchestrator {
       getLogger().info("Framework knowledge section trimmed to fit the prompt budget", frameworkTrim);
     }
     // Live section alone was a NAME LIST: namespaces and 40-per-namespace class
-    // names, no usage contracts. Measured 2026-08-23 (PixelFlow): a run given
+    // names, no usage contracts. Measured 2026-08-23 (the test game): a run given
     // only that invented its own module shapes — Models/Systems folders, a
     // hand-rolled config — because nothing in context showed how ModuleConfig,
     // [Inject], [StradaSystem] or EntityMediator actually wire. The static
@@ -3159,7 +3159,7 @@ export class Orchestrator {
    * message that just arrived, and delegation, which carries the parent's set
    * into a run that did not receive that message. Measured 2026-08-20: a
    * delegated worker started with an empty map and refused
-   * /Users/okan/Downloads/PixelFlow_GDD.docx, the document the task was about.
+   * /Users/okan/Downloads/SampleGame_GDD.docx, the document the task was about.
    * Delegation only ever hands down what the parent already holds, so a worker
    * cannot authorize itself.
    */
@@ -4911,8 +4911,8 @@ export class Orchestrator {
       !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
     if (!isLooseGameCode) return null;
     // Name the way out. Measured 2026-09-07: nine refusals in one day on
-    // Assets/Scripts/PlayfieldBuilder.cs — a loose duplicate of
-    // Assets/Modules/PresentationModule/Scripts/PlayfieldBuilder.cs — each
+    // Assets/Scripts/BoardBuilder.cs — a loose duplicate of
+    // Assets/Modules/PresentationModule/Scripts/BoardBuilder.cs — each
     // answered with the layout rule and nothing about the twin, so the agent
     // kept trying the loose copy while the build carried both definitions.
     // Looked up under the same root: a module copy made in the lease is not
@@ -5235,7 +5235,7 @@ export class Orchestrator {
     reason: string,
   ): ToolResult {
     // A rejection that names no alternative sends the run back to the same
-    // rejected shape. Measured 2026-08-24 (PixelFlow overnight): a run kept
+    // rejected shape. Measured 2026-08-24 (test-game overnight): a run kept
     // re-submitting `python3 -c` to massage level JSON — each rejection said
     // only "looks destructive", so the loop never taught itself the tool route.
     const guidance = /python\d?\s+-c\b|node\s+-e\b|perl\s+-e\b/i.test(reason + "")

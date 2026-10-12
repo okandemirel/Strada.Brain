@@ -1,7 +1,7 @@
 /**
  * Procedural sprite generation for the autonomous game-build path.
  *
- * Measured 2026-08-26 (PixelFlow, stated by the user): prefab structures get
+ * Measured 2026-08-26 (the test game, stated by the user): prefab structures get
  * created while scenes stay empty, and no gate ever forces the production of
  * assets that belong to the target game. The conformance layer can SAY "check
  * unity_my_assets_cloud before making art" — but until now nothing in the toolchain
@@ -495,7 +495,7 @@ export type LocalRunnerLike = Pick<
 
 /**
  * The part of style.json's notes that describes a LOOK. Measured 2026-09-07:
- * the project's notes read "…plump glossy pigs. | verification: visual assets
+ * the project's notes read "…<the art direction>. | verification: visual assets
  * for areas … integrated into PresentationModule config and prefab references
  * verified." — a sprint had appended its report to the art direction, and
  * every default diffusion prompt carried that sentence. Only the first
@@ -705,7 +705,7 @@ export class SpriteGenerateTool implements ITool {
     }
     // A KNOWING placeholder while real art is one flag away. Measured
     // 2026-09-07 12:21 (campaign mcov1, attempt 4): the sprint regenerated
-    // eight pig sprites with provider "procedural" — 335 → 170 bytes each —
+    // eight character sprites with provider "procedural" — 335 → 170 bytes each —
     // while the installed model draws a real one in ~45 s. The tool's own
     // description had called itself "placeholder-grade" and the procedural
     // branch "always works"; the delivery gate then counts every one of
@@ -861,7 +861,7 @@ export class SpriteGenerateTool implements ITool {
       }
       // The model can return a blank (a filtered or empty draw; after
       // background removal, a field of specks). Measured 2026-09-07 15:02: a
-      // 512² "green pig" came back as 19 KB of alpha noise and the tool said
+      // 512² green character came back as 19 KB of alpha noise and the tool said
       // ✓. The draw is measured (pixels: flat shape, or nearly all
       // transparent), with one differently-seeded retry before giving up.
       // A RUNNER THAT EXITED 0 WITHOUT WRITING leaves the previous image in
@@ -1132,7 +1132,7 @@ export class SpriteGenerateTool implements ITool {
         if (why !== undefined) unusable.set(j.fullPath, why);
       }
       // …and TWO SUBJECTS CANNOT SHARE ONE IMAGE. A runner that wrote the same
-      // valid picture for Pig, Rocket and Tree reported "3 of 3 sprites
+      // valid picture for Frog, Rocket and Tree reported "3 of 3 sprites
       // written" and the inventory counted three sprites with no placeholders
       // (Codex 2026-09-11 N#10). The retry below redraws them with new seeds.
       const byContent = new Map<string, string>();

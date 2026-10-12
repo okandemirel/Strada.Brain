@@ -64,14 +64,14 @@ describe("what the project built instead of using", () => {
   });
 
   it("names a service-locator fallback standing beside [Inject]", () => {
-    // Measured 2026-08-21: PigSystem declared [Inject] for three services and
+    // Measured 2026-08-21: a character system declared [Inject] for three services and
     // reached for the locator in OnUpdate whenever they were null — every
     // frame — while the boot check's wiring report said all three WERE
     // registered. The tests went green over the workaround.
     const found = assessFrameworkBypass("/p", io({
       "/p/Assets/A.cs": [
-        "[Inject] private IPigService _pig;",
-        "if (_pig == null) GameBootstrapper.Services?.TryGet(out _pig);",
+        "[Inject] private IPigService _frog;",
+        "if (_frog == null) GameBootstrapper.Services?.TryGet(out _frog);",
         "if (_board == null) GameBootstrapper.Services?.TryGet(out _board);",
       ].join("\n"),
     }));

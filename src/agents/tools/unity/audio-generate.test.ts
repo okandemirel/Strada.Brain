@@ -63,10 +63,10 @@ describe("unity_generate_audio", () => {
   });
 
   it("writes a music loop and says it is procedural", async () => {
-    const r = await new AudioGenerateTool().execute({ name: "music_farm", kind: "music", bpm: 100, key: "G", seconds: 8 }, ctx);
+    const r = await new AudioGenerateTool().execute({ name: "music_meadow", kind: "music", bpm: 100, key: "G", seconds: 8 }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("PROCEDURAL");
-    const clip = measureAudioClip(join(root, "Assets/Audio/Generated/music_farm.wav"));
+    const clip = measureAudioClip(join(root, "Assets/Audio/Generated/music_meadow.wav"));
     expect(clip.seconds).toBeCloseTo(7.2, 1); // 100 bpm → 2.4 s bars → 3 bars
   });
 

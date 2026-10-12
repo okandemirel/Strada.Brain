@@ -2,7 +2,7 @@
  * Style Profile — the game's visual identity, as a versioned project config.
  *
  * Product decision (2026-08-27, user's call): there is NO universal style.
- * A PixelFlow today is a Call of Duty tomorrow, so nothing about the look
+ * A casual puzzle today is a Call of Duty tomorrow, so nothing about the look
  * may be hardcoded — the profile is DERIVED from each project's own GDD
  * (see style-analysis.ts), written to <project>/style.json, and read by
  * every generation/render tool as its default. Consistency inside one game

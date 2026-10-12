@@ -2,7 +2,7 @@
  * A delegated worker must inherit what the user authorized.
  *
  * Measured 2026-08-20: the run decomposed into multi-agent work and the very
- * first read of /Users/okan/Downloads/PixelFlow_GDD.docx — the document the
+ * first read of /Users/okan/Downloads/SampleGame_GDD.docx — the document the
  * task was about, named by the user in their own request — came back "Path
  * resolves outside the project directory".
  *
@@ -24,10 +24,10 @@ describe("carrying authorization across a delegation", () => {
   it("hands the parent's paths to the delegate's own chat id", () => {
     const child = orchestrator();
 
-    child.seedUserAuthorizedPaths("delegation-sub-1", ["/Users/okan/Downloads/PixelFlow_GDD.docx"]);
+    child.seedUserAuthorizedPaths("delegation-sub-1", ["/Users/okan/Downloads/SampleGame_GDD.docx"]);
 
     expect(child.userAuthorizedPathsSnapshot("delegation-sub-1")).toEqual([
-      "/Users/okan/Downloads/PixelFlow_GDD.docx",
+      "/Users/okan/Downloads/SampleGame_GDD.docx",
     ]);
   });
 
@@ -70,8 +70,8 @@ describe("one store, every orchestrator", () => {
   // Measured 2026-08-20, after seeding the delegate fixed the delegation path
   // and the refusal came back anyway: the run was decomposing into sub-goals,
   // not delegating. Goal decomposition rewrote the user's
-  // "/Users/okan/Downloads/PixelFlow_GDD.docx" into a sub-goal that said only
-  // "PixelFlow_GDD.docx", so the sub-agent's Orchestrator had nothing to
+  // "/Users/okan/Downloads/SampleGame_GDD.docx" into a sub-goal that said only
+  // "SampleGame_GDD.docx", so the sub-agent's Orchestrator had nothing to
   // derive from and refused the document its task was about.
   //
   // Per-instance memory cannot survive that: the authorization has to be one
@@ -87,10 +87,10 @@ describe("one store, every orchestrator", () => {
     const root = withStore(shared);
     const sub = withStore(shared);
 
-    root.seedUserAuthorizedPaths("cli-local", ["/Users/okan/Downloads/PixelFlow_GDD.docx"]);
+    root.seedUserAuthorizedPaths("cli-local", ["/Users/okan/Downloads/SampleGame_GDD.docx"]);
 
     expect(sub.userAuthorizedPathsSnapshot("cli-local")).toEqual([
-      "/Users/okan/Downloads/PixelFlow_GDD.docx",
+      "/Users/okan/Downloads/SampleGame_GDD.docx",
     ]);
   });
 

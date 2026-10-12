@@ -43,7 +43,7 @@
       "family": "lease-path-outside-project",
       "title": "a workspace lease is judged outside the project it belongs to",
       "tool": "workspace_lease_acquire",
-      "target": { "file_path": "/var/folders/T/lease-1/PixelFlow" },
+      "target": { "file_path": "/var/folders/T/lease-1/SampleGame" },
       "errorMessage": "workspace_lease_acquire failed: lease path is outside the project root, cannot acquire (/var vs /private/var)",
       "repairs": 4
     }

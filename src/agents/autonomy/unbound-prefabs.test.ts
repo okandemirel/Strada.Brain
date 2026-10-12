@@ -54,7 +54,7 @@ function project(opts: {
     configPath,
     opts.prefabFields
       ? "public class PresentationPrefabsConfig : ScriptableObject {\n" +
-          "    [SerializeField] private GameObject _pigPrefab;\n" +
+          "    [SerializeField] private GameObject _frogPrefab;\n" +
           "    [SerializeField] private GameObject _cubePrefab;\n}"
       : "public class PresentationPrefabsConfig : ScriptableObject {\n" +
           "    [SerializeField] private int _spawnBudget;\n}",
@@ -188,7 +188,7 @@ describe("a config that holds prefabs and was never instantiated", () => {
     writeFileSync(
       configPath,
       "public class PresentationPrefabsConfig : ScriptableObject {\n" +
-        "    // [SerializeField] private GameObject _pigPrefab;\n" +
+        "    // [SerializeField] private GameObject _frogPrefab;\n" +
         "    /* [SerializeField] private GameObject _cubePrefab; */\n" +
         "    [SerializeField] private int _spawnBudget;\n}",
     );
@@ -200,7 +200,7 @@ describe("a config that holds prefabs and was never instantiated", () => {
     const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
     writeFileSync(
       configPath,
-      "public sealed class PresentationPrefabsConfig : ModuleConfig {\n    [SerializeField] private GameObject _pigPrefab;\n}",
+      "public sealed class PresentationPrefabsConfig : ModuleConfig {\n    [SerializeField] private GameObject _frogPrefab;\n}",
     );
 
     expect(promptFor(root, configPath)).toContain("[STRADA PREFABS UNBOUND]");

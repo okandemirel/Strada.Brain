@@ -146,24 +146,24 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
 
 /**
  * A compatibility layer is not a build target. Measured by Codex 2026-09-12
- * (U#F3) against the real document: "Mobile — iOS & Android; Google Play
- * Games on PC compatible" asked for a Windows build nobody would ever make,
+ * (U#F3) against the real document: a mobile platform line that went on to
+ * name Google Play Games on PC asked for a Windows build nobody would ever make,
  * and the delivery gate then reported a platform the document never asked for
  * as an unbuilt one — a proof no run could close.
  */
 describe("a PC that names a distribution, not a target (Codex 2026-09-12 U#F3)", () => {
   it("reads the document's own platform line as two mobile targets", () => {
-    const platform = gddPlatform("Mobile — iOS (15.0+) & Android (8.0+); Google Play Games on PC compatible");
+    const platform = gddPlatform("Mobile — iOS (16+) and Android (10+); runs on Google Play Games on PC too");
     expect(platform.targets).toEqual(["ios", "android"]);
     expect(platform.handheld).toBe(true);
   });
 
   it("ignores a desktop OS named as the layer, wherever the layer sits", () => {
-    expect(gddPlatform("Launch on Android; Google Play Games on PC compatible.").targets).toEqual(["android"]);
+    expect(gddPlatform("Launch on Android; Google Play Games on PC as well.").targets).toEqual(["android"]);
     expect(gddPlatform("Android only. PC-compatible via Google Play Games.").targets).toEqual(["android"]);
     // The OS word itself, qualified by the layer right after it.
     expect(
-      gddPlatform("Ships on Android. Windows/PC play (Google Play Games on PC) uses the same account.").targets,
+      gddPlatform("Ships on Android. Windows/PC builds (via Google Play Games) share the save.").targets,
     ).toEqual(["android"]);
   });
 
@@ -174,7 +174,7 @@ describe("a PC that names a distribution, not a target (Codex 2026-09-12 U#F3)",
     expect(gddPlatform("Ships on PC, compatible with gamepads.").targets).toEqual(["windows"]);
     // …and a native mention elsewhere still names it.
     expect(
-      gddPlatform("Android first; Google Play Games on PC compatible. A native Windows build follows.").targets,
+      gddPlatform("Android first; Google Play Games on PC as well. A native Windows build follows.").targets,
     ).toEqual(["android", "windows"]);
   });
 });
@@ -186,7 +186,7 @@ describe("a storefront is not a compatibility layer (Codex 2026-09-12 V)", () =>
     expect(gddPlatform("Release on the App Store for Mac.").targets).toEqual(["macos"]);
     expect(gddPlatform("On the App Store for iPhone and iPad.").targets).toEqual(["ios"]);
     // …and the layer itself is still not a target.
-    expect(gddPlatform("Android; Google Play Games on PC compatible.").targets).toEqual(["android"]);
+    expect(gddPlatform("Android; Google Play Games on PC, too.").targets).toEqual(["android"]);
   });
 });
 

@@ -1,7 +1,7 @@
 /**
  * Vault ids are qualified; the names a caller knows are the kinds.
  *
- * Measured on the Pixel Flow run of 2026-08-19: vault_search's own description
+ * Measured on the test-game run of 2026-08-19: vault_search's own description
  * offers 'self' as an example vaultId, the agent used it, and the registry
  * answered "vault not found: self" — twice. The registered id was
  * "self:strada-brain", and the error named no alternative to try.

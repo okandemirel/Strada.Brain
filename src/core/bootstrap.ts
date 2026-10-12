@@ -762,7 +762,7 @@ async function bootstrapImpl(
   // Say whether this is a Strada.Core project UP FRONT. The conformance gates
   // catch reimplementations after the fact; a run that never hears the framework
   // exists may build a vanilla dotnet project beside it instead (measured
-  // 2026-08-23, PixelFlow). One line at start beats a gate at the end.
+  // 2026-08-23 on the test game). One line at start beats a gate at the end.
   const frameworkNotice = describeFrameworkInstall(config.unityProjectPath);
   if (frameworkNotice) {
     runtimeStageNotices.push(frameworkNotice);

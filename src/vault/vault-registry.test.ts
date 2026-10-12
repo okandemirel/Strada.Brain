@@ -241,7 +241,7 @@ describe('VaultRegistry disposal', () => {
 
 describe('resolve() accepts a bare id', () => {
   /**
-   * Measured 2026-09-06: every vault_search an agent issued in the PixelFlow
+   * Measured 2026-09-06: every vault_search an agent issued in the test game's
    * campaign failed with "vault not found: 4ca9bd33 — registered:
    * unity:4ca9bd33, …" — the id copied from a log line without its kind
    * prefix. An id that is unambiguous without its prefix is not a wrong id.

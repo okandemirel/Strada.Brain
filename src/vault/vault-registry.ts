@@ -179,7 +179,7 @@ export class VaultRegistry {
     if (byPrefix.length === 1) return byPrefix[0];
 
     // A bare hash. Measured 2026-09-06: every vault_search an agent ever
-    // issued in the PixelFlow campaign (three, across two weeks) failed with
+    // issued in the test game's campaign (three, across two weeks) failed with
     // "vault not found: 4ca9bd33 — registered: unity:4ca9bd33, …": the agent
     // copied the id it saw in a log line without its kind prefix, the exact
     // match missed, and the indexed 84 MB project vault answered nothing. An

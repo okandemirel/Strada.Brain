@@ -54,9 +54,9 @@ describe("recognising the container", () => {
 
 describe("reading the body out of a Word file", () => {
   it("returns the words a person wrote", () => {
-    const text = docxToText(doc("<w:p><w:r><w:t>PIXEL FLOW</w:t></w:r></w:p>"));
+    const text = docxToText(doc("<w:p><w:r><w:t>GRID QUEST</w:t></w:r></w:p>"));
 
-    expect(text).toBe("PIXEL FLOW");
+    expect(text).toBe("GRID QUEST");
   });
 
   it("keeps paragraphs on separate lines", () => {

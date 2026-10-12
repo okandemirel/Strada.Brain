@@ -300,7 +300,7 @@ describe("GoalDecomposer", () => {
         JSON.stringify({
           nodes: [
             { id: "s1", task: "vault_search for GDD files", dependsOn: [] },
-            { id: "s2", task: "Read PixelFlow_GDD.md structure", dependsOn: ["s1"] },
+            { id: "s2", task: "Read SampleGame_GDD.md structure", dependsOn: ["s1"] },
           ],
         }),
         JSON.stringify({

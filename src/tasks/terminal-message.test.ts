@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { terminalMessage } from "./terminal-message.js";
 
 const QUESTION =
-  "UNITY_PROJECT_PATH points at PixelFlow-Clean but the open editor is Lodestone. Which should I build?";
+  "UNITY_PROJECT_PATH points at SampleGame but the open editor is Lodestone. Which should I build?";
 
 describe("a tag that stands in for an explanation", () => {
   it("gives way to what the worker actually said", () => {

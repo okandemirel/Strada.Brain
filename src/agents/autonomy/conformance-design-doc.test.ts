@@ -3,7 +3,7 @@
  *
  * The guard found its document by itself: the largest markdown under docs/.
  * In a project whose docs/ holds another game's GDD, a text-only campaign's
- * workers were told "[STRADA SPEC SCOPE] … no implementation: Dragon Boss"
+ * workers were told "[STRADA SPEC SCOPE] … no implementation: Storm Boss"
  * and "[STRADA ELEMENT ASSETS MISSING]", and at the last ask to report the
  * game as partially delivered (review campaign-text-only P2). A campaign run
  * carries its own GDD text, or the word that it has none.
@@ -45,8 +45,8 @@ function schedule(title: string, rows: Array<[string, string]>): string {
 }
 
 /** Another game's design, the only (so the largest) markdown under docs/. */
-const OTHER_GAME = schedule("Dungeon Game GDD", [["L5", "Dragon Boss"], ["L9", "Lava Pit"]]);
-const THIS_GAME = schedule("Puzzle Game GDD", [["L21", "Rocket"], ["L36", "Ice Block"]]);
+const OTHER_GAME = schedule("Dungeon Game GDD", [["L5", "Storm Boss"], ["L9", "Lava Pit"]]);
+const THIS_GAME = schedule("Puzzle Game GDD", [["L18", "Firefly"], ["L30", "Frost Tile"]]);
 
 const roots: string[] = [];
 afterEach(() => {
@@ -119,20 +119,20 @@ describe("a campaign run's conformance guard reads the campaign's GDD", () => {
     const prompt = playedGuard(root, codePath, { text: THIS_GAME }).getPrompt() ?? "";
 
     expect(prompt).toContain(ASSETS_GATE);
-    expect(prompt).toContain("Rocket");
-    expect(prompt).toContain("Ice Block");
-    expect(prompt).not.toContain("Dragon Boss");
+    expect(prompt).toContain("Firefly");
+    expect(prompt).toContain("Frost Tile");
+    expect(prompt).not.toContain("Storm Boss");
   });
 
   it("names the campaign's unimplemented elements in the spec-scope ask", () => {
     const { root, codePath } = assembledProject();
-    bindArt(root, ["Rocket", "IceBlock"]); // art covered; no code mentions either
+    bindArt(root, ["Firefly", "FrostTile"]); // art covered; no code mentions either
 
     const prompt = playedGuard(root, codePath, { text: THIS_GAME }).getPrompt() ?? "";
 
     expect(prompt).toContain(SCOPE_GATE);
-    expect(prompt).toContain("Rocket (L21)");
-    expect(prompt).not.toContain("Dragon Boss");
+    expect(prompt).toContain("Firefly (L18)");
+    expect(prompt).not.toContain("Storm Boss");
   });
 
   it("holds a campaign with no GDD text to no document at all", () => {
@@ -142,7 +142,7 @@ describe("a campaign run's conformance guard reads the campaign's GDD", () => {
 
     expect(prompt).not.toContain(ASSETS_GATE);
     expect(prompt).not.toContain(SCOPE_GATE);
-    expect(prompt).not.toContain("Dragon Boss");
+    expect(prompt).not.toContain("Storm Boss");
   });
 
   it("still finds the project's own GDD for a run that serves no campaign", () => {
@@ -151,7 +151,7 @@ describe("a campaign run's conformance guard reads the campaign's GDD", () => {
     const prompt = playedGuard(root, codePath).getPrompt() ?? "";
 
     expect(prompt).toContain(ASSETS_GATE);
-    expect(prompt).toContain("Dragon Boss");
+    expect(prompt).toContain("Storm Boss");
   });
 
   it("reaches the guard through the run's autonomy bundle", () => {
@@ -168,8 +168,8 @@ describe("a campaign run's conformance guard reads the campaign's GDD", () => {
     stradaConformance.trackToolCall("unity_playmode_verify", {}, false);
 
     const prompt = stradaConformance.getPrompt() ?? "";
-    expect(prompt).toContain("Rocket");
-    expect(prompt).not.toContain("Dragon Boss");
+    expect(prompt).toContain("Firefly");
+    expect(prompt).not.toContain("Storm Boss");
   });
 });
 

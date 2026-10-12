@@ -5,12 +5,12 @@
  * shell_exec guards its working directory through path-guard, and then hands the
  * command string to bash untouched. An absolute path inside the command walks
  * straight past that guard — and the task text routinely carries one, because
- * "add a level editor to ~/Documents/Games/PixelFlow" is an ordinary way to ask.
+ * "add a level editor to ~/Documents/Games/SampleGame" is an ordinary way to ask.
  *
  * Measured across two from-scratch runs, and unchanged by telling the agent
  * about it in the preamble:
- *   mkdir -p /Users/…/PixelFlow/Assets/Scripts/Board
- *   Unity -batchmode -quit -projectPath /Users/…/PixelFlow
+ *   mkdir -p /Users/…/SampleGame/Assets/Scripts/Board
+ *   Unity -batchmode -quit -projectPath /Users/…/SampleGame
  * The first wrote into the user's project instead of the lease; the second
  * compiled a tree holding none of the agent's work and reported zero errors in
  * 5.8 seconds, which the agent read as a clean build.

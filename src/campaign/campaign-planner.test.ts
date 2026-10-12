@@ -88,7 +88,7 @@ describe("quoteIsAbout", () => {
     expect(quoteIsAbout("Save progress across restarts: absent", "landed: Added Assets/Art/Hero.png")).toBe(false);
     expect(quoteIsAbout("Save progress across restarts: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
     expect(quoteIsAbout("The full test suite runs green: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
-    expect(quoteIsAbout("Dragon boss: absent", "shipped tree: Assets/Prefabs/DragonBoss.prefab present")).toBe(true);
+    expect(quoteIsAbout("Storm boss: absent", "shipped tree: Assets/Prefabs/StormBoss.prefab present")).toBe(true);
     expect(quoteIsAbout("Level count: 13 levels", "document numbers: 13 levels claimed; 13 played to an outcome")).toBe(true);
     expect(quoteIsAbout("Level count: 13 levels", "document numbers: boots in 2.1 s (claimed under 3 s)")).toBe(false);
     // A requirement made only of stopwords cannot be closed by relevance.

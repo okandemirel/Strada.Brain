@@ -2,7 +2,7 @@
  * unity_generate_audio — procedural SFX and music loops written straight into
  * Assets/ as WAV + AudioImporter .meta, no Editor needed.
  *
- * Measured 2026-09-07 on the PixelFlow project: the GDD schedules a music
+ * Measured 2026-09-07 on the test game's project: the GDD schedules a music
  * base loop, area variations and a complete SFX cue list; the toolchain had
  * no audio tool at all, and the project held nineteen WAVs — thirteen
  * 0.15-second blips, four byte-identical to another clip. This is the audio

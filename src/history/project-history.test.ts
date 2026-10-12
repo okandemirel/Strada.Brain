@@ -43,7 +43,7 @@ describe("ProjectHistoryStore — the exit criterion", () => {
     const writer = new ProjectHistoryStore(first);
     const decision = writer.record({
       kind: "decision",
-      projectId: "PixelFlow",
+      projectId: "SampleGame",
       summary: "Approved the shadow promotion of the jump-tuning artifact",
       owner: { scope: "user", userId: "alice", profileId: "profile-alice" },
       version: { campaignRevision: "rev-41", commitSha: "a1b2c3d4e5f6a7b8" },
@@ -51,7 +51,7 @@ describe("ProjectHistoryStore — the exit criterion", () => {
     });
     const delivery = writer.record({
       kind: "delivery",
-      projectId: "PixelFlow",
+      projectId: "SampleGame",
       summary: "Build 41 delivered",
       owner: { scope: "user", userId: "alice" },
       version: { campaignRevision: "rev-41", commitSha: "A1B2C3D4E5F6A7B8" },
@@ -418,7 +418,7 @@ describe("project history ids round-trip their own validator (round 13 #6)", () 
       const store = new ProjectHistoryStore(storage);
       const event = store.record({
         kind: "decision",
-        projectId: "PixelFlow",
+        projectId: "SampleGame",
         summary: `recorded at ${recordedAt}`,
         owner: { scope: "user", userId: "alice" },
         payload: {},

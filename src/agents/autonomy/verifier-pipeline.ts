@@ -514,7 +514,7 @@ export function isTerminalFailureReport(
   // Only phrases that describe the RUN'S OWN outcome. Audited 2026-09-02: this
   // list also held "missing", "requires", "not found", "error" and "failure" —
   // words an ordinary completion report uses about the things it fixed — so
-  // "Done. Implemented … The pig prefab was missing, so I generated one." was
+  // "Done. Implemented … The frog prefab was missing, so I generated one." was
   // approved as an honest terminal failure report (skipping the deliverables
   // review and downgrading the build gate) AND recorded by the campaign as a
   // failed sprint. One vocabulary miss moved a delivery both wrong ways at once.

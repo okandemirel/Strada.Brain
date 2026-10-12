@@ -1133,7 +1133,7 @@ export class WorkspaceLeaseManager {
    *
    * Shutdown used to release without committing, so a task interrupted mid-run
    * had its files deleted along with the workspace. Measured: a run stopped by
-   * SIGINT had written Modules/PixelFlow/Tests/Runtime/DomainModelTests.cs into
+   * SIGINT had written Modules/SampleGame/Tests/Runtime/DomainModelTests.cs into
    * its lease; after "Shutdown complete" the file existed neither in the project
    * nor anywhere under the lease root. The agent's work for that run was gone.
    *
@@ -1371,7 +1371,7 @@ export class WorkspaceLeaseManager {
    * the framework it is supposed to conform to, while the project it was seeded
    * from has all of it.
    *
-   * Measured on a full Pixel Flow build: the project held 295 Strada.Core .cs
+   * Measured on a full test-game build: the project held 295 Strada.Core .cs
    * files and the workspace held none. `list_directory Packages/Submodules/
    * Strada.Core` answered "directory not found", the glob for its sources found
    * nothing, and the agent — having looked and found no framework — invented its

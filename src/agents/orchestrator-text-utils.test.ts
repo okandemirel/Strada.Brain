@@ -378,7 +378,7 @@ describe("orchestrator-text-utils", () => {
       const jpeg = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL";
       expect(sanitizePromptInjection(`img: ${jpeg} end`)).toBe("img: [base64:60ch] end");
       // A real absolute path with the same slashes is left alone.
-      expect(sanitizePromptInjection("see /private/var/folders/fd/strada/Assets/Art/Generated/Pig.png now")).toContain("/Assets/Art/Generated/Pig.png");
+      expect(sanitizePromptInjection("see /private/var/folders/fd/strada/Assets/Art/Generated/Frog.png now")).toContain("/Assets/Art/Generated/Frog.png");
     });
 
     it("does NOT flag a pure SHA-256 hex digest as base64", () => {

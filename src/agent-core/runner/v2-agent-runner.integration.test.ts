@@ -524,7 +524,7 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
   });
 
   it("a sub-goal worker (goalContext set) never re-decomposes its own task", async () => {
-    // Measured 2026-09-08 04:48 and 05:00 (PixelFlow sprint): supervisor-dispatched
+    // Measured 2026-09-08 04:48 and 05:00 (test-game sprint): supervisor-dispatched
     // node workers each started in PLANNING and re-decomposed their task text into
     // a fresh 12- and 3-node tree under a new root — 4-7 minutes apiece — and each
     // overwrote the parent's activeGoalTrees entry. The parent planner already

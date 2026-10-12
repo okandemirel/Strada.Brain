@@ -389,7 +389,7 @@ describe("the arguments the producer ran with decide the scope (Codex 2026-09-12
       { mode: "play", filter: { testNames: ["Smoke"] }, unfiltered: true },
       { mode: "play", testFilter: "Board.Tests", unfiltered: true },
       { mode: "play", categoryNames: ["Fast"], unfiltered: true },
-      { mode: "play", assemblyNames: ["PixelFlow.Tests"], unfiltered: true },
+      { mode: "play", assemblyNames: ["SampleGame.Tests"], unfiltered: true },
       { mode: "play", filter: { categoryNames: ["Fast"] }, unfiltered: "true" },
     ]) {
       expect(

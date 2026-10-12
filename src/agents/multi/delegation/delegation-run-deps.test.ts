@@ -161,7 +161,7 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
     duringRun = undefined;
     // The lexical tmpdir form on purpose: on macOS /var/..., its realpath /private/var/...
     tmpDir = mkdtempSync(join(tmpdir(), "delegation-run-deps-"));
-    project = join(tmpDir, "PixelFlow");
+    project = join(tmpDir, "SampleGame");
     mkdirSync(project, { recursive: true });
     mkdirSync(join(tmpDir, "strada-brain"), { recursive: true });
     lease = join(tmpDir, "strada-workspaces", "delegation-1");
@@ -401,7 +401,7 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
       };
       const review = vi.spyOn(host, "reviewShellCommandWithProvider").mockResolvedValue({ approved: true });
       await host.reviewSelfManagedWriteOperation(
-        "delegation-sub", "shell_exec", { command: `dotnet build ${project}/PixelFlow.sln` }, "delegated",
+        "delegation-sub", "shell_exec", { command: `dotnet build ${project}/SampleGame.sln` }, "delegated",
         { workspaceLease: request.workspaceLease },
       );
       return review.mock.calls[0]?.[3] as { projectPath?: string; sourceProjectPath?: string } | undefined;

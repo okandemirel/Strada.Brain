@@ -114,22 +114,22 @@ describe("discoverSkills", () => {
 
   it("reads inject and triggers from the frontmatter (how a body earns its place in a prompt)", async () => {
     const skillDir = join("/test-project", "skills");
-    const planDir = join(skillDir, "ufo-plan");
+    const planDir = join(skillDir, "comet-plan");
     fsMock.stat.mockImplementation(async (path: string) => {
       if (path === skillDir || path === planDir) return dirStat;
       if (path === join(planDir, "SKILL.md")) return fileStat;
       throw new Error("ENOENT");
     });
-    fsMock.readdir.mockImplementation(async (path: string) => (path === skillDir ? ["ufo-plan"] : []));
+    fsMock.readdir.mockImplementation(async (path: string) => (path === skillDir ? ["comet-plan"] : []));
     fsMock.readFile.mockImplementation(async (path: string) => {
       if (path === join(planDir, "SKILL.md")) {
         return makeSkillMd({
-          name: "ufo-plan",
+          name: "comet-plan",
           version: "1.0.0",
-          description: "UFO set-piece plan",
+          description: "Comet set-piece plan",
           inject: "on-mention",
-          triggers: ["UFO", "set-piece"],
-        }) + "# UFO plan body\n";
+          triggers: ["Comet", "set-piece"],
+        }) + "# Comet plan body\n";
       }
       throw new Error("ENOENT");
     });
@@ -137,8 +137,8 @@ describe("discoverSkills", () => {
     const skills = await discoverSkills("/test-project");
     expect(skills).toHaveLength(1);
     expect(skills[0]!.manifest.inject).toBe("on-mention");
-    expect(skills[0]!.manifest.triggers).toEqual(["UFO", "set-piece"]);
-    expect(skills[0]!.body).toContain("UFO plan body");
+    expect(skills[0]!.manifest.triggers).toEqual(["Comet", "set-piece"]);
+    expect(skills[0]!.body).toContain("Comet plan body");
   });
 
   it("skips skills with missing name field", async () => {

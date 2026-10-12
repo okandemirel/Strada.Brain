@@ -13,15 +13,15 @@ const skill = (name: string, body: string, extra: Record<string, unknown> = {}, 
 
 describe("selectSkillKnowledge", () => {
   it("withholds an active skill the prompt never names, and says which and how big", () => {
-    const stale = skill("pixelflow-replan-playfieldbuilder", "## REPLAN: Resolve PlayfieldBuilder …".padEnd(3683, "x"));
+    const stale = skill("samplegame-replan-boardbuilder", "## REPLAN: Resolve BoardBuilder …".padEnd(3683, "x"));
     const { included, withheld } = selectSkillKnowledge([stale], "Draw the area backgrounds the GDD schedules.");
     expect(included).toEqual([]);
-    expect(withheld).toEqual([{ name: "pixelflow-replan-playfieldbuilder", chars: 3683 }]);
+    expect(withheld).toEqual([{ name: "samplegame-replan-boardbuilder", chars: 3683 }]);
   });
 
   it("includes a skill the prompt names, case-insensitively", () => {
-    const plan = skill("ufo-set-piece-plan", "# UFO plan");
-    expect(selectSkillKnowledge([plan], "Follow UFO-Set-Piece-Plan for the rocket.").included).toEqual([plan]);
+    const plan = skill("comet-set-piece-plan", "# Comet plan");
+    expect(selectSkillKnowledge([plan], "Follow Comet-Set-Piece-Plan for the finale.").included).toEqual([plan]);
   });
 
   it("includes a skill when one of its declared triggers appears in the prompt", () => {
@@ -62,7 +62,7 @@ describe("memoryDedupKey — a clamped entry's tail stays retrievable", () => {
     const shown = clampMemoryEntry(long);
     expect(shown.length).toBeLessThan(long.length);
     expect(memoryDedupKey(long, shown)).toBe(shown);
-    const short = "decision: ship the tray module first";
+    const short = "decision: ship the dock module first";
     expect(memoryDedupKey(short, clampMemoryEntry(short))).toBe(short);
   });
 });

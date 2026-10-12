@@ -1331,7 +1331,7 @@ describe("V2AgentRunner — Phase 1c streaming liveness re-arm (no false task-in
   });
 
   describe("a graceful STOP is not a success for a worker or background run", () => {
-  // Measured 2026-09-08 10:00-11:53 (PixelFlow sprint, supervisor node workers): eight nodes each
+  // Measured 2026-09-08 10:00-11:53 (test-game sprint, supervisor node workers): eight nodes each
   // hit a clock/stall stop with graceful finalize, reported status "completed", and carried as
   // their whole output the localized "the AI provider is not responding" notice — the dispatcher
   // marked all eight done ("Generate and bind area background sprites" among them).

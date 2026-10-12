@@ -22,9 +22,9 @@ function pdfWith(streamBody: string, compress = true): Buffer {
 
 describe("reading a PDF", () => {
   it("returns the shown text", () => {
-    const pdf = pdfWith("BT /F1 12 Tf (PIXEL FLOW) Tj ET");
+    const pdf = pdfWith("BT /F1 12 Tf (GRID QUEST) Tj ET");
 
-    expect(pdfToText(pdf)).toBe("PIXEL FLOW");
+    expect(pdfToText(pdf)).toBe("GRID QUEST");
   });
 
   it("reads an uncompressed stream too", () => {
@@ -52,9 +52,9 @@ describe("reading a PDF", () => {
 
 describe("reading an RTF", () => {
   it("returns the body without the control words", () => {
-    const rtf = "{\\rtf1\\ansi\\deff0 PIXEL FLOW\\par Core Loop\\par}";
+    const rtf = "{\\rtf1\\ansi\\deff0 GRID QUEST\\par Core Loop\\par}";
 
-    expect(rtfToText(rtf)).toBe("PIXEL FLOW\nCore Loop");
+    expect(rtfToText(rtf)).toBe("GRID QUEST\nCore Loop");
   });
 
   it("drops the font table, which is not body text", () => {
@@ -141,7 +141,7 @@ const slideXml = (text: string): string =>
 describe("reading a PowerPoint deck", () => {
   it("reads every slide of a deck with a gap in the part numbers", () => {
     const deck = zipWithEntries({
-      "ppt/slides/slide1.xml": slideXml("PIXEL FLOW"),
+      "ppt/slides/slide1.xml": slideXml("GRID QUEST"),
       "ppt/slides/slide2.xml": slideXml("Overview"),
       "ppt/slides/slide4.xml": slideXml("Core Loop"),
       "ppt/slides/slide5.xml": slideXml("Monetisation"),
@@ -149,7 +149,7 @@ describe("reading a PowerPoint deck", () => {
 
     const text = extractDocumentText("GDD.pptx", deck);
 
-    expect(text).toContain("PIXEL FLOW");
+    expect(text).toContain("GRID QUEST");
     expect(text).toContain("Overview");
     expect(text).toContain("Core Loop");
     expect(text).toContain("Monetisation");

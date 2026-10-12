@@ -54,7 +54,7 @@ describe("terminal keys", () => {
 
 describe("worstTerminal: red, then outage, then interrupted, then done", () => {
   it("red outranks an outage, whichever came first", () => {
-    // 18d4t m6: ten task_stuck stamps and a quota stamp; the red one decides.
+    // A measured m6: ten task_stuck stamps and a quota stamp; the red one decides.
     expect(worstTerminal(["provider_quota", "task_stuck"])).toBe("task_stuck");
     expect(worstTerminal(["task_stuck", "provider_quota"])).toBe("task_stuck");
     expect(worstTerminal(["done", "cut_short", "provider_abort"])).toBe("cut_short");

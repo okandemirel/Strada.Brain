@@ -9,7 +9,7 @@ import type { ToolContext } from "./tool.interface.js";
 /**
  * Measured live 2026-09-12 03:50: a sprint cleaning up after itself was
  * refused sixteen times in one ten-minute window — "directory contains 51
- * files (limit: 50)" against Artifacts/UfoPlayModeCapture and its siblings. A
+ * files (limit: 50)" against Artifacts/CometPlayModeCapture and its siblings. A
  * PlayMode capture folder routinely holds more than fifty frames.
  */
 describe("deleting a directory of the system's own output", () => {
@@ -24,7 +24,7 @@ describe("deleting a directory of the system's own output", () => {
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
   it("names the system's own output directories", () => {
-    expect(isSystemOutputDirectory("Artifacts/UfoPlayModeCapture")).toBe(true);
+    expect(isSystemOutputDirectory("Artifacts/CometPlayModeCapture")).toBe(true);
     expect(isSystemOutputDirectory("Recordings/playthrough")).toBe(true);
     expect(isSystemOutputDirectory("Logs")).toBe(true);
     expect(isSystemOutputDirectory("Assets/Art/Generated")).toBe(false);
@@ -58,8 +58,8 @@ describe("deleting a directory of the system's own output", () => {
   });
 
   it("removes 51 captured frames, and still refuses 51 of a person's files", async () => {
-    fill("Artifacts/UfoPlayModeCapture", 51);
-    const captures = await new FileDeleteDirectoryTool().execute({ path: "Artifacts/UfoPlayModeCapture" }, ctx());
+    fill("Artifacts/CometPlayModeCapture", 51);
+    const captures = await new FileDeleteDirectoryTool().execute({ path: "Artifacts/CometPlayModeCapture" }, ctx());
     expect(captures.isError).toBeFalsy();
     expect(captures.content).toContain("51 files removed");
 

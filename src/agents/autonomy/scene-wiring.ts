@@ -403,7 +403,7 @@ const BYPASS_RULES: ReadonlyArray<{
     floor: 5,
   },
   {
-    // Measured 2026-08-21: PigSystem declared [Inject] for three services and
+    // Measured 2026-08-21: a character system declared [Inject] for three services and
     // then reached for GameBootstrapper.Services.TryGet in OnUpdate whenever
     // they were null — every frame. The boot check's own wiring report said all
     // three WERE registered, so the fallback was never needed; it was masking a

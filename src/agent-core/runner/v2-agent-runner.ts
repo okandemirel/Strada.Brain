@@ -126,9 +126,9 @@ function isInteractive(mode: RunnerMode): boolean {
 /**
  * The status a run reports when a verdict STOPS it before the model said
  * done. "graceful" finalize means the run winds down cleanly — it does not
- * mean the task succeeded. Measured 2026-09-08 10:00-11:53 (PixelFlow
- * sprint, supervisor node workers): eight nodes — "Generate and bind area
- * background sprites", "Generate and bind 20 canvas artworks", … — each hit
+ * mean the task succeeded. Measured 2026-09-08 10:00-11:53 (test-game
+ * sprint, supervisor node workers): eight nodes — "Generate and bind
+ * background sprites", "Generate and bind 20 artworks", … — each hit
  * a clock/stall stop with graceful finalize, reported status "completed",
  * and carried as their whole output the localized "the AI provider is not
  * responding" notice. The dispatcher marked all eight done. An interactive

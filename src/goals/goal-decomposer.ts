@@ -526,7 +526,7 @@ export class GoalDecomposer {
       // collects chunk text; we parse the final response.text exactly as before (the
       // streamed text and the response.text are identical), so output is behavior-identical.
       //
-      // PATIENCE (measured 2026-08-24, PixelFlow overnight): an upstream 503 storm
+      // PATIENCE (measured 2026-08-24, test-game overnight): an upstream 503 storm
       // exhausted the chain's 3 fast retries in ~3 seconds, the decomposition threw,
       // and the whole mission idled for five hours. Provider-capacity blinks are
       // transient by nature — retry here on the SLOW clock before giving up.

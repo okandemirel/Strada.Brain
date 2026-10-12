@@ -116,7 +116,7 @@ const WORK_RE =
   /\b(?:re-?)?(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|execute|verify|capture|deliver|produce|ship|author|animate|script|attach|spawn|hook up|populate|tune|polish|export|commit|register|integrate|document)\b/i;
 /**
  * Verbs that only look — judged on the task's LEADING verb, so "Read the GDD
- * and generate the sprites" is work (generate) while "Read PixelFlow_GDD.md
+ * and generate the sprites" is work (generate) while "Read SampleGame_GDD.md
  * structure and extract key requirements" is looking. Review 2026-09-08:
  * "extract", "map", "document", "inspect", "locate", "find" are also how
  * real work is phrased ("Extract the movement logic into MovementBase",
@@ -136,11 +136,11 @@ export interface PlanShapeVerdict {
 /**
  * Whether a plan is all looking and no doing.
  *
- * Measured 2026-09-08 08:21-08:48 (PixelFlow, a sprint whose prompt said
+ * Measured 2026-09-08 08:21-08:48 (the test game, a sprint whose prompt said
  * "DO NOT AUDIT"): the planner answered with seven nodes — "vault_search for
  * GDD files", "vault_search for module definitions", "… scene files", "…
  * prefab files", "… audio assets", "… existing patterns", "Read
- * PixelFlow_GDD.md structure" — and the sprint spent thirty minutes and 55
+ * SampleGame_GDD.md structure" — and the sprint spent thirty minutes and 55
  * read calls producing nothing. A single-node tree is the whole task and is
  * not judged here.
  */

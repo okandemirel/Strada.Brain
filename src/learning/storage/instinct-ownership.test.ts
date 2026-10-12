@@ -26,7 +26,7 @@ import { LearningStorage } from "./learning-storage.js";
 import type { Instinct, InstinctId } from "../types.js";
 import type { TimestampMs } from "../../types/index.js";
 
-const PROJECT = "/projects/pixelflow";
+const PROJECT = "/projects/samplegame";
 
 function makeInstinct(over: Partial<Instinct> = {}): Instinct {
   const now = Date.now() as TimestampMs;

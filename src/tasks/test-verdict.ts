@@ -35,7 +35,7 @@ export interface TaskTestVerdict {
    * filter. The Unity MCP prints "(unfiltered — the whole PlayMode suite)" or
    * "(filter: <names>)"; undefined means the line said neither.
    *
-   * Audited 2026-09-03: the delivered PixelFlow campaign carried no verdict at
+   * Audited 2026-09-03: the delivered test-game campaign carried no verdict at
    * all on any milestone, while its filtered runs went green and the ONE
    * unfiltered run reported 6 of 173 failing — including
    * WinLevel_ReachesWonState ("LevelWon event did not fire"). A green from a
@@ -71,7 +71,7 @@ export interface TaskTestVerdict {
    */
   assetSourcingBlind?: string;
   /**
-   * How the run ended, as data from the runtime. In campaign 18d4t five of six
+   * How the run ended, as data from the runtime. In a measured campaign five of six
    * milestone tips ended on the system's own "task_stuck" notice and all six
    * went green: the only record of the stop was that sentence (GDD-drift W01).
    */

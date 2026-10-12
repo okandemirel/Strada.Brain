@@ -103,13 +103,13 @@ function gameProject(): string {
   );
   put(
     root,
-    "Assets/Prefabs/Pig.prefab",
-    `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Pig\n` +
+    "Assets/Prefabs/Frog.prefab",
+    `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Frog\n` +
       `--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: ${g(20)}, type: 3}\n`,
     g(10),
   );
   put(root, "Assets/Prefabs/Unused.prefab", `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Unused\n`, g(11));
-  put(root, "Assets/Art/Pig.png", png(16, 16, "noise"), g(20));
+  put(root, "Assets/Art/Frog.png", png(16, 16, "noise"), g(20));
   put(root, "Assets/Art/Placeholder.png", png(32, 32, "flat"), g(21));
   put(root, "Assets/Art/Broken.png", Buffer.from("not a png"), g(22));
   put(root, "Assets/Audio/a.wav", wav(0.2, 1), g(30));

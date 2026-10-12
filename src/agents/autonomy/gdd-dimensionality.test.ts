@@ -8,7 +8,7 @@ import { describeDimensionality } from "./gdd-dimensionality.js";
 /**
  * The GDD's own dimensionality, measured against the shipped scenes.
  *
- * Audited 2026-09-03: the GDD asked for "plump, glossy 3D-feel pigs" and the
+ * Audited 2026-09-03: the GDD asked for 3D-feel characters and the
  * delivered scenes had no mesh renderers and bound none of the project's 62
  * imported models. Disclosure, never refusal — a 3D-feel look built from
  * sprites is a legitimate choice, and only the counts can tell the reader
@@ -47,12 +47,12 @@ const CAMERA = (orthographic: 0 | 1): string =>
 const prefabInstance = (guid: string): string =>
   `--- !u!1001 &1001\nPrefabInstance:\n  m_Modification:\n    m_Modifications: []\n  m_SourcePrefab: {fileID: 100100000, guid: ${guid}, type: 3}\n`;
 const artPrefab = (spriteGuid: string): string =>
-  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Pig\n` +
+  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Lantern\n` +
   `--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 2100000, guid: aaaabbbbccccddddeeeeffff00001111, type: 2}\n` +
   `  m_Sprite: {fileID: 21300000, guid: ${spriteGuid}, type: 3}\n`;
 /** A prefab that really does draw 3D: a MeshFilter bound to an imported .fbx. */
 const modelPrefab = (modelGuid: string): string =>
-  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Pig\n` +
+  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Lantern\n` +
   `--- !u!33 &9\nMeshFilter:\n  m_Mesh: {fileID: 4300000, guid: ${modelGuid}, type: 3}\n` +
   `--- !u!23 &8\nMeshRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 2100000, guid: aaaabbbbccccddddeeeeffff00001111, type: 2}\n`;
 
@@ -65,8 +65,8 @@ function spriteProject(): ReturnType<typeof assessBuiltAsSpecified> {
     `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
     "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
   );
-  put(root, "Assets/Prefabs/Pig.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-  put(root, "Assets/Art/pig.png", "pixels", "22222222222222222222222222222222");
+  put(root, "Assets/Prefabs/Lantern.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+  put(root, "Assets/Art/lantern.png", "pixels", "22222222222222222222222222222222");
   return assessBuiltAsSpecified(root);
 }
 
@@ -74,7 +74,7 @@ describe("describeDimensionality", () => {
   const unmeasurable = assessBuiltAsSpecified("/definitely/not/a/project");
 
   it("discloses the counts when the GDD asks for 3D and the scenes are sprites", () => {
-    const gdd = "12. ART DIRECTION\nplump, glossy 3D-feel pigs on softly rendered dimensional stages.";
+    const gdd = "8. ART DIRECTION\nround, lacquered 3D-feel lanterns over a softly lit painted lake.";
     const d = describeDimensionality(gdd, spriteProject());
 
     expect(d.asksFor3D).toBe(true);
@@ -98,15 +98,15 @@ describe("describeDimensionality", () => {
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Pig.prefab", modelPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/Models/pig.fbx", "binary", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Lantern.prefab", modelPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/Models/lantern.fbx", "binary", "22222222222222222222222222222222");
 
-    const d = describeDimensionality("The pigs are 3D.", assessBuiltAsSpecified(root));
+    const d = describeDimensionality("The lanterns are 3D.", assessBuiltAsSpecified(root));
     expect(d.lines.join("\n")).toContain("1 mesh renderer(s) and bind 1 imported model(s)");
   });
 
   it("counts every mention and quotes each, so a table-of-contents line cannot pass as the statement", () => {
-    const gdd = "CONTENTS\n  12.1 3D look ......... 40\n\n12.1 3D look\nThe pigs are 3D models on 3D stages.";
+    const gdd = "CONTENTS\n  12.1 3D look ......... 40\n\n12.1 3D look\nThe lanterns are 3D models on 3D ponds.";
     const d = describeDimensionality(gdd, spriteProject());
 
     expect(d.signals.find((s) => s.term === "3D")?.count).toBe(4);
@@ -128,7 +128,7 @@ describe("describeDimensionality", () => {
   });
 
   it("says the GDD stated nothing rather than implying a match", () => {
-    const d = describeDimensionality("A game about pigs.", unmeasurable);
+    const d = describeDimensionality("A game about lanterns.", unmeasurable);
     expect(d.signals).toEqual([]);
     expect(d.lines.join("\n")).toContain("states none of");
   });

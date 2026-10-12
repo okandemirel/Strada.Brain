@@ -6,7 +6,7 @@ import { extractCoreLoop, readUnityVersion, renderHowToRun, suiteCommand, testPl
 import { assessSceneHygiene } from "./scene-hygiene.js";
 
 /**
- * The person who opened the delivered PixelFlow tree (2026-09-03) had 20
+ * The person who opened the delivered test-game tree (2026-09-03) had 20
  * scenes, no README, and no idea what the game's verb was. Everything this
  * file writes must be MEASURED — the Unity version off ProjectVersion.txt,
  * the entry scene off Build Settings, the suite off the milestone's own
@@ -22,7 +22,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** The real GDD's shape: a flattened table row, its label alone on one line. */
+/** A real GDD's shape (invented text): a flattened table row, its label alone on one line. */
 const REAL_GDD = [
   "TABLE OF CONTENTS",
   "1. INTRODUCTION",
@@ -30,21 +30,21 @@ const REAL_GDD = [
   "Field",
   "Value",
   "Genre",
-  "Casual Puzzle — “Sorting Shooter / Color Shooter” sub-genre",
+  "Relaxed puzzle — “lantern matching” sub-genre",
   "Core mechanic",
-  "Tap a pig on the conveyor to send it to a tray slot, where it auto-fires balls at exposed pixel cubes of its own color until its ammo runs out. Clear 100% of the pixel-art canvas without deadlocking the 5-slot tray.",
+  "Tap a shrine to pull the nearest lantern of its colour onto the pond, where it lights every matching neighbour until its wicks are spent. Light the whole lake without filling the 4-slot dock.",
   "Session length",
-  "Levels of 1–4 minutes",
+  "Levels of 2–3 minutes",
   "",
   "12. PRODUCTION",
-  "Core loop fun-test: 20 graybox levels, feel budget met (≤50 ms), team plays it unprompted",
+  "Core loop fun-test: 15 graybox ponds, input latency within budget, testers replay them unprompted",
 ].join("\n");
 
 describe("core-loop extraction", () => {
   it("takes the labelled field's value, not a heading and not a look-alike line", () => {
     const loop = extractCoreLoop(REAL_GDD);
-    expect(loop).toContain("Tap a pig on the conveyor");
-    expect(loop).toContain("without deadlocking the 5-slot tray");
+    expect(loop).toContain("Tap a shrine to pull the nearest lantern");
+    expect(loop).toContain("without filling the 4-slot dock");
     // "Core loop fun-test: ..." is a different field; matching it would put a
     // production checklist in the play instructions.
     expect(loop).not.toContain("graybox");
@@ -57,7 +57,7 @@ describe("core-loop extraction", () => {
   });
 
   it("returns nothing when the GDD names no core-mechanic field — it never guesses", () => {
-    expect(extractCoreLoop("# Game\n\nIt is a game about pigs.\n\n## Levels\n\nThere are many.")).toBeUndefined();
+    expect(extractCoreLoop("# Game\n\nIt is a game about lanterns.\n\n## Levels\n\nThere are many.")).toBeUndefined();
   });
 
   it("does not take a heading as the value of a bare label", () => {
@@ -92,11 +92,11 @@ describe("unity version", () => {
     });
     try {
       const { readUnityVersion: onWindows } = await import("./how-to-run.js");
-      const unreadable = onWindows("C:\\Games\\Pixel", () => {
+      const unreadable = onWindows("C:\\Games\\Lantern", () => {
         throw new Error("ENOENT");
       });
       expect(unreadable.note).toBe("ProjectSettings/ProjectVersion.txt could not be read (ENOENT)");
-      const unnamed = onWindows("C:\\Games\\Pixel", () => "m_EditorVersionWithRevision: 6000.3.22f1\n");
+      const unnamed = onWindows("C:\\Games\\Lantern", () => "m_EditorVersionWithRevision: 6000.3.22f1\n");
       expect(unnamed.note).toBe("ProjectSettings/ProjectVersion.txt names no m_EditorVersion line");
     } finally {
       vi.doUnmock("node:path");
@@ -107,15 +107,15 @@ describe("unity version", () => {
 
 describe("HOW_TO_RUN.md rendering", () => {
   const measured = {
-    projectRoot: "/tmp/PixelFlow-Clean",
+    projectRoot: "/tmp/SampleGame",
     unityVersion: "6000.3.22f1",
     entryScene: "Assets/Scenes/ProductionMain.unity",
     entryObjects: 17,
-    scaffolding: ["Assets/Scenes/UfoShowcase.unity", "Assets/Scenes/AssembledMain.unity"],
+    scaffolding: ["Assets/Scenes/LanternShowcase.unity", "Assets/Scenes/AssembledMain.unity"],
     unclassified: ["Assets/Scenes/Main.unity"],
     otherEnabled: 13,
-    coreLoop: "Tap a pig on the conveyor to send it to a tray slot.",
-    gddPath: "docs/PixelFlow_GDD.md",
+    coreLoop: "Tap a shrine to pull the nearest lantern onto the pond.",
+    gddPath: "docs/SampleGame_GDD.md",
     suiteVerdict: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
     suiteUnfiltered: true,
     testPlatform: "PlayMode",
@@ -128,12 +128,12 @@ describe("HOW_TO_RUN.md rendering", () => {
     expect(text).toContain("ProjectSettings/ProjectVersion.txt");
     expect(text).toContain("Assets/Scenes/ProductionMain.unity");
     expect(text).toContain("EditorBuildSettings.asset");
-    expect(text).toContain("Tap a pig on the conveyor");
-    expect(text).toContain("docs/PixelFlow_GDD.md");
+    expect(text).toContain("Tap a shrine to pull the nearest lantern");
+    expect(text).toContain("docs/SampleGame_GDD.md");
     expect(text).toContain("179 of 179");
     expect(text).toContain("-testPlatform PlayMode");
     // The scaffolding list is the "what can be removed" section.
-    expect(text).toContain("UfoShowcase.unity");
+    expect(text).toContain("LanternShowcase.unity");
     expect(text).toContain("AssembledMain.unity");
     // An unclassified scene is listed, and explicitly NOT called removable.
     expect(text).toContain("Main.unity");

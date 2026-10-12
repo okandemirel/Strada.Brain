@@ -24,7 +24,7 @@ GameObject:
   m_Component:
   - component: {fileID: 400}
   m_Layer: 0
-  m_Name: Pig
+  m_Name: Frog
   m_IsActive: 1
 --- !u!4 &400
 Transform:
@@ -83,31 +83,31 @@ function put(rel: string, body: string, guid?: string): void {
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "scene-binding-"));
   ctx = { projectPath: root, workingDirectory: root, readOnly: false } as ToolContext;
-  put("Assets/Art/pig.png", "png-bytes");
-  writeFileSync(join(root, "Assets/Art/pig.png.meta"), `fileFormatVersion: 2\nguid: ${SPRITE_GUID}\nTextureImporter:\n  textureType: 0\n  spriteMode: 0\n`);
+  put("Assets/Art/frog.png", "png-bytes");
+  writeFileSync(join(root, "Assets/Art/frog.png.meta"), `fileFormatVersion: 2\nguid: ${SPRITE_GUID}\nTextureImporter:\n  textureType: 0\n  spriteMode: 0\n`);
   put("ProjectSettings/EditorBuildSettings.asset", "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: 00000000000000000000000000000001\n");
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("unity_bind_sprite", () => {
   it("adds a SpriteRenderer to an object that has none, registers it, and fixes the importer", async () => {
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
-    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png" }, ctx);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png" }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("ADDED");
     expect(r.content).toContain("importer was switched to Sprite");
-    const text = readFileSync(join(root, "Assets/Prefabs/Pig.prefab"), "utf8");
+    const text = readFileSync(join(root, "Assets/Prefabs/Frog.prefab"), "utf8");
     const { docs } = splitUnityDocs(text);
     const sr = docs.find((d) => d.classId === 212)!;
     expect(sr.text).toContain(`m_Sprite: {fileID: 21300000, guid: ${SPRITE_GUID}, type: 3}`);
     expect(sr.text).toContain("m_GameObject: {fileID: 100}");
     expect(docs.find((d) => d.classId === 1)!.text).toContain(`- component: {fileID: ${sr.fileId}}`);
-    expect(readFileSync(join(root, "Assets/Art/pig.png.meta"), "utf8")).toMatch(/textureType: 8/);
+    expect(readFileSync(join(root, "Assets/Art/frog.png.meta"), "utf8")).toMatch(/textureType: 8/);
   });
 
   it("replaces the sprite of an existing renderer", async () => {
     put("Assets/Prefabs/Cube.prefab", PREFAB_WITH_RENDERER, PREFAB_GUID);
-    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Cube.prefab", sprite: "Assets/Art/pig.png", objectName: "Cube" }, ctx);
+    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Cube.prefab", sprite: "Assets/Art/frog.png", objectName: "Cube" }, ctx);
     expect(r.isError).toBeFalsy();
     const text = readFileSync(join(root, "Assets/Prefabs/Cube.prefab"), "utf8");
     expect(text).toContain(`guid: ${SPRITE_GUID}`);
@@ -117,9 +117,9 @@ describe("unity_bind_sprite", () => {
   });
 
   it("refuses a texture without a .meta, naming the way in", async () => {
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
     put("Assets/Art/orphan.png", "png");
-    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/orphan.png" }, ctx);
+    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/orphan.png" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("no .meta");
   });
@@ -127,17 +127,17 @@ describe("unity_bind_sprite", () => {
 
 describe("unity_place_prefab", () => {
   it("places the prefab as a scene root the delivery measurement counts", async () => {
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
     put("Assets/Scenes/Main.unity", SCENE, "dddddddddddddddddddddddddddddddd");
-    await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png" }, ctx);
-    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Main.unity", prefab: "Assets/Prefabs/Pig.prefab", position: { x: 1, y: 2, z: 0 } }, ctx);
+    await new BindSpriteTool().execute({ target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png" }, ctx);
+    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Main.unity", prefab: "Assets/Prefabs/Frog.prefab", position: { x: 1, y: 2, z: 0 } }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("registered in SceneRoots");
     const text = readFileSync(join(root, "Assets/Scenes/Main.unity"), "utf8");
     expect(text).toContain(`m_SourcePrefab: {fileID: 100100000, guid: ${PREFAB_GUID}, type: 3}`);
     expect(text).toMatch(/propertyPath: m_LocalPosition\.y\n {6}value: 2/);
     expect(text.trimEnd().endsWith("}")).toBe(true); // SceneRoots stays last
-    expect(prefabRoot(PREFAB_NO_RENDERER)).toEqual({ gameObjectId: "100", transformId: "400", transformClassId: 4, name: "Pig" });
+    expect(prefabRoot(PREFAB_NO_RENDERER)).toEqual({ gameObjectId: "100", transformId: "400", transformClassId: 4, name: "Frog" });
 
     // The measurement the campaign uses now sees a placed prefab with a renderer.
     const report = assessBuiltAsSpecified(root);
@@ -154,21 +154,21 @@ describe("unity_place_prefab", () => {
 describe("defects the independent review found", () => {
   it("quotes an instance name YAML would misread, and keeps a plain one plain", async () => {
     const { yamlString, yamlScalar } = await import("./scene-binding.js");
-    expect(yamlString("StradaProbeUfo")).toBe("StradaProbeUfo");
+    expect(yamlString("StradaProbeComet")).toBe("StradaProbeComet");
     expect(yamlString("Enemy: Red")).toBe('"Enemy: Red"');
     expect(yamlString("Enemy #1")).toBe('"Enemy #1"');
     expect(yamlScalar('"Enemy: Red"')).toBe("Enemy: Red");
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
     put("Assets/Scenes/Main.unity", SCENE, "dddddddddddddddddddddddddddddddd");
-    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Main.unity", prefab: "Assets/Prefabs/Pig.prefab", name: "Enemy: Red" }, ctx);
+    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Main.unity", prefab: "Assets/Prefabs/Frog.prefab", name: "Enemy: Red" }, ctx);
     expect(r.isError).toBeFalsy();
     expect(readFileSync(join(root, "Assets/Scenes/Main.unity"), "utf8")).toContain('value: "Enemy: Red"');
   });
 
   it("registers the root in an empty scene's inline `m_Roots: []`", async () => {
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
     put("Assets/Scenes/Empty.unity", SCENE.replace("  m_Roots:\n  - {fileID: 501}\n", "  m_Roots: []\n"), "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
-    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Empty.unity", prefab: "Assets/Prefabs/Pig.prefab" }, ctx);
+    const r = await new PlacePrefabTool().execute({ scene: "Assets/Scenes/Empty.unity", prefab: "Assets/Prefabs/Frog.prefab" }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("registered in SceneRoots");
     const text = readFileSync(join(root, "Assets/Scenes/Empty.unity"), "utf8");
@@ -187,19 +187,19 @@ describe("defects the independent review found", () => {
   });
 
   it("keeps a sprite sheet's slices (spriteMode 2) instead of flattening it", async () => {
-    writeFileSync(join(root, "Assets/Art/pig.png.meta"), `fileFormatVersion: 2\nguid: ${SPRITE_GUID}\nTextureImporter:\n  textureType: 0\n  spriteMode: 2\n`);
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
-    await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png" }, ctx);
-    const meta = readFileSync(join(root, "Assets/Art/pig.png.meta"), "utf8");
+    writeFileSync(join(root, "Assets/Art/frog.png.meta"), `fileFormatVersion: 2\nguid: ${SPRITE_GUID}\nTextureImporter:\n  textureType: 0\n  spriteMode: 2\n`);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    await new BindSpriteTool().execute({ target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png" }, ctx);
+    const meta = readFileSync(join(root, "Assets/Art/frog.png.meta"), "utf8");
     expect(meta).toMatch(/textureType: 8/);
     expect(meta).toMatch(/spriteMode: 2/);
   });
 
   it("finds a GameObject whose serialized name is quoted", async () => {
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER.replace("m_Name: Pig", 'm_Name: "Pig: Red"'), PREFAB_GUID);
-    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png", objectName: "Pig: Red" }, ctx);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER.replace("m_Name: Frog", 'm_Name: "Frog: Red"'), PREFAB_GUID);
+    const r = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png", objectName: "Frog: Red" }, ctx);
     expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('"Pig: Red"');
+    expect(r.content).toContain('"Frog: Red"');
   });
 });
 
@@ -219,34 +219,34 @@ const SHEET_META = (guid: string, entries: readonly [string, string][]): string 
   `  externalObjects: {}\n  textureType: 0\n  spriteMode: 2\n`;
 
 const SHEET_ENTRIES: [string, string][] = [
-  ["21300000", "pig_idle"],
-  ["21300002", "pig_walk"],
-  ["21300004", "pig_jump"],
+  ["21300000", "frog_idle"],
+  ["21300002", "frog_walk"],
+  ["21300004", "frog_jump"],
 ];
 
 describe("sprite sheet fileIDs (2.14 / U6 / D53)", () => {
   it("binds a named sheet sprite to ITS fileID, not the 21300000 literal", async () => {
-    writeFileSync(join(root, "Assets/Art/pig.png.meta"), SHEET_META(SPRITE_GUID, SHEET_ENTRIES));
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    writeFileSync(join(root, "Assets/Art/frog.png.meta"), SHEET_META(SPRITE_GUID, SHEET_ENTRIES));
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
     const r = await new BindSpriteTool().execute(
-      { target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png", spriteName: "pig_walk" },
+      { target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png", spriteName: "frog_walk" },
       ctx,
     );
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("fileID 21300002");
-    const text = readFileSync(join(root, "Assets/Prefabs/Pig.prefab"), "utf8");
+    const text = readFileSync(join(root, "Assets/Prefabs/Frog.prefab"), "utf8");
     const sr = splitUnityDocs(text).docs.find((d) => d.classId === 212)!;
     expect(sr.text).toContain(`m_Sprite: {fileID: 21300002, guid: ${SPRITE_GUID}, type: 3}`);
     expect(sr.text).not.toContain("fileID: 21300000");
     // The slices survive the importer fix, so the ids stay resolvable.
-    expect(readFileSync(join(root, "Assets/Art/pig.png.meta"), "utf8")).toMatch(/spriteMode: 2/);
+    expect(readFileSync(join(root, "Assets/Art/frog.png.meta"), "utf8")).toMatch(/spriteMode: 2/);
   });
 
   it("still binds 21300000 for a single-sprite texture, named or not", async () => {
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
-    const bare = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png" }, ctx);
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    const bare = await new BindSpriteTool().execute({ target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png" }, ctx);
     expect(bare.isError).toBeFalsy();
-    expect(readFileSync(join(root, "Assets/Prefabs/Pig.prefab"), "utf8")).toContain(`m_Sprite: {fileID: 21300000, guid: ${SPRITE_GUID}, type: 3}`);
+    expect(readFileSync(join(root, "Assets/Prefabs/Frog.prefab"), "utf8")).toContain(`m_Sprite: {fileID: 21300000, guid: ${SPRITE_GUID}, type: 3}`);
 
     // A Single-mode meta that DOES record its one sprite resolves by name to the same id.
     writeFileSync(join(root, "Assets/Art/solo.png.meta"), SHEET_META(OLD_SPRITE, [["21300000", "solo"]]).replace("spriteMode: 2", "spriteMode: 1"));
@@ -261,41 +261,41 @@ describe("sprite sheet fileIDs (2.14 / U6 / D53)", () => {
   });
 
   it("refuses a sprite name the sheet does not hold, listing the names it does", async () => {
-    writeFileSync(join(root, "Assets/Art/pig.png.meta"), SHEET_META(SPRITE_GUID, SHEET_ENTRIES));
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    writeFileSync(join(root, "Assets/Art/frog.png.meta"), SHEET_META(SPRITE_GUID, SHEET_ENTRIES));
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
     const r = await new BindSpriteTool().execute(
-      { target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png", spriteName: "pig_fly" },
+      { target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png", spriteName: "frog_fly" },
       ctx,
     );
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('no sprite named "pig_fly"');
-    expect(r.content).toContain("pig_idle, pig_walk, pig_jump");
+    expect(r.content).toContain('no sprite named "frog_fly"');
+    expect(r.content).toContain("frog_idle, frog_walk, frog_jump");
     // Nothing was written: no renderer, no half-bound prefab.
-    expect(splitUnityDocs(readFileSync(join(root, "Assets/Prefabs/Pig.prefab"), "utf8")).docs.filter((d) => d.classId === 212)).toHaveLength(0);
+    expect(splitUnityDocs(readFileSync(join(root, "Assets/Prefabs/Frog.prefab"), "utf8")).docs.filter((d) => d.classId === 212)).toHaveLength(0);
   });
 
   it("re-reads the fileID from the meta on every call — a re-slice renumbers the ids", async () => {
-    writeFileSync(join(root, "Assets/Art/pig.png.meta"), SHEET_META(SPRITE_GUID, SHEET_ENTRIES));
-    put("Assets/Prefabs/Pig.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
+    writeFileSync(join(root, "Assets/Art/frog.png.meta"), SHEET_META(SPRITE_GUID, SHEET_ENTRIES));
+    put("Assets/Prefabs/Frog.prefab", PREFAB_NO_RENDERER, PREFAB_GUID);
     const first = await new BindSpriteTool().execute(
-      { target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png", spriteName: "pig_walk" },
+      { target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png", spriteName: "frog_walk" },
       ctx,
     );
     expect(first.isError).toBeFalsy();
-    expect(readFileSync(join(root, "Assets/Prefabs/Pig.prefab"), "utf8")).toContain("m_Sprite: {fileID: 21300002");
+    expect(readFileSync(join(root, "Assets/Prefabs/Frog.prefab"), "utf8")).toContain("m_Sprite: {fileID: 21300002");
 
-    // Unity re-sliced the sheet: pig_walk now lives at a different sub-asset id.
+    // Unity re-sliced the sheet: frog_walk now lives at a different sub-asset id.
     writeFileSync(
-      join(root, "Assets/Art/pig.png.meta"),
-      SHEET_META(SPRITE_GUID, [["21300000", "pig_idle"], ["21300008", "pig_walk"], ["21300010", "pig_jump"]]),
+      join(root, "Assets/Art/frog.png.meta"),
+      SHEET_META(SPRITE_GUID, [["21300000", "frog_idle"], ["21300008", "frog_walk"], ["21300010", "frog_jump"]]),
     );
     const second = await new BindSpriteTool().execute(
-      { target: "Assets/Prefabs/Pig.prefab", sprite: "Assets/Art/pig.png", spriteName: "pig_walk" },
+      { target: "Assets/Prefabs/Frog.prefab", sprite: "Assets/Art/frog.png", spriteName: "frog_walk" },
       ctx,
     );
     expect(second.isError).toBeFalsy();
     expect(second.content).toContain("fileID 21300008");
-    const text = readFileSync(join(root, "Assets/Prefabs/Pig.prefab"), "utf8");
+    const text = readFileSync(join(root, "Assets/Prefabs/Frog.prefab"), "utf8");
     expect(text).toContain("m_Sprite: {fileID: 21300008");
     expect(text).not.toContain("fileID: 21300002");
     expect(splitUnityDocs(text).docs.filter((d) => d.classId === 212)).toHaveLength(1);
@@ -304,13 +304,13 @@ describe("sprite sheet fileIDs (2.14 / U6 / D53)", () => {
   it("reads the table itself: inline `first: {213: n}`, an empty table, and a quoted name", async () => {
     const { spriteNameTable, resolveSpriteFileId } = await import("./scene-binding.js");
     expect(spriteNameTable(SHEET_META(SPRITE_GUID, SHEET_ENTRIES))).toEqual([
-      { fileId: "21300000", name: "pig_idle" },
-      { fileId: "21300002", name: "pig_walk" },
-      { fileId: "21300004", name: "pig_jump" },
+      { fileId: "21300000", name: "frog_idle" },
+      { fileId: "21300002", name: "frog_walk" },
+      { fileId: "21300004", name: "frog_jump" },
     ]);
     expect(spriteNameTable("TextureImporter:\n  internalIDToNameTable: []\n  spriteMode: 1\n")).toEqual([]);
-    expect(spriteNameTable("TextureImporter:\n  internalIDToNameTable:\n  - first: {213: 21300006}\n    second: \"pig: red\"\n  spriteMode: 2\n")).toEqual([
-      { fileId: "21300006", name: "pig: red" },
+    expect(spriteNameTable("TextureImporter:\n  internalIDToNameTable:\n  - first: {213: 21300006}\n    second: \"frog: red\"\n  spriteMode: 2\n")).toEqual([
+      { fileId: "21300006", name: "frog: red" },
     ]);
     // A sheet with no name asked for refuses rather than guessing a slice.
     const metaPath = join(root, "Assets/Art/sheet.png.meta");

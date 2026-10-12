@@ -76,7 +76,7 @@ export class ControlLoopTracker {
   /**
    * Consecutive read-only calls (DISTINCT ones — repeats trip the 8-call rule)
    * before the run is told that reading is not progress. Measured 2026-09-08
-   * 17:57-18:44 on a PixelFlow sprint: 14 turns, ~30 vault/file reads, no
+   * 17:57-18:44 on a test-game sprint: 14 turns, ~30 vault/file reads, no
    * write, no gate — the old limit of 60 was ~100 minutes of a 6-hour box at
    * the provider's 4.5-minute turn pace, and shell greps reset it besides.
    */

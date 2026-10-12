@@ -23,11 +23,11 @@ describe("delivery report entry point", () => {
     mkdirSync(join(root, "ProjectSettings"), { recursive: true });
     mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
     writeFileSync(join(root, "Assets", "Scenes", "ProductionMain.unity"), scene(17));
-    writeFileSync(join(root, "Assets", "Scenes", "UfoShowcase.unity"), scene(5));
+    writeFileSync(join(root, "Assets", "Scenes", "CometShowcase.unity"), scene(5));
     writeFileSync(join(root, "Assets", "InitTestScene-abc.unity"), scene(2));
     writeFileSync(
       join(root, "ProjectSettings", "EditorBuildSettings.asset"),
-      ["  - enabled: 1", "    path: Assets/Scenes/UfoShowcase.unity",
+      ["  - enabled: 1", "    path: Assets/Scenes/CometShowcase.unity",
        "  - enabled: 1", "    path: Assets/Scenes/ProductionMain.unity",
        "  - enabled: 1", "    path: Assets/InitTestScene-abc.unity",
        "  - enabled: 0", "    path: Assets/Scenes/Disabled.unity"].join("\n"),
@@ -38,9 +38,9 @@ describe("delivery report entry point", () => {
     const text = (manager as unknown as { describeEntryPoint(): string | undefined }).describeEntryPoint();
 
     expect(text).toContain("How to run it");
-    // The build opens UfoShowcase (index 0) — that is what a person gets —
+    // The build opens CometShowcase (index 0) — that is what a person gets —
     // and ProductionMain is named beside it with what to do about it.
-    expect(text).toContain("Assets/Scenes/UfoShowcase.unity");
+    expect(text).toContain("Assets/Scenes/CometShowcase.unity");
     expect(text).toContain("FIRST enabled scene");
     expect(text).toContain("ProductionMain.unity");
     expect(text).toContain("17 objects");

@@ -333,7 +333,7 @@ export function createAgentCorePort(
         // showed that flag makes the run's finally settle the tree under its
         // conversation scope, which for a worker is the PARENT's persisted
         // tree — settled "completed" by the first node to finish.
-        // Measured 2026-09-08 04:48 and 05:00 (PixelFlow sprint): the
+        // Measured 2026-09-08 04:48 and 05:00 (test-game sprint): the
         // supervisor dispatched sub-goal workers, each started in PLANNING,
         // each re-decomposed its own task text into a fresh 12- and 3-node
         // tree under a new root — 4-7 minutes apiece on the free model, 18 of

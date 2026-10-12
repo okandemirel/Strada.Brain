@@ -27,7 +27,7 @@ import { InstinctRetriever } from "../agents/instinct-retriever.js";
 import type { Instinct, InstinctId } from "./types.js";
 import type { TimestampMs } from "../types/index.js";
 
-const PROJECT = "/projects/pixelflow";
+const PROJECT = "/projects/samplegame";
 const TRIGGER = "NullReferenceException in BoardController.Resolve";
 const ACTION_A = "add a null guard around the resolved board reference";
 const ACTION_B = "construct the board eagerly in Awake so it is never null";

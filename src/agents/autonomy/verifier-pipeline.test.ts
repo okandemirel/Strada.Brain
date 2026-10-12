@@ -237,7 +237,7 @@ DONE`,
   it("hard-blocks completion when build tools are unavailable but verification debt is outstanding", () => {
     // The old behavior collapsed missing tooling to not_applicable, which let
     // a disconnected Unity bridge delete the build gate and approve unverified
-    // compilable changes (how PixelFlow milestones went green on UNKNOWN).
+    // compilable changes (how the test game's milestones went green on UNKNOWN).
     const plan = planVerifierPipeline({
       prompt: "fix the level editor",
       draft: "I updated the ArrowLevelEditorWindow.cs file to fix the issue.",
@@ -444,8 +444,8 @@ DONE`,
       state: createState(),
       task: IMPLEMENTATION_TASK,
       verificationState: {
-        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
-        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
+        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
+        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
         hasCompilableChanges: true,
         lastBuildOk: null,
         lastVerificationAt: null,
@@ -461,7 +461,7 @@ DONE`,
     const build = plan.checks.find((check) => check.name === "build");
     expect(build?.status).toBe("issues");
     expect(build?.summary).toContain("Board.cs");
-    expect(build?.summary).toContain("Tray.cs");
+    expect(build?.summary).toContain("Dock.cs");
     expect(build?.summary).not.toContain("No outstanding");
   });
 
@@ -474,8 +474,8 @@ DONE`,
       state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote Board.cs", timestamp: Date.now() - 500 }] }),
       task: IMPLEMENTATION_TASK,
       verificationState: {
-        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
-        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Tray.cs"]),
+        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
+        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
         hasCompilableChanges: true,
         lastBuildOk: null,
         lastVerificationAt: null,
@@ -506,11 +506,11 @@ DONE`,
     });
     expect(toolsAway.initialDecision).toBe("continue");
     expect(toolsAway.gate).toContain("VERIFICATION DEBT UNPAID");
-    expect(first.gate).toContain("- Assets/Game/Tray.cs");
+    expect(first.gate).toContain("- Assets/Game/Dock.cs");
     expect(exhausted("Implemented the board. DONE").initialDecision).toBe("continue");
     expect(exhausted("Implemented the board. DONE").initialDecision).toBe("replan");
     // the honest exit stands, and is not counted as a claim
-    const honest = exhausted("I could not verify Board.cs and Tray.cs: the compile tool failed every time. Stopping, the task is blocked.");
+    const honest = exhausted("I could not verify Board.cs and Dock.cs: the compile tool failed every time. Stopping, the task is blocked.");
     expect(honest.initialDecision).toBe("approve");
     expect(honest.summary).toContain("honest terminal failure report");
   });
@@ -519,14 +519,14 @@ DONE`,
    * Audited 2026-09-02: the failure vocabulary included "missing", "requires",
    * "not found", "error" and "failure" — words an ordinary completion report
    * uses about things it FIXED — while "implemented" was not a success word.
-   * "Done. Implemented … The pig prefab was missing, so I generated one." was
+   * "Done. Implemented … The frog prefab was missing, so I generated one." was
    * therefore approved as an honest terminal failure report (skipping the
    * deliverables review and, with build tools unavailable, downgrading the
    * build gate), and campaign-manager recorded the same sprint as failed.
    */
   describe("isTerminalFailureReport reads the run's own outcome, not its vocabulary", () => {
     it.each([
-      "Done. Implemented ScoreService, BoardView and the level loader. The pig prefab was missing, so I generated one.",
+      "Done. Implemented ScoreService, BoardView and the level loader. The frog prefab was missing, so I generated one.",
       "All three systems are implemented and the PlayMode tests pass. I removed a stale reference that caused a compile error.",
       "Wired the HUD. Nothing is missing now.",
       "The build requires Unity 2022.3, which the project uses. Shipped the level loader.",
@@ -564,7 +564,7 @@ DONE`,
     it("does not approve a completion draft as an honest failure report", () => {
       const plan = planVerifierPipeline({
         prompt: "Implement ScoreService, BoardView, the level loader and PowerUps",
-        draft: "Done. Implemented ScoreService, BoardView and the level loader. The pig prefab was missing, so I generated one.",
+        draft: "Done. Implemented ScoreService, BoardView and the level loader. The frog prefab was missing, so I generated one.",
         state: createState(),
         task: IMPLEMENTATION_TASK,
         verificationState: {

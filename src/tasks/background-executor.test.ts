@@ -1767,7 +1767,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
             written: ["Assets/A.cs"],
             conflicts: [],
             failed: [],
-            removed: ["Assets/Art/Generated/PixelCube_Blue.png.meta", "Assets/Scenes/ContentAssetAssembly.unity"],
+            removed: ["Assets/Art/Generated/Tile_Blue.png.meta", "Assets/Scenes/ContentAssetAssembly.unity"],
           }),
         }),
       } as any,
@@ -1780,7 +1780,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     });
 
     expect(result.output).toContain("PUBLICATION NOTE");
-    expect(result.output).toContain("PixelCube_Blue.png.meta");
+    expect(result.output).toContain("Tile_Blue.png.meta");
     expect(result.output).toContain("instead of deleting them again");
     // A declined deletion is by design — the run still succeeded.
     expect(result.workerResult?.status).toBe("completed");
@@ -2123,7 +2123,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
    */
   it("blocks with the question the worker asked, not the tag for asking", async () => {
     const question =
-      "UNITY_PROJECT_PATH points at PixelFlow-Clean but the open editor is Lodestone. Which should I build?";
+      "UNITY_PROJECT_PATH points at SampleGame but the open editor is Lodestone. Which should I build?";
     const executor = new BackgroundExecutor({
       orchestrator: {
         runWorkerTask: vi.fn().mockResolvedValue({
@@ -3876,7 +3876,7 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
 });
 
 describe("BackgroundExecutor - settle carries how the run ended (GDD-drift W01)", () => {
-  // In campaign 18d4t five of six milestone tips ended on the system's own
+  // In a measured campaign five of six milestone tips ended on the system's own
   // "task_stuck" notice and all six went green. The only record of how a run
   // ended was that sentence; the task row carried nothing a gate could read.
   function makeVerdictTaskManager() {

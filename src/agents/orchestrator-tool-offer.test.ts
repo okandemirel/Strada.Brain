@@ -87,7 +87,7 @@ describe("what the model is offered", () => {
   });
 
   it("offers them once a solution exists", () => {
-    writeFileSync(join(projectPath, "PixelFlow.sln"), "");
+    writeFileSync(join(projectPath, "SampleGame.sln"), "");
     const names = offered(orchestratorFor(projectPath));
 
     expect(names).toContain("dotnet_build");
