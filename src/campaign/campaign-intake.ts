@@ -7,7 +7,8 @@
  *   1. A document attachment that extracts to text (the GDD itself) — sharing
  *      the file IS the instruction ("direkt bir GDD paylaşıldığında").
  *   2. Free text asking for the game IN an existing GDD ("GDD'deki oyunu yap",
- *      "build the game in the GDD") → build from docs/.
+ *      "build the game in the GDD", "Bu oyunu yap: docs/Foo.md") → build from
+ *      docs/, or from the document whose path the message named.
  *   3. Free text with an end-to-end build intent around a game idea
  *      ("şöyle bir oyun yap", "build this game: ...") → idea mode, which
  *      drafts the GDD first and stops at the single approval gate.
@@ -30,8 +31,20 @@ export type CampaignIntent =
 const BUILD_INTENT_RE =
   /\b(baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan|build\s+(this|the|a|my)\s+game|make\s+(this|the|a|my)\s+game|develop\s+(this|the|a|my)\s+game|oyunu?n?u?\s+(yap|yazar\s+mısın|geliştir|inşa\s+et|kodla)|oyun\s+(yap|geliştir|yaz|kodla))\b/i;
 
-/** Reference to an existing GDD document (in docs/, or "the GDD" generally). */
-const GDD_REFERENCE_RE = /\b(gdd|game\s+design\s+doc(ument)?)\b/i;
+/**
+ * A reference to a GDD (in docs/, or "the GDD" generally), INSIDE A NAME TOO:
+ * "Foo_GDD.md", "foo-gdd.md", "FooGDD.md", "GDD'deki". `\bgdd\b` never matched
+ * the first ('_' is a word character), so "Build this game: docs/Foo_GDD.md"
+ * was not a reference at all. …BUT AS A WORD OF ITS OWN: the letters inside
+ * another word ("Rigddon") are none, or an idea that mentions such a word is
+ * thrown away for whatever design docs/ holds.
+ */
+const GDD_ACRONYM_RE = /(?:(?<![\p{L}\p{N}])(?:gdd|Gdd|GDD)|(?<=\p{Ll})(?:Gdd|GDD))s?(?![\p{Ll}])/u;
+const GDD_SPELLED_RE = /(?<![\p{L}\p{N}])game[\s_-]*design[\s_-]*doc(?:ument)?s?(?![\p{L}])/iu;
+
+function refersToGdd(text: string): boolean {
+  return GDD_ACRONYM_RE.test(text) || GDD_SPELLED_RE.test(text);
+}
 
 /** A message that is ONLY an idea is long enough to design from. */
 const MIN_IDEA_LENGTH = 40;
@@ -50,7 +63,7 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
     const extractedText = extractDocumentText(attachment.name, attachment.data);
     if (extractedText && extractedText.trim().length >= 200) {
       // A document with real prose + (build intent OR a GDD-shaped name or no text at all).
-      if (!text || BUILD_INTENT_RE.test(text) || GDD_REFERENCE_RE.test(attachment.name) || GDD_REFERENCE_RE.test(text)) {
+      if (!text || BUILD_INTENT_RE.test(text) || refersToGdd(attachment.name) || refersToGdd(text)) {
         return { kind: "gdd-attachment", gddText: extractedText, sourceName: attachment.name };
       }
     }
@@ -68,19 +81,24 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
 
 /** Steps 2 and 3: what the message's own text asks for. */
 function intentFromText(text: string): CampaignIntent | undefined {
+  if (!BUILD_INTENT_RE.test(text)) return undefined;
+
   // 2. "Build the game in the GDD" — the design already lives in the repo.
   // BEFORE the idea-length minimum: that minimum exists because an IDEA has
   // to be long enough to design from, and this instruction is not an idea —
   // it points at a document. "Build the game in the GDD" is 25 characters,
   // and it was ignored entirely (Codex 2026-09-12 X).
-  if (GDD_REFERENCE_RE.test(text) && BUILD_INTENT_RE.test(text)) {
-    // A PATH THE MESSAGE NAMED IS THE DOCUMENT IT MEANT. "Build the game
-    // from the GDD at docs/Space_GDD.md" became a bare "gdd-from-docs", and
-    // the manager then chose a repository document by filename distance and
-    // modification time — a different, newer GDD could win (Codex 2026-09-12
-    // AD#6).
-    const named = documentPathIn(text);
-    if (named) return { kind: "gdd-from-docs", path: named };
+  // A PATH THE MESSAGE NAMED IS THE DOCUMENT IT MEANT, whatever the file is
+  // called. "Build the game from the GDD at docs/Space_GDD.md" became a bare
+  // "gdd-from-docs", and the manager then chose a repository document by
+  // filename distance and modification time — a different, newer GDD could
+  // win (Codex 2026-09-12 AD#6). Without "the GDD" spelled out the path did
+  // not count at all: "Build this game: docs/Foo_GDD.md" was nothing, and
+  // past 40 characters an IDEA — a new design drafted from the sentence that
+  // pointed at the old one.
+  const named = documentPathIn(text);
+  if (named) return { kind: "gdd-from-docs", path: named };
+  if (refersToGdd(text)) {
     // …AND DESIGN TEXT WRITTEN IN THE MESSAGE IS THE DESIGN. "Build this
     // game. GDD: <the design>" was read as a reference to a document in the
     // repository and the supplied design was discarded (AD#6).
@@ -92,11 +110,7 @@ function intentFromText(text: string): CampaignIntent | undefined {
   if (text.length < MIN_IDEA_LENGTH) return undefined;
 
   // 3. A written game idea with build intent.
-  if (BUILD_INTENT_RE.test(text)) {
-    return { kind: "idea", ideaText: text };
-  }
-
-  return undefined;
+  return { kind: "idea", ideaText: text };
 }
 
 /** The first document the message carried bytes for, and why no design came out of it. */
@@ -116,20 +130,62 @@ function unreadDocumentIn(msg: IncomingMessage): Extract<CampaignIntent, { kind:
   return undefined;
 }
 
-/** A document path the message names, when it names one. */
-const DOCUMENT_PATH_RE = /(?:^|[\s"'`(])((?:[\w.-]+[/\\])*[\w.-]+\.(?:md|markdown|txt|docx|odt|rtf|pdf))(?=$|[\s"'`),.])/i;
+/**
+ * A document path in quotes or backticks, which may hold spaces. Unquoted,
+ * "docs/My Game GDD.md" yielded only its last word, "GDD.md" — another file.
+ * The opening quote stands after a space so a Turkish suffix apostrophe
+ * ("GDD'li … docs/x.md'yi") is not read as one.
+ */
+const QUOTED_DOCUMENT_PATH_RE = /(?:^|[\s(:])["'`“‘]([^"'`“”‘’\n]+\.(?:md|markdown|txt|docx|odt|rtf|pdf))["'`”’]/giu;
 
-export function documentPathIn(text: string): string | undefined {
-  const match = DOCUMENT_PATH_RE.exec(text);
-  return match?.[1];
+/**
+ * A document path the message names: relative, absolute (/x, C:\x) or from
+ * home (~/x), in any script (Oyun_Tasarımı.md), ended by a Turkish suffix in
+ * either apostrophe ("x.md'deki", "x.md’deki"). An absolute path was not
+ * extracted at all, and the campaign discovered whichever design docs/ held.
+ */
+const DOCUMENT_PATH_RE =
+  /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])*[\p{L}\p{N}_.~-]+\.(?:md|markdown|txt|docx|odt|rtf|pdf))(?=$|[\s"'`),.:;!?”’])/giu;
+
+/** Documents that sit beside a design — a style sheet, a changelog, a readme — and are not it when the message names it too. */
+const SUPPORT_DOCUMENT_WORDS = new Set(["style", "styles", "stylesheet", "styleguide", "stil", "changelog", "readme", "license", "licence", "contributing"]);
+
+function isSupportDocument(path: string): boolean {
+  const name = path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
+  return name.split(/[^\p{L}\p{N}]+|(?<=\p{Ll})(?=\p{Lu})/u).some((word) => SUPPORT_DOCUMENT_WORDS.has(word.toLowerCase()));
 }
 
 /**
+ * The design document the message names, when it names one. Beside a style
+ * sheet or a changelog, the design: the one whose name says GDD, else the
+ * first that is not a support document, in the order the message wrote them.
+ * Taking the first path built the game from "docs/art-style.md" when the
+ * message said "Following docs/art-style.md, build the game in docs/x.md".
+ */
+export function documentPathIn(text: string): string | undefined {
+  const named: Array<{ at: number; path: string }> = [];
+  for (const m of text.matchAll(QUOTED_DOCUMENT_PATH_RE)) named.push({ at: m.index, path: m[1]! });
+  // Quoted spans blanked to the same length, so every position still holds.
+  const unquoted = text.replace(QUOTED_DOCUMENT_PATH_RE, (span) => " ".repeat(span.length));
+  for (const m of unquoted.matchAll(DOCUMENT_PATH_RE)) named.push({ at: m.index, path: m[1]! });
+  const paths = named.sort((a, b) => a.at - b.at).map((n) => n.path);
+  return paths.find(refersToGdd) ?? paths.find((path) => !isSupportDocument(path)) ?? paths[0];
+}
+
+/** The reference followed by a "GDD:" marker, read exactly as refersToGdd reads one. */
+const INLINE_DESIGN_MARKER_RES = [
+  new RegExp(`(?:${GDD_ACRONYM_RE.source})\\s*[:\\-—]\\s*`, "u"),
+  new RegExp(`(?:${GDD_SPELLED_RE.source})\\s*[:\\-—]\\s*`, "iu"),
+];
+
+/**
  * The design written INSIDE the message, after a "GDD:" marker — as opposed to
- * a reference to a document that already exists.
+ * a reference to a document that already exists. "Foo_GDD: <the design>" is a
+ * reference too, so its design is not taken for a pointer to docs/.
  */
 export function inlineDesignIn(text: string): string | undefined {
-  const marker = /\b(?:gdd|game\s+design\s+doc(?:ument)?)\b\s*[:\-—]\s*/i.exec(text);
+  const markers = INLINE_DESIGN_MARKER_RES.map((re) => re.exec(text)).filter((m): m is RegExpExecArray => m !== null);
+  const marker = markers.sort((a, b) => a.index - b.index)[0];
   if (!marker) return undefined;
   const after = text.slice(marker.index + marker[0].length).trim();
   return after.length >= MIN_IDEA_LENGTH ? text : undefined;

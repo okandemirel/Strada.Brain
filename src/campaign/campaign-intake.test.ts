@@ -190,3 +190,99 @@ describe("a document that arrived but could not be read (channel-attachments rev
     ).toEqual({ kind: "idea", ideaText: LONG_IDEA });
   });
 });
+
+/**
+ * A message that points at the design by its path was read as an idea, or as
+ * nothing: "Build this game: docs/Foo_GDD.md" became `{kind: "idea"}` once it
+ * ran past the idea-length minimum (the campaign drafted a NEW design from
+ * that one sentence) and `undefined` below it. Only a message that also spelled
+ * out "the GDD" was a pointer: `\bgdd\b` never matches inside Foo_GDD ('_' is a
+ * word character), and a path without GDD in its name did not count at all.
+ * An absolute path was not extracted, so the campaign went on to discover
+ * whichever design docs/ held.
+ */
+describe("a message that names the design document by its path", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it.each([
+    ["Build this game: docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Build the game in docs/Quillmoor_GDD.md, sprint by sprint, until it is done.", "docs/Quillmoor_GDD.md"],
+    ["build the game from the GDD at docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Build this game: quill-moor-gdd.md", "quill-moor-gdd.md"],
+    ["Build this game: docs/QuillmoorGDD.md", "docs/QuillmoorGDD.md"],
+    ["Make this game: design/quillmoor-notes.docx", "design/quillmoor-notes.docx"],
+    ["Develop my game from docs/quillmoor.markdown", "docs/quillmoor.markdown"],
+    ["Build the game described in ./quillmoor.txt", "./quillmoor.txt"],
+    ["Build the game in /Users/someone/Desktop/Quillmoor_GDD.pdf", "/Users/someone/Desktop/Quillmoor_GDD.pdf"],
+    ["Build the game in ~/Desktop/Quillmoor_GDD.rtf", "~/Desktop/Quillmoor_GDD.rtf"],
+    ["Build the game in C:\\Games\\Quillmoor_GDD.odt", "C:\\Games\\Quillmoor_GDD.odt"],
+    ['Build the game in "docs/Quill Moor GDD.md"', "docs/Quill Moor GDD.md"],
+    ["docs/Quillmoor_GDD.md oyununu baştan sona yap", "docs/Quillmoor_GDD.md"],
+    ["Bu oyunu yap: docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Quillmoor_GDD.odt'deki oyunu baştan sona yap", "Quillmoor_GDD.odt"],
+    ["docs/quillmoor.pdf dosyasındaki oyunu geliştir", "docs/quillmoor.pdf"],
+    ["GDD'li dosya docs/quillmoor.txt, bu oyunu yap", "docs/quillmoor.txt"],
+    ["Bu oyunu yap: docs/Kuşkonmaz_Tasarımı.md", "docs/Kuşkonmaz_Tasarımı.md"],
+    ["Quillmoor_GDD.md’deki oyunu baştan sona yap", "Quillmoor_GDD.md"],
+    // Beside a style sheet or a changelog, the design — wherever it stands.
+    ["Build the game in docs/art-style.md and docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Following docs/art-style.md, build the game in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["CHANGELOG.md'yi güncel tut, docs/quillmoor.md'deki oyunu baştan sona yap", "docs/quillmoor.md"],
+    // Named alone, it is the one the message meant, whatever it is called.
+    ["Build this game: docs/README.md", "docs/README.md"],
+  ])("%s → that path", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
+  it.each([
+    "Quillmoor_GDD'deki oyunu yap",
+    "Build the game in QuillmoorGDD",
+    "Build the game in the quillmoor_game_design_document",
+  ])("%s → the repository's design (the reference is inside a name)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
+  });
+
+  it.each([
+    "Build this game. Quillmoor_GDD: a puzzle where the player saves progress and restores it after exiting.",
+    "Build this game. QuillmoorGDD: a puzzle where the player saves progress and restores it after exiting.",
+  ])("design text after a GDD-named marker is still the design, not a pointer: %s", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  // The letters inside another word are no reference: the idea is the design.
+  it.each([
+    "Build this game from scratch: a city builder named Rigddon where tides flood the streets every night.",
+    "Sıfırdan bir oyun yap: Bigdda kasabasında geçen, gelgitle sokakları su basan bir şehir kurma oyunu.",
+  ])("%s → the idea", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  it.each([
+    "add a pause menu to my game",
+    "fix the GDD typo",
+    "fix the GDD typo in docs/Quillmoor_GDD.md",
+    "update docs/Quillmoor_GDD.md section 3",
+    "open docs/Quillmoor_GDD.md",
+    "where is Quillmoor_GDD.md?",
+    "Can you summarize docs/quillmoor-notes.pdf for me?",
+    "docs/Quillmoor_GDD.md dosyasına bak",
+    "docs/Quillmoor_GDD.md dosyasının 3. bölümünü güncelle",
+    "Quillmoor_GDD.md'deki yazım hatasını düzelt",
+    "Oyuna pause menüsü ekle, docs/ui-notes.md'deki gibi",
+  ])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it("a GDD-named attachment is the design even when the caption says nothing", () => {
+    const design = `# Quillmoor\n\n${"Design content. ".repeat(30)}`;
+    expect(
+      detectCampaignIntent({ chatId: "c", text: "bak", attachments: [{ type: "document", name: "QuillmoorGDD.md", data: Buffer.from(design) }] } as never),
+    ).toMatchObject({ kind: "gdd-attachment", sourceName: "QuillmoorGDD.md" });
+    // …and the letters inside another word do not make one.
+    expect(
+      detectCampaignIntent({ chatId: "c", text: "bak", attachments: [{ type: "document", name: "Rigddon-notes.md", data: Buffer.from(design) }] } as never),
+    ).toBeUndefined();
+  });
+});

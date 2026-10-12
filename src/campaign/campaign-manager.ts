@@ -26,6 +26,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure, providerFailuresSince } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -45,6 +46,8 @@ import {
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
+import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "../agents/tools/document-text.js";
+import { projectRelativeTarget } from "../security/path-guard.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
@@ -1444,8 +1447,11 @@ export class CampaignManager {
     // …AND A NAMED PATH THAT CANNOT BE READ IS A REFUSAL, NOT A HINT. Falling
     // back to discovery started a campaign on whatever other design the repo
     // held — the wrong game, silently (audit 06.4, 2026-09-13).
-    if (preferredPath !== undefined && !readGddFile(this.projectRoot, preferredPath)) return undefined;
-    const gddPath = preferredPath ?? this.findNewestGddPath();
+    if (preferredPath !== undefined) {
+      const named = this.readNamedGdd(preferredPath);
+      return "text" in named ? this.startFromGdd(ctx, named.text, named.path) : undefined;
+    }
+    const gddPath = this.findNewestGddPath();
     if (!gddPath) return undefined;
     const gddText = readGddFile(this.projectRoot, gddPath);
     if (!gddText) return undefined;
@@ -1502,15 +1508,12 @@ export class CampaignManager {
         return true;
       }
       case "gdd-from-docs": {
-        if (intent.path !== undefined && !readGddFile(this.projectRoot, intent.path)) {
-          await this.tell(
-            { chatId: msg.chatId },
-            `I could not read \`${intent.path}\` — check the path, or share the document and I'll build from that. ` +
-              "I am not starting from another design in the repo in its place.",
-          );
+        const named = intent.path === undefined ? undefined : this.readNamedGdd(intent.path);
+        if (named !== undefined && "refusal" in named) {
+          await this.tell({ chatId: msg.chatId }, named.refusal);
           return true;
         }
-        const campaign = this.startFromGddFromDocs(ctx, intent.path);
+        const campaign = named !== undefined ? this.startFromGdd(ctx, named.text, named.path) : this.startFromGddFromDocs(ctx);
         if (!campaign) {
           await this.tell(
             { chatId: msg.chatId },
@@ -1518,7 +1521,11 @@ export class CampaignManager {
           );
           return true;
         }
-        await this.tell(campaign, `Building from \`${campaign.gddPath}\` — planning the milestone ladder, then the build starts.`);
+        const from =
+          named === undefined || named.source === campaign.gddPath
+            ? `\`${campaign.gddPath}\``
+            : `the text of \`${named.source}\`${campaign.gddPath !== undefined ? `, kept as \`${campaign.gddPath}\`` : ""}`;
+        await this.tell(campaign, `Building from ${from} — planning the milestone ladder, then the build starts.`);
         return true;
       }
       case "gdd-unreadable": {
@@ -10348,6 +10355,41 @@ export class CampaignManager {
   }
 
   /**
+   * The design a message named by its path (`source`, project-relative), the
+   * text to build from and the path that holds it — or what to say instead.
+   * A refusal never falls back to another design.
+   *
+   * A WORD FILE, AN ODT, AN RTF OR A PDF IS ITS TEXT. Read as UTF-8, the
+   * document's bytes went to the planner and every sprint prompt as the
+   * design. Its text is kept in docs/ as Markdown, as a shared attachment's
+   * is, because the campaign's path is read as text everywhere and
+   * startFromGdd writes the text it is given over that path.
+   */
+  private readNamedGdd(named: string): { text: string; path: string | undefined; source: string } | { refusal: string } {
+    const notInstead = "I am not starting from another design in the repo in its place.";
+    const located = locateNamedGdd(this.projectRoot, named);
+    if (!("path" in located)) {
+      return { refusal: `\`${named}\` is outside this project, and I build only from a design inside it — copy it into docs/, or share the file here. ${notInstead}` };
+    }
+    const source = located.path;
+    const unreadable = { refusal: `I could not read \`${named}\` — check the path, or share the document and I'll build from that. ${notInstead}` };
+    if (!RICH_DOCUMENT_EXTENSIONS.some((ext) => source.toLowerCase().endsWith(ext))) {
+      const text = readGddFile(this.projectRoot, source);
+      return text ? { text, path: source, source } : unreadable;
+    }
+    const raw = readGddBytes(this.projectRoot, source);
+    if (!raw) return unreadable;
+    const text = extractDocumentText(source, raw);
+    if (!text?.trim()) {
+      return {
+        refusal:
+          `I found \`${named}\`, but no text could be read from it — paste the design into the message, or keep it as Markdown, TXT or a PDF with selectable text. ${notInstead}`,
+      };
+    }
+    return { text, path: this.persistSuppliedGdd(text, basename(source)), source };
+  }
+
+  /**
    * Write a supplied GDD into docs/ so sprint prompts reference a durable,
    * committable path. Sanitizes the source filename; idempotent per CONTENT.
    * Audited 2026-09-02: this was "idempotent per name" (an existence check),
@@ -11120,13 +11162,37 @@ function sha256Of(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+/**
+ * The project-relative path of a GDD a chat message named, or `outside` when
+ * the document is not in the project. A full path was joined onto the root as
+ * if relative, so the project's own document named by its full path could not
+ * be read, and one elsewhere was "could not read" rather than outside; the
+ * root is compared in both spellings (/var against /private/var on macOS). A
+ * relative name that is not where it says but is in docs/ is that one —
+ * "with or without docs/".
+ */
+function locateNamedGdd(projectRoot: string, named: string): { path: string } | { outside: true } {
+  const spelled = /^~[\\/]/.test(named) ? join(homedir(), named.slice(2)) : named;
+  // A drive-letter path names no place on this machine unless it is Windows;
+  // elsewhere it resolves as a folder called "C:" inside the project.
+  if (/^[a-z]:[\\/]/i.test(spelled) && process.platform !== "win32") return { outside: true };
+  let rel = projectRelativeTarget(projectRoot, spelled);
+  if (rel === undefined) return { outside: true };
+  if (!isAbsolute(spelled) && !existsSync(join(projectRoot, rel)) && existsSync(join(projectRoot, "docs", rel))) rel = `docs/${rel}`;
+  return pathIsInsideProject(projectRoot, rel) ? { path: rel } : { outside: true };
+}
+
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
+  return readGddBytes(projectRoot, gddPath)?.toString("utf8");
+}
+
+function readGddBytes(projectRoot: string, gddPath: string): Buffer | undefined {
   // A GDD path can come from a chat message, and what is read goes to the
   // planner and every sprint prompt: the read side is held inside the project
   // exactly as the write side is (CMP-12), links resolved.
   if (!pathIsInsideProject(projectRoot, gddPath)) return undefined;
   try {
-    return readFileSync(join(projectRoot, gddPath), "utf8");
+    return readFileSync(join(projectRoot, gddPath));
   } catch {
     return undefined;
   }

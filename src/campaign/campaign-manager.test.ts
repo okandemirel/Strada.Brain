@@ -3,7 +3,8 @@ import { SYSTEM_INTERRUPTION_MARKER } from "../tasks/interruption.js";
 import { extractLookDescription } from "./visual-conformance.js";
 import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, statSync, symlinkSync, chmodSync } from "node:fs";
+import { deflateSync } from "node:zlib";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, statSync, symlinkSync, chmodSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
@@ -10245,6 +10246,107 @@ describe("CampaignManager", () => {
       symlinkSync(join(dir, "outside.md"), join(projectRoot, "docs", "Linked_GDD.md"));
       expect(manager.startFromGddFromDocs(ctx, "docs/Linked_GDD.md")).toBeUndefined();
       expect(tasks.submitted).toHaveLength(0);
+    });
+  });
+
+  /**
+   * The design a message named by its path. An absolute path was not even
+   * extracted, so the campaign built whichever design docs/ held — another
+   * game, announced as if it were the one asked for. Extracted, it was joined
+   * onto the project root as if relative: a document inside the project named
+   * by its full path could not be read, one outside it was "could not read"
+   * rather than outside, and a bare file name that lives in docs/ was looked
+   * for at the root only.
+   */
+  describe("the design a message named by its path (intake-gdd-path)", () => {
+    const say = (chatId: string, text: string): Promise<boolean> =>
+      manager.tryHandleIncoming({ channelType: "cli", chatId, userId: "u1", text, timestamp: new Date() } as unknown as IncomingMessage);
+    const told = (chatId: string): string => messages.filter((m) => m.chatId === chatId).map((m) => m.text).join("\n");
+    const DESIGN = "# Quillmoor\n\nThe game the message asked for.\n" + "q".repeat(400);
+
+    it.each([
+      ["its full path", () => join(projectRoot, "docs", "Quillmoor_GDD.md")],
+      // /var against /private/var on macOS: the root's real spelling is the same project.
+      ["the real spelling of its full path", () => join(realpathSync.native(projectRoot), "docs", "Quillmoor_GDD.md")],
+      ["its bare file name, kept in docs/", () => "Quillmoor_GDD.md"],
+    ])("builds the document named by %s, not the repository's other GDD", async (_how, named) => {
+      writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-named", `Build this game: ${named()}`)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-named");
+      expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.md");
+      expect(campaign?.gddText).toBe(DESIGN);
+      expect(told("chat-named")).toContain("Building from `docs/Quillmoor_GDD.md`");
+    });
+
+    it.each([
+      ["a full path outside the project", () => join(dir, "Quillmoor_GDD.md")],
+      ["a relative path that leaves the project", () => "../Quillmoor_GDD.md"],
+      ["a path from the home directory", () => "~/Desktop/Quillmoor_GDD.md"],
+    ])("refuses %s in so many words, and builds no other design", async (_how, named) => {
+      writeFileSync(join(dir, "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-outside", `Bu oyunu yap: ${named()}`)).toBe(true);
+      const said = told("chat-outside");
+      expect(said).toContain(named());
+      expect(said).toContain("outside this project");
+      expect(said).not.toContain("Building from");
+      expect(storage.hasActiveForChat("chat-outside")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    it("finds a named folder under docs/ when the message left docs/ out", async () => {
+      mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
+      writeFileSync(join(projectRoot, "docs", "design", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-folder", "Bu oyunu yap: design/Quillmoor_GDD.md")).toBe(true);
+      expect(storage.listActive().find((c) => c.chatId === "chat-folder")?.gddPath).toBe("docs/design/Quillmoor_GDD.md");
+    });
+
+    it("says a named document that is not there could not be read, and builds no other design", async () => {
+      expect(await say("chat-missing", "Build this game: docs/Missing_GDD.md")).toBe(true);
+      const said = told("chat-missing");
+      expect(said).toContain("could not read `docs/Missing_GDD.md`");
+      expect(said).not.toContain("Building from");
+      expect(storage.hasActiveForChat("chat-missing")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    /**
+     * A named PDF (or Word file, ODT, RTF) was read as UTF-8: its compressed
+     * bytes went to the planner as the design, and the path every sprint reads
+     * as text was the PDF itself.
+     */
+    describe("a named document in a rich format", () => {
+      const PROSE = "Quillmoor: the keeper lights one lantern per night and the fog retreats from every lit street.";
+      /** A one-page PDF whose content stream shows `shown` (FlateDecode, as exporters write it). */
+      const pdf = (shown: string): Buffer => {
+        const content = deflateSync(Buffer.from(`BT /F1 12 Tf 72 712 Td ${shown} Tj ET`, "latin1"));
+        return Buffer.concat([
+          Buffer.from(`%PDF-1.4\n4 0 obj\n<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`, "latin1"),
+          content,
+          Buffer.from("\nendstream\nendobj\n%%EOF\n", "latin1"),
+        ]);
+      };
+
+      it("is built from its text, kept as Markdown beside it; the PDF itself is not touched", async () => {
+        const bytes = pdf(`(${PROSE})`);
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf"), bytes);
+        expect(await say("chat-pdf", "Build the game in docs/Quillmoor_GDD.pdf")).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-pdf");
+        expect(campaign?.gddText).toBe(PROSE);
+        expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.md");
+        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), "utf8")).toBe(PROSE);
+        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf")).equals(bytes)).toBe(true);
+        expect(told("chat-pdf")).toContain("Building from the text of `docs/Quillmoor_GDD.pdf`, kept as `docs/Quillmoor_GDD.md`");
+      });
+
+      it("with no text to read is said so, and no other design is built", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf"), pdf(`<${Buffer.from(PROSE, "latin1").toString("hex")}>`));
+        expect(await say("chat-scan", "Bu oyunu yap: docs/Quillmoor_GDD.pdf")).toBe(true);
+        const said = told("chat-scan");
+        expect(said).toContain("`docs/Quillmoor_GDD.pdf`, but no text could be read from it");
+        expect(said).not.toContain("Building from");
+        expect(storage.hasActiveForChat("chat-scan")).toBe(false);
+        expect(tasks.submitted).toHaveLength(0);
+      });
     });
   });
 
