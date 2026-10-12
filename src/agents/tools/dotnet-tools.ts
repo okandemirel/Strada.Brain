@@ -237,12 +237,21 @@ export async function shellDotnet(command: string, cwd: string, projectPath: str
       // (measured, 10.0.400). Another command's failure there (`cd`) is then
       // held against the build, which only refuses no-build runs until a
       // clean build.
+      // With a `dotnet test` in the line, the exit is still the builds' when
+      // the line printed nothing at all: a run that got to its tests names
+      // each failure on stderr even with its output sent away (xunit's
+      // `[FAIL]` lines), while `dotnet build P > /dev/null && dotnet test P
+      // --no-build` and `dotnet test P > /dev/null` over a broken source
+      // printed nothing, exited 1, and the next no_build run read the old DLL
+      // as PASSED (measured, 10.0.400). Failed tests with both streams in a
+      // log, or a runner that names failures only on stdout, print nothing
+      // either; that line is held against its build too, which costs a build.
       const unmasked = read.operators.every((op) => op === "&&")
         && [...read.hazards].every((hazard) => hazard === "redirection")
         && read.commands.every((words) => words.length > 0);
       const failed = result.timedOut
         || MSBUILD_ERROR_LINE.test(output)
-        || (result.exitCode !== 0 && unmasked && commands.every((c) => c.verb === "build"));
+        || (result.exitCode !== 0 && unmasked && (commands.every((c) => c.verb === "build") || output.trim() === ""));
       const clean = !failed && result.exitCode === 0 && unmasked;
       if (failed || clean) {
         for (const c of commands) {
