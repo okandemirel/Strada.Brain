@@ -165,6 +165,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       notify: true,
       autoRestart: true,
     },
+    // loadConfig always builds this section; the task runtime stage warns when it is missing.
+    campaign: { scopeGate: "off", maxRequirementRows: 400 },
     ...overrides,
   } as Config;
 }
@@ -716,10 +718,12 @@ describe("bootstrap-stages", () => {
     } as any;
     const backgroundExecutor = {
       setTaskManager: vi.fn(),
+      setCampaignDesignDocs: vi.fn(),
     } as any;
     const taskManager = {
       recoverOnStartup: vi.fn(),
       on: vi.fn(),
+      off: vi.fn(),
     } as any;
     const autoUpdater = {
       setNotifyFn: vi.fn(),
@@ -733,7 +737,7 @@ describe("bootstrap-stages", () => {
       setRealTreeGuardian: vi.fn(),
       commandGate: vi.fn(),
     } as any;
-    const messageRouter = { _tag: "message-router" } as any;
+    const messageRouter = { _tag: "message-router", setCampaignManager: vi.fn() } as any;
     const daemonEventBus = { _tag: "daemon-bus" } as any;
     const providerRouter = { _tag: "provider-router" } as any;
     const channel = {
@@ -792,6 +796,16 @@ describe("bootstrap-stages", () => {
     expect(autoUpdater.init).toHaveBeenCalled();
     expect(autoUpdater.scheduleChecks).toHaveBeenCalled();
     expect(commandHandler.setProviderRouter).toHaveBeenCalledWith(providerRouter);
+    // The campaign layer came up from these dependencies: the stage swallows a
+    // failure there into one warning, and this test passed with the layer
+    // disabled under it from the day the layer landed (2026-08-26): its
+    // message router mock had no setCampaignManager.
+    expect(logger.warn).not.toHaveBeenCalledWith("Campaign layer disabled", expect.anything());
+    expect(result.campaignManager).toBeDefined();
+    expect(logger.info).toHaveBeenCalledWith("Campaign layer initialized");
+    expect(backgroundExecutor.setCampaignDesignDocs).toHaveBeenCalledWith(expect.any(Function));
+    expect(messageRouter.setCampaignManager).toHaveBeenCalledWith(result.campaignManager);
+    expect(commandHandler.setCampaignManager).toHaveBeenCalledWith(result.campaignManager);
     // The channels' build commands are wired even when no campaign layer or guardian came up.
     expect(commandHandler.setCampaignManager).toHaveBeenCalledTimes(1);
     expect(commandHandler.setRealTreeGuardian).toHaveBeenCalledTimes(1);
@@ -807,6 +821,7 @@ describe("bootstrap-stages", () => {
     const notifyFn = autoUpdater.setNotifyFn.mock.calls[0][0] as (msg: string) => void;
     notifyFn("update available");
     expect(channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "update available");
+    await result.campaignManager?.dispose();
   });
 
   // owner-commands: the handler it builds asks the channel who a caller is, so
