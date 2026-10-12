@@ -36,6 +36,19 @@ export interface StradaDepsStatus {
    */
   readonly coreIncomplete?: string | null;
   readonly modulesIncomplete?: string | null;
+  /**
+   * A package folder found under Packages/Submodules that Packages/manifest.json
+   * does not reference, so Unity never loads it, and where. null otherwise.
+   */
+  readonly coreUnreferenced?: string | null;
+  readonly modulesUnreferenced?: string | null;
+  /**
+   * An upstream checkout of the package outside the project (STRADA_CORE_PATH /
+   * STRADA_MODULES_PATH, or a sibling of this install). Available to read and
+   * to install from; it says nothing about what the project compiles against.
+   */
+  readonly coreCheckout?: StradaFrameworkCheckout | null;
+  readonly modulesCheckout?: StradaFrameworkCheckout | null;
   readonly mcpInstalled: boolean;
   readonly mcpPath: string | null;
   readonly mcpVersion: string | null;
@@ -50,6 +63,19 @@ export type StradaDepInstallSource =
   | "configured-path"
   | "sibling-checkout"
   | "global-install";
+
+export interface StradaFrameworkCheckout {
+  readonly path: string;
+  readonly source: "configured-path" | "sibling-checkout";
+  readonly version: string | null;
+  /** Short HEAD commit, or null when the folder is not a git checkout. */
+  readonly commit: string | null;
+}
+
+export interface StradaDepsCheckOptions {
+  /** This install's root; the sibling checkouts are looked for next to it. */
+  readonly installRoot?: string;
+}
 
 export interface McpRecommendation {
   readonly recommended: boolean;
@@ -79,6 +105,10 @@ export interface StradaMcpInstall {
 
 const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core", "Submodules/Strada.Core"] as const;
 const MODULES_NAMES = ["strada.modules", "com.strada.modules", "Strada.Modules", "Submodules/Strada.Modules"] as const;
+const FRAMEWORK_CHECKOUTS = {
+  core: { label: "Strada.Core", dir: "Strada.Core", packageName: "com.strada.core", env: "STRADA_CORE_PATH" },
+  modules: { label: "Strada.Modules", dir: "Strada.Modules", packageName: "com.strada.modules", env: "STRADA_MODULES_PATH" },
+} as const;
 const STRADA_MCP_PACKAGE_NAME = "strada-mcp";
 const DEFAULT_STRADA_DEPENDENCY_CONFIG: StradaDependencyConfig = {
   coreRepoUrl: DEFAULT_STRADA_CORE_REPO_URL,
@@ -126,6 +156,8 @@ function resolveStradaDependencyConfig(
   config?: Partial<StradaDependencyConfig>,
 ): StradaDependencyConfig {
   const mcpPath = config?.mcpPath?.trim();
+  const corePath = config?.corePath?.trim();
+  const modulesPath = config?.modulesPath?.trim();
   return {
     coreRepoUrl: config?.coreRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.coreRepoUrl,
     modulesRepoUrl: config?.modulesRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.modulesRepoUrl,
@@ -138,7 +170,69 @@ function resolveStradaDependencyConfig(
     mcpRepoUrl: config?.mcpRepoUrl ?? DEFAULT_STRADA_DEPENDENCY_CONFIG.mcpRepoUrl,
     ...(mcpPath ? { mcpPath } : {}),
     ...(config?.mcpAllowProjectLocal === true ? { mcpAllowProjectLocal: true } : {}),
+    ...(corePath ? { corePath } : {}),
+    ...(modulesPath ? { modulesPath } : {}),
   };
+}
+
+/** This install's root: the sibling checkouts live next to it. */
+function defaultInstallRoot(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+/**
+ * The upstream checkout of Strada.Core or Strada.Modules outside the project:
+ * the configured path first, then `<installRoot>/../Strada.{Core,Modules}`.
+ * A folder counts only when its package.json names the package, so an
+ * unrelated directory of the same name is not taken for it.
+ */
+function findFrameworkCheckout(
+  kind: keyof typeof FRAMEWORK_CHECKOUTS,
+  configuredPath: string | undefined,
+  installRoot: string,
+): StradaFrameworkCheckout | null {
+  const spec = FRAMEWORK_CHECKOUTS[kind];
+  const candidates: Array<[string, StradaFrameworkCheckout["source"]]> = [
+    ...(configuredPath ? [[resolvePath(configuredPath), "configured-path"] as [string, StradaFrameworkCheckout["source"]]] : []),
+    [resolvePath(installRoot, "..", spec.dir), "sibling-checkout"],
+  ];
+  for (const [path, source] of candidates) {
+    const metadata = readPackageMetadata(join(path, "package.json"));
+    if (metadata?.name !== spec.packageName) continue;
+    return { path, source, version: metadata.version ?? null, commit: readCheckoutCommit(path) };
+  }
+  return null;
+}
+
+/** Short HEAD of a checkout's own repository; null when it has none. */
+function readCheckoutCommit(dir: string): string | null {
+  // Without its own .git, rev-parse answers for whatever repository encloses it.
+  if (!existsSync(join(dir, ".git"))) return null;
+  try {
+    const sha = execFileSync("git", ["-C", dir, "rev-parse", "--short=7", "HEAD"], {
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return /^[0-9a-f]{7,40}$/u.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * "Strada.Modules: available (sibling 9033fc7), not installed in the project
+ * — checkout at …". One wording for the boot log, the doctor, the boot report
+ * and the prompt, so the four cannot tell the same state differently.
+ */
+export function describeFrameworkCheckout(
+  kind: keyof typeof FRAMEWORK_CHECKOUTS,
+  checkout: StradaFrameworkCheckout,
+): string {
+  const spec = FRAMEWORK_CHECKOUTS[kind];
+  const origin = checkout.source === "configured-path" ? spec.env : "sibling";
+  const commit = checkout.commit ? ` ${checkout.commit}` : ", not a git checkout";
+  return `${spec.label}: available (${origin}${commit}), not installed in the project — checkout at ${checkout.path}`;
 }
 
 export interface StradaMcpLoadTrust {
@@ -202,11 +296,23 @@ function isWithinDirectory(root: string, candidate: string): boolean {
 export function checkStradaDeps(
   unityProjectPath: string,
   config?: Partial<StradaDependencyConfig>,
+  options?: StradaDepsCheckOptions,
 ): StradaDepsStatus {
   const resolvedConfig = resolveStradaDependencyConfig(config);
   const warnings: string[] = [];
   const packagesDir = join(unityProjectPath, "Packages");
   const configuredMcpPath = resolvedConfig.mcpPath;
+  const installRoot = options?.installRoot ?? defaultInstallRoot();
+  const coreCheckout = findFrameworkCheckout("core", resolvedConfig.corePath, installRoot);
+  const modulesCheckout = findFrameworkCheckout("modules", resolvedConfig.modulesPath, installRoot);
+  for (const [name, configured, found] of [
+    ["STRADA_CORE_PATH", resolvedConfig.corePath, coreCheckout],
+    ["STRADA_MODULES_PATH", resolvedConfig.modulesPath, modulesCheckout],
+  ] as const) {
+    if (configured && found?.source !== "configured-path") {
+      warnings.push(`Configured ${name} (${configured}) is not a checkout of the package it names`);
+    }
+  }
 
   let packagesExists = false;
   try { packagesExists = existsSync(packagesDir) && statSync(packagesDir).isDirectory(); } catch { /* TOCTOU safe */ }
@@ -215,6 +321,8 @@ export function checkStradaDeps(
     if (configuredMcpPath && !readStradaMcpInstall(configuredMcpPath)) {
       warnings.push("Configured STRADA_MCP_PATH is not a valid Strada.MCP package root");
     }
+    if (coreCheckout) warnings.push(describeFrameworkCheckout("core", coreCheckout));
+    if (modulesCheckout) warnings.push(describeFrameworkCheckout("modules", modulesCheckout));
     const mcp = detectStradaMcp(resolvedConfig, unityProjectPath);
     return {
       coreInstalled: false,
@@ -225,6 +333,8 @@ export function checkStradaDeps(
       modulesPath: null,
       modulesVersion: null,
       modulesSource: null,
+      coreCheckout,
+      modulesCheckout,
       mcpInstalled: mcp.installed,
       mcpPath: mcp.path,
       mcpVersion: mcp.version,
@@ -248,26 +358,34 @@ export function checkStradaDeps(
   const modulesVersion = modulesPath ? readPackageVersion(modulesPath) : null;
   const coreIncomplete = coreInstalled ? null : (coreDir.incomplete ?? coreRef.incomplete);
   const modulesIncomplete = modulesInstalled ? null : (modulesDir.incomplete ?? modulesRef.incomplete);
+  const coreUnreferenced = coreInstalled ? null : coreDir.unreferenced;
+  const modulesUnreferenced = modulesInstalled ? null : modulesDir.unreferenced;
 
   if (coreIncomplete) {
     warnings.push(
       `Strada.Core checkout is incomplete: ${coreIncomplete}. Run \`${SUBMODULE_INIT_COMMAND}\` in the Unity project to finish it.`,
     );
+  } else if (coreUnreferenced) {
+    warnings.push(`Strada.Core is not installed: ${coreUnreferenced}.`);
   } else if (!coreInstalled) {
     warnings.push(
       `Strada.Core not found. Searched: ${CORE_NAMES.join(", ")} in Packages/ and manifest.json`,
     );
   }
+  if (!coreInstalled && coreCheckout) warnings.push(describeFrameworkCheckout("core", coreCheckout));
 
   if (modulesIncomplete) {
     warnings.push(
       `Strada.Modules checkout is incomplete: ${modulesIncomplete}. Run \`${SUBMODULE_INIT_COMMAND}\` in the Unity project to finish it.`,
     );
-  } else if (!modulesInstalled) {
+  } else if (modulesUnreferenced) {
+    warnings.push(`Strada.Modules is not installed: ${modulesUnreferenced}.`);
+  } else if (!modulesInstalled && !modulesCheckout) {
     warnings.push(
       "Strada.Modules not installed (optional). Module-specific APIs will not be available.",
     );
   }
+  if (!modulesInstalled && modulesCheckout) warnings.push(describeFrameworkCheckout("modules", modulesCheckout));
 
   // Detect Strada.MCP (Node.js tool, not a Unity package)
   if (configuredMcpPath && !readStradaMcpInstall(configuredMcpPath)) {
@@ -286,6 +404,10 @@ export function checkStradaDeps(
     modulesVersion,
     modulesSource: modulesDir.path ? "package-directory" : modulesRef.installed ? "manifest" : null,
     modulesIncomplete,
+    coreUnreferenced,
+    modulesUnreferenced,
+    coreCheckout,
+    modulesCheckout,
     mcpInstalled: mcp.installed,
     mcpPath: mcp.path,
     mcpVersion: mcp.version,
@@ -523,22 +645,36 @@ function readPackageVersion(packagePath: string): string | null {
   return readPackageMetadata(join(packagePath, "package.json"))?.version ?? null;
 }
 
-/** A package directory under Packages/, or the directory found there that is not one yet. */
+/**
+ * A package Unity loads from Packages/ without a manifest line, or what was
+ * found there instead.
+ *
+ * Unity loads a package folder directly under Packages/ (an embedded
+ * package) by itself. One nested deeper, as Packages/Submodules/<name> is,
+ * loads only through a manifest `file:` reference, which checkManifest
+ * judges; found alone it is reported as `unreferenced`, never as installed.
+ */
 function findPackage(
   packagesDir: string,
   names: readonly string[],
-): { path: string | null; incomplete: string | null } {
+): { path: string | null; incomplete: string | null; unreferenced: string | null } {
   let incomplete: string | null = null;
+  let unreferenced: string | null = null;
   for (const name of names) {
     const candidate = join(packagesDir, name);
     try {
       if (existsSync(candidate) && statSync(candidate).isDirectory()) {
-        if (!isIncompleteCheckout(candidate)) return { path: candidate, incomplete: null };
-        incomplete ??= `${candidate} exists but holds no package.json (a submodule that was never checked out)`;
+        if (isIncompleteCheckout(candidate)) {
+          incomplete ??= `${candidate} exists but holds no package.json (a submodule that was never checked out)`;
+        } else if (!name.includes("/")) {
+          return { path: candidate, incomplete: null, unreferenced: null };
+        } else {
+          unreferenced ??= `${candidate} holds the package, but Packages/manifest.json does not reference it, so Unity does not load it`;
+        }
       }
     } catch { /* TOCTOU: directory removed between existsSync and statSync */ }
   }
-  return { path: null, incomplete };
+  return { path: null, incomplete, unreferenced };
 }
 
 interface ManifestRef {
@@ -989,6 +1125,11 @@ function evaluatePackageRow(
   source: StradaDepInstallSource | null | undefined,
   scanned = true,
   incomplete: string | null = null,
+  found: {
+    readonly kind?: keyof typeof FRAMEWORK_CHECKOUTS;
+    readonly unreferenced?: string | null;
+    readonly checkout?: StradaFrameworkCheckout | null;
+  } = {},
 ): ProjectMatrixRow {
   // NOTHING WAS LOOKED AT (Codex round 12 #27). With no project configured
   // there is no Packages/ to search, so reporting the package "missing"
@@ -1016,6 +1157,26 @@ function evaluatePackageRow(
       status: "missing",
       detail: `${spec.label} is not installed — its checkout is incomplete: ${incomplete}. Without it, ${spec.withoutIt}.`,
       fix: `Run \`${SUBMODULE_INIT_COMMAND}\` in the Unity project to finish the checkout, or restore the package the manifest points at.`,
+    };
+  }
+  // Present, or available next door, is not installed — but it is not "not
+  // found" either, and the fix differs: a manifest line, or an install from
+  // the checkout already on this machine.
+  if (!installed && (found.unreferenced || (found.kind && found.checkout))) {
+    const parts = [
+      found.unreferenced ? `${spec.label} is not installed: ${found.unreferenced}.` : "",
+      found.kind && found.checkout ? `${describeFrameworkCheckout(found.kind, found.checkout)}.` : "",
+    ].filter(Boolean);
+    const manifest = found.kind ? DEP_MANIFEST_ENTRIES[found.kind] : null;
+    return {
+      id: spec.id,
+      label: spec.label,
+      requirement: spec.requirement,
+      status: "missing",
+      detail: `${parts.join(" ")} Without it, ${spec.withoutIt}.`,
+      fix: manifest
+        ? `Install it under ${TARGET_PATHS[found.kind!]} (git submodule) and add "${manifest.name}": "${manifest.reference}" to Packages/manifest.json; its package.json lists the packages it needs in turn.`
+        : `Add ${spec.label} to the Unity project (git submodule under Packages/Submodules + a Packages/manifest.json dependency).`,
     };
   }
   if (!installed) {
@@ -1232,8 +1393,16 @@ export function evaluateProjectSupport(opts: ProjectSupportOptions): ProjectSupp
 
   const rows: ProjectMatrixRow[] = [
     ...projectRows,
-    evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource, scanned, deps.coreIncomplete ?? null),
-    evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource, scanned, deps.modulesIncomplete ?? null),
+    evaluatePackageRow(core, deps.coreInstalled, deps.corePath, deps.coreVersion, deps.coreSource, scanned, deps.coreIncomplete ?? null, {
+      kind: "core",
+      unreferenced: deps.coreUnreferenced,
+      checkout: deps.coreCheckout,
+    }),
+    evaluatePackageRow(modules, deps.modulesInstalled, deps.modulesPath, deps.modulesVersion, deps.modulesSource, scanned, deps.modulesIncomplete ?? null, {
+      kind: "modules",
+      unreferenced: deps.modulesUnreferenced,
+      checkout: deps.modulesCheckout,
+    }),
     evaluatePackageRow(mcp, deps.mcpInstalled, deps.mcpPath, deps.mcpVersion, deps.mcpSource, scanned),
     ...(scanned
       ? [

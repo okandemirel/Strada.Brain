@@ -72,6 +72,8 @@ describe("loadConfig", () => {
     delete process.env["STRADA_MODULES_REPO_URL"];
     delete process.env["STRADA_MCP_PATH"];
     delete process.env["STRADA_MCP_ALLOW_PROJECT_LOCAL"];
+    delete process.env["STRADA_CORE_PATH"];
+    delete process.env["STRADA_MODULES_PATH"];
     delete process.env["LOG_LEVEL"];
     delete process.env["LOG_FILE"];
     // Clear unified memory env vars. The worker setup points both database
@@ -718,6 +720,20 @@ describe("loadConfig", () => {
     setEnv({ STRADA_MCP_ALLOW_PROJECT_LOCAL: "true" });
     expect(loadConfig().strada.mcpAllowProjectLocal).toBe(true);
     delete process.env["STRADA_MCP_ALLOW_PROJECT_LOCAL"];
+  });
+
+  it("reads STRADA_CORE_PATH and STRADA_MODULES_PATH into the dependency config (WP-1.2)", () => {
+    // Only the offline sync CLI read these, so the daemon never looked at the
+    // checkouts an operator pointed it at.
+    setEnv({ STRADA_CORE_PATH: undefined, STRADA_MODULES_PATH: undefined });
+    expect(loadConfig().strada.corePath).toBeUndefined();
+    expect(loadConfig().strada.modulesPath).toBeUndefined();
+    resetConfigCache();
+    setEnv({ STRADA_CORE_PATH: "/work/Strada.Core", STRADA_MODULES_PATH: "/work/Strada.Modules" });
+    expect(loadConfig().strada.corePath).toBe("/work/Strada.Core");
+    expect(loadConfig().strada.modulesPath).toBe("/work/Strada.Modules");
+    delete process.env["STRADA_CORE_PATH"];
+    delete process.env["STRADA_MODULES_PATH"];
   });
 
   it("caches config on subsequent calls", () => {

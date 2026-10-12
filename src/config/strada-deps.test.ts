@@ -252,6 +252,151 @@ describe("checkStradaDeps", () => {
   });
 });
 
+/**
+ * WP-1.2: the framework checkouts an operator keeps next to this install.
+ *
+ * Only Strada.MCP was ever looked for beside the install; a Strada.Core or
+ * Strada.Modules checkout there was invisible, so the project read "not
+ * installed" with no word about the copy one directory away, and a package
+ * folder Unity never loads read "installed".
+ */
+describe("framework checkouts beside this install (WP-1.2)", () => {
+  let root: string;
+  let installRoot: string;
+  let projectDir: string;
+
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "t",
+        GIT_AUTHOR_EMAIL: "t@example.invalid",
+        GIT_COMMITTER_NAME: "t",
+        GIT_COMMITTER_EMAIL: "t@example.invalid",
+      },
+    }).trim();
+
+  /** A package checkout at `<root>/<name>`, committed; returns its path and short head. */
+  const checkout = (name: string, packageName: string, version: string): { dir: string; commit: string } => {
+    const dir = join(root, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: packageName, version }));
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "init");
+    return { dir, commit: git(dir, "rev-parse", "--short=7", "HEAD") };
+  };
+
+  beforeEach(() => {
+    root = join(tmpdir(), `strada-checkouts-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    installRoot = join(root, "Strada.Brain");
+    projectDir = join(root, "Game");
+    mkdirSync(installRoot, { recursive: true });
+    mkdirSync(join(projectDir, "Packages"), { recursive: true });
+    writeFileSync(join(projectDir, "Packages", "manifest.json"), JSON.stringify({ dependencies: {} }));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("finds Strada.Core and Strada.Modules checkouts next to the install and names their commit", () => {
+    const core = checkout("Strada.Core", "com.strada.core", "2.0.0");
+    const modules = checkout("Strada.Modules", "com.strada.modules", "1.0.0");
+
+    const result = checkStradaDeps(projectDir, TEST_STRADA_CONFIG, { installRoot });
+
+    expect(result.modulesInstalled).toBe(false);
+    expect(result.modulesCheckout).toEqual({
+      path: modules.dir,
+      source: "sibling-checkout",
+      version: "1.0.0",
+      commit: modules.commit,
+    });
+    expect(result.coreCheckout).toMatchObject({ path: core.dir, source: "sibling-checkout", commit: core.commit });
+    // "Not installed" and "available here, not installed" are different
+    // answers with different fixes.
+    const warnings = result.warnings.join("\n");
+    expect(warnings).toContain(`Strada.Modules: available (sibling ${modules.commit}), not installed in the project`);
+    expect(warnings).not.toContain("Strada.Modules not installed (optional)");
+  });
+
+  it("prefers STRADA_CORE_PATH / STRADA_MODULES_PATH over a sibling", () => {
+    checkout("Strada.Modules", "com.strada.modules", "1.0.0");
+    const pinned = checkout("pinned-modules", "com.strada.modules", "1.1.0");
+    const pinnedCore = checkout("pinned-core", "com.strada.core", "2.1.0");
+
+    const result = checkStradaDeps(
+      projectDir,
+      { ...TEST_STRADA_CONFIG, modulesPath: pinned.dir, corePath: pinnedCore.dir },
+      { installRoot },
+    );
+
+    expect(result.modulesCheckout).toMatchObject({ path: pinned.dir, source: "configured-path", version: "1.1.0" });
+    expect(result.coreCheckout).toMatchObject({ path: pinnedCore.dir, source: "configured-path" });
+    expect(result.warnings.join("\n")).toContain(
+      `available (STRADA_MODULES_PATH ${pinned.commit}), not installed in the project`,
+    );
+  });
+
+  it("does not take a sibling folder of the same name for the package it is not", () => {
+    checkout("Strada.Modules", "some-other-package", "1.0.0");
+
+    const result = checkStradaDeps(projectDir, TEST_STRADA_CONFIG, { installRoot });
+
+    expect(result.modulesCheckout ?? null).toBeNull();
+  });
+
+  it("does not count a package folder under Packages/Submodules that the manifest does not reference", () => {
+    // Unity loads a package nested under Packages/Submodules only through a
+    // manifest file: reference. Measured on an earlier project: an untracked
+    // Strada.Modules folder there read modules:true while Unity never compiled it.
+    const nested = join(projectDir, "Packages", "Submodules", "Strada.Modules");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "package.json"), JSON.stringify({ name: "com.strada.modules", version: "1.0.0" }));
+
+    const bare = checkStradaDeps(projectDir, TEST_STRADA_CONFIG, { installRoot });
+
+    expect(bare.modulesInstalled).toBe(false);
+    expect(bare.modulesSource).toBeNull();
+    expect(bare.warnings.join("\n")).toMatch(/Submodules[\\/]Strada\.Modules[\s\S]*manifest\.json does not reference it/);
+
+    writeFileSync(
+      join(projectDir, "Packages", "manifest.json"),
+      JSON.stringify({ dependencies: { "com.strada.modules": "file:Submodules/Strada.Modules" } }),
+    );
+    const referenced = checkStradaDeps(projectDir, TEST_STRADA_CONFIG, { installRoot });
+
+    expect(referenced.modulesInstalled).toBe(true);
+    expect(referenced.modulesPath).toBe(nested);
+  });
+
+  it("still counts an embedded package directly under Packages/ — Unity loads those without a manifest line", () => {
+    const embedded = join(projectDir, "Packages", "com.strada.core");
+    mkdirSync(embedded, { recursive: true });
+    writeFileSync(join(embedded, "package.json"), JSON.stringify({ name: "com.strada.core", version: "2.0.0" }));
+
+    const result = checkStradaDeps(projectDir, TEST_STRADA_CONFIG, { installRoot });
+
+    expect(result.coreInstalled).toBe(true);
+    expect(result.coreSource).toBe("package-directory");
+  });
+
+  it("says available-not-installed in the matrix row instead of a bare 'not found'", () => {
+    const modules = checkout("Strada.Modules", "com.strada.modules", "1.0.0");
+    const deps = checkStradaDeps(projectDir, TEST_STRADA_CONFIG, { installRoot });
+
+    const verdict = evaluateProjectSupport({ unityProjectPath: projectDir, deps });
+    const modulesRow = verdict.rows.find((r) => r.id === "strada-modules");
+
+    expect(modulesRow?.status).toBe("missing");
+    expect(modulesRow?.detail).toContain(`available (sibling ${modules.commit}), not installed in the project`);
+    expect(modulesRow?.detail).toContain(modules.dir);
+  });
+});
+
 describe("installStradaDep", () => {
   let testDir: string;
 

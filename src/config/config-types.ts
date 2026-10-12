@@ -95,6 +95,8 @@ export type EnvVarName =
   | "STRADA_MCP_REPO_URL"
   | "STRADA_MCP_PATH"
   | "STRADA_MCP_ALLOW_PROJECT_LOCAL"
+  | "STRADA_CORE_PATH"
+  | "STRADA_MODULES_PATH"
   | "OBSIDIAN_ENABLED"
   | "OBSIDIAN_API_URL"
   | "OBSIDIAN_API_KEY"
@@ -638,6 +640,14 @@ export interface StradaDependencyConfig {
    * project tree is agent-writable and arrives with cloned projects.
    */
   readonly mcpAllowProjectLocal?: boolean;
+  /**
+   * STRADA_CORE_PATH / STRADA_MODULES_PATH: an upstream checkout of the
+   * package, read before the sibling `<installRoot>/../Strada.{Core,Modules}`.
+   * Knowledge and install guidance only; it never counts as installed in the
+   * project, which is decided by what Unity loads.
+   */
+  readonly corePath?: string;
+  readonly modulesPath?: string;
   readonly unityBridgePort: number;
   readonly unityBridgeAutoConnect: boolean;
   readonly unityBridgeTimeout: number;
