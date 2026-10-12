@@ -10,10 +10,10 @@
  * fails a test below.
  */
 import { EventEmitter } from "node:events";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type * as winston from "winston";
 import { AcceptanceAuthor } from "../../campaign/acceptance-author.js";
 import type { CampaignManager } from "../../campaign/campaign-manager.js";
@@ -22,9 +22,17 @@ import type { AcceptanceSuiteRunner } from "../../campaign/scope-types.js";
 import type { Config } from "../../config/config.js";
 import { initializeTaskRuntimeStage } from "./stage-runtime.js";
 
-const cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) cleanup();
+const ROOT_PREFIX = "stage-scope-wiring-";
+const cleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => {
+  // Last in, first out: a root goes only after the manager holding its
+  // database has closed it — Windows will not remove an open SQLite file.
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
+// Every boot opens a real campaigns.db under its own temp root; the suite has
+// to take them all with it.
+afterAll(() => {
+  expect(readdirSync(tmpdir()).filter((name) => name.startsWith(ROOT_PREFIX))).toEqual([]);
 });
 
 function providerManager() {
@@ -47,7 +55,8 @@ async function boot(
   campaign: Config["campaign"] | undefined,
   options: { readonly registry?: ReturnType<typeof toolRegistry>; readonly streamingEnabled?: boolean } = {},
 ) {
-  const root = mkdtempSync(join(tmpdir(), "stage-scope-wiring-"));
+  const root = mkdtempSync(join(tmpdir(), ROOT_PREFIX));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   const providers = providerManager();
   const config = {
     unityProjectPath: root,
@@ -97,9 +106,11 @@ async function boot(
       createProgressReporter: vi.fn(),
     },
   );
-  cleanups.push(() => {
+  cleanups.push(async () => {
     result.realTreeGuardian?.stop();
-    result.campaignManager?.dispose();
+    // Awaited: dispose closes campaigns.db and waits out any probe the manager
+    // still has running in the root.
+    await result.campaignManager?.dispose();
   });
   // A campaign layer that failed to come up is logged and swallowed by the
   // stage; a wiring test that let that pass would be testing nothing.
