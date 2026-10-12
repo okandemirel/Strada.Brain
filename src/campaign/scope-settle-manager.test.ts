@@ -988,6 +988,27 @@ describe("the time box (scope gate on, W09)", () => {
     expect(m1.prompt).not.toMatch(/report precisely what remains/);
     expect(m1.prompt).toContain("time-box split 1");
   }, 60_000);
+
+  it("never splits the last planned milestone into one after it: its rows stay, half of them first", async () => {
+    const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Core Rules", "Screens"] }] };
+    const h = build("on", { ladder: ONE_RUNG, milestoneTimeBoxMs: 60_000, failing: () => true });
+    const campaign = await start(h);
+    const stored = h.storage.get(campaign.id)!;
+    stored.milestones[0]!.startedAtMs = Date.now() - 2 * 3_600_000;
+    h.storage.save(stored);
+    completeSprint(h, { status: "failed", error: "ran out of steps", result: "ran out of steps", key: "max_steps_reached" });
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.milestones[0]!.timeBoxEscalations).toBe(1), { timeout: 20_000 });
+    const now = h.storage.get(campaign.id)!;
+    const m1 = now.milestones[0]!;
+    // Still the delivery sprint: nothing was inserted after it, and it owns every row it owned.
+    expect(now.milestones.map((m) => m.id)).toEqual(["m1"]);
+    const owned = now.requirements!.rows.filter((r) => r.owner === "m1");
+    expect(owned.length).toBeGreaterThan(2);
+    expect(m1.prompt).toContain("EF-1");
+    expect(m1.prompt).toMatch(/stay with this sprint/);
+    expect(m1.prompt).not.toMatch(/report precisely what remains/);
+    expect(m1.prompt).not.toMatch(/time-box split/);
+  }, 60_000);
 });
 
 describe("the final milestone's missing proofs (W09)", () => {

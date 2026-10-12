@@ -3933,6 +3933,9 @@ export class CampaignManager {
         "(code + bound visual + its acceptance check passing) and commit:\n" +
         split.kept.map((row) => `- ${row.label ?? row.rid}: "${row.text.replace(/\s+/g, " ").trim().slice(0, 300)}"`).join("\n") +
         (split.moved.length > 0 ? `\nThe other ${split.moved.length} open row(s) moved to **${split.into}**, which runs next; leave them.` : "") +
+        (split.stayed.length > 0
+          ? `\nThe other ${split.stayed.length} open row(s) stay with this sprint — it is the last one, so no later sprint takes them — and come after these.`
+          : "") +
         "\nA smaller delivered increment beats another broad attempt."
       : `\n\nTIME BOX (${Math.round(elapsedMs / 3_600_000)}h elapsed, escalation ${escalations + 1}/2): this sprint has run far past its budget ` +
         "without landing green. NARROW THE SCOPE NOW: pick the single highest-value unmet requirement, " +
@@ -6615,19 +6618,24 @@ export class CampaignManager {
   /**
    * A milestone over its time box keeps half of its open rows, in GDD order,
    * and the rest move to a sprint split off from it, inserted right after it
-   * (GDD-drift W09 step 12). Undefined when the milestone owns no open row.
+   * (GDD-drift W09 step 12). The last planned milestone is not split: a
+   * sprint after it would become the delivery sprint, and it would settle as
+   * an ordinary one with no delivery gate. Its other open rows stay, after
+   * the kept ones. Undefined when the milestone owns no open row.
    */
   private splitTimeBox(
     campaign: Campaign,
     milestone: CampaignMilestone,
     escalation: number,
-  ): { kept: RequirementRow[]; moved: RequirementRow[]; into: string } | undefined {
+  ): { kept: RequirementRow[]; moved: RequirementRow[]; into: string; stayed: RequirementRow[] } | undefined {
     const ledger = campaign.requirements;
     const owned = this.scopeRowsOf(campaign, milestone).filter((r) => r.owner === milestone.id);
     if (ledger === undefined || owned.length === 0) return undefined;
     const { kept, moved } = timeBoxSplit(owned);
     if (kept.length === 0) return undefined;
-    if (moved.length === 0) return { kept, moved, into: "" };
+    const lastRung = campaign.currentMilestone >= campaign.milestones.length - 1;
+    if (lastRung) return { kept, moved: [], into: "", stayed: moved };
+    if (moved.length === 0) return { kept, moved, into: "", stayed: [] };
     let id = `${milestone.id}-tb${escalation}`;
     for (let n = 2; campaign.milestones.some((m) => m.id === id); n++) id = `${milestone.id}-tb${escalation}-${n}`;
     const atMs = Date.now();
@@ -6664,7 +6672,7 @@ export class CampaignManager {
       kept: kept.length,
       moved: moved.length,
     });
-    return { kept, moved, into: title };
+    return { kept, moved, into: title, stayed: [] };
   }
 
   /**
