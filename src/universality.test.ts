@@ -17,7 +17,9 @@
  * tests/fixtures/local/ (see src/tests/helpers/local-fixtures.ts):
  *   - vehicle-terms.txt: one case-insensitive regular expression per line
  *     (`#` starts a comment) — the vehicle's ordinary words, which a digest
- *     would leave to a dictionary, and the next vehicle's names;
+ *     would leave to a dictionary, and the next vehicle's names; found
+ *     however a name's parts are separated, so write them apart (`foo bar`
+ *     finds FooBar, foo_bar and foobar too; see compileTerms);
  *   - confidential-documents.txt: one absolute path per line — design
  *     documents whose wording no tracked file may quote.
  */
@@ -36,6 +38,7 @@ import {
   RollSet,
   rollingHits,
   termLines,
+  type VehicleTerms,
 } from "./tests/helpers/universality-scan.js";
 
 /**
@@ -84,7 +87,7 @@ function readText(file: string): string | undefined {
   return text.includes("\0") ? undefined : text;
 }
 
-function localTerms(): RegExp | undefined {
+function localTerms(): VehicleTerms | undefined {
   const path = localFixturePath("vehicle-terms.txt");
   return path ? compileTerms(readFileSync(path, "utf8")) : undefined;
 }
@@ -166,5 +169,52 @@ describe("universality: a passage is found through the syntax that wraps it", ()
 
   it("does not join the same words in another order into the passage", () => {
     expect(quotedLines('const rule =\n  "the brass hood before the tide " +\n  "Every lantern keeper polishes";\n', index)).toEqual([]);
+  });
+});
+
+/**
+ * Local terms, shown on invented ones: a name written apart, a name written
+ * together and anchored, and a regular expression with a space in it. The
+ * digests match a name on its letters and digits alone; a local term must
+ * not depend on how the name's parts are separated either.
+ */
+describe("universality: a local term is found however its parts are separated", () => {
+  const terms = compileTerms("# invented\nquill bright\n\\bmarrowfen\\b\n\\bsalt (wake|reach)\\b\n")!;
+
+  it.each([
+    "QuillBright",
+    "quillBright",
+    "quill_bright",
+    "QUILL_BRIGHT",
+    "quill-bright",
+    "quillbright",
+    "the Quill Bright banner",
+    "MarrowFen",
+    "marrowFen",
+    "Marrow_Fen",
+    "MARROW_FEN",
+    "marrow-fen",
+    "SaltWake",
+    "salt_reach",
+    "saltwake",
+  ])("%s", (name) => {
+    expect(termLines(`const x = 1;\nexport const label = ${JSON.stringify(name)};\n`, terms)).toEqual([2]);
+  });
+
+  it("across a wrapped comment and a string joint, on the line the name starts", () => {
+    expect(termLines("/**\n * the Quill\n * Bright banner\n */\n", terms)).toEqual([2]);
+    expect(termLines('const x = 1;\nconst title = "Quill " +\n  "Bright";\n', terms)).toEqual([2]);
+  });
+
+  it.each([
+    "the quill is bright",
+    'const kind = "quill";\nbright = true;',
+    "marrow fence",
+    "Marrow_Fence",
+    "marrowfens",
+    "salt water",
+    "SaltWater",
+  ])("not in %s", (text) => {
+    expect(termLines(text, terms)).toEqual([]);
   });
 });
