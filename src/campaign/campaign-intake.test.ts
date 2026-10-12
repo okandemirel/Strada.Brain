@@ -286,3 +286,32 @@ describe("a message that names the design document by its path", () => {
     ).toBeUndefined();
   });
 });
+
+/**
+ * The build verbs ended at an ASCII `\b`, which sees a boundary before every
+ * Turkish letter: "oyun yazılımı" (the game's software), "oyunu yapılandır"
+ * (configure the game) and "oyun yapısı" (its structure) all read as "make
+ * the game". A bug report past 40 characters drafted a new game, and an edit
+ * to one section of a named design built the whole game from it.
+ */
+describe("a Turkish word that only begins like a build verb", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it.each([
+    "docs/Quillmoor_GDD.md'deki oyun yazılımı bölümünü güncelle",
+    "Quillmoor_GDD.md'ye göre oyunu yapılandır",
+    "Oyun yapısını docs/mimari-notlar.md'deki gibi düzenle",
+    "Oyun yazılımında bir hata var, menüden çıkınca kilitleniyor, bakar mısın?",
+    "Oyun yapımı sürecini anlatan kısa bir not yazar mısın, ekibe göndereceğim?",
+  ])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it("…while the build verb itself, plain or polite, still is one", () => {
+    expect(detectCampaignIntent(msg("Bu oyunu yap: docs/Quillmoor_GDD.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/Quillmoor_GDD.md" });
+    expect(detectCampaignIntent(msg("Bu oyunu yapın: docs/Quillmoor_GDD.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/Quillmoor_GDD.md" });
+    const polite = "Şu oyunu yapınız: fener bekçisi her gece bir sokağı aydınlatır, sis aydınlanan sokaklardan çekilir.";
+    expect(detectCampaignIntent(msg(polite))).toEqual({ kind: "idea", ideaText: polite });
+  });
+});

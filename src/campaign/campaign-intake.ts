@@ -27,9 +27,17 @@ export type CampaignIntent =
   /** A document arrived with the request but no design could be read from it. */
   | { kind: "gdd-unreadable"; sourceName: string; reason: string };
 
-/** End-to-end build intent. Narrow verbs of whole-game creation, TR + EN. */
+/**
+ * End-to-end build intent. Narrow verbs of whole-game creation, TR + EN.
+ *
+ * Bounded by letters of BOTH languages: `\b` is ASCII, so it found a word end
+ * before every Turkish letter — "oyun yazılımı" (the game's software), "oyunu
+ * yapılandır" (configure the game) and "oyun yapısı" (its structure) were
+ * "make the game". The polite imperative "yapın" was matched only by that
+ * accident, and is named instead.
+ */
 const BUILD_INTENT_RE =
-  /\b(baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan|build\s+(this|the|a|my)\s+game|make\s+(this|the|a|my)\s+game|develop\s+(this|the|a|my)\s+game|oyunu?n?u?\s+(yap|yazar\s+mısın|geliştir|inşa\s+et|kodla)|oyun\s+(yap|geliştir|yaz|kodla))\b/i;
+  /(?<![\wçğıöşüÇĞİÖŞÜ])(baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan|build\s+(this|the|a|my)\s+game|make\s+(this|the|a|my)\s+game|develop\s+(this|the|a|my)\s+game|oyunu?n?u?\s+(yap(ın(ız)?)?|yazar\s+mısın|geliştir|inşa\s+et|kodla)|oyun\s+(yap|geliştir|yaz|kodla))(?![\wçğıöşüÇĞİÖŞÜ])/i;
 
 /**
  * A reference to a GDD (in docs/, or "the GDD" generally), INSIDE A NAME TOO:
