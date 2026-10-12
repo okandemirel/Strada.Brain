@@ -3280,6 +3280,87 @@ describe("CampaignManager", () => {
     expect(storage.get(campaign.id)!.state).toBe("executing");
   });
 
+  // git refuses an add whose :(exclude) pathspec names a folder the project
+  // ignores ("The following paths are ignored by one of your .gitignore
+  // files", exit 1). A project whose .gitignore listed .strada/ failed EVERY
+  // envelope commit, and each sprint's work stayed uncommitted in the tree; a
+  // stock Unity .gitignore did the same through Recordings/ once a capture ran.
+  describe("the envelope commit, whatever the project ignores", () => {
+    type Layout = { ignore: string; infoExclude?: string; strada: boolean; recordings: boolean; trackedBefore?: boolean };
+    const layouts: Array<[string, Layout]> = [
+      [".strada/ ignored, no Recordings/", { ignore: ".strada/\n", strada: true, recordings: false }],
+      [".strada/ ignored, Recordings/ not", { ignore: ".strada/\n", strada: true, recordings: true }],
+      ["both ignored", { ignore: ".strada/\nRecordings/\n", strada: true, recordings: true }],
+      ["only Recordings/ ignored", { ignore: "Recordings/\n", strada: true, recordings: true }],
+      // The line a stock Unity .gitignore carries for the Recorder's output.
+      ["Recordings/ ignored by a bracketed, anchored pattern", { ignore: "/[Rr]ecordings/\n", strada: true, recordings: true }],
+      ["both ignored by anchored patterns without a slash", { ignore: "/.strada\n/Recordings\n", strada: true, recordings: true }],
+      [".strada/ ignored through .git/info/exclude, not .gitignore", { ignore: "", infoExclude: ".strada/\n", strada: true, recordings: true }],
+      ["their contents ignored, not the folders", { ignore: ".strada/*\nRecordings/**\n", strada: true, recordings: true }],
+      ["nothing ignored", { ignore: "", strada: true, recordings: true }],
+      // .strada/ is on disk anyway: the envelope's own write lock lives there.
+      ["both ignored, the sprint wrote to neither", { ignore: ".strada/\nRecordings/\n", strada: false, recordings: false }],
+      ["both ignored after an earlier envelope tracked them", { ignore: ".strada/\nRecordings/\n", strada: true, recordings: true, trackedBefore: true }],
+    ];
+
+    it.each(layouts)("commits the sprint's work: %s", async (_name, layout) => {
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
+      const ledger = join(projectRoot, ".strada", "ledger.json");
+      const oldFrame = join(projectRoot, "Recordings", "old-run", "frame_0.png");
+      if (!layout.recordings) rmSync(join(projectRoot, "Recordings"), { recursive: true, force: true });
+      git("init", "-q");
+      git("config", "user.email", "test@test.local");
+      git("config", "user.name", "Test");
+      if (layout.infoExclude !== undefined) {
+        mkdirSync(join(projectRoot, ".git", "info"), { recursive: true });
+        writeFileSync(join(projectRoot, ".git", "info", "exclude"), layout.infoExclude);
+      }
+      if (layout.trackedBefore) {
+        mkdirSync(join(projectRoot, ".strada"), { recursive: true });
+        writeFileSync(ledger, "{\"v\":1}");
+        mkdirSync(join(projectRoot, "Recordings", "old-run"), { recursive: true });
+        writeFileSync(oldFrame, "x");
+        git("add", "-A");
+        git("commit", "-q", "-m", "an earlier envelope swept them in");
+      }
+      writeFileSync(join(projectRoot, ".gitignore"), layout.ignore);
+      git("add", "-A");
+      git("commit", "-q", "-m", "seed");
+
+      writeFileSync(join(projectRoot, "SprintWork.cs"), "class SprintWork {}");
+      if (layout.strada) {
+        mkdirSync(join(projectRoot, ".strada"), { recursive: true });
+        writeFileSync(ledger, "{\"v\":2}");
+      }
+      if (layout.recordings) {
+        mkdirSync(join(projectRoot, "Recordings", "this-run"), { recursive: true });
+        writeFileSync(join(projectRoot, "Recordings", "this-run", "frame_0.png"), "y");
+      }
+
+      const milestone = { id: "m1", title: "Sprint one", commits: [] as string[] };
+      const note = await (manager as unknown as {
+        commitMilestoneWork(campaign: unknown, milestone: unknown): Promise<string>;
+      }).commitMilestoneWork({ id: "c1", currentMilestone: 0, milestones: [milestone] }, milestone);
+
+      expect(note).toMatch(/^ Committed \d+ file\(s\) as `[0-9a-f]+`: .*SprintWork\.cs/);
+      expect(git("log", "-1", "--pretty=%s")).toContain("milestone green");
+      expect(git("show", "--name-only", "--format=", "HEAD")).toContain("SprintWork.cs");
+      expect(git("ls-files", "--", ".strada", "Recordings").trim()).toBe("");
+      expect(milestone.commits).toEqual([git("rev-parse", "HEAD").trim()]);
+      if (layout.recordings) {
+        // Excluded or ignored, a capture frame is never even hashed: the
+        // `rm --cached` after the add is not what keeps it out.
+        const blob = git("hash-object", "--", "Recordings/this-run/frame_0.png").trim();
+        expect(() => git("cat-file", "-e", blob)).toThrow();
+      }
+      if (layout.trackedBefore) {
+        expect(existsSync(ledger)).toBe(true); // untracked, never deleted
+        expect(existsSync(oldFrame)).toBe(true);
+      }
+    });
+  });
+
   it("appends a coverage-remediation sprint when the audit finds GDD gaps", async () => {
     // Isolated fixtures: the beforeEach manager stays subscribed to the shared
     // emitter, and two managers double-handling one campaign is not a

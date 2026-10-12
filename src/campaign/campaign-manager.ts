@@ -5768,10 +5768,30 @@ export class CampaignManager {
         .join("\n")
         .trim();
       if (dirty === "") return "";
-      git(["add", "-A", "--", ".", ":(exclude).strada", ":(exclude)Recordings"]);
-      const trackedSystemPaths = git(["ls-files", "--", ".strada", "Recordings"], 60_000).trim();
+      // git REFUSES an add whose :(exclude) names a folder the project
+      // ignores ("The following paths are ignored by one of your .gitignore
+      // files", exit 1), and .strada is always there (it holds the lock
+      // above): a project whose .gitignore listed .strada/ failed EVERY
+      // envelope commit. `add -A` never stages an ignored folder anyway, so
+      // only the ones git would pick up are excluded. --no-index: without it
+      // a folder holding files an earlier envelope tracked reads as not
+      // ignored, yet the add still refuses it (the `rm --cached` below
+      // untracks those files either way).
+      const systemPaths = [".strada", "Recordings"];
+      let ignored: string[] = [];
+      try {
+        ignored = git(["check-ignore", "--no-index", "--", ...systemPaths], 10_000)
+          .split("\n")
+          .map((line) => line.trim());
+      } catch {
+        // Exit 1 is "none ignored". Any other failure keeps every exclude —
+        // the add as it always was.
+      }
+      const excludes = systemPaths.filter((path) => !ignored.includes(path)).map((path) => `:(exclude)${path}`);
+      git(["add", "-A", "--", ".", ...excludes]);
+      const trackedSystemPaths = git(["ls-files", "--", ...systemPaths], 60_000).trim();
       if (trackedSystemPaths !== "") {
-        git(["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", ".strada", "Recordings"]);
+        git(["rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", ...systemPaths]);
         getLoggerSafe().info("Campaign envelope untracked the system's own paths", {
           id: campaign.id,
           files: trackedSystemPaths.split("\n").length,
