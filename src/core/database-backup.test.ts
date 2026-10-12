@@ -570,7 +570,9 @@ describe("data kept behind a symlinked directory (backup-receipt follow-up)", ()
       "memory:campaigns.db",
       "user-home:trusted-skills.db",
     ]);
-    expect(manifest.databases.find((d) => d.root === "user-home")?.links).toEqual([link]);
+    expect(manifest.databases.find((d) => d.root === "user-home")?.links).toEqual([
+      { root: "strada-home", relative: "trusted-skills.db", source: link },
+    ]);
     seedDatabase(real, 1).close();
     seedDatabase(path.join(memoryRoot, "campaigns.db"), 1).close();
 
@@ -590,12 +592,15 @@ describe("data kept behind a symlinked directory (backup-receipt follow-up)", ()
     await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
     const manifest = readBackupManifest(destDir);
     expect(manifest.databases.map((d) => `${d.root}:${d.relative}`)).toEqual(["memory:hub-owners.db"]);
-    expect(manifest.databases[0]?.links).toEqual([link]);
+    expect(manifest.databases[0]?.links).toEqual([
+      { root: "strada-home", relative: "hub-owners.db", source: link },
+    ]);
     seedDatabase(real, 2).close();
 
-    await restoreRuntimeData({ backupDir: destDir });
+    const result = await restoreRuntimeData({ backupDir: destDir });
     expect(countRows(real)).toBe(3);
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(result.links).toEqual([{ link, target: real, created: false }]);
   });
 
   it("restores an AgentDB file linked to another tree's even after the real file is gone, leaving the link a link", async () => {
@@ -606,8 +611,10 @@ describe("data kept behind a symlinked directory (backup-receipt follow-up)", ()
     seedDatabase(real, 5).close();
     symlinkSync(real, link);
     await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
-    expect(readBackupManifest(destDir).databases.map((d) => d.relative)).toEqual([
-      path.join("agents", "a1", "memory.db"),
+    const manifest = readBackupManifest(destDir);
+    expect(manifest.databases.map((d) => d.relative)).toEqual([path.join("agents", "a1", "memory.db")]);
+    expect(manifest.databases[0]?.links).toEqual([
+      { root: "memory", relative: path.join("agentdb", "memory.db"), source: link },
     ]);
     // Disaster recovery: the link dangles. Restoring it as a regular file would
     // leave two copies that drift apart once the real one is back.
@@ -617,6 +624,103 @@ describe("data kept behind a symlinked directory (backup-receipt follow-up)", ()
     expect(countRows(real)).toBe(5);
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
     expect(countRows(link)).toBe(5);
+  });
+
+  // The archive carries a linked file under its real name only, so the link is
+  // the manifest's to put back. Left out, the restore reported success with
+  // nothing at the path the runtime opens, and the runtime started an empty
+  // store there: every chat binding or every memory gone after a green restore.
+  describe("a linked file whose link is gone at restore time", () => {
+    /** hub-owners.db in the memory root, read by the runtime through the Strada home. */
+    async function backUpLinkedFile(): Promise<{ real: string; link: string }> {
+      const real = path.join(memoryRoot, "hub-owners.db");
+      const link = path.join(stradaHome, "hub-owners.db");
+      seedDatabase(real, 3).close();
+      symlinkSync(real, link);
+      await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+      return { real, link };
+    }
+
+    it.each([
+      ["both roots are wiped", () => {
+        rmSync(memoryRoot, { recursive: true, force: true });
+        rmSync(stradaHome, { recursive: true, force: true });
+      }],
+      ["only the link is removed", () => {
+        rmSync(path.join(stradaHome, "hub-owners.db"));
+        seedDatabase(path.join(memoryRoot, "hub-owners.db"), 4).close();
+      }],
+    ])("puts the link back when %s", async (_case, disaster) => {
+      const { real, link } = await backUpLinkedFile();
+      disaster();
+
+      const result = await restoreRuntimeData({ backupDir: destDir });
+      expect(countRows(real)).toBe(3);
+      expect(lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()).toBe(true);
+      expect(countRows(link)).toBe(3);
+      expect(result.links).toEqual([{ link, target: real, created: true }]);
+    });
+
+    it("puts the link inside the roots the restore is redirected to", async () => {
+      await backUpLinkedFile();
+      const machine = path.join(root, "new-machine");
+      const roots = { memory: path.join(machine, "memory"), "strada-home": path.join(machine, "home") };
+
+      const result = await restoreRuntimeData({ backupDir: destDir, roots });
+      const real = path.join(roots.memory, "hub-owners.db");
+      const link = path.join(roots["strada-home"], "hub-owners.db");
+      expect(countRows(real)).toBe(3);
+      expect(lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()).toBe(true);
+      expect(countRows(link)).toBe(3);
+      expect(result.links).toEqual([{ link, target: real, created: true }]);
+    });
+
+    it("puts an AgentDB link back after the memory root is wiped", async () => {
+      const real = path.join(memoryRoot, "agents", "a1", "memory.db");
+      const link = path.join(memoryRoot, "agentdb", "memory.db");
+      mkdirSync(path.dirname(real), { recursive: true });
+      mkdirSync(path.dirname(link), { recursive: true });
+      seedDatabase(real, 5).close();
+      symlinkSync(real, link);
+      await backupRuntimeData({ ...defaultInstallation(), destDir, timestamp: "ts" });
+      rmSync(memoryRoot, { recursive: true, force: true });
+
+      await restoreRuntimeData({ backupDir: destDir });
+      expect(countRows(real)).toBe(5);
+      expect(lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()).toBe(true);
+      expect(countRows(link)).toBe(5);
+    });
+
+    it("refuses, replacing nothing, when a file of its own now sits where the link was", async () => {
+      const { real, link } = await backUpLinkedFile();
+      // The runtime started without the link and opened a store of its own there.
+      rmSync(link);
+      seedDatabase(link, 1).close();
+      seedDatabase(real, 4).close();
+
+      await expect(restoreRuntimeData({ backupDir: destDir })).rejects.toThrow(
+        /hub-owners\.db was a symbolic link to .* when it was backed up and is now a file/,
+      );
+      expect(countRows(real)).toBe(7);
+      expect(lstatSync(link).isFile()).toBe(true);
+      expect(countRows(link)).toBe(1);
+    });
+
+    it("rolls back the files and the links it made when a link cannot be put back", async () => {
+      const { real, link } = await backUpLinkedFile();
+      rmSync(link);
+      seedDatabase(real, 4).close();
+      // Two records of one link: the second cannot be created over the first,
+      // and the failure comes after every file is already in place.
+      const file = path.join(destDir, BACKUP_MANIFEST_FILE);
+      const manifest = JSON.parse(readFileSync(file, "utf8")) as Record<string, any>;
+      manifest.databases[0].links.push({ ...manifest.databases[0].links[0] });
+      writeFileSync(file, JSON.stringify(manifest));
+
+      await expect(restoreRuntimeData({ backupDir: destDir })).rejects.toThrow(/rolled back/);
+      expect(countRows(real)).toBe(7);
+      expect(lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
+    });
   });
 });
 
@@ -1380,13 +1484,35 @@ describe("a manifest that has been modified (round 12 #19)", () => {
     expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
   });
 
-  it("refuses an entry whose links are not a list of paths", async () => {
+  it.each([
+    ["not a list", "../../victim.db", /links is not a list/],
+    ["a bare path", ["../../victim.db"], /links\[0\] is not an object/],
+    ["a link without a root", [{ relative: "victim.db", source: "/victim.db" }], /links\[0\]\.root/],
+    ["a link that climbs out of its root", [{ root: "memory", relative: "../../victim.db", source: "/v" }], /links\[0\]\.relative .* climbs/],
+  ])("refuses an entry whose links are %s", async (_case, links, refusal) => {
     await backupAndDiverge();
     tamperManifest((m) => {
-      m.databases[0].links = [{ escape: "../../victim" }];
+      m.databases[0].links = links;
     });
 
-    expect(() => readBackupManifest(destDir)).toThrow(/links\[0\]/);
+    expect(() => readBackupManifest(destDir)).toThrow(refusal);
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(refusal);
+    expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
+  });
+
+  it("refuses a link reached through a symlink out of its root, writing nothing there", async () => {
+    await backupAndDiverge();
+    const elsewhere = path.join(root, "elsewhere");
+    mkdirSync(elsewhere, { recursive: true });
+    symlinkSync(elsewhere, path.join(stradaHome, "sub"));
+    tamperManifest((m) => {
+      m.databases[0].links = [
+        { root: "strada-home", relative: path.join("sub", "memory.db"), source: "/anywhere" },
+      ];
+    });
+
+    await expect(restoreRuntimeDatabases({ backupDir: destDir })).rejects.toThrow(/outside the root/);
+    expect(readdirSync(elsewhere)).toEqual([]);
     expect(countRows(path.join(memoryRoot, "memory.db"))).toBe(12);
   });
 

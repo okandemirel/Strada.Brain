@@ -78,10 +78,12 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
@@ -319,7 +321,7 @@ export interface RuntimeDatabaseFile {
   /** Path within the root — the filename, and the restore's relative target. */
   readonly relative: string;
   /** Inventoried spellings that are symbolic links to this file ({@link foldFileLinks}). */
-  readonly links?: readonly string[];
+  readonly links?: readonly BackupLinkEntry[];
 }
 
 /**
@@ -357,9 +359,10 @@ export function inventoryRuntimeDatabases(opts: RuntimeDatabaseOptions): Runtime
  * as naming one file twice, after the backup had reported success; kept as
  * the link's entry the restore replaced the link with a regular file and left
  * the target stale. The target's entry restores the bytes where they live, and
- * the link, which no entry names, still reaches them. Matched on the target's
- * inode, the key the restore's duplicate check uses ({@link destinationKeys}).
- * A link to a file nothing else lists is left as it was.
+ * the link, which no entry names, still reaches them — or, when it is gone, is
+ * put back from the entry's `links`. Matched on the target's inode, the key the
+ * restore's duplicate check uses ({@link destinationKeys}). A link to a file
+ * nothing else lists is left as it was.
  */
 function foldFileLinks(files: readonly RuntimeDatabaseFile[]): RuntimeDatabaseFile[] {
   const inodeKey = (stat: { dev: bigint; ino: bigint }): string => `${stat.dev}:${stat.ino}`;
@@ -374,12 +377,13 @@ function foldFileLinks(files: readonly RuntimeDatabaseFile[]): RuntimeDatabaseFi
       // Gone or dangling: left as listed, for the copy to report by name.
     }
   }
-  const links = new Map<RuntimeDatabaseFile, string[]>();
+  const links = new Map<RuntimeDatabaseFile, BackupLinkEntry[]>();
   const kept = files.filter((file) => {
     const key = linked.get(file);
     const target = key === undefined ? undefined : regular.get(key);
     if (target === undefined) return true;
-    links.set(target, [...(links.get(target) ?? []), file.source]);
+    const link = { root: file.root, relative: file.relative, source: file.source };
+    links.set(target, [...(links.get(target) ?? []), link]);
     return false;
   });
   return kept.map((file) => {
@@ -708,11 +712,22 @@ export interface BackupManifestEntry {
   readonly backup: string;
   readonly bytes: number;
   /**
-   * Absolute paths that were symbolic links to this file when it was backed
-   * up. Carried by this entry instead of one of their own; the restore writes
-   * the file and leaves them links.
+   * Symbolic links to this file when it was backed up, carried by this entry
+   * instead of one of their own. The runtime may read the file only through
+   * one of them, so the restore puts a missing one back.
    */
-  readonly links?: readonly string[];
+  readonly links?: readonly BackupLinkEntry[];
+}
+
+/**
+ * A symbolic link to a backed-up database, placed like an entry (root, path
+ * within it) so a restore into other roots puts it beside the file it names.
+ */
+export interface BackupLinkEntry {
+  readonly root: string;
+  readonly relative: string;
+  /** The absolute path the link had. */
+  readonly source: string;
 }
 
 /** One retained blob in the backup: bytes a row names, and their digest. */
@@ -1109,9 +1124,17 @@ export function readBackupManifest(backupDir: string): BackupManifest {
     if (entry.links !== undefined && !Array.isArray(entry.links)) {
       throw new Error(`${where}: links is not a list`);
     }
-    const links = (entry.links as unknown[] | undefined)?.map((link, j) =>
-      manifestString(link, `links[${j}]`, where),
-    );
+    const links = (entry.links as unknown[] | undefined)?.map((raw, j): BackupLinkEntry => {
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        throw new Error(`${where}: links[${j}] is not an object`);
+      }
+      const link = raw as Record<string, unknown>;
+      return {
+        root: manifestString(link.root, `links[${j}].root`, where),
+        relative: manifestRelative(link.relative, `links[${j}].relative`, where, "the root it belongs to"),
+        source: manifestString(link.source, `links[${j}].source`, where),
+      };
+    });
     return {
       root: manifestString(entry.root, "root", where),
       relative: manifestRelative(entry.relative, "relative", where, "the root it belongs to"),
@@ -1494,6 +1517,55 @@ export interface RestoreRunOptions {
 export interface RestoreRunResult {
   readonly databases: DatabaseBackupResult[];
   readonly blobs: BlobBackupResult[];
+  /** The manifest's links to restored databases, and which ones it recreated. */
+  readonly links: RestoredLinkResult[];
+}
+
+/** A link a restored database is read through. */
+export interface RestoredLinkResult {
+  readonly link: string;
+  /** The restored database it leads to. */
+  readonly target: string;
+  /** False when the link was already there and already led to it. */
+  readonly created: boolean;
+}
+
+/** A recorded link to a planned database, resolved and checked like a destination. */
+interface RestoreLinkPlan {
+  readonly item: RestorePlanItem;
+  /** Where the link goes, inside its own root. */
+  readonly target: string;
+  /** Already there and leading to {@link item}'s destination: left alone. */
+  readonly present: boolean;
+}
+
+/**
+ * Does the symbolic link `link` lead to the path `canonical` names?
+ *
+ * Followed hop by hop as paths, never by opening the end: the file it must
+ * reach may be the one the restore is about to put back, so a dangling link
+ * aimed at it is correct and one that resolves to some other file is not.
+ */
+function linkLeadsTo(link: string, canonical: string): boolean {
+  let at = link;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let text: string;
+    try {
+      text = readlinkSync(at);
+    } catch {
+      return false;
+    }
+    const next = path.resolve(realPathAsFarAsItExists(path.dirname(at)), text);
+    const key = path.join(realPathAsFarAsItExists(path.dirname(next)), path.basename(next));
+    if (
+      key === canonical ||
+      (directoryIsCaseInsensitive(path.dirname(key)) && key.toLowerCase() === canonical.toLowerCase())
+    ) {
+      return true;
+    }
+    at = next;
+  }
+  return false;
 }
 
 /** One thing to put back, resolved and checked before anything is touched. */
@@ -1767,6 +1839,40 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
     return { file: resolved.target };
   };
 
+  /**
+   * A link the backup folded into its file's entry ({@link foldFileLinks}),
+   * resolved like a destination: the manifest that names it is untrusted.
+   *
+   * The runtime may open the database only through it, so restoring the file
+   * without it exited 0 with nothing at the path the runtime reads — after a
+   * bare-metal restore, a rebuilt Strada home, or a restore into other roots.
+   * Missing, it is put back; already leading to the file, it is left alone;
+   * anything else there is refused, because replacing it would destroy a file
+   * the archive never held and keeping it would leave the restored rows unread.
+   */
+  const planLink = (item: RestorePlanItem, link: BackupLinkEntry): RestoreLinkPlan | { problem: string } => {
+    const rootPath = rootPathFor(link.root);
+    if (rootPath === undefined) {
+      return { problem: `${BACKUP_MANIFEST_FILE} names no directory for root "${link.root}"` };
+    }
+    const placed = placeInside(link.root, rootPath, link.relative);
+    if ("problem" in placed) {
+      return { problem: `the link ${link.relative} in root "${link.root}" (to ${item.target}) ${placed.problem}` };
+    }
+    const leaf = lstatSync(placed.target, { throwIfNoEntry: false });
+    if (leaf === undefined) return { item, target: placed.target, present: false };
+    if (leaf.isSymbolicLink() && linkLeadsTo(placed.target, item.canonical)) {
+      return { item, target: placed.target, present: true };
+    }
+    const now = leaf.isSymbolicLink() ? "a link to somewhere else" : leaf.isDirectory() ? "a directory" : "a file";
+    return {
+      problem:
+        `${placed.target} was a symbolic link to ${item.target} when it was backed up and is now ${now}; ` +
+        `the runtime reads that database through it — move it aside and restore again`,
+    };
+  };
+  const links: RestoreLinkPlan[] = [];
+
   for (const entry of manifest.databases) {
     const rootPath = rootPathFor(entry.root);
     if (rootPath === undefined) {
@@ -1788,7 +1894,7 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
       problems.push(`${entry.backup} (for ${placed.target}) ${problem}`);
       continue;
     }
-    items.push({
+    const item: RestorePlanItem = {
       kind: "database",
       root: entry.root,
       relative: entry.relative,
@@ -1797,7 +1903,13 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
       canonical: placed.canonical,
       rootPath,
       sourceRootPath: manifest.roots[entry.root] ?? rootPath,
-    });
+    };
+    items.push(item);
+    for (const link of entry.links ?? []) {
+      const planned = planLink(item, link);
+      if ("problem" in planned) problems.push(planned.problem);
+      else links.push(planned);
+    }
   }
   for (const entry of manifest.blobs ?? []) {
     const rootPath = rootPathFor(entry.root);
@@ -1908,7 +2020,7 @@ export async function restoreRuntimeData(opts: RestoreRunOptions): Promise<Resto
   }
   try {
     assertNothingAttached(items, opts);
-    return await replaceDestinations(items, opts);
+    return await replaceDestinations(items, links, opts);
   } finally {
     exclusion.release();
   }
@@ -1954,6 +2066,7 @@ function assertNothingAttached(
  */
 async function replaceDestinations(
   items: readonly RestorePlanItem[],
+  links: readonly RestoreLinkPlan[],
   opts: RestoreRunOptions,
 ): Promise<RestoreRunResult> {
   // Unique per run, and the same for every file of it, so a crash leaves
@@ -2014,9 +2127,17 @@ async function replaceDestinations(
   }
 
   const swaps: SwapRecord[] = [];
+  const createdLinks: string[] = [];
   /** Undo every swap made so far. Returns what could not be put back. */
   const rollback = (): string[] => {
     const unrecovered: string[] = [];
+    for (const link of [...createdLinks].reverse()) {
+      try {
+        rmSync(link, { force: true });
+      } catch (e) {
+        unrecovered.push(`${link} (${(e as Error).message})`);
+      }
+    }
     for (const record of [...swaps].reverse()) {
       if (record.placed) {
         try {
@@ -2064,6 +2185,14 @@ async function replaceDestinations(
       }
       renameSync(entry.path, entry.item.target);
       record.placed = true;
+    }
+    // Absolute, to the path just written: the link it replaces may have been
+    // relative to a tree that is not where this restore put the file.
+    for (const link of links) {
+      if (link.present) continue;
+      mkdirSync(path.dirname(link.target), { recursive: true });
+      symlinkSync(link.item.target, link.target, "file");
+      createdLinks.push(link.target);
     }
     // #18, the last window the checks above cannot cover: a connection that
     // opened a database between its own check and its own rename now holds the
@@ -2131,7 +2260,11 @@ async function replaceDestinations(
     if (entry.item.kind === "database") databases.push(common);
     else blobs.push({ ...common, sha256: entry.sha256 ?? "" });
   }
-  return { databases, blobs };
+  return {
+    databases,
+    blobs,
+    links: links.map((link) => ({ link: link.target, target: link.item.target, created: !link.present })),
+  };
 }
 
 /** The databases a restore put back — {@link restoreRuntimeData} does the whole job. */

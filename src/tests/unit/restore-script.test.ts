@@ -203,6 +203,29 @@ describe("scripts/restore.mjs", () => {
     expect(fs.existsSync(fixture.memoryDb)).toBe(false);
   });
 
+  it("puts back the link a database is read through after both roots are wiped, and says so", async () => {
+    const root = tempRoot();
+    const memoryRoot = path.join(root, "memory");
+    const stradaHome = path.join(root, "strada-home");
+    const backupDir = path.join(root, "backup");
+    const real = path.join(memoryRoot, "hub-owners.db");
+    const link = path.join(stradaHome, "hub-owners.db");
+    seed(real, [[1, "chat binding"]]);
+    fs.mkdirSync(stradaHome, { recursive: true });
+    fs.symlinkSync(real, link);
+    await backupRuntimeDatabases({ memoryRoot, stradaHome, userHome: path.join(root, "fake-home"), destDir: backupDir });
+    fs.rmSync(memoryRoot, { recursive: true, force: true });
+    fs.rmSync(stradaHome, { recursive: true, force: true });
+
+    const { code, output } = runRestore(["--backup-dir", backupDir, "--skip-checksums"]);
+
+    expect(code).toBe(0);
+    expect(output).toContain(`linked from ${link}`);
+    expect(output).toContain(`recreated link ${link} -> ${real}`);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(read(link)).toEqual([{ id: 1, payload: "chat binding" }]);
+  });
+
   it("--dry-run prints the plan and writes nothing", async () => {
     const fixture = await installationWithBackup();
     fs.rmSync(fixture.campaignsDb, { force: true });

@@ -306,6 +306,11 @@ async function main(argv) {
     for (const entry of manifest.databases) {
       const rootPath = roots[entry.root] ?? manifest.roots[entry.root];
       console.log(`restore: ${entry.backup} -> ${rootPath ? path.join(rootPath, entry.relative) : `? (no directory for root "${entry.root}")`}`);
+      // The runtime may read this database only through one of these links.
+      for (const link of entry.links ?? []) {
+        const linkRoot = roots[link.root] ?? manifest.roots[link.root];
+        console.log(`restore:   linked from ${linkRoot ? path.join(linkRoot, link.relative) : `? (no directory for root "${link.root}")`}`);
+      }
     }
 
     if (flags.dryRun) {
@@ -336,6 +341,9 @@ async function main(argv) {
     }
     for (const blob of outcome.blobs ?? []) {
       console.log(`restore: restored blob ${blob.restorePath ?? blob.destination} (${blob.bytes} bytes)`);
+    }
+    for (const link of outcome.links ?? []) {
+      console.log(`restore: ${link.created ? "recreated" : "kept"} link ${link.link} -> ${link.target}`);
     }
     const blobCount = (outcome.blobs ?? []).length;
     console.log(
