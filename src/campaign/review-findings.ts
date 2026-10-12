@@ -36,6 +36,13 @@ import type { RequirementLedger, RequirementRow } from "./scope-types.js";
 /** One review may add at most this many rows; a reviewer that lists the whole document is disclosed past it. */
 export const REVIEW_MAX_ADDED_ROWS = 10;
 
+/**
+ * One review may retire at most this many checks: each is a regeneration, and
+ * a reviewer that calls every check weak would otherwise reopen the whole
+ * ledger every round. Past it, a finding is disclosed and the check stays.
+ */
+export const REVIEW_MAX_REOPENED_ROWS = 10;
+
 export interface ReviewWeakCheck {
   readonly rid: string;
   readonly why: string;
@@ -203,6 +210,10 @@ export function applyReviewFindings(
     if (!row.checks.some((c) => c.kind === "test" && c.supersededAtMs === undefined)) {
       const retired = row.checks.some((c) => c.kind === "test" && c.weak !== undefined && c.supersededAtMs === options.atMs);
       disclosed.push(`${said} (${rowRef(row)}): it has no current system test${retired ? " (this review already retired it)" : ""}`);
+      continue;
+    }
+    if (reopened.length >= REVIEW_MAX_REOPENED_ROWS) {
+      disclosed.push(`${said} (${rowRef(row)}): past the ${REVIEW_MAX_REOPENED_ROWS} rows one review may reopen`);
       continue;
     }
     const why = clip(finding.why, 300) || "the independent review gave no reason";

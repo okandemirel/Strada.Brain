@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { encodeRequirement } from "./requirement-identity.js";
 import {
   REVIEW_MAX_ADDED_ROWS,
+  REVIEW_MAX_REOPENED_ROWS,
   applyReviewFindings,
   parseReviewFindings,
   reviewGateRecord,
@@ -252,6 +253,19 @@ describe("applyReviewFindings", () => {
       "KP-02 (§3) (stays check-fault) — asserts true",
       expect.stringMatching(/\(stays unmeasured\) — asserts true$/),
     ]);
+  });
+
+  it("one review reopens at most REVIEW_MAX_REOPENED_ROWS rows; the rest are disclosed and keep their test", () => {
+    const towns = Array.from({ length: 12 }, (_, i) => row(`req-t${i + 1}`, undefined, `Town ${i + 1} must have its own post office with a distinct roof colour.`));
+    const applied = apply(ledger(towns), findings({ weakChecks: towns.map((r) => ({ rid: r.rid, why: "reads a constant" })) }));
+    // As many as one review may add: a reviewer that calls every check weak does not reopen the whole ledger each round.
+    const cap = 10;
+    expect(applied.reopened).toHaveLength(cap);
+    const past = applied.disclosed.filter((d) => d.includes(`past the ${cap} rows one review may reopen`));
+    expect(past).toHaveLength(12 - cap);
+    // The rows past the cap are exactly as they were: still passing on their current test.
+    expect(applied.ledger.rows.slice(cap)).toEqual(towns.slice(cap));
+    expect(REVIEW_MAX_REOPENED_ROWS).toBe(cap);
   });
 });
 
