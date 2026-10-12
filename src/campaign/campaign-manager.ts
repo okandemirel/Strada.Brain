@@ -4021,6 +4021,10 @@ export class CampaignManager {
     if (this.scopeGateMode !== "off") {
       const ledger = await this.ensureLedger(campaign);
       if (ledger.changed) this.persist(campaign);
+      // What was read is told here as at plan time and at a revive: an
+      // upgraded campaign otherwise got its rows, its legacy greens and its
+      // amendments with no word in the chat.
+      if (ledger.note) await this.tell(campaign, ledger.note);
     }
     // THE SCOPE GATE DECIDES only when it is on and the campaign holds a
     // readable ledger. Off, shadow, and a campaign the gate cannot read take

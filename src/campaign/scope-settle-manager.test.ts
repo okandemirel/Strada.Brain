@@ -615,6 +615,22 @@ describe("a milestone is green only by the judge (scope gate on, W09)", () => {
     expect(m1.scopeBounces).toBe(1);
   }, 60_000);
 
+  it("a campaign from before the gate gets its rows at its next settle, and the chat is told what was read", async () => {
+    const h = build("on");
+    const campaign = await start(h);
+    // In flight before the gate: no rows, no owners.
+    const before = h.storage.get(campaign.id)!;
+    before.requirements = undefined;
+    before.scopeGateSince = undefined;
+    for (const m of before.milestones) m.requirementIds = undefined;
+    h.storage.save(before);
+    const told = h.messages.length;
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.currentMilestone).toBe(1), { timeout: 20_000 });
+    expect(h.storage.get(campaign.id)!.requirements?.rows.length).toBeGreaterThan(0);
+    expect(h.messages.slice(told).some((m) => m.startsWith("📋 GDD rows:"))).toBe(true);
+  }, 60_000);
+
   it("a regression stays a regression after the run that found it, also on a row a parked milestone owns", async () => {
     let failing: (label: string) => boolean = (label) => label === "EF-2";
     const h = build("on", { failing: (label) => failing(label) });
