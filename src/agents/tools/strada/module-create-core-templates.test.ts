@@ -141,6 +141,29 @@ describe("strada_create_module writes Core's templates", () => {
     expect(read(root, "Scripts/Controllers/HarborController.cs")).not.toContain("[Inject]");
   });
 
+  it("a hand-written controller is kept, and the result says the new config does not register it", async () => {
+    const root = project();
+    put(root, "Scripts/Controllers/HarborController.cs", "namespace Game.Modules.Harbor { public class HarborController { public int Tugs; } }");
+
+    const result = await run(root, { include_controller: true });
+    expect(result.isError, `refused: ${result.content}`).toBeFalsy();
+    expect(read(root, "Scripts/Controllers/HarborController.cs")).toContain("Tugs");
+    expect(read(root, "Scripts/HarborModuleConfig.cs")).not.toContain("RegisterController");
+
+    expect(result.content).toContain("Scripts/Controllers/HarborController.cs");
+    expect(result.content).toMatch(/not register/);
+    expect(result.content).toContain("builder.RegisterController<HarborController>()");
+    expect(result.content).toContain("patterns.RegisterController(services.Get<HarborController>())");
+
+    // A file on the controller's path that declares nothing yet is kept too.
+    const placeholder = project();
+    put(placeholder, "Scripts/Controllers/HarborController.cs", "// to do");
+    const kept = await run(placeholder, { include_controller: true });
+    expect(kept.isError, `refused: ${kept.content}`).toBeFalsy();
+    expect(read(placeholder, "Scripts/HarborModuleConfig.cs")).not.toContain("RegisterController");
+    expect(kept.content).toContain("builder.RegisterController<HarborController>()");
+  });
+
   it("a kept config is named, with what is left to register and hand to the PatternManager", async () => {
     const root = project();
     put(root, "Scripts/HarborModuleConfig.cs", "// mine");

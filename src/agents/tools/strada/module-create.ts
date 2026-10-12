@@ -440,6 +440,7 @@ export class ModuleCreateTool implements ITool {
 
       let serviceCreated = false;
       let controllerCreated = false;
+      let keptController: string | null = null;
       const keptServiceHalves: string[] = [];
       const existingConfig = existing.files.find((f) => /ModuleConfig\.cs$/i.test(f)) ?? null;
       if (templates) {
@@ -456,6 +457,7 @@ export class ModuleCreateTool implements ITool {
         });
         serviceCreated = made.serviceCreated;
         controllerCreated = made.controllerCreated;
+        keptController = made.keptController;
         keptServiceHalves.push(...made.keptServiceHalves);
         if (existingConfig) keep(existingConfig);
       } else {
@@ -540,6 +542,18 @@ export class ModuleCreateTool implements ITool {
                 (templates
                   ? ` and its Initialize hands it to the PatternManager: patterns.RegisterService(services.Get<I${name}Service>()).`
                   : "."),
+            ]
+          : []),
+        // The config registers only what this call made, so a kept controller
+        // was left out of it in silence.
+        ...(keptController
+          ? [
+              "",
+              `Controller: ${modulePath}/${keptController} was already there and was kept, so no ${name}Controller was ` +
+                `generated and the module config does not register one. Once ${name}Controller derives from Controller ` +
+                `or TickableController, register it there: builder.RegisterController<${name}Controller>() in Configure, ` +
+                `and patterns.RegisterController(services.Get<${name}Controller>()) in Initialize ` +
+                `(patterns = services.Get<PatternManager>()).`,
             ]
           : []),
         "",
@@ -660,14 +674,16 @@ interface CoreTemplatePlacement {
 async function placeCoreTemplates(
   templates: ModuleSourceTemplates,
   p: CoreTemplatePlacement,
-): Promise<{ serviceCreated: boolean; controllerCreated: boolean; keptServiceHalves: string[] }> {
+): Promise<{ serviceCreated: boolean; controllerCreated: boolean; keptServiceHalves: string[]; keptController: string | null }> {
   const selection = { ...p.selection };
   const keptServiceHalves: string[] = [];
+  let keptController: string | null = null;
   for (const file of templates.render(p.name, p.namespace, selection)) {
     if (file.component === "ModuleConfig") continue;
     const declared = declarationOf(p.existing, declaredType(file.source) ?? file.fileName.replace(/\.cs$/i, ""));
     if (!declared) continue;
     p.keep(declared);
+    if (file.component === "Controller") keptController = declared;
     if ((file.component === "ServiceInterface" || file.component === "Service") && !keptServiceHalves.includes(declared)) {
       keptServiceHalves.push(declared);
     }
@@ -704,7 +720,7 @@ async function placeCoreTemplates(
       await p.place(`${folder}/${config.fileName}`, config.source);
     }
   }
-  return { serviceCreated, controllerCreated, keptServiceHalves };
+  return { serviceCreated, controllerCreated, keptServiceHalves, keptController };
 }
 
 function generateModuleConfig(
