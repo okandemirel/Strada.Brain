@@ -1,6 +1,7 @@
-import { unlink, rename, stat, readdir, rm, realpath, mkdir } from "node:fs/promises";
+import { unlink, rename, stat, readdir, rm, realpath, mkdir, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { isProjectManifest, manifestWriteRefusal } from "../../security/framework-package-path.js";
 import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import { checkSafeToDelete } from "../../intelligence/unity-guid-resolver.js";
 import { metaPathFor, shouldGenerateMeta } from "./unity/meta-file-utils.js";
@@ -77,6 +78,10 @@ export class FileDeleteTool implements ITool {
     }
     if (await isGitInternalsPath(context.projectPath, pathCheck.fullPath)) {
       return { content: GIT_INTERNALS_ERROR, isError: true };
+    }
+    const manifestRefusal = await manifestWriteRefusal(context.projectPath, pathCheck.fullPath, undefined);
+    if (manifestRefusal) {
+      return { content: `Error: ${manifestRefusal}`, isError: true };
     }
 
     // GUID safety check: warn if file is referenced by other assets.
@@ -246,6 +251,20 @@ export class FileRenameTool implements ITool {
     }
     if (existing && !sameFile && input["overwrite"] !== true) {
       return { content: `Error: ${newPath} already exists — pass overwrite: true to replace it`, isError: true };
+    }
+    // Moving the manifest away drops its Strada lines; moving a file onto it
+    // brings its own.
+    const manifestRefusal =
+      (await manifestWriteRefusal(context.projectPath, oldCheck.fullPath, undefined)) ??
+      (isProjectManifest(context.projectPath, newCheck.fullPath)
+        ? await manifestWriteRefusal(
+            context.projectPath,
+            newCheck.fullPath,
+            await readFile(oldCheck.fullPath, "utf8").catch(() => undefined),
+          )
+        : undefined);
+    if (manifestRefusal) {
+      return { content: `Error: ${manifestRefusal}`, isError: true };
     }
 
     try {

@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import { sameNameElsewhere } from "./nearby-names.js";
 import { dirname, extname, sep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { manifestWriteRefusal } from "../../security/framework-package-path.js";
 import { openNoFollow } from "../../security/open-no-follow.js";
 import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import {
@@ -78,6 +79,10 @@ export class FileWriteTool implements ITool {
         content: `Error: content too large (${Math.round(byteLength / 1024)}KB). Max: ${MAX_WRITE_SIZE / 1024}KB`,
         isError: true,
       };
+    }
+    const manifestRefusal = await manifestWriteRefusal(context.projectPath, pathCheck.fullPath, content);
+    if (manifestRefusal) {
+      return { content: `Error: ${manifestRefusal}`, isError: true };
     }
 
     try {

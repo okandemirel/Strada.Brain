@@ -9,7 +9,7 @@ import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { markCaptureEntry, pruneCaptureEntries } from "./capture-retention.js";
 import { appendLeaseLedger, isSystemOwnedCheckPath, systemOwnedDeletionReason } from "./system-owned-path.js";
-import { isFrameworkPackagePath } from "../../security/framework-package-path.js";
+import { isFrameworkPackagePath, isUnityManifestPath, stradaManifestChangeRefusal } from "../../security/framework-package-path.js";
 import { isDerivedBuildOutput } from "./derived-build-output.js";
 import {
   changeReviewDir,
@@ -61,7 +61,9 @@ export interface WorkspaceCommitResult {
   /**
    * The part of `conflicts` the agent wrote into a Strada framework package
    * (Packages/Submodules/Strada.*, see framework-package-path.ts): upstream's
-   * code, read by a lease, never published from one. Absent when there were none.
+   * code, read by a lease, never published from one. Packages/manifest.json is
+   * here too when the agent changed its Strada package lines, which only the
+   * installer writes. Absent when there were none.
    */
   readonly refusedFrameworkPackage?: string[];
   /**
@@ -2163,6 +2165,17 @@ export class WorkspaceLeaseManager {
             if ((await pathExists(target)) && (await sameContent(target, full))) return {};
             await quarantine(rel, full);
             return { conflict: rel, frameworkOwned: true };
+          }
+          // Nor the manifest lines that point Unity at those packages: the
+          // installer adds a package and its line together, and a line whose
+          // package was refused just above points at nothing.
+          if (isUnityManifestPath(rel)) {
+            const before = await fsp.readFile(target, "utf8").catch(() => undefined);
+            const after = await fsp.readFile(full, "utf8").catch(() => undefined);
+            if (stradaManifestChangeRefusal(before, after)) {
+              await quarantine(rel, full);
+              return { conflict: rel, frameworkOwned: true };
+            }
           }
 
           // Quarantine-only mode (orphan salvage): nothing is written into the

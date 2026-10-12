@@ -22,7 +22,7 @@ import { basename, dirname, isAbsolute, join, posix, relative, resolve } from "n
 import { isScaffoldingScene } from "../../agents/autonomy/built-as-specified.js";
 import { findModuleTwin } from "../../agents/orchestrator.js";
 import { ACCEPTANCE_DIR } from "../../campaign/scope-types.js";
-import { isFrameworkPackagePath } from "../../security/framework-package-path.js";
+import { isFrameworkPackagePath, isUnityManifestPath, stradaManifestChangeRefusal } from "../../security/framework-package-path.js";
 
 /**
  * Every path a lease commit ever wrote into this project, one per line. This
@@ -59,6 +59,14 @@ export function appendLeaseLedger(sourceRoot: string, rels: readonly string[]): 
   }
 }
 
+function readTextOrUndefined(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 function sameBytes(a: string, b: string): boolean {
   try {
     return readFileSync(a).equals(readFileSync(b));
@@ -91,6 +99,11 @@ export async function systemOwnedDeletionReason(
   // Nor is a file in a Strada framework package, even one an earlier lease
   // wrote there: upstream's folder is not the worker's to change (WP-1.2).
   if (isFrameworkPackagePath(bare)) return undefined;
+  // Nor a manifest that still points Unity at one: deleting it drops the
+  // Strada package lines only the installer writes.
+  if (isUnityManifestPath(bare) && stradaManifestChangeRefusal(readTextOrUndefined(join(sourceRoot, bare)), undefined)) {
+    return undefined;
+  }
   const ledger = readLeaseLedger(sourceRoot);
   // Present but unreadable: the one record of what the system wrote cannot be
   // consulted, so nothing that depends on it may call a file the system's.

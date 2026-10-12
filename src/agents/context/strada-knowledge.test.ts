@@ -301,25 +301,42 @@ describe("buildDepsContext", () => {
       commit: "abc1234",
     };
 
-    it("says it is available, where, and how it would be installed — not that it does not exist", () => {
+    it("says it is available and where — not that it does not exist", () => {
       const result = buildDepsContext(makeDepsStatus({ modulesInstalled: false, modulesPath: null, modulesCheckout: checkout }));
 
       expect(result).not.toContain("Strada.Modules is not available");
       expect(result).not.toContain("Do not reference Strada.Modules APIs");
       expect(result).toContain("available (sibling abc1234), not installed in the project");
       expect(result).toContain("/work/Strada.Modules");
-      expect(result).toContain("Packages/Submodules/Strada.Modules");
-      expect(result).toContain('"com.strada.modules": "file:Submodules/Strada.Modules"');
       // Not installed still means the project cannot compile against it yet.
       expect(result).toMatch(/cannot (call|use) its APIs until it is installed/);
     });
 
-    it("with no checkout either, still says how it would be installed instead of forbidding it", () => {
-      const result = buildDepsContext(makeDepsStatus({ modulesInstalled: false, modulesPath: null }));
+    /**
+     * The prompt gave every worker a hand-install recipe (the folder under
+     * Packages/Submodules plus the manifest line). The folder is refused to
+     * agents and the manifest was not, so a worker that followed it left a
+     * manifest pointing at a package that never landed — a project Unity
+     * cannot resolve. Installing is the system's step, taken when the
+     * operator allows it; the prompt says that, and how.
+     */
+    it("says the system installs it when the operator allows it, and gives no recipe to follow by hand", () => {
+      for (const status of [
+        makeDepsStatus({ modulesInstalled: false, modulesPath: null, modulesCheckout: checkout }),
+        makeDepsStatus({ modulesInstalled: false, modulesPath: null }),
+      ]) {
+        const result = buildDepsContext(status);
 
-      expect(result).not.toContain("Do not reference Strada.Modules APIs");
-      expect(result).toContain("Packages/Submodules/Strada.Modules");
-      expect(result).toMatch(/cannot (call|use) its APIs until it is installed/);
+        expect(result).not.toContain('"com.strada.modules": "file:Submodules/Strada.Modules"');
+        expect(result).not.toMatch(/would be installed under/);
+        expect(result).toContain("dependency installer");
+        expect(result).toMatch(/when the operator allows it/);
+        expect(result).toContain("setup wizard");
+        expect(result).toMatch(/not a step (of|in) (this|a) task/);
+        // The worker's way forward: build for the task, and name the module.
+        expect(result).toMatch(/say (so )?in your result/);
+        expect(result).toMatch(/cannot (call|use) its APIs until it is installed/);
+      }
     });
 
     it("says nothing of the kind when it is installed (guard)", () => {

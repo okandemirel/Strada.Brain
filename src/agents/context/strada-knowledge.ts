@@ -452,7 +452,7 @@ import type { IdentityState } from "../../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
-import { describeFrameworkCheckout, describeFrameworkInstall, type StradaDepsStatus } from "../../config/strada-deps.js";
+import { describeFrameworkCheckout, type StradaDepsStatus } from "../../config/strada-deps.js";
 import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { createProjectScopeFingerprint } from "../../learning/project-scope.js";
@@ -842,12 +842,19 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
   if (!status.modulesInstalled) {
     // Not "not available, do not reference": that ban stood beside a
     // checkout of it and its own class list from a cached clone, and workers
-    // hand-rolled what a ready module already does.
+    // hand-rolled what a ready module already does. Nor a recipe to install
+    // it by hand: the package folder is refused to agents, so a worker that
+    // followed one left a manifest line pointing at nothing.
     lines.push(
       status.modulesCheckout
         ? `\nNote: ${describeFrameworkCheckout("modules", status.modulesCheckout)}. Its source there may be read for reference.`
         : "\nNote: Strada.Modules is not installed in this project.",
-      `Project code cannot call its APIs until it is installed. To use one of its modules, it would be ${describeFrameworkInstall("modules")}.`,
+      "Project code cannot call its APIs until it is installed, and installing it is not a step of this task: " +
+        "Strada's dependency installer adds the package and its Packages/manifest.json line together, when the " +
+        "operator allows it (the setup wizard's project step, or the offer Strada makes in chat after installing " +
+        "Strada.Core). Files under Packages/Submodules/Strada.* and the Strada lines of Packages/manifest.json are " +
+        "refused to agents. If one of its modules would serve this task, build what the task needs in the game's " +
+        "own code and say in your result which module would replace it, so the operator can install it.",
     );
   }
   lines.push("\n## Framework Source Authority");

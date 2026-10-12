@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { validatePath } from "../../security/path-guard.js";
+import { manifestWriteRefusal } from "../../security/framework-package-path.js";
 import { GIT_INTERNALS_ERROR, isGitInternalsPath } from "./git-internals-guard.js";
 import { writeFileInsideRoot } from "./file-write.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
@@ -152,6 +153,11 @@ export class FileEditTool implements ITool {
         const at = content.indexOf(oldString);
         newContent = content.slice(0, at) + newString + content.slice(at + oldString.length);
         replacementCount = 1;
+      }
+
+      const manifestRefusal = await manifestWriteRefusal(context.projectPath, pathCheck.fullPath, newContent, content);
+      if (manifestRefusal) {
+        return { content: `Error: ${manifestRefusal}`, isError: true };
       }
 
       // The same contained write file_write uses: a plain writeFile followed
