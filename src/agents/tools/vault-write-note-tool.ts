@@ -1,4 +1,11 @@
-import { canonicalVaultPath } from '../../vault/path-policy.js';
+import { readFile } from 'node:fs/promises';
+import { isAbsolute, relative, resolve } from 'node:path';
+import {
+  frameworkPackageWriteRefusal,
+  isUnityManifestPath,
+  stradaManifestChangeRefusal,
+} from '../../security/framework-package-path.js';
+import { canonicalVaultPath, normalizeVaultRelPath } from '../../vault/path-policy.js';
 import type { IVault } from '../../vault/vault.interface.js';
 import { vaultNotFound } from './vault-not-found.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
@@ -25,7 +32,9 @@ export class VaultWriteNoteTool {
       },
       vaultId: {
         type: 'string',
-        description: 'Target vault id. Omit to write to the project vault.',
+        description:
+          "Target vault id. Omit to write to the project vault. Only the project's own vaults take notes; " +
+          'a framework vault is read, never written.',
       },
     },
     required: ['path', 'content'],
@@ -75,15 +84,23 @@ export class VaultWriteNoteTool {
       const lookupPath = context.sourceProjectPath || context.projectPath;
       const owner = lookupPath ? registry.resolveVaultForPath(lookupPath, lookupPath) : undefined;
       if (!owner || !ownsProject(owner, lookupPath)) {
-        const ids = registry.ids();
+        if (registry.ids().length === 0) return { content: 'no vaults registered', isError: true };
+        // Only the vaults a note may go to: offering a framework vault here
+        // sent the agent to write into the framework.
+        const ids = registry.list().filter((v) => vaultRootRefusal(v, projectRoots(context)) === undefined).map((v) => v.id);
         return {
           content: ids.length
             ? `Error: no vault is registered for this project, so nothing was written. Pass vaultId to choose one: ${ids.join(', ')}`
-            : 'no vaults registered',
+            : 'Error: no vault this project may write notes into is registered, so nothing was written.',
           isError: true,
         };
       }
       targetVaults = [owner];
+    }
+
+    for (const vault of targetVaults) {
+      const refusal = await noteWriteRefusal(vault, path, content, projectRoots(context));
+      if (refusal) return { content: `Error: ${refusal}`, isError: true };
     }
 
     const started = Date.now();
@@ -138,6 +155,62 @@ export class VaultWriteNoteTool {
  */
 function ownsProject(vault: IVault, projectRoot: string): boolean {
   return vault.kind === 'unity-project' || canonicalVaultPath(vault.rootPath) === canonicalVaultPath(projectRoot);
+}
+
+/** Where a note may land: the project, and the lease standing in for it. */
+function projectRoots(context: ToolContext): string[] {
+  return [context.sourceProjectPath, context.projectPath].filter((p): p is string => typeof p === 'string' && p !== '');
+}
+
+function isInsideOrEqual(root: string, child: string): boolean {
+  const rel = relative(root, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/** The project root `vault` lies in, judged by the real form of both, or undefined. */
+function homeOf(vault: IVault, roots: readonly string[]): string | undefined {
+  const vaultRoot = canonicalVaultPath(vault.rootPath);
+  return roots.map(canonicalVaultPath).find((root) => isInsideOrEqual(root, vaultRoot));
+}
+
+/**
+ * Why no note may go into `vault` at all: it lies outside the project (an
+ * upstream framework checkout, this system's own tree, any other folder), or
+ * it is one of the project's framework packages.
+ */
+function vaultRootRefusal(vault: IVault, roots: readonly string[]): string | undefined {
+  const home = homeOf(vault, roots);
+  if (home === undefined) {
+    return (
+      `vault ${vault.id} is rooted at ${vault.rootPath}, outside this project: notes go into the project's own ` +
+      'vaults. A framework checkout or another tree is read, never written.'
+    );
+  }
+  return frameworkPackageWriteRefusal(relative(home, canonicalVaultPath(vault.rootPath)));
+}
+
+/**
+ * Why this note may not be written: its vault (above), or where it lands —
+ * inside a framework package, or on the manifest with its Strada lines
+ * changed. The file tools refuse the same through validatePath and the
+ * manifest rule; this tool writes through the vault's own root, past both
+ * and past the lease, so it asks the same questions itself.
+ */
+async function noteWriteRefusal(
+  vault: IVault,
+  relPath: string,
+  content: string,
+  roots: readonly string[],
+): Promise<string | undefined> {
+  const rootRefusal = vaultRootRefusal(vault, roots);
+  if (rootRefusal) return rootRefusal;
+  const home = homeOf(vault, roots)!;
+  const target = resolve(canonicalVaultPath(vault.rootPath), normalizeVaultRelPath(relPath));
+  const rel = relative(home, target);
+  const packageRefusal = frameworkPackageWriteRefusal(rel);
+  if (packageRefusal) return packageRefusal;
+  if (!isUnityManifestPath(rel)) return undefined;
+  return stradaManifestChangeRefusal(await readFile(target, 'utf8').catch(() => undefined), content);
 }
 
 function hasReindexFile(vault: unknown): vault is { reindexFile(path: string): Promise<boolean> } {

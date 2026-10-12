@@ -131,7 +131,10 @@ describe("vault_write_note under a workspace lease", () => {
 
     expect(result.isError).toBe(true);
     expect(writtenTo(vaults)).toEqual([]);
-    for (const v of vaults) expect(result.content).toContain(v.id);
+    // Only the vaults a note may go to (WP-1.2): the framework packages and
+    // Strada.Brain's own tree are read, never written.
+    expect(result.content).toContain("knowledge:k");
+    for (const id of ["self:strada-brain", "generic:core", "generic:mcp"]) expect(result.content).not.toContain(id);
   });
 
   it("does not broadcast when only the lease path is known", async () => {
