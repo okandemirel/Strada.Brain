@@ -600,6 +600,10 @@ describe("FileVectorStore", () => {
             worstWrite = Math.max(worstWrite, draws.mock.calls.length);
             live.set(f, chunks);
           }
+          // Each round's last removal drops the graph. Without a search to
+          // build it again, the writes after it met no graph and drew
+          // nothing whatever they did.
+          await store.search(nearAFile(), K);
         }
         // One level draw per inserted chunk, plus a 1-in-16 chance of each extra.
         expect(worstWrite).toBeLessThanOrEqual(400);
@@ -618,6 +622,86 @@ describe("FileVectorStore", () => {
       let r = 0;
       const nearARemainingFile = () => near(18 + (r++ % 2), 0.2);
       expect(await recall(store, rest, nearARemainingFile)).toBeGreaterThanOrEqual(0.95);
+      await store.shutdown();
+    });
+
+    // The test above counts what a write draws. What replaced the rebuild is
+    // judged by what the search after a write draws: nothing while the graph
+    // is kept, one draw per live chunk (and a 1-in-16 extra) when it was
+    // dropped and is built again. Dropping the graph after every write moved
+    // a whole build onto each search; never dropping it let the removed nodes
+    // pile up without bound. Both passed every test until this one.
+    it("keeps the graph until removed nodes outnumber live ones, then builds it once, from the live chunks", async () => {
+      const dims = 8;
+      const store = new FileVectorStore(tmpDir, dims, GRAPH);
+      await store.initialize();
+      const next = seeded(29);
+      const centers = Array.from({ length: 10 }, () => Array.from({ length: dims }, next));
+      const near = (file: number, spread: number) => centers[file]!.map((c) => c + spread * next());
+      const fileChunks = (file: number, round: number) =>
+        Array.from({ length: 100 }, (_, i) =>
+          makeEntry(`r${round}-f${file}-${i}`, `/src/F${file}.cs`, near(file, 0.15)),
+        );
+      const live = new Map<number, VectorEntry[]>();
+      for (let f = 0; f < 10; f++) live.set(f, fileChunks(f, 0));
+      await store.upsert([...live.values()].flat());
+      let q = 0;
+      const nearAFile = () => near(q++ % 10, 0.2);
+      await store.search(nearAFile(), K); // builds the graph: 1000 live, none removed
+
+      const draws = vi.spyOn(Math, "random");
+      const searchDraws = async (): Promise<number> => {
+        draws.mockClear();
+        await store.search(nearAFile(), K);
+        return draws.mock.calls.length;
+      };
+      const rebuiltFrom = (liveCount: number) => ({ atLeast: liveCount, below: Math.ceil(liveCount * 1.25) });
+      try {
+        // Nine files re-indexed: 900 removed against 1000 live, still kept.
+        for (let f = 0; f < 9; f++) {
+          await store.removeByFile(`/src/F${f}.cs`);
+          expect(await searchDraws()).toBe(0);
+          const chunks = fileChunks(f, 1);
+          await store.upsert(chunks);
+          live.set(f, chunks);
+          expect(await searchDraws()).toBe(0);
+        }
+
+        // The tenth removal crosses the line (1000 removed, 900 live): the
+        // next search builds from the 900 live chunks, never from all 1900.
+        await store.removeByFile("/src/F9.cs");
+        live.delete(9);
+        const { atLeast, below } = rebuiltFrom(900);
+        const rebuild = await searchDraws();
+        expect(rebuild).toBeGreaterThanOrEqual(atLeast);
+        expect(rebuild).toBeLessThan(below);
+        expect(await searchDraws()).toBe(0);
+        const chunks = fileChunks(9, 1);
+        await store.upsert(chunks);
+        live.set(9, chunks);
+        expect(await searchDraws()).toBe(0);
+
+        // An upsert that re-vectors a chunk removes its old node too, so the
+        // line can be crossed by upserts alone: 1000 re-vectored is 1000
+        // removed against 1000 live, still kept; 100 more cross it.
+        const revector = (files: number[]) =>
+          files.flatMap((f) => live.get(f)!.map((e) => makeEntry(e.id, e.chunk.filePath, near(f, 0.15))));
+        const all = revector([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        await store.upsert(all);
+        expect(await searchDraws()).toBe(0);
+        const again = revector([0]);
+        await store.upsert(again);
+        const rebuiltAfterUpsert = await searchDraws();
+        expect(rebuiltAfterUpsert).toBeGreaterThanOrEqual(rebuiltFrom(1000).atLeast);
+        expect(rebuiltAfterUpsert).toBeLessThan(rebuiltFrom(1000).below);
+        expect(await searchDraws()).toBe(0);
+
+        const byId = new Map([...all, ...again].map((e) => [e.id, e]));
+        expect(store.count()).toBe(byId.size);
+        expect(await recall(store, [...byId.values()], nearAFile)).toBeGreaterThanOrEqual(0.95);
+      } finally {
+        draws.mockRestore();
+      }
       await store.shutdown();
     });
 
