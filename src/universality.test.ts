@@ -27,6 +27,16 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { localFixturePath, missingLocalFixture, REPO_ROOT } from "./tests/helpers/local-fixtures.js";
+import {
+  compileTerms,
+  lineAt,
+  project,
+  quotedLines,
+  quoteIndex,
+  RollSet,
+  rollingHits,
+  termLines,
+} from "./tests/helpers/universality-scan.js";
 
 /**
  * [length, rolling hash, sha256] of each identifier's lowercase letters and
@@ -43,10 +53,6 @@ const VEHICLE_DIGESTS: ReadonlyArray<readonly [number, number, string]> = [
   [16, 4269027509, "396c31926ad3d08da18841a0e7177e95fbd85f0fb3cf2096d8713409a3f966d7"],
   [8, 984327875, "3352c6e65e4d7e16620983238909243348cf2a655b0fbe5aad27afda6bcf9fcf"],
 ];
-const ROLL_BASE = 131;
-/** A quoted passage is this long, as the owner's shingle scan measures it. */
-const SHINGLE = 36;
-
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 /**
@@ -78,81 +84,9 @@ function readText(file: string): string | undefined {
   return text.includes("\0") ? undefined : text;
 }
 
-function lineAt(text: string, offset: number): number {
-  let line = 1;
-  for (let i = text.indexOf("\n"); i !== -1 && i < offset; i = text.indexOf("\n", i + 1)) line++;
-  return line;
-}
-
-/**
- * The text as the char codes a matcher reads, each with the offset it came
- * from: "alnum" keeps lowercase letters and digits only; "prose" lowercases
- * and collapses each whitespace run to one space, the way the owner's
- * shingle scan reads a document.
- */
-function project(text: string, mode: "alnum" | "prose"): { codes: Uint16Array; origin: Int32Array } {
-  const codes = new Uint16Array(text.length);
-  const origin = new Int32Array(text.length);
-  let n = 0;
-  for (let i = 0; i < text.length; i++) {
-    let c = text.charCodeAt(i);
-    if (c >= 65 && c <= 90) c += 32;
-    if (mode === "alnum") {
-      if (!((c >= 97 && c <= 122) || (c >= 48 && c <= 57))) continue;
-    } else if (c === 32 || (c >= 9 && c <= 13) || c === 0xa0) {
-      if (n > 0 && codes[n - 1] === 32) continue;
-      c = 32;
-    }
-    codes[n] = c;
-    origin[n] = i;
-    n++;
-  }
-  return { codes: codes.subarray(0, n), origin: origin.subarray(0, n) };
-}
-
-/**
- * Rolling hashes to look for, behind a 2^24-bit filter: tens of millions of
- * windows are checked per run, and a Set lookup for each one was most of a
- * run's eight seconds.
- */
-class RollSet {
-  private readonly bits = new Uint32Array(1 << 19);
-  private readonly set = new Set<number>();
-  add(h: number): void {
-    this.set.add(h);
-    const b = h >>> 8;
-    this.bits[b >>> 5] = (this.bits[b >>> 5] ?? 0) | (1 << (b & 31));
-  }
-  has(h: number): boolean {
-    const b = h >>> 8;
-    return ((this.bits[b >>> 5] ?? 0) & (1 << (b & 31))) !== 0 && this.set.has(h);
-  }
-}
-
-/** Start offsets (into `codes`) of every window of `length` whose rolling hash is in `hashes`. */
-function rollingHits(codes: Uint16Array, length: number, hashes: RollSet): number[] {
-  let top = 1;
-  for (let i = 1; i < length; i++) top = Math.imul(top, ROLL_BASE) >>> 0;
-  const hits: number[] = [];
-  let h = 0;
-  for (let i = 0; i < codes.length; i++) {
-    if (i >= length) h = (h - Math.imul(codes[i - length]!, top)) >>> 0;
-    h = (Math.imul(h, ROLL_BASE) + codes[i]!) >>> 0;
-    if (i >= length - 1 && hashes.has(h)) hits.push(i - length + 1);
-  }
-  return hits;
-}
-
-const rollOf = (codes: Uint16Array): number => codes.reduce((h, c) => (Math.imul(h, ROLL_BASE) + c) >>> 0, 0);
-
 function localTerms(): RegExp | undefined {
   const path = localFixturePath("vehicle-terms.txt");
-  if (!path) return undefined;
-  const lines = readFileSync(path, "utf8")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l !== "" && !l.startsWith("#"));
-  return lines.length > 0 ? new RegExp(lines.map((l) => `(?:${l})`).join("|"), "i") : undefined;
+  return path ? compileTerms(readFileSync(path, "utf8")) : undefined;
 }
 
 describe("universality: nothing of a test vehicle in the repository", () => {
@@ -177,11 +111,7 @@ describe("universality: nothing of a test vehicle in the repository", () => {
           if (digests.has(sha256(run))) hits.add(`${file}:${lineAt(text, origin[start]!)}`);
         }
       }
-      if (terms) {
-        text.split("\n").forEach((line, i) => {
-          if (terms.test(line)) hits.add(`${file}:${i + 1} (local term)`);
-        });
-      }
+      if (terms) for (const line of termLines(text, terms)) hits.add(`${file}:${line} (local term)`);
     }
     expect([...hits], `test-vehicle names in publishable files:\n${[...hits].join("\n")}`).toEqual([]);
   });
@@ -189,34 +119,17 @@ describe("universality: nothing of a test vehicle in the repository", () => {
   const docsList = localFixturePath("confidential-documents.txt");
   const why = docsList ? "" : ` (${missingLocalFixture("confidential-documents.txt", "the design documents to compare against")})`;
   it.skipIf(files === undefined || !docsList)(`no publishable file quotes a confidential design document${why}`, () => {
-    const windows = new Set<string>();
-    const rolls = new RollSet();
     const paths = readFileSync(docsList!, "utf8")
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l !== "" && !l.startsWith("#"));
-    for (const path of paths) {
-      expect(existsSync(path), `listed confidential document ${path} is not there`).toBe(true);
-      const { codes } = project(readFileSync(path, "utf8"), "prose");
-      for (let i = 0; i + SHINGLE <= codes.length; i++) {
-        const slice = codes.subarray(i, i + SHINGLE);
-        const window = String.fromCharCode(...slice);
-        // A lone path or identifier is shared vocabulary, not a quoted passage.
-        if (window.trim().split(" ").length < 3) continue;
-        windows.add(window);
-        rolls.add(rollOf(slice));
-      }
-    }
+    for (const path of paths) expect(existsSync(path), `listed confidential document ${path} is not there`).toBe(true);
+    const index = quoteIndex(paths.map((path) => readFileSync(path, "utf8")));
     const hits = new Set<string>();
     for (const file of files!) {
       const text = readText(file);
       if (text === undefined) continue;
-      const { codes, origin } = project(text, "prose");
-      for (const start of rollingHits(codes, SHINGLE, rolls)) {
-        if (windows.has(String.fromCharCode(...codes.subarray(start, start + SHINGLE)))) {
-          hits.add(`${file}:${lineAt(text, origin[start]!)}`);
-        }
-      }
+      for (const line of quotedLines(text, index)) hits.add(`${file}:${line}`);
     }
     // Locations only: the passage itself stays out of the test's output.
     expect([...hits], `passages of a confidential document in publishable files:\n${[...hits].join("\n")}`).toEqual([]);
