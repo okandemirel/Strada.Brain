@@ -314,6 +314,43 @@ describe("a message that names the design document by its path", () => {
       detectCampaignIntent({ chatId: "c", text: "bak", attachments: [{ type: "document", name: "Rigddon-notes.md", data: Buffer.from(design) }] } as never),
     ).toBeUndefined();
   });
+
+  /**
+   * A GDD-shaped name or a GDD in the caption made ANY caption the
+   * instruction: "fix the typo in this" with Quillmoor_GDD.md attached was an
+   * immediate multi-day build of that document, with no approval gate.
+   */
+  describe("a caption that asks for work on the attached document", () => {
+    const design = `# Quillmoor\n\n${"Design content. ".repeat(30)}`;
+    const shared = (text: string, name: string): ReturnType<typeof detectCampaignIntent> =>
+      detectCampaignIntent({ chatId: "c", text, attachments: [{ type: "document", name, data: Buffer.from(design) }] } as never);
+
+    it.each([
+      ["fix the typo in this", "Quillmoor_GDD.md"],
+      ["fix the typo in this", "quillmoor-gdd.md"],
+      ["fix the GDD typo", "notes.md"],
+      ["can you proofread this?", "Quillmoor_GDD.md"],
+      ["summarize it for the team", "QuillmoorGDD.md"],
+      ["bunu özetle", "Quillmoor_GDD.md"],
+      ["GDD'deki yazım hatalarını düzelt", "Quillmoor_GDD.md"],
+      ["şu GDD'yi bir incele", "Quillmoor_GDD.md"],
+      ["update section 3 of the GDD", "Quillmoor_GDD.md"],
+    ])("%s (%s attached) → no campaign", (text, name) => {
+      expect(shared(text, name)).toBeUndefined();
+    });
+
+    it.each([
+      ["", "Quillmoor_GDD.md"],
+      ["işte gdd", "Quillmoor_GDD.md"],
+      ["bak", "QuillmoorGDD.md"],
+      ["build the game in this GDD", "Quillmoor_GDD.md"],
+      // Build intent wins over a word of review beside it.
+      ["GDD'yi oku ve oyunu yap", "Quillmoor_GDD.md"],
+      ["Read it and build the game from scratch", "notes.md"],
+    ])("%s (%s attached) → the design", (text, name) => {
+      expect(shared(text, name)).toMatchObject({ kind: "gdd-attachment", sourceName: name });
+    });
+  });
 });
 
 /**

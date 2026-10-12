@@ -65,6 +65,18 @@ function refersToGdd(text: string): boolean {
   return GDD_ACRONYM_RE.test(text) || GDD_SPELLED_RE.test(text);
 }
 
+/**
+ * A caption asking for work on the document itself — fix, proofread,
+ * summarize, translate, review, update; düzelt, özetle, çevir, incele,
+ * güncelle — not for the game it describes. Turkish verbs take suffixes
+ * ("düzeltir misin"), so only their start is bounded.
+ */
+const WORK_ON_DOCUMENT_RE = new RegExp(
+  String.raw`(?<![\p{L}])(?:fix|correct|proofread|typos?|review|summari[sz]e|summary|translate|update|edit|check|read|reword|rewrite|shorten|comment\s+on|feedback)(?![\p{L}])` +
+    String.raw`|(?<![\p{L}])(?:düzelt|güncelle|özet|çevir|[iİ]ncele|kontrol\s+e|gözden\s+geçir|kısalt|düzenle|yazım\s+hata|oku(?:r|yun(?:uz)?|yabilir|yup)?(?![\p{L}]))`,
+  "iu",
+);
+
 /** A message that is ONLY an idea is long enough to design from. */
 const MIN_IDEA_LENGTH = 40;
 
@@ -82,7 +94,10 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
     const extractedText = extractDocumentText(attachment.name, attachment.data);
     if (extractedText && extractedText.trim().length >= 200) {
       // A document with real prose + (build intent OR a GDD-shaped name or no text at all).
-      if (!text || BUILD_INTENT_RE.test(text) || refersToGdd(attachment.name) || refersToGdd(text)) {
+      // …UNLESS THE CAPTION ASKS FOR WORK ON THE DOCUMENT: "fix the typo in
+      // this" with Foo_GDD.md attached was an immediate build of the game.
+      const asksForWork = WORK_ON_DOCUMENT_RE.test(text);
+      if (!text || BUILD_INTENT_RE.test(text) || (!asksForWork && (refersToGdd(attachment.name) || refersToGdd(text)))) {
         return { kind: "gdd-attachment", gddText: extractedText, sourceName: attachment.name };
       }
     }
