@@ -10,16 +10,23 @@
  * This reads the real Core source (the files the framework extractor reads) and
  * holds every identifier those texts name to it:
  * - a namespace must be declared, an attribute must be a declared `…Attribute`;
+ *   `X.Y.*` and `X.Y.<name>` must sit above a declared namespace or be the one
+ *   Core's module generator gives game code;
  * - a call must be a member of the type it is qualified with, or, unqualified,
  *   of a type the same section (or STRADA_API group) names;
  * - any other name must be a Core type, a member of a type the passage names, or
  *   a BCL/Unity name Core's code uses without declaring (`ValueTask`,
- *   `MonoBehaviour`).
+ *   `MonoBehaviour`);
+ * - a directory tree's folders inside a module must be in Core's module layout.
  * Existence, not signatures: an overload Core dropped still passes by name.
+ * Three statements about behaviour are read from Core's code as well: which
+ * registrations run `[Inject]`, when a job system's command buffer plays back,
+ * and that each piece of the work division is something a module can register.
  *
  * The checkout comes from STRADA_CORE_PATH (CI clones Core there), else a
  * sibling `../Strada.Core`, else /tmp/Strada.Core-ci. Without one the checks
- * skip and say so in their names.
+ * skip and say so in their names; the readers themselves are also tested
+ * against small Cores written to a temporary directory, which needs none.
  */
 
 import { describe, it, expect } from "vitest";
