@@ -629,6 +629,35 @@ describe("what the ledger's life must never do (W11)", () => {
     expect(campaign.milestones[0]!.requirementIds).toEqual(rows.filter((r) => r.owner === "m1").map((r) => r.rid));
   });
 
+  it("a ledger that could not be read or built is said in the chat, at the plan and at a revive", async () => {
+    const fault = () => {
+      throw new Error("invented reader fault");
+    };
+    const planned = build("shadow");
+    vi.spyOn(planned.manager as unknown as { readLedger(c: Campaign): unknown }, "readLedger").mockImplementation(fault);
+    planned.manager.startFromGdd(ctx, APPROVED, "docs/GDD.md");
+    await vi.waitFor(() => expect(planned.submitted).toHaveLength(1), { timeout: 10_000 });
+    const announcement = planned.messages.find((m) => m.includes("Milestone ladder ready")) ?? "";
+    expect(announcement).toMatch(/GDD rows could not be read.*invented reader fault/);
+
+    const revived = build("shadow");
+    writeFileSync(join(revived.root, "docs", "GDD.md"), APPROVED);
+    revived.storage.save(inFlightCampaign(revived.root, QUEUED));
+    vi.spyOn(revived.manager as unknown as { readLedger(c: Campaign): unknown }, "readLedger").mockImplementation(fault);
+    expect(await revived.manager.reviveByCommand(ctx.chatId)).toBe(true);
+    const revive = revived.messages.find((m) => m.startsWith("Reviving the campaign")) ?? "";
+    expect(revive).toMatch(/GDD rows could not be read.*invented reader fault/);
+
+    // …and the add-only pass that follows the revive's submit.
+    const passed = build("shadow");
+    writeFileSync(join(passed.root, "docs", "GDD.md"), APPROVED);
+    passed.storage.save(inFlightCampaign(passed.root, QUEUED));
+    vi.spyOn(passed.manager as unknown as { completeLedgerPass(c: Campaign): unknown }, "completeLedgerPass").mockImplementation(async () => fault());
+    expect(await passed.manager.reviveByCommand(ctx.chatId)).toBe(true);
+    expect(passed.submitted).toHaveLength(1);
+    expect(passed.messages.some((m) => /GDD rows could not be read.*invented reader fault/.test(m))).toBe(true);
+  });
+
   it("the add-only pass asks about no text but the one the ledger was read from", async () => {
     const { manager, storage, root, complete } = build("shadow");
     writeFileSync(join(root, "docs", "GDD.md"), APPROVED);

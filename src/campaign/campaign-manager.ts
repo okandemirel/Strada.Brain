@@ -6751,7 +6751,7 @@ export class CampaignManager {
       if (pass.note) notes.push(pass.note);
       changed = this.startScopeGate(campaign) || changed;
     } catch (err) {
-      this.ledgerFailed(campaign, err);
+      notes.push(this.ledgerFailed(campaign, err));
     }
     return { changed, ...(notes.length > 0 ? { note: notes.join("\n") } : {}) };
   }
@@ -6770,7 +6770,7 @@ export class CampaignManager {
       notes.push(...this.ledgerReadNotes(campaign, read));
       changed = this.startScopeGate(campaign) || read.changed;
     } catch (err) {
-      this.ledgerFailed(campaign, err);
+      notes.push(this.ledgerFailed(campaign, err));
     }
     return { changed, ...(notes.length > 0 ? { note: notes.join("\n") } : {}) };
   }
@@ -6791,7 +6791,7 @@ export class CampaignManager {
     try {
       pass = await this.completeLedgerPass(held);
     } catch (err) {
-      this.ledgerFailed(held, err);
+      await this.tell(held, this.ledgerFailed(held, err));
       return;
     }
     if (pass.changed && held.requirements !== undefined) {
@@ -6839,11 +6839,11 @@ export class CampaignManager {
     return true;
   }
 
-  private ledgerFailed(campaign: Campaign, err: unknown): void {
-    getLoggerSafe().warn("The requirement ledger could not be built", {
-      id: campaign.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
+  /** Logged, and the sentence the chat is told: a ledger that silently failed reads as a campaign with no GDD rows to judge. */
+  private ledgerFailed(campaign: Campaign, err: unknown): string {
+    const error = err instanceof Error ? err.message : String(err);
+    getLoggerSafe().warn("The requirement ledger could not be built", { id: campaign.id, error });
+    return `📋 The GDD rows could not be read (${error.replace(/\s+/g, " ").slice(0, 200)}); they stay as they were, and the next settle or revive reads them again.`;
   }
 
   private ledgerOptions(campaign: Campaign): LedgerReadOptions {
