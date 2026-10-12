@@ -133,6 +133,68 @@ describe("a template file this reader cannot follow is unreadable, with the reas
     expect(unreadable(CORE_TEMPLATES_SOURCE.replace("Files(string name", "AllFiles(string name"))).toMatch(/Files/);
   });
 
+  // A name it cannot resolve used to become a value whose printed form was its
+  // last segment, so the file read as declared and wrote that word into the
+  // module: `Indentpublic interface ...`, `Empty`, `NewLine`.
+  const withServiceLine = (replacement: string): string => {
+    const edited = CORE_TEMPLATES_SOURCE.replace(
+      'sb.AppendLine($"    public interface I{name}Service : IService");',
+      replacement,
+    );
+    expect(edited).not.toBe(CORE_TEMPLATES_SOURCE);
+    return edited;
+  };
+
+  it("a class-level constant it does not read", () => {
+    const source = withServiceLine('sb.AppendLine($"{Indent}public interface I{name}Service : IService");').replace(
+      "public static class ModuleSourceTemplates\n    {",
+      'public static class ModuleSourceTemplates\n    {\n        private const string Indent = "    ";',
+    );
+    expect(unreadable(source)).toMatch(/Indent/);
+  });
+
+  it("a framework member it does not model: string.Empty", () => {
+    expect(
+      unreadable(withServiceLine('sb.AppendLine(string.Empty); sb.AppendLine($"    public interface I{name}Service : IService");')),
+    ).toMatch(/string\.Empty/);
+  });
+
+  it("a framework type it does not model: Environment.NewLine", () => {
+    expect(
+      unreadable(withServiceLine('sb.Append($"    public interface I{name}Service : IService{Environment.NewLine}");')),
+    ).toMatch(/Environment/);
+  });
+
+  it("a comparison of values it does not model, which it would answer by identity", () => {
+    // Two reads of the same enum member are different objects here: == was
+    // always false, so the branch silently never ran.
+    const source = CORE_TEMPLATES_SOURCE.replace(
+      "if (enabled) files.Add(new GeneratedFile(component, fileName, source()));",
+      "if (enabled && component != Config.ComponentType.Events) files.Add(new GeneratedFile(component, fileName, source()));",
+    );
+    expect(source).not.toBe(CORE_TEMPLATES_SOURCE);
+    expect(unreadable(source)).toMatch(/ComponentType/);
+  });
+
+  it("a list built from another, which it would have made empty", () => {
+    const source = CORE_TEMPLATES_SOURCE.replace(
+      "foreach (var u in usings)",
+      "foreach (var u in new List<string>(usings))",
+    );
+    expect(source).not.toBe(CORE_TEMPLATES_SOURCE);
+    expect(unreadable(source)).toMatch(/List<string>/);
+  });
+});
+
+describe("a selection names only options Core declares", () => {
+  it("refuses a field ModuleTemplateOptions does not have, instead of rendering without it", () => {
+    // Core renaming EcsSystem would otherwise make include_system write nothing
+    // and say nothing.
+    expect(() => fixture().render("Harbor", "Game.Modules.Harbor", { ModuleConfig: true, Systems: true })).toThrow(
+      /Systems/,
+    );
+  });
+
   it("a file that would never finish", () => {
     const looping = CORE_TEMPLATES_SOURCE.replace(
       "foreach (var u in usings)\n                sb.AppendLine(u);",

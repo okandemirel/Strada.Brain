@@ -181,4 +181,42 @@ describe("module templates this reader cannot follow", () => {
     expect(result.content).toMatch(/switch/);
     expect(existsSync(join(root, "Assets"))).toBe(false);
   });
+
+  it("refuses a framework member it would otherwise print as its last word", async () => {
+    // Read as declared, this wrote a line holding only `Empty` into every
+    // service interface.
+    const root = project(false);
+    installCoreTemplates(
+      root,
+      CORE_TEMPLATES_SOURCE.replace(
+        'sb.AppendLine($"    public interface I{name}Service : IService");',
+        'sb.AppendLine(string.Empty); sb.AppendLine($"    public interface I{name}Service : IService");',
+      ),
+    );
+
+    const result = await run(root);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("ModuleSourceTemplates.cs");
+    expect(result.content).toMatch(/string\.Empty/);
+    // The refusal says what to do instead.
+    expect(result.content).toMatch(/by hand from Packages\/Submodules\/Strada\.Core\/.*ModuleSourceTemplates\.cs/);
+    expect(existsSync(join(root, "Assets"))).toBe(false);
+  });
+
+  it("refuses a requested component whose option the installed Core does not declare, before writing anything", async () => {
+    // A Core that renamed EcsSystem: rendering without the option made
+    // include_system produce no system, and the result did not say so.
+    const root = project(false);
+    installCoreTemplates(root, CORE_TEMPLATES_SOURCE.replaceAll("EcsSystem", "EntitySystem"));
+
+    const asked = await run(root, { include_system: true });
+    expect(asked.isError).toBe(true);
+    expect(asked.content).toMatch(/EcsSystem/);
+    expect(asked.content).toContain("ModuleSourceTemplates.cs");
+    expect(existsSync(join(root, "Assets"))).toBe(false);
+
+    // Not asking for it asks nothing of the missing option.
+    const plain = await run(root);
+    expect(plain.isError, `refused: ${plain.content}`).toBeFalsy();
+  });
 });

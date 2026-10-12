@@ -697,14 +697,30 @@ class Env {
 const isObj = <T extends { t: string }>(v: Value, t: T["t"]): v is Value & T =>
   typeof v === "object" && v !== null && !Array.isArray(v) && !(v instanceof Builder) && (v as { t: string }).t === t;
 
+/**
+ * The types a template may name. A name that is not a local, a parameter or an
+ * option field is one of these or something this reader does not model — a
+ * class-level constant, Environment — and reading it as a name printed its last
+ * word into the module.
+ */
+const NAMED_TYPES = new Set(["Config", "Array", "string"]);
+
 /** How C# prints a value into a string. */
 function show(v: Value): string {
   if (v === null) return "";
   if (typeof v === "string") return v;
   if (typeof v === "number") return String(v);
   if (typeof v === "boolean") return v ? "True" : "False";
-  if (isObj<Qualified>(v, "qualified")) return v.parts[v.parts.length - 1]!;
+  // An enum member prints its name in C#, but string.Empty does not: which
+  // qualified name is which is the part this reader does not model.
+  if (isObj<Qualified>(v, "qualified")) return fail(`prints ${v.parts.join(".")}, which this reader does not model`);
   return fail("a non-text value printed into a string");
+}
+
+/** The ComponentType a GeneratedFile is filed under: `Config.ComponentType.Service` → "Service". */
+function componentOf(v: Value): string | null {
+  if (!isObj<Qualified>(v, "qualified") || v.parts.length < 2 || v.parts[v.parts.length - 2] !== "ComponentType") return null;
+  return v.parts[v.parts.length - 1]!;
 }
 
 class Returned { constructor(readonly value: Value) {} }
@@ -746,7 +762,12 @@ class Program {
 
   files(name: string, namespace: string, selection: TemplateSelection): TemplateFile[] {
     const fields = this.optionDefaults();
-    for (const [key, on] of Object.entries(selection)) if (fields.has(key)) fields.set(key, on);
+    // An option asked for that Core does not declare would render without it
+    // and say nothing; one turned off asks for nothing it could lack.
+    for (const [key, on] of Object.entries(selection)) {
+      if (fields.has(key)) fields.set(key, on);
+      else if (on) fail(`selects ${key}, which ModuleTemplateOptions does not declare`);
+    }
     this.steps = 0;
     this.depth = 0;
     const result = this.invoke("Files", [name, namespace, { t: "options", fields }], null);
@@ -833,6 +854,7 @@ class Program {
         const local = env.lookup(e.id);
         if (local.found) return local.value!;
         if (self?.fields.has(e.id)) return self.fields.get(e.id)!;
+        if (!NAMED_TYPES.has(e.id)) return fail(`reads ${e.id}, which is not a local, a parameter or an option this reader models`);
         return { t: "qualified", parts: [e.id] };
       }
       case "member": {
@@ -850,17 +872,19 @@ class Program {
       case "new": {
         const args = e.args.map((a) => this.eval(a, env, self));
         const items = e.items?.map((a) => this.eval(a, env, self)) ?? null;
-        if (e.type === "[]" || /^List<.*>$/.test(e.type)) return items ?? [];
+        // A capacity changes nothing; a list to copy would have been dropped.
+        if (e.type === "[]" || (/^List<.*>$/.test(e.type) && args.every((a) => typeof a === "number"))) return items ?? [];
         if (e.type === "StringBuilder" && args.length === 0 && !items) return new Builder();
         if (e.type === "string" && args.length === 2 && typeof args[0] === "string" && typeof args[1] === "number") {
           return args[0].repeat(args[1]);
         }
         if (e.type === "GeneratedFile" && args.length === 3) {
           const [component, fileName, source] = args;
-          if (!isObj<Qualified>(component!, "qualified") || typeof fileName !== "string" || typeof source !== "string") {
+          const filedUnder = componentOf(component!);
+          if (filedUnder === null || typeof fileName !== "string" || typeof source !== "string") {
             return fail("new GeneratedFile(...) with arguments of an unexpected kind");
           }
-          return { t: "generated", component: show(component), fileName, source };
+          return { t: "generated", component: filedUnder, fileName, source };
         }
         return fail(`new ${e.type || "(...)"}(...)`);
       }
@@ -876,8 +900,14 @@ class Program {
         const l = this.eval(e.l, env, self);
         if (e.op === "??") return l !== null ? l : this.eval(e.r, env, self);
         const r = this.eval(e.r, env, self);
-        if (e.op === "==") return l === r;
-        if (e.op === "!=") return l !== r;
+        if (e.op === "==" || e.op === "!=") {
+          // Each read of an enum member is a new object here, so === answered
+          // false for two reads of the same member.
+          for (const side of [l, r]) {
+            if (isObj<Qualified>(side, "qualified")) fail(`compares ${side.parts.join(".")}, which this reader does not model`);
+          }
+          return e.op === "==" ? l === r : l !== r;
+        }
         if (e.op === "+" && (typeof l === "string" || typeof r === "string")) return show(l) + show(r);
         if (typeof l !== "number" || typeof r !== "number") return fail(`'${e.op}' on values that are not numbers`);
         switch (e.op) {

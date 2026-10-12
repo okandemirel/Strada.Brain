@@ -199,12 +199,16 @@ export class ModuleCreateTool implements ITool {
       // bootstrapper does not provide. Templates it has but this cannot read
       // refuse, like a layout it cannot read.
       const templateLookup = readModuleTemplates(context.projectPath, CORE_INSTALL_PATH);
+      // Brain's own templates are no fallback for a Core that has its own: they
+      // hand nothing to the PatternManager that Core provides. The way on is
+      // named instead, so the refusal is not a dead end.
       if (templateLookup.status === "unreadable") {
         return {
           content:
             `Error: Strada.Core is installed at ${CORE_INSTALL_PATH} and declares its module templates, but they ` +
             `could not be read (${templateLookup.reason}). No module was created — files written from a guess are ` +
-            `how a module ends up in a shape the framework never agreed to.`,
+            `how a module ends up in a shape the framework never agreed to. Write the module's files by hand from ` +
+            `${CORE_INSTALL_PATH}/${TEMPLATE_DECLARATION_FILE}: its Files() lists each file and its text.`,
           isError: true,
         };
       }
@@ -239,6 +243,39 @@ export class ModuleCreateTool implements ITool {
       if (includeData) components.add("ConfigData").add("ValueObject");
       if (includeEditor) components.add("EditorScripts");
       if (includeTests) components.add("RuntimeTests").add("EditorTests");
+
+      // Core's RuntimeTests/EditorTests stay off: they are Assert.Pass()
+      // placeholders, and a passing placeholder reads as a tested module to
+      // every gate that counts tests. The test assemblies below are made.
+      const coreSelection: Record<string, boolean> = {
+        ServiceInterface: includeService,
+        Service: includeService,
+        Controller: includeController,
+        Model: includeModel,
+        View: includeView,
+        EcsSystem: includeSystem,
+        ConfigData: includeData,
+        ValueObject: includeData,
+        Events: includeEvents,
+        Signals: includeSignals,
+      };
+      // Asked here, before anything is written: a Core that renamed an option
+      // would otherwise render the module without that part, halfway through.
+      const undeclared = templates
+        ? ["ModuleConfig", ...Object.keys(coreSelection).filter((o) => coreSelection[o])].filter(
+            (o) => !templates.options.includes(o),
+          )
+        : [];
+      if (undeclared.length > 0) {
+        return {
+          content:
+            `Error: the installed Strada.Core's module templates (${TEMPLATE_DECLARATION_FILE}) declare no ` +
+            `${undeclared.join(", ")} option, so they cannot generate what was asked for. ModuleTemplateOptions ` +
+            `declares: ${templates!.options.join(", ")}. No module was created — leave out the matching include_* ` +
+            `flag, or write that part by hand from the installed Core.`,
+          isError: true,
+        };
+      }
 
       const declaredOptional = optionalFolderPaths(declared);
       // Omitted means all of them. A module gets the authored-asset folders the
@@ -406,24 +443,10 @@ export class ModuleCreateTool implements ITool {
       const keptServiceHalves: string[] = [];
       const existingConfig = existing.files.find((f) => /ModuleConfig\.cs$/i.test(f)) ?? null;
       if (templates) {
-        // Core's RuntimeTests/EditorTests stay off: they are Assert.Pass()
-        // placeholders, and a passing placeholder reads as a tested module to
-        // every gate that counts tests. The test assemblies above are made.
         const made = await placeCoreTemplates(templates, {
           name,
           namespace,
-          selection: {
-            ServiceInterface: includeService,
-            Service: includeService,
-            Controller: includeController,
-            Model: includeModel,
-            View: includeView,
-            EcsSystem: includeSystem,
-            ConfigData: includeData,
-            ValueObject: includeData,
-            Events: includeEvents,
-            Signals: includeSignals,
-          },
+          selection: coreSelection,
           configKept: existingConfig !== null,
           existing,
           layout,
