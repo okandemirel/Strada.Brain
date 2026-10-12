@@ -23,8 +23,10 @@ import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import {
   ORACLE,
+  combineVerdicts,
   decideVerdict,
   judgeRows,
+  measureLedgerArm,
   measureRates,
   parseArgs,
   renderReport,
@@ -32,6 +34,7 @@ import {
 } from "../../scripts/eval/requirement-evidence-eval.mjs";
 import { EXIT, STATE } from "../../scripts/eval/learning-eval-core.mjs";
 import { closingFact, quotableFactsOf } from "../../src/campaign/campaign-planner.js";
+import { closesByLedger } from "../../src/campaign/scope-verdict.js";
 
 // fileURLToPath, not `.pathname`: on Windows that is "/D:/..." and resolves to "D:\D:\...".
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -39,9 +42,14 @@ const CLI = join(REPO_ROOT, "scripts", "eval", "requirement-evidence-eval.mjs");
 const DATASET_PATH = join(REPO_ROOT, "scripts", "eval", "datasets", "requirement-evidence.json");
 const matcher = { quotableFactsOf, closingFact };
 
+type DatasetRow = { id: string; requirement: string; evidence: Record<string, unknown>; expected: string; rationale: string; source: string };
+type Budgets = { maxFalseClosedRate: number; maxFalseOpenRate: number; minRowsPerRate: number };
+
 function loadDataset(): {
-  budgets: { maxFalseClosedRate: number; maxFalseOpenRate: number; minRowsPerRate: number };
-  rows: Array<{ id: string; requirement: string; evidence: Record<string, unknown>; expected: string; rationale: string; source: string }>;
+  budgets: Budgets;
+  rows: DatasetRow[];
+  ledgerBudgets: Budgets;
+  ledgerRows: Array<DatasetRow & { revision: string; ledger: Record<string, unknown> }>;
 } {
   return JSON.parse(readFileSync(DATASET_PATH, "utf8"));
 }
@@ -200,6 +208,116 @@ describe("the measured rates", () => {
     expect(falseClosed.wrong).toBeGreaterThanOrEqual(6);
     expect(falseClosed.rows).toContain("bomb-by-no-trace-finding");
     expect(falseClosed.rows).toContain("fps-by-not-met-claim");
+  });
+});
+
+describe("the ledger arm (GDD-drift W12): a row closes only on its own check passing on this revision", () => {
+  const PROBES = [
+    "probe-labelled-rule-by-system-file",
+    "probe-feature-by-service-file",
+    "probe-input-by-input-service",
+    "probe-guardrail-by-interface-file",
+  ];
+
+  it("closes none of the not-proven rows — the word-match probes among them — and leaves no proven row open", () => {
+    const dataset = loadDataset();
+    const arm = measureLedgerArm(dataset.ledgerRows, dataset.ledgerBudgets, { closesByLedger }, matcher);
+    const falseClosed = arm.measures.find((m: { name: string }) => m.name === "false-closed-rate")!;
+    const falseOpen = arm.measures.find((m: { name: string }) => m.name === "false-open-rate")!;
+
+    expect(falseClosed.state, JSON.stringify(falseClosed)).toBe(STATE.GOOD);
+    expect(falseClosed.value).toBe(0);
+    expect(falseOpen.state, JSON.stringify(falseOpen)).toBe(STATE.GOOD);
+    expect(falseOpen.value).toBe(0);
+    expect(arm.exitCode).toBe(EXIT.MEASURED_GOOD);
+
+    // The trace's four probes are in the arm, every one of them not proven
+    // and left open by the ledger rule…
+    const probes = arm.rows.filter((r: { id: string }) => PROBES.includes(r.id));
+    expect(probes.map((p: { id: string }) => p.id)).toEqual(PROBES);
+    for (const p of probes) {
+      expect(p.expected, p.id).toBe(ORACLE.NOT_PROVEN);
+      expect(p.matcher, p.id).toBe("open");
+    }
+    // …while today's word matcher closes three of the four (the tap row shares
+    // no word with InputService.cs), as measured on the trace itself.
+    expect(probes.filter((p: { wordMatcher: string }) => p.wordMatcher === "closed").map((p: { id: string }) => p.id)).toEqual([
+      "probe-labelled-rule-by-system-file",
+      "probe-feature-by-service-file",
+      "probe-guardrail-by-interface-file",
+    ]);
+    expect(arm.wordMatcher.closed.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("the arm can fail: a rule that closes what the word matcher closes is a regression", () => {
+    const dataset = loadDataset();
+    // Each row judged by the word matcher over its OWN evidence instead of the ledger rule.
+    const rows = dataset.ledgerRows;
+    const wordRule = {
+      closesByLedger: (row: { rid: string }) => {
+        const r = rows.find((x) => x.id === row.rid)!;
+        return closingFact(r.requirement, quotableFactsOf([r.evidence as never])) !== undefined;
+      },
+    };
+
+    const arm = measureLedgerArm(rows, dataset.ledgerBudgets, wordRule, matcher);
+    const falseClosed = arm.measures.find((m: { name: string }) => m.name === "false-closed-rate")!;
+
+    expect(falseClosed.state).toBe(STATE.REGRESSED);
+    expect(falseClosed.rows).toEqual(expect.arrayContaining(PROBES.filter((id) => id !== "probe-input-by-input-service")));
+    expect(arm.exitCode).toBe(EXIT.MEASURED_REGRESSED);
+    // …and the arm's regression is the run's regression.
+    const main = { verdict: STATE.GOOD, exitCode: EXIT.MEASURED_GOOD, reasons: [] };
+    expect(combineVerdicts(main, arm).exitCode).toBe(EXIT.MEASURED_REGRESSED);
+  });
+
+  it("refuses a ledger row whose state would silently read as open", () => {
+    const good = loadDataset();
+    const first = good.ledgerRows[0]!;
+    const withLedgerRow = (row: Record<string, unknown>) => ({ ...good, ledgerRows: [row] });
+    expect(() => validateDataset(withLedgerRow({ ...first, ledger: { ...first.ledger, status: "passed" } }))).toThrow(/ledger.status/);
+    expect(() => validateDataset(withLedgerRow({ ...first, revision: "" }))).toThrow(/revision/);
+    expect(() =>
+      validateDataset(withLedgerRow({ ...first, ledger: { ...first.ledger, last: { revision: "rev-now", outcome: "passed" } } })),
+    ).toThrow(/ledger.last/);
+    expect(() => validateDataset(withLedgerRow({ ...first, id: good.rows[0]!.id }))).toThrow(/duplicate/);
+    expect(() => validateDataset({ ...good, ledgerBudgets: undefined })).toThrow(/ledgerBudgets/);
+  });
+
+  it("an unjudgeable ledger row keeps the run out of a pass", () => {
+    const dataset = loadDataset();
+    const broken = {
+      closesByLedger: () => {
+        throw new Error("the rule blew up");
+      },
+    };
+    const arm = measureLedgerArm(dataset.ledgerRows, dataset.ledgerBudgets, broken, matcher);
+    expect(arm.exitCode).toBe(EXIT.NOT_MEASURED);
+    const main = { verdict: STATE.GOOD, exitCode: EXIT.MEASURED_GOOD, reasons: [] };
+    expect(combineVerdicts(main, arm).exitCode).toBe(EXIT.NOT_MEASURED);
+  });
+
+  it("the CLI carries the arm, and a regression in it alone fails the run", () => {
+    const run = runCli(["--json"]);
+    expect(run.status).toBe(EXIT.MEASURED_GOOD);
+    const result = JSON.parse(run.stdout);
+    expect(result.ledger.verdict).toBe(STATE.GOOD);
+    expect(result.ledger.wordMatcher.closed).toEqual(expect.arrayContaining(["probe-labelled-rule-by-system-file"]));
+
+    const dir = mkdtempSync(join(tmpdir(), "req-eval-ledger-"));
+    try {
+      const dataset = loadDataset();
+      // One proven row relabelled not proven: the ledger rule closes it, so the
+      // arm's false-closed rate leaves its zero budget while the other arm is untouched.
+      const ledgerRows = dataset.ledgerRows.map((r) => (r.id === "ledger-pass-now" ? { ...r, expected: ORACLE.NOT_PROVEN } : r));
+      const path = join(dir, "ledger-regressed.json");
+      writeFileSync(path, JSON.stringify({ ...dataset, ledgerRows }));
+      const regressed = runCli(["--dataset", path]);
+      expect(regressed.status).toBe(EXIT.MEASURED_REGRESSED);
+      expect(regressed.stdout).toContain("REGRESSED  ledger false-closed-rate");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

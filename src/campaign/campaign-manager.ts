@@ -103,6 +103,9 @@ import {
   rejudgeCampaign,
   rowRef,
 } from "./scope-report.js";
+import type { RequirementLedger, RequirementRow } from "./scope-types.js";
+import { rowBlocks } from "./scope-report.js";
+import { closesByLedger } from "./scope-verdict.js";
 import { systemStampsIn } from "../agents/autonomy/terminal-outcome.js";
 import { acceptancePromptFor } from "./acceptance-prompt.js";
 
@@ -908,7 +911,7 @@ export const MAX_REPAIRS_PER_REQUIREMENT = 2;
  */
 export function withRepairBudget(
   candidates: readonly string[],
-  milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; coverageGap?: string }>,
+  milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; coverageGap?: string; requirementIds?: readonly string[] }>,
 ): { schedulable: string[]; spent: string[] } {
   const schedulable: string[] = [];
   const spent: string[] = [];
@@ -919,11 +922,67 @@ export function withRepairBudget(
 }
 
 export function repairsForRequirement(
-  milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; coverageGap?: string }>,
+  milestones: ReadonlyArray<{ id: string; title: string; prompt?: string; coverageGap?: string; requirementIds?: readonly string[] }>,
   requirement: string,
 ): number {
   const key = gapKey(requirement);
-  return milestones.filter((m) => m.id.startsWith("mcov") && gapKey(coverageGapOf(m)) === key).length;
+  // A LEDGER ROW IS REPAIRED BY EVERY SPRINT THAT CARRIES IT (GDD-drift W12),
+  // not only by the one named after it: a sprint carries rows by id, and its
+  // `coverageGap` names just the first of them.
+  const rid = decodeRequirement(requirement).identity?.id;
+  return milestones.filter(
+    (m) => m.id.startsWith("mcov") && (gapKey(coverageGapOf(m)) === key || (rid !== undefined && (m.requirementIds ?? []).includes(rid))),
+  ).length;
+}
+
+/**
+ * The requirement ledger that decides closure, or undefined when the closure
+ * resolver still does (GDD-drift W12).
+ *
+ * A word match closed GDD rows: a commit naming `LanternSystem.cs` closed "a
+ * lantern refills only at a lit shrine" whatever the lantern did. With a
+ * ledger, a row closes only on its own check passing. Only a READABLE ledger
+ * under the scope gate's `on` mode decides: in shadow the gate records what it
+ * would do and every decision stays today's, and an unreadable ledger is not
+ * an empty one.
+ */
+export function closingLedger(
+  campaign: Pick<Campaign, "requirements" | "requirementsUnreadable">,
+  mode: ScopeGateMode | undefined,
+): RequirementLedger | undefined {
+  if (mode !== "on" || campaign.requirementsUnreadable === true) return undefined;
+  return campaign.requirements;
+}
+
+/** The identities a row answers to in the coverage record: its id, and its lineage across rewordings. */
+function rowIdentities(row: RequirementRow): string[] {
+  const identity = decodeRequirement(row.encoded).identity;
+  return [row.rid, ...(identity ? [identity.id, identity.lineage] : [])];
+}
+
+/**
+ * The ledger rows a coverage sprint carries: its `requirementIds`, or the row
+ * its requirement encodes — by id, or by lineage, so a sprint created for an
+ * older wording of a row is judged by the row as the GDD words it now.
+ */
+export function rowsCarriedBy(
+  ledger: RequirementLedger,
+  sprint: { requirementIds?: readonly string[]; coverageGap?: string },
+): RequirementRow[] {
+  const ids = new Set(sprint.requirementIds ?? []);
+  const identity = sprint.coverageGap ? decodeRequirement(sprint.coverageGap).identity : undefined;
+  return ledger.rows.filter(
+    (row) => ids.has(row.rid) || (identity !== undefined && rowIdentities(row).some((id) => id === identity.id || id === identity.lineage)),
+  );
+}
+
+/**
+ * The rows a ledger leaves open on this revision: every row that can block and
+ * has no check of its own that passed here. A check fault is open whatever its
+ * last run said: the check, not the game, is what failed.
+ */
+export function openLedgerRows(ledger: RequirementLedger, revision: string): RequirementRow[] {
+  return ledger.rows.filter((row) => rowBlocks(row) && (row.status === "check-fault" || !closesByLedger(row, revision)));
 }
 
 /**
@@ -6710,15 +6769,34 @@ export class CampaignManager {
             campaign.gddText !== undefined ? quoteGddFor(campaign.gddText, shown) : "(the campaign carries no GDD text — the item above is all there is)",
             "</gdd>",
           ];
+    // A LEDGER ROW TRAVELS AS ITSELF (GDD-drift W12): its id, so the closure
+    // and the repair budget read the row and not a wording of it, and its
+    // check and last result, because that check is what decides it.
+    const rows = campaign.requirementsUnreadable === true || !campaign.requirements ? [] : rowsCarriedBy(campaign.requirements, { coverageGap: item });
+    const rowLines = rows.flatMap((row) => {
+      const test = row.checks.find((c) => c.kind === "test" && c.supersededAtMs === undefined);
+      return [
+        `GDD row ${row.label ?? row.rid} (${row.sectionNumber ? `§${row.sectionNumber}` : row.section}, line ${row.line}), verbatim: "${row.text.replace(/\s+/g, " ").slice(0, 400)}"`,
+        ...(test?.kind === "test" ? [`Its acceptance check: ${test.testName}`] : []),
+        ...(row.last
+          ? [`Last result on ${row.last.revision.slice(0, 8) || "an unknown revision"}: ${row.last.outcome} — ${row.last.detail.replace(/\s+/g, " ").slice(0, 200)}`]
+          : []),
+      ];
+    });
+    if (rowLines.length > 0 && closingLedger(campaign, this.scopeGateMode) !== undefined) {
+      rowLines.push("The row closes only when its acceptance check passes on the committed tree; a summary saying it is done closes nothing.");
+    }
     return {
       id: index === 0 ? `mcov${round}` : `mcov${round}-${index + 1}`,
       title: `Coverage completion ${round}.${index + 1} — ${shown.slice(0, 60)}`,
       // The requirement IN FULL, because the title is truncated and identity
       // by prefix merged different requirements (Codex 2026-09-11 J#13).
       coverageGap: item,
+      ...(rows.length > 0 ? { requirementIds: rows.map((row) => row.rid) } : {}),
       prompt: [
         `The build's milestone ladder finished, but auditing it against ${gddRef} found this scheduled item undelivered:`,
         `- ${shown}`,
+        ...(rowLines.length > 0 ? ["", ...rowLines] : []),
         "",
         `Implement it exactly as ${gddRef} specifies it, following the project's existing module pattern. This sprint is this one item; the other gaps have their own sprints.`,
         "Verification bar: headless compile green, the relevant PlayMode tests green and unfiltered, and a captured frame proving the bound visual renders (the project's style.json holds the derived art direction — generators read it).",
@@ -6853,8 +6931,78 @@ export class CampaignManager {
    * 2.7, V#4). Every terminal path asks this — the partial-delivery path used
    * to measure the shipped tree alone and set `done` with the requirement its
    * own exhausted sprint had named still missing (V#5).
+   *
+   * WITH A LEDGER THAT DECIDES (GDD-drift W12), a GDD row is closed only by
+   * its own check passing on this revision, and no model is asked about it:
+   * the resolver's quote-and-word-match closed a row whose check had just
+   * failed, because a commit named a file that shared a word with it. Every
+   * row that can block is held, not only the ones a coverage sprint carries.
+   * A sprint that carries no row (capability work, a requirement from before
+   * the ledger) is still put to the resolver; it closes that sprint, never a
+   * row.
    */
   private async openRequirements(campaign: Campaign): Promise<{ open: string[]; auditFailed?: string }> {
+    const repairs = campaign.milestones.filter((m) => m.id.startsWith("mcov"));
+    const ledger = closingLedger(campaign, this.scopeGateMode);
+    if (ledger === undefined) return this.openRequirementsByResolver(campaign, repairs);
+    const tree = this.treeForClosure();
+    const revision = tree.forClosure;
+    const openRows = openLedgerRows(ledger, revision);
+    const unbound: CampaignMilestone[] = [];
+    let restamped = false;
+    for (const m of repairs) {
+      const rows = rowsCarriedBy(ledger, m);
+      if (rows.length === 0) {
+        unbound.push(m);
+        continue;
+      }
+      // The sprint's closure is its rows', and a closure the word match
+      // stamped earlier is withdrawn: left standing, the report called the
+      // row delivered beside a headline that it was not (W#8).
+      const closed = revision !== "" && rows.every((row) => row.status !== "check-fault" && closesByLedger(row, revision));
+      if (closed && (m.coverageClosed !== true || m.coverageClosedRevision !== revision)) {
+        m.coverageClosed = true;
+        m.coverageClosedRevision = revision;
+        restamped = true;
+      } else if (!closed && (m.coverageClosed !== undefined || m.coverageClosedRevision !== undefined)) {
+        m.coverageClosed = undefined;
+        m.coverageClosedRevision = undefined;
+        restamped = true;
+      }
+    }
+    if (restamped) this.persist(campaign);
+    const rest = unbound.length > 0 ? await this.openRequirementsByResolver(campaign, unbound) : { open: [] as string[] };
+    // A ROW IS NOT JUDGED ON A TREE NOBODY CAN NAME, and the reason travels
+    // with the rows it left open, in the words the resolver path uses.
+    const unjudged =
+      revision === "" && openRows.length > 0
+        ? tree.unknown
+          ? "the project's revision could not be read (an unborn or unreadable repository), so no GDD row could be " +
+            `judged against one: ${openRows.length} row(s) stay open`
+          : tree.tracked && tree.dirty
+          ? "the project has uncommitted changes, so no GDD row could be judged against a revision of it: " +
+            `${openRows.length} row(s) stay open`
+          : undefined
+        : undefined;
+    getLoggerSafe().info("Coverage requirements judged by the requirement ledger", {
+      id: campaign.id,
+      revision: revision.slice(0, 12),
+      openRows: openRows.length,
+      rows: ledger.rows.length,
+      unboundSprints: unbound.length,
+    });
+    const auditFailed = [unjudged, rest.auditFailed].filter((s): s is string => s !== undefined).join("; ");
+    return {
+      open: [...openRows.map((row) => row.encoded), ...rest.open],
+      ...(auditFailed === "" ? {} : { auditFailed }),
+    };
+  }
+
+  /** The closure resolver's answer for these coverage sprints: today's path, and the whole of it without a deciding ledger. */
+  private async openRequirementsByResolver(
+    campaign: Campaign,
+    failedRepairs: readonly CampaignMilestone[],
+  ): Promise<{ open: string[]; auditFailed?: string }> {
     const treeBefore = this.treeForClosure();
     const revisionForClosure = treeBefore.forClosure;
     // EVERY REPAIR'S REQUIREMENT, not only the ones whose sprint failed. A
@@ -6875,7 +7023,6 @@ export class CampaignManager {
     // absent (audit 06.1, 2026-09-13). The audit mark now counts rounds only;
     // closure decides what is closed. Legacy rows without `coverageGap` keep
     // their requirement through coverageGapOf (prompt line, then title).
-    const failedRepairs = campaign.milestones.filter((m) => m.id.startsWith("mcov"));
     const unclosed = failedRepairs.filter((m) => !closureHolds(m, revisionForClosure));
     if (unclosed.length === 0) return { open: [] };
     const gddForGaps = campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);

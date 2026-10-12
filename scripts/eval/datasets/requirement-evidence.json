@@ -26,7 +26,17 @@
     "  game with a missing feature, while a FALSE OPEN costs one more repair round. False",
     "  closing is therefore budgeted at zero.",
     "minRowsPerRate keeps a shrunken dataset from reading as a pass: below it the rate is",
-    "  reported NOT MEASURED and the exit code is 3."
+    "  reported NOT MEASURED and the exit code is 3.",
+    "THE LEDGER ARM (GDD-drift plan W12/W16): ledgerRows are judged by closesByLedger",
+    "  (src/campaign/scope-verdict.ts), the rule that closes a requirement row only when its own",
+    "  check passed on the revision being judged. Each row carries the row's ledger state and that",
+    "  revision. They are kept OUT of `rows`, so the word-matcher arm above and its oracles are",
+    "  unchanged: the probe-* rows are the 18d4t trace's shapes (a labelled rule, a feature, a player",
+    "  input and an architecture guardrail, each held against a commit that names a file sharing a",
+    "  word with it), in INVENTED wording, and today's word matcher closes three of the four. The",
+    "  harness reports that count beside the ledger arm's rates; it is disclosure, not a budget.",
+    "  ledgerBudgets are pre-registered the same way: a false close is budgeted at zero, and so is",
+    "  a false open, because the ledger rule reads recorded results, not wording."
   ],
   "budgets": {
     "maxFalseClosedRate": 0.0,
@@ -505,6 +515,190 @@
       "expected": "not_measured",
       "rationale": "An aspiration, not scheduled content. The coverage system is instructed to be lenient about these, and no evidence kind settles it.",
       "source": "src/campaign/campaign-planner.ts (COVERAGE_SYSTEM: strict about scheduled content, lenient about aspiration)"
+    }
+  ],
+  "ledgerBudgets": {
+    "maxFalseClosedRate": 0.0,
+    "maxFalseOpenRate": 0.0,
+    "minRowsPerRate": 4
+  },
+  "ledgerRows": [
+    {
+      "id": "probe-labelled-rule-by-system-file",
+      "requirement": "LR-02 A lantern refills only at a shrine the player has lit.",
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Lantern/LanternSystem.cs, Assets/Scripts/Lantern/LanternView.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "status": "failing",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R2_lr02aa", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "a1" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "fail", "detail": "lantern charge after visiting an unlit shrine: Expected 0 But was 3" }
+      },
+      "expected": "not_proven",
+      "rationale": "The rule's own check failed on this revision. The commit names a system file that shares the rule's noun, which is the whole of what the word match saw: a file exists, not that it obeys the rule.",
+      "source": "GDD-drift plan W12/W16, probe 1 of the 18d4t trace (a labelled rule closed by a system file's name); wording invented"
+    },
+    {
+      "id": "probe-feature-by-service-file",
+      "requirement": "Rewind: after a fall the player may rewind once per run, then the run ends.",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Services/RewindService.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "status": "open",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M3.Acceptance_M3.R1_rewind", "path": "Assets/StradaAcceptance/M3/Acceptance_M3.cs", "bodySha": "b1" }]
+      },
+      "expected": "not_proven",
+      "rationale": "The check written for the feature never ran, so nothing measured the once-per-run limit or the end of the run. A service named after the feature is not the feature's behaviour.",
+      "source": "GDD-drift plan W12/W16, probe 2 of the 18d4t trace (a feature closed by a service file's name); wording invented"
+    },
+    {
+      "id": "probe-input-by-input-service",
+      "requirement": "The player taps a shrine to light it.",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Input/InputService.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "kind": "input",
+        "status": "failing",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M1.Acceptance_M1.R3_tapsh", "path": "Assets/StradaAcceptance/M1/Acceptance_M1.cs", "bodySha": "c1" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "fail", "detail": "a tap at the shrine's screen position left it unlit" }
+      },
+      "expected": "not_proven",
+      "rationale": "The harness tapped the shrine and it stayed unlit. An input service existing says nothing about whether a player's tap reaches the shrine.",
+      "source": "GDD-drift plan W12/W16, probe 3 of the 18d4t trace (a player input held against an input service); wording invented"
+    },
+    {
+      "id": "probe-guardrail-by-interface-file",
+      "requirement": "G2: gameplay systems read the grid only through IGridQuery.",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Grid/IGridQuery.cs, Assets/Scripts/Grid/GridQuery.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "status": "passing",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M1.Acceptance_M1.R4_gridq", "path": "Assets/StradaAcceptance/M1/Acceptance_M1.cs", "bodySha": "d1", "weak": "asserts the interface's method count through reflection; no gameplay system is observed" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "passed in run r7" }
+      },
+      "expected": "not_proven",
+      "rationale": "The only check passed, and the independent review called it weak: counting an interface's methods proves the interface exists, not that gameplay reads the grid only through it.",
+      "source": "GDD-drift plan W12/W16, probe 4 of the 18d4t trace (an architecture guardrail closed by its interface file); wording invented"
+    },
+    {
+      "id": "ledger-pass-on-an-older-revision",
+      "requirement": "The lantern drains one charge every 5 seconds.",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Lantern/LanternSystem.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "kind": "constant",
+        "status": "passing",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R1_drain5", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "e1" }],
+        "last": { "revision": "rev-old", "atMs": 1, "outcome": "pass", "detail": "passed in run r2" }
+      },
+      "expected": "not_proven",
+      "rationale": "It passed on an earlier revision. The tree has changed since and nothing measured the drain on it, so the old pass says nothing about the game in front of us.",
+      "source": "src/campaign/scope-verdict.ts closesByLedger (a pass is bound to the revision it was read on)"
+    },
+    {
+      "id": "ledger-pass-by-a-superseded-check",
+      "requirement": "Shrine count: each level has 3 to 5 shrines.",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Level/ShrinePlacer.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "kind": "range",
+        "status": "passing",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R5_shrn35", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "f1", "supersededAtMs": 9 }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "passed in run r3" }
+      },
+      "expected": "not_proven",
+      "rationale": "The check that passed was superseded (the GDD's numbers changed after it was written), so it measured a range the document no longer asks for.",
+      "source": "src/campaign/scope-types.ts AcceptanceCheckRef.supersededAtMs (a changed GDD number reopens the row)"
+    },
+    {
+      "id": "ledger-flaky-is-not-a-pass",
+      "requirement": "A lit shrine glows until the level ends.",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Shrine/ShrineGlow.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "status": "check-fault",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R6_glow", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "g1" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "flaky", "detail": "failed, then passed on the re-run" }
+      },
+      "expected": "not_proven",
+      "rationale": "A fail followed by a pass is a check that cannot be trusted either way, so it is a check fault and not evidence that the glow holds.",
+      "source": "src/campaign/scope-types.ts RowOutcome (flaky: a check fault, not a pass)"
+    },
+    {
+      "id": "ledger-unmeasured-is-not-a-pass",
+      "requirement": "Shrines are never placed on water tiles.",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Level/ShrinePlacer.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "status": "unmeasured",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R7_nowatr", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "h1" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "unmeasured", "detail": "no acceptance runner is configured" }
+      },
+      "expected": "not_proven",
+      "rationale": "Nothing could run the check on this machine. Unmeasured is never a pass, whatever the commit names.",
+      "source": "GDD-drift plan section 1 (unmeasured is never a pass)"
+    },
+    {
+      "id": "ledger-pass-now",
+      "requirement": "LR-01 The lantern drains one charge every 5 seconds.",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Lantern/LanternDrain.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "kind": "constant",
+        "status": "passing",
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R1_drain5", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "i1" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "passed in run r9" }
+      },
+      "expected": "proven",
+      "rationale": "The rule's own current check passed on the revision being judged, and its assertion on the number is the system's, written from bounds parsed out of the GDD.",
+      "source": "src/campaign/scope-verdict.ts closesByLedger (the positive control)"
+    },
+    {
+      "id": "ledger-pass-now-after-a-rebind",
+      "requirement": "The pause screen opens from the gameplay HUD.",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/UI/PauseScreen.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "kind": "screen",
+        "status": "passing",
+        "checks": [
+          { "kind": "test", "testName": "Strada.Acceptance.M4.Acceptance_M4.R1_pause", "path": "Assets/StradaAcceptance/M4/Acceptance_M4.cs", "bodySha": "j1", "supersededAtMs": 4 },
+          { "kind": "test", "testName": "Strada.Acceptance.M4.Acceptance_M4.R1_pause", "path": "Assets/StradaAcceptance/M4/Acceptance_M4.cs", "bodySha": "j2" }
+        ],
+        "last": { "revision": "rev-now", "atMs": 5, "outcome": "pass", "detail": "passed in run r10" }
+      },
+      "expected": "proven",
+      "rationale": "A refactor broke the first check and it was rebound once; the current check passed on this revision, and the superseded one is history, not a reason to stay open.",
+      "source": "GDD-drift plan section 1 (a check a legitimate refactor broke gets one rebind)"
+    },
+    {
+      "id": "ledger-pass-now-by-scenario",
+      "requirement": "Losing every lantern charge ends the run on the result screen.",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Run/RunOutcome.cs" },
+      "revision": "rev-now",
+      "ledger": {
+        "kind": "flow",
+        "status": "passing",
+        "checks": [{ "kind": "scenario", "requirement": "Losing every lantern charge ends the run on the result screen." }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "the play-through reached the result screen after the last charge" }
+      },
+      "expected": "proven",
+      "rationale": "The play-through scenario for this flow passed on the revision being judged. The word matcher leaves this row open; the ledger rule reads the measurement instead of the wording.",
+      "source": "src/campaign/scope-types.ts AcceptanceCheckRef (scenario)"
+    },
+    {
+      "id": "ledger-pass-now-by-claim",
+      "requirement": "The game holds 60 fps on the target device.",
+      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 60 fps: met — 61 fps median over 3 sessions"] },
+      "revision": "rev-now",
+      "ledger": {
+        "kind": "claim",
+        "status": "passing",
+        "checks": [{ "kind": "claim", "claimKind": "fps" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "61 fps median over 3 sessions" }
+      },
+      "expected": "proven",
+      "rationale": "The delivery gate measured the frame-rate claim on this revision and it met the GDD's number.",
+      "source": "src/campaign/scope-types.ts AcceptanceCheckRef (claim) + gdd-claims.ts"
     }
   ]
 }

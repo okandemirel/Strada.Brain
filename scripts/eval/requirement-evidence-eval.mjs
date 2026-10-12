@@ -23,6 +23,15 @@
  *   this harness could not run are reported on their own and are NEVER folded
  *   into either rate or into a pass.
  *
+ * THE LEDGER ARM (GDD-drift plan W12/W16). With a requirement ledger, a GDD
+ * row is closed only by its own check passing on the revision being judged —
+ * `closesByLedger` in src/campaign/scope-verdict.ts, again production code. The
+ * dataset's `ledgerRows` carry each row's ledger state and that revision, and
+ * are judged by that rule against their own budgets; the arm above never sees
+ * them. Beside its rates the harness reports how many of the arm's not-proven
+ * rows today's word matcher would close — the false closures the ledger exists
+ * to stop. That count is disclosure, not a budget.
+ *
  * Exit codes (the contract scripts/eval/learning-eval.mjs uses):
  *   0  measured and good        — both rates ran and stayed inside their budgets
  *   1  measured and regressed   — a rate ran and came out worse than its budget
@@ -106,35 +115,155 @@ export function parseArgs(argv) {
  */
 export function validateDataset(raw) {
   if (raw === null || typeof raw !== "object") throw new Error("dataset must be an object");
-  const budgets = raw.budgets;
-  if (budgets === null || typeof budgets !== "object") throw new Error("dataset.budgets is required");
-  for (const key of ["maxFalseClosedRate", "maxFalseOpenRate", "minRowsPerRate"]) {
-    if (!Number.isFinite(budgets[key])) throw new Error(`dataset.budgets.${key} must be a number`);
-  }
+  validateBudgets(raw.budgets, "budgets");
   if (!Array.isArray(raw.rows) || raw.rows.length === 0) throw new Error("dataset.rows must be a non-empty array");
   const ids = new Set();
-  const verdicts = new Set(Object.values(ORACLE));
-  for (const row of raw.rows) {
-    if (typeof row?.id !== "string" || row.id === "") throw new Error("every row needs an id");
-    if (ids.has(row.id)) throw new Error(`duplicate row id: ${row.id}`);
-    ids.add(row.id);
-    if (typeof row.requirement !== "string" || row.requirement.trim() === "") {
-      throw new Error(`row ${row.id}: requirement must be a non-empty string`);
+  for (const row of raw.rows) validateRow(row, ids);
+  if (raw.ledgerRows !== undefined) {
+    validateBudgets(raw.ledgerBudgets, "ledgerBudgets");
+    if (!Array.isArray(raw.ledgerRows) || raw.ledgerRows.length === 0) {
+      throw new Error("dataset.ledgerRows must be a non-empty array when present");
     }
-    if (row.evidence === null || typeof row.evidence !== "object" || Array.isArray(row.evidence)) {
-      throw new Error(`row ${row.id}: evidence must be a milestone-shaped object`);
-    }
-    if (!verdicts.has(row.expected)) {
-      throw new Error(`row ${row.id}: expected must be one of ${[...verdicts].join(", ")}`);
-    }
-    if (typeof row.rationale !== "string" || row.rationale.trim().length < 20) {
-      throw new Error(`row ${row.id}: rationale must say WHY the oracle says that`);
-    }
-    if (typeof row.source !== "string" || row.source.trim() === "") {
-      throw new Error(`row ${row.id}: source must name where the shape came from`);
+    for (const row of raw.ledgerRows) {
+      validateRow(row, ids);
+      validateLedgerState(row);
     }
   }
   return raw;
+}
+
+function validateBudgets(budgets, name) {
+  if (budgets === null || typeof budgets !== "object") throw new Error(`dataset.${name} is required`);
+  for (const key of ["maxFalseClosedRate", "maxFalseOpenRate", "minRowsPerRate"]) {
+    if (!Number.isFinite(budgets[key])) throw new Error(`dataset.${name}.${key} must be a number`);
+  }
+}
+
+function validateRow(row, ids) {
+  const verdicts = new Set(Object.values(ORACLE));
+  if (typeof row?.id !== "string" || row.id === "") throw new Error("every row needs an id");
+  if (ids.has(row.id)) throw new Error(`duplicate row id: ${row.id}`);
+  ids.add(row.id);
+  if (typeof row.requirement !== "string" || row.requirement.trim() === "") {
+    throw new Error(`row ${row.id}: requirement must be a non-empty string`);
+  }
+  if (row.evidence === null || typeof row.evidence !== "object" || Array.isArray(row.evidence)) {
+    throw new Error(`row ${row.id}: evidence must be a milestone-shaped object`);
+  }
+  if (!verdicts.has(row.expected)) {
+    throw new Error(`row ${row.id}: expected must be one of ${[...verdicts].join(", ")}`);
+  }
+  if (typeof row.rationale !== "string" || row.rationale.trim().length < 20) {
+    throw new Error(`row ${row.id}: rationale must say WHY the oracle says that`);
+  }
+  if (typeof row.source !== "string" || row.source.trim() === "") {
+    throw new Error(`row ${row.id}: source must name where the shape came from`);
+  }
+}
+
+/** The row states `closesByLedger` reads; anything else is a typo that would silently read as "open". */
+const LEDGER_STATUSES = new Set(["open", "passing", "failing", "check-fault", "unmeasured", "excluded", "waived"]);
+const LEDGER_OUTCOMES = new Set(["pass", "fail", "flaky", "not-run", "check-fault", "unmeasured"]);
+
+function validateLedgerState(row) {
+  if (typeof row.revision !== "string" || row.revision.trim() === "") {
+    throw new Error(`ledger row ${row.id}: revision (the revision it is judged on) must be a non-empty string`);
+  }
+  const l = row.ledger;
+  if (l === null || typeof l !== "object" || Array.isArray(l)) throw new Error(`ledger row ${row.id}: ledger must be an object`);
+  if (!LEDGER_STATUSES.has(l.status)) throw new Error(`ledger row ${row.id}: ledger.status must be one of ${[...LEDGER_STATUSES].join(", ")}`);
+  if (!Array.isArray(l.checks)) throw new Error(`ledger row ${row.id}: ledger.checks must be an array`);
+  if (l.last !== undefined) {
+    if (typeof l.last?.revision !== "string" || !LEDGER_OUTCOMES.has(l.last.outcome)) {
+      throw new Error(`ledger row ${row.id}: ledger.last needs a revision and an outcome among ${[...LEDGER_OUTCOMES].join(", ")}`);
+    }
+  }
+}
+
+/** A dataset row's ledger state as the RequirementRow `closesByLedger` reads. */
+export function ledgerRowOf(row) {
+  const l = row.ledger;
+  return {
+    rid: row.id,
+    encoded: row.requirement,
+    text: row.requirement,
+    section: "",
+    line: 0,
+    span: { start: 0, end: row.requirement.length },
+    kind: l.kind ?? "rule",
+    source: "extracted",
+    ownership: [],
+    status: l.status,
+    checks: l.checks,
+    ...(l.last === undefined ? {} : { last: l.last }),
+    gddSha256: "",
+    gddRevision: 1,
+  };
+}
+
+/**
+ * Run every ledger row through the production closure rule, and record what
+ * today's word matcher would have done with the same row's evidence.
+ */
+export function judgeLedgerRows(rows, ledger, words) {
+  return rows.map((row) => {
+    let closed;
+    let error;
+    try {
+      closed = ledger.closesByLedger(ledgerRowOf(row), row.revision) === true;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+    let wordClosedBy;
+    try {
+      wordClosedBy = words.closingFact(row.requirement, words.quotableFactsOf([row.evidence]));
+    } catch {
+      wordClosedBy = undefined;
+    }
+    return {
+      id: row.id,
+      requirement: row.requirement,
+      expected: row.expected,
+      rationale: row.rationale,
+      source: row.source,
+      matcher: error !== undefined ? "error" : closed ? "closed" : "open",
+      wordMatcher: wordClosedBy !== undefined ? "closed" : "open",
+      ...(wordClosedBy === undefined ? {} : { closedBy: wordClosedBy }),
+      ...(error === undefined ? {} : { error }),
+    };
+  });
+}
+
+/** The ledger arm, measured: its rates, its own verdict, and the word matcher's closures of its not-proven rows. */
+export function measureLedgerArm(rows, budgets, ledger, words) {
+  const judged = judgeLedgerRows(rows, ledger, words);
+  const { measures, notMeasured, counts } = measureRates(judged, budgets);
+  const notProven = judged.filter((j) => j.expected === ORACLE.NOT_PROVEN);
+  return {
+    budgets,
+    measures,
+    notMeasured,
+    counts,
+    wordMatcher: {
+      notProven: notProven.length,
+      closed: notProven.filter((j) => j.wordMatcher === "closed").map((j) => j.id),
+    },
+    rows: judged,
+    ...decideVerdict({ measures, notMeasured }),
+  };
+}
+
+/** Both arms' verdicts as one: a regression in either is a regression, an unmeasured one is not a pass. */
+export function combineVerdicts(main, ledger) {
+  if (ledger === undefined) return main;
+  const reasons = [...main.reasons, ...ledger.reasons.map((r) => `ledger arm — ${r}`)];
+  if (main.exitCode === EXIT.MEASURED_REGRESSED || ledger.exitCode === EXIT.MEASURED_REGRESSED) {
+    return { verdict: STATE.REGRESSED, exitCode: EXIT.MEASURED_REGRESSED, reasons };
+  }
+  if (main.exitCode === EXIT.NOT_MEASURED || ledger.exitCode === EXIT.NOT_MEASURED) {
+    return { verdict: STATE.UNMEASURED, exitCode: EXIT.NOT_MEASURED, reasons };
+  }
+  return { verdict: STATE.GOOD, exitCode: EXIT.MEASURED_GOOD, reasons };
 }
 
 /** Run every row through the production predicate. */
@@ -294,6 +423,35 @@ export function renderReport(result) {
       out.push(` ${agree} ${r.id}: ${r.expected} → ${r.matcher}${r.closedBy ? ` [${r.closedBy.slice(0, 80)}]` : ""}`);
     }
   }
+  if (result.ledger) {
+    const l = result.ledger;
+    out.push("");
+    out.push(
+      `ledger arm — closesByLedger (src/campaign/scope-verdict.ts): ${l.counts.rows} rows ` +
+        `(${l.counts.notProven} not proven, ${l.counts.proven} proven)`,
+    );
+    for (const m of l.measures) {
+      if (m.state === STATE.UNMEASURED) {
+        out.push(`NOT MEASURED  ledger ${m.name} — ${m.reason}`);
+        continue;
+      }
+      const tag = m.state === STATE.GOOD ? "OK       " : "REGRESSED";
+      out.push(`${tag}  ledger ${m.name}: ${(m.value * 100).toFixed(1)}%  (${m.wrong}/${m.denominator}, budget ${(m.budget * 100).toFixed(1)}%)`);
+      if (m.rows.length > 0) out.push(`            rows: ${m.rows.join(", ")}`);
+    }
+    for (const f of l.notMeasured.harnessFailed) out.push(`   ledger ${f.id}: ${f.error}`);
+    out.push(
+      `today's word matcher (closingFact) would close ${l.wordMatcher.closed.length} of the ${l.wordMatcher.notProven} ` +
+        `not-proven ledger rows${l.wordMatcher.closed.length > 0 ? `: ${l.wordMatcher.closed.join(", ")}` : ""} — disclosure, not a budget`,
+    );
+    if (result.rows) {
+      out.push("per ledger row (oracle → ledger rule · word matcher):");
+      for (const r of l.rows) {
+        const agree = r.expected === ORACLE.NOT_MEASURED ? "·" : (r.expected === ORACLE.PROVEN) === (r.matcher === "closed") ? " " : "✗";
+        out.push(` ${agree} ${r.id}: ${r.expected} → ${r.matcher} · words ${r.wordMatcher}`);
+      }
+    }
+  }
   out.push("");
   out.push(`verdict: ${result.verdict}`);
   for (const reason of result.reasons) out.push(`   ${reason}`);
@@ -333,7 +491,9 @@ async function loadMatcher() {
   if (typeof planner.quotableFactsOf !== "function" || typeof planner.closingFact !== "function") {
     throw new Error("campaign-planner.ts does not export quotableFactsOf/closingFact");
   }
-  return { quotableFactsOf: planner.quotableFactsOf, closingFact: planner.closingFact };
+  const verdict = await import(new URL("../../src/campaign/scope-verdict.ts", import.meta.url).href);
+  if (typeof verdict.closesByLedger !== "function") throw new Error("scope-verdict.ts does not export closesByLedger");
+  return { quotableFactsOf: planner.quotableFactsOf, closingFact: planner.closingFact, closesByLedger: verdict.closesByLedger };
 }
 
 export async function main() {
@@ -373,17 +533,23 @@ export async function main() {
   const budgets = { ...dataset.budgets, ...args.overrides };
   // The gate check: with every oracle verdict flipped, a working harness MUST
   // report a regression. A harness that cannot fail measures nothing.
-  const rows = args.verifyCanFail
-    ? dataset.rows.map((r) => ({
-        ...r,
-        expected:
-          r.expected === ORACLE.PROVEN ? ORACLE.NOT_PROVEN : r.expected === ORACLE.NOT_PROVEN ? ORACLE.PROVEN : r.expected,
-      }))
-    : dataset.rows;
+  const invert = (list) =>
+    list.map((r) => ({
+      ...r,
+      expected:
+        r.expected === ORACLE.PROVEN ? ORACLE.NOT_PROVEN : r.expected === ORACLE.NOT_PROVEN ? ORACLE.PROVEN : r.expected,
+    }));
+  const rows = args.verifyCanFail ? invert(dataset.rows) : dataset.rows;
 
   const judged = judgeRows(rows, matcher);
   const { measures, notMeasured, counts } = measureRates(judged, budgets);
-  const verdict = decideVerdict({ measures, notMeasured });
+  const ledger =
+    dataset.ledgerRows === undefined
+      ? undefined
+      : measureLedgerArm(args.verifyCanFail ? invert(dataset.ledgerRows) : dataset.ledgerRows, dataset.ledgerBudgets, matcher, matcher);
+  const verdict = combineVerdicts(decideVerdict({ measures, notMeasured }), ledger);
+  // Per-row detail travels only when asked for, as it does for the arm above.
+  const { rows: ledgerJudged, ...ledgerSummary } = ledger ?? {};
   const result = {
     harness: "requirement-evidence-eval 6.2",
     dataset: datasetPath,
@@ -392,6 +558,7 @@ export async function main() {
     notMeasured,
     counts,
     ...(args.rows ? { rows: judged } : {}),
+    ...(ledger === undefined ? {} : { ledger: args.rows || args.verifyCanFail ? { ...ledgerSummary, rows: ledgerJudged } : ledgerSummary }),
     ...verdict,
   };
 
