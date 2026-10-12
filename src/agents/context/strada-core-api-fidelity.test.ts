@@ -27,13 +27,15 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { dirname, join, win32 } from "node:path";
 import os from "node:os";
 import { globSync, type GlobOptions } from "glob";
-import { STRADA_AGENT_PREAMBLE, STRADA_STATIC_FRAMEWORK_KNOWLEDGE } from "./strada-knowledge.js";
+import { buildDepsContext, STRADA_AGENT_PREAMBLE, STRADA_STATIC_FRAMEWORK_KNOWLEDGE } from "./strada-knowledge.js";
 import { STRADA_API } from "./strada-api-reference.js";
+import { STRADA_WORK_DIVISION } from "./strada-work-division.js";
 import { STRADA_SEEDS } from "../../learning/seeds/strada-core-seeds.js";
 import { CORE_PACKAGE_CONFIG } from "../../intelligence/framework/framework-package-configs.js";
 import { CSharpFrameworkExtractor } from "../../intelligence/framework/framework-extractor-csharp.js";
 import { StradaCoreExtractor } from "../../intelligence/strada-core-extractor.js";
 import { validateDrift } from "../../intelligence/strada-drift-validator.js";
+import type { StradaDepsStatus } from "../../config/strada-deps.js";
 
 const CORE_PATH_FROM_ENV = process.env["STRADA_CORE_PATH"]?.trim() || undefined;
 const CORE_ROOT =
@@ -414,6 +416,24 @@ function sectionClaims(source: string, block: string, prose: boolean): Array<{ c
 /** The recommendation in a seed; what follows "not" names the alternatives it rejects. */
 const recommended = (description: string): string => description.split(/,?\s+(?:not|instead of)\s+/u)[0]!;
 
+/**
+ * "a controller per flow, a signal and its handler per action, …": each piece
+ * of work must be something Core lets a module register (`RegisterController`,
+ * `RegisterSignalHandler`) or a type it provides (`Controller`, `SystemBase`).
+ * The words are lowercase prose, which the name checks never read.
+ */
+function workDivisionProblems(core: CoreSurface, division: string): string[] {
+  const pieces = [...division.matchAll(/\ban? (\w+)(?: and its (\w+))? (?:per|for)\b/gu)];
+  if (pieces.length === 0) return [`names no "a <piece> per <work>": ${JSON.stringify(division)}`];
+  const registrations = new Set([...core.types.values()].flatMap((t) => [...t.members].filter((m) => m.startsWith("Register"))));
+  const pascal = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
+  return pieces.flatMap(([phrase, piece, owned]) => {
+    const name = pascal(piece!) + (owned ? pascal(owned) : "");
+    const known = [name, `${name}Base`, `I${name}`].some((t) => core.types.has(t)) || registrations.has(`Register${name}`);
+    return known ? [] : [`"${phrase}": Strada.Core has no ${name} type and no Register${name}`];
+  });
+}
+
 /** Groups whose values name members without naming the type that declares them. */
 const API_GROUP_OWNERS: Partial<Record<keyof typeof STRADA_API, string[]>> = {
   systemApi: ["SystemBase"],
@@ -467,6 +487,10 @@ describe("Brain's Strada.Core knowledge names only APIs Strada.Core has", () => 
     expect(problems, `names Strada.Core does not have:\n${problems.join("\n")}`).toEqual([]);
   });
 
+  it.skipIf(!CORE_ROOT)(`the way the deps context and the FILE TOO LONG gate divide work${SKIPPED}`, () => {
+    expect(workDivisionProblems(core!, STRADA_WORK_DIVISION)).toEqual([]);
+  });
+
   it.skipIf(!CORE_ROOT)(`the STRADA_API reference${SKIPPED}`, () => {
     const problems: string[] = [];
     const asmdef = JSON.parse(readFileSync(join(CORE_ROOT!, "Runtime", "Strada.Core.asmdef"), "utf8")) as {
@@ -518,8 +542,13 @@ async function withTree(files: Record<string, string>, use: (root: string) => un
 
 /** A Core small enough to read in a test, with a module generator. */
 const SMALL_CORE = {
-  "Runtime/Communication/EventBus.cs":
-    "namespace Strada.Core.Communication { public sealed class EventBus { public void Publish<T>(T message) { } } }",
+  "Runtime/Communication/EventBus.cs": [
+    "namespace Strada.Core.Communication { public sealed class EventBus {",
+    "  public void Publish<T>(T message) { }",
+    "  public void RegisterSignalHandler<T>(System.Action<T> handler) { }",
+    "} }",
+  ].join("\n"),
+  "Runtime/Patterns/Controller.cs": "namespace Strada.Core.Patterns { public abstract class Controller { } }",
   "Editor/ModuleGenerator/ModuleDefinition.cs":
     'namespace Strada.Core.Editor.ModuleGenerator { public class ModuleDefinition { public string Namespace = "Game.Modules"; } }',
   "Editor/ModuleGenerator/ModuleLayout.cs": [
@@ -590,6 +619,31 @@ describe("what the checks read in a prompt block", () => {
         expect.stringContaining("SystemTicker is not a Strada.Core type"),
       ]);
     });
+  });
+
+  it("holds each piece of a work division to what Core lets a module register", async () => {
+    await withTree(SMALL_CORE, (root) => {
+      const core = readCoreSurface(root);
+
+      expect(workDivisionProblems(core, "a controller per flow, a signal and its handler per action, a system for per-frame work")).toEqual([]);
+      // The deps context and the FILE TOO LONG gate both taught this, and
+      // neither text was read by any check.
+      expect(workDivisionProblems(core, "a command per action, a system for per-frame work")).toEqual([
+        expect.stringContaining("Strada.Core has no Command type and no RegisterCommand"),
+      ]);
+    });
+  });
+});
+
+describe("the work division the deps context and the FILE TOO LONG gate teach", () => {
+  it("is the one copy, in the deps context's item 7", () => {
+    const deps: StradaDepsStatus = {
+      coreInstalled: true, corePath: "/core", modulesInstalled: false, modulesPath: null,
+      mcpInstalled: true, mcpPath: "/mcp", mcpVersion: null, warnings: [],
+    };
+    const item7 = buildDepsContext(deps).split("\n").find((line) => line.startsWith("7. "));
+
+    expect(item7).toContain(STRADA_WORK_DIVISION);
   });
 });
 

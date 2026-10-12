@@ -1,10 +1,11 @@
 /**
  * A file that outgrew the framework.
  *
- * Strada.Core's shape — commands, services, models, systems — exists to divide
- * work. Past a couple of hundred lines a class is almost always doing several
- * jobs that the pattern set already has homes for, and a command is the
- * cheapest cut: it takes one action out whole, with its own test.
+ * Strada.Core's shape — controllers, signals, services, models, systems —
+ * exists to divide work. Past a couple of hundred lines a class is almost
+ * always doing several jobs that the pattern set already has homes for, and a
+ * signal handler is the cheapest cut: it takes one action out whole, with its
+ * own test.
  *
  * Measured on the run that prompted this: 41 files, 733 lines in total, nothing
  * over 93. The rule did not fire there and should not have — it is a guardrail
@@ -16,6 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { StradaConformanceGuard } from "./strada-conformance.js";
+import { STRADA_WORK_DIVISION } from "../context/strada-work-division.js";
 
 const deps = {
   coreInstalled: true, corePath: "/core", modulesInstalled: false,
@@ -74,6 +76,9 @@ describe("a source file past the limit", () => {
     // Core has no commands: a module's actions are signals with one handler each.
     expect(prompt).toContain("signal and its handler per action");
     expect(prompt).toContain("service");
+    // The one copy of that division, which the deps context teaches too and
+    // strada-core-api-fidelity.test.ts holds to a Core checkout.
+    expect(prompt).toContain(STRADA_WORK_DIVISION);
   });
 
   it("says nothing about a file within the limit", () => {

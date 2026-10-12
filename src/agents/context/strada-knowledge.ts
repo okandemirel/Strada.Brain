@@ -459,6 +459,7 @@ import { describeFrameworkCheckout, type StradaDepsStatus } from "../../config/s
 import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { createProjectScopeFingerprint } from "../../learning/project-scope.js";
+import { STRADA_WORK_DIVISION } from "./strada-work-division.js";
 
 
 /**
@@ -953,7 +954,7 @@ export function buildDepsContext(status?: StradaDepsStatus, options: DepsContext
       `4. NEVER hand-write a .unity scene or a .asset file. Measured: a run wrote scene YAML whose _gameConfig carried the right guid and the right fileID and \`type: 3\` instead of \`type: 2\`. Every static check passed — the reference is present and non-zero — and at runtime the bootstrapper saw null and logged "No configuration assigned!". One number, invisible on inspection, and the game does not start. \`unity_scene_build\` writes it correctly.`,
       `5. Use \`unity_scene_build\` to assemble the scene from a spec: it creates the assets, GameObjects and prefabs, assigns serialized fields (including GameBootstrapper._gameConfig), and verifies on disk that each reference is a real link rather than a {fileID: 0} that looks like one. It needs no Editor open.`,
       `6. Then call \`unity_playmode_verify\` to actually run the game headlessly. A wired scene is not a running one — a bootstrapper can initialize into a module that throws on its first frame, and the scene file reads identically either way.`,
-      `7. Keep a file under 200 lines. Strada.Core's shape exists to divide work — a controller per flow, a signal and its handler per action, a service for state and collaboration, a model for data, a system for per-frame work — and a class past that has usually stopped using it. A signal handler is the cheapest cut: it takes one action out whole, with its own test.`,
+      `7. Keep a file under 200 lines. Strada.Core's shape exists to divide work — ${STRADA_WORK_DIVISION} — and a class past that has usually stopped using it. A signal handler is the cheapest cut: it takes one action out whole, with its own test.`,
       `8. A test run in which nothing executed is NOT a pass. Unity reports \`result="Passed" total="0"\` and exit 0 for a project whose test assemblies are empty; the question is always what ran, never how many failed.`,
     );
   }

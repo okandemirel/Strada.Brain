@@ -224,6 +224,7 @@ import { cachedReadFile, forEachFileText, snapshotTree, type TreeSnapshot } from
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePaths } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 import { declaresCsTest, isVendorPath, stripCsComments } from "./csharp-source.js";
+import { STRADA_WORK_DIVISION } from "../context/strada-work-division.js";
 
 const STRADA_GENERATOR_TOOLS: ReadonlySet<string> = new Set([
   "strada_create_module",
@@ -1994,10 +1995,8 @@ export class StradaConformanceGuard {
       return (
         "[STRADA FILE TOO LONG] These files are past " + `${MAX_SOURCE_LINES} lines: ` +
         `${oversized.join("; ")}. ` +
-        "Split them the way the framework already divides work: a controller per flow, a signal and " +
-        "its handler per action, a service for state and collaboration, a model for data, a system " +
-        "for per-frame work. A signal handler is usually the cheapest cut — it takes one action out " +
-        "whole, with its own test." +
+        `Split them the way the framework already divides work: ${STRADA_WORK_DIVISION}. ` +
+        "A signal handler is usually the cheapest cut — it takes one action out whole, with its own test." +
         lastAskNote(oversizedAsk)
       );
     }
