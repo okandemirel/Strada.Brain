@@ -46,7 +46,7 @@ export const STRADA_API = {
     logging: "Strada.Core.Logging",
     services: "Strada.Core.Services",
     utilities: "Strada.Core.Utilities",
-    sourceGen: "Strada.Core.SourceGen",
+    sourceGen: "Strada.SourceGeneration",
     commands: "Strada.Core.Commands",
     bootstrap: "Strada.Core.Bootstrap",
     editor: "Strada.Core.Editor",
@@ -129,12 +129,14 @@ export const STRADA_API = {
       "OnDispose()",
     ],
     queryPattern: "ForEach<T1, T2>((int entity, ref T1 c1, ref T2 c2) => { })",
-    entityQueryPatterns: {
-      single: "EntityQuery.Single<T>()",
-      filter: "EntityQuery.Where<T>(Func<T, bool>)",
-      withAll: "EntityQuery.WithAll<T1, T2>()",
-      withAny: "EntityQuery.WithAny<T1, T2>()",
-      withNone: "EntityQuery.WithNone<T>()",
+    // Query() on a system; there is no WithAll/WithAny/WithNone builder.
+    queryBuilder: {
+      query: "Query()",
+      select: "QueryBuilder.Select<T1, T2>()",
+      filter: "QueryBuilder.Filter<T1>()",
+      also: "FilteredQueryBuilder.Also<TFilter>()",
+      none: "FilteredQueryBuilder.None<TExclude>()",
+      forEach: "FilteredQueryBuilder.ForEach(QueryDelegate<T1> action)",
     },
     genericVariants: 8,
   },
@@ -144,30 +146,35 @@ export const STRADA_API = {
     events: {
       publish: "EventBus.Publish<TEvent>(TEvent evt)",
       subscribe: "EventBus.Subscribe<TEvent>(Action<TEvent> handler)",
-      unsubscribe: "EventBus.Unsubscribe<TEvent>(Action<TEvent> handler)",
     },
     signals: {
       send: "EventBus.Send<TSignal>(TSignal signal)",
       register: "EventBus.RegisterSignalHandler<TSignal>(Action<TSignal> handler)",
-      unregister: "EventBus.UnregisterSignalHandler<TSignal>(Action<TSignal> handler)",
     },
     queries: {
       query: "EventBus.Query<TQuery, TResult>(TQuery query)",
       register: "EventBus.RegisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler)",
-      unregister: "EventBus.UnregisterQueryHandler<TQuery, TResult>(Func<TQuery, TResult> handler)",
+      contract: "IQuery<TResult>",
     },
+    // Every Register*/Subscribe returns one; the bus has no Unsubscribe/Unregister*.
+    unsubscribe: "SubscriptionToken.Dispose()",
     async: {
       sendAsync: "EventBus.SendAsync<TSignal>(TSignal signal)",
       queryAsync: "EventBus.QueryAsync<TQuery, TResult>(TQuery query)",
+      queryContract: "IAsyncQuery<TResult>",
     },
     sequences: {
-      pattern: "SignalSequence.Then<T>(Action<T>).ThenIf<T>(Func<T, bool>, Action<T>).Execute()",
+      pattern: "new SignalSequence(bus).Then<TSignal>(TSignal signal).ThenIf<TSignal>(Func<bool> predicate, TSignal signal).Execute()",
     },
   },
 
   // ── Sync Layer ──────────────────────────────────────────────────────
   syncLayer: {
     mediator: "EntityMediator<TView>",
+    // The operators below extend IReadOnlyReactiveProperty<T>; Computed and
+    // BindTwoWay belong to BindingScope.
+    reactiveProperty: "ReactiveProperty<T>",
+    bindingScope: "BindingScope",
     bindings: {
       component: "ComponentBinding<TComponent, TProperty>",
       autoSync: "AutoSyncBinding<TComponent>",
@@ -232,25 +239,27 @@ export const STRADA_API = {
 
   // ── DI API ──────────────────────────────────────────────────────────
   diApi: {
+    // Constructor parameters are resolved everywhere; [Inject] members only by
+    // newer Core builds, for types registered through IModuleBuilder.
+    constructorInjection: "constructor parameters, resolved by the container",
     fieldInjection: "[Inject] private readonly T _field;",
     registration: {
       service: "builder.RegisterService<TInterface, TImpl>()",
       controller: "builder.RegisterController<T>()",
       model: "builder.RegisterModel<TInterface, TImpl>()",
-      factory: "builder.RegisterFactory<TInterface, TImpl>()",
+      factory: "builder.RegisterFactory<T>(Func<IServiceLocator, T> factory, Lifetime lifetime)",
       instance: "builder.RegisterInstance<T>(instance)",
-      singleton: "builder.RegisterSingleton<TInterface, TImpl>()",
-      transient: "builder.RegisterTransient<TInterface, TImpl>()",
-      scoped: "builder.RegisterScoped<TInterface, TImpl>()",
-      lazy: "builder.RegisterLazy<T>(Func<T> factory)",
+      // There is no RegisterSingleton/RegisterTransient/RegisterScoped/RegisterLazy.
+      withLifetime: "builder.Register<TInterface, TImpl>(Lifetime lifetime)",
+      lifetimes: "Lifetime.Singleton | Lifetime.Transient | Lifetime.Scoped",
     },
   },
 
   // ── DI Advanced ─────────────────────────────────────────────────────
   diAdvanced: {
     directFactory: "DirectFactory<T>",
-    sourceGen: "Strada.Core.SourceGen / Strada.SourceGeneration",
-    asyncContainer: "IAsyncContainer",
+    sourceGen: "Strada.SourceGeneration",
+    asyncScope: "AsyncContainerScope",
     containerScope: "ContainerScope",
     autoRegister: "[AutoRegister]",
     autoRegisterSingleton: "[AutoRegisterSingleton]",

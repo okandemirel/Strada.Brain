@@ -57,20 +57,23 @@ export function validateFrameworkDrift(
   const warnings = issues.filter((i) => i.severity === "warning");
   const infos = issues.filter((i) => i.severity === "info");
 
-  const rawScore = errors.length * 10 + warnings.length * 3 + infos.length;
-
   return {
     packageId,
     totalIssues: issues.length,
     errors,
     warnings,
     infos,
-    driftScore: Math.min(100, rawScore),
+    driftScore: scoreDrift(errors.length, warnings.length, infos.length),
     validatedAt: new Date(),
     previousVersion: previous.version,
     currentVersion: current.version,
     changelog: buildChangelog(previous, current),
   };
+}
+
+/** An error weighs 10, a warning 3 and an info 1, capped at 100. */
+export function scoreDrift(errors: number, warnings: number, infos: number): number {
+  return Math.min(100, errors * 10 + warnings * 3 + infos);
 }
 
 /**
@@ -208,21 +211,34 @@ function validateInterfaceDrift(
   }
 }
 
+/**
+ * An attribute is gone when nothing in the current source applies it and no
+ * class declares it.
+ *
+ * The map's KEYS are not comparable across snapshots: an extracted snapshot
+ * keys it by the class that carries the attributes, Brain's reference by its
+ * own labels ("stradaSystem"). Comparing keys reported every attribute Brain
+ * teaches as removed from a Core that declares all of them. The VALUES are
+ * attribute names on both sides, so those are what is compared.
+ */
 function validateAttributeDrift(
   prev: FrameworkAPISnapshot,
   curr: FrameworkAPISnapshot,
   issues: DriftIssue[],
 ): void {
-  const prevKeys = new Set([...prev.attributes.keys()]);
-  const currKeys = new Set([...curr.attributes.keys()]);
+  const attributeName = (name: string) => name.replace(/<.*$/su, "").replace(/Attribute$/u, "");
+  const present = new Set([...curr.attributes.values()].flat().map(attributeName));
+  for (const cls of curr.classes) {
+    if (/Attribute(?:<.*)?$/su.test(cls.name)) present.add(attributeName(cls.name));
+  }
 
-  for (const key of prevKeys) {
-    if (!currKeys.has(key)) {
+  for (const name of new Set([...prev.attributes.values()].flat().map(attributeName))) {
+    if (!present.has(name)) {
       issues.push({
         severity: "warning",
         category: "attribute",
-        message: `Attribute target "${key}" removed`,
-        brainValue: key,
+        message: `Attribute [${name}] is no longer declared or applied`,
+        brainValue: name,
       });
     }
   }

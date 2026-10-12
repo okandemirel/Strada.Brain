@@ -17,7 +17,9 @@ export const CORE_PACKAGE_CONFIG: FrameworkPackageConfig = {
   displayName: "Strada.Core",
   sourceLanguage: "csharp",
   fileGlob: "**/*.cs",
-  ignoreGlobs: ["**/Tests/**", "**/bin/**", "**/obj/**"],
+  // Tools/ is Core's own build and benchmark tooling (a dotnet test harness,
+  // fixtures named T0..T4, adapters for other DI containers), not its API.
+  ignoreGlobs: ["**/Tests/**", "Tools/**", "**/bin/**", "**/obj/**"],
   repoUrl: DEFAULT_STRADA_CORE_REPO_URL,
   versionDetection: "package.json",
 };

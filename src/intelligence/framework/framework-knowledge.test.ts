@@ -410,15 +410,16 @@ describe("validateFrameworkDrift", () => {
   });
 
   it("attribute removal creates warning for csharp packages", () => {
+    // As the extractor shapes it: each class mapped to the attributes it carries.
     const prev = makeSnapshot({
       attributes: new Map([
-        ["StradaSystem", ["AttributeTargets.Class"]],
-        ["Deprecated", ["AttributeTargets.Method"]],
+        ["MovementSystem", ["StradaSystem"]],
+        ["LegacyApi", ["Deprecated"]],
       ]),
     });
     const curr = makeSnapshot({
       attributes: new Map([
-        ["StradaSystem", ["AttributeTargets.Class"]],
+        ["MovementSystem", ["StradaSystem"]],
       ]),
     });
 

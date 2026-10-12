@@ -52,7 +52,10 @@ export const STRADA_SEEDS: SeedInstinct[] = [
   },
   {
     pattern: "mediator_pattern",
-    action: { description: "Use Strada.Core MediatR implementation" },
+    action: {
+      description:
+        "Use Strada.Core EventBus signals (RegisterSignalHandler/Send) and queries (RegisterQueryHandler/Query) for in-process requests, and EntityMediator to bind ECS entities to views, not a MediatR-style library",
+    },
     scope: "global",
     confidence: 0.65,
     trustLevel: "warn_enabled",
@@ -60,7 +63,10 @@ export const STRADA_SEEDS: SeedInstinct[] = [
   },
   {
     pattern: "async_pattern",
-    action: { description: "Use UniTask for async operations, not System.Threading.Tasks" },
+    action: {
+      description:
+        "Use ValueTask with a CancellationToken for async operations, as Strada.Core's EventBus does (SendAsync, QueryAsync), not UniTask",
+    },
     scope: "global",
     confidence: 0.65,
     trustLevel: "warn_enabled",
@@ -108,6 +114,13 @@ export async function seedStradaConventions(storage: LearningStorage): Promise<v
       // Repair rows an older build registered under project_path "" (see below);
       // INSERT OR IGNORE makes this a no-op once the '*' row exists.
       storage.addInstinctScopeV2(existing.id, "*", "global");
+      // A seed row keeps the text it was first written with, so a corrected seed
+      // never reached a store seeded by an older build: every store kept teaching
+      // "MediatR" and UniTask, which Strada.Core does not have. Only the seed's
+      // own row is rewritten; a learned instinct on the same pattern is left alone.
+      if (existing.seed && existing.action !== seed.action.description) {
+        storage.updateInstinct({ ...existing, action: seed.action.description });
+      }
       continue;
     }
 

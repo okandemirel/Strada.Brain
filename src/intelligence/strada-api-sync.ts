@@ -171,14 +171,11 @@ async function runMultiPackageSync(opts: SyncOptions): Promise<void> {
       );
       console.log(`  Namespaces: ${snapshot.namespaces.length}`);
 
-      // Drift detection: for core, build a baseline from STRADA_API; for others, first sync
-      let previousSnapshot: import("./framework/framework-types.js").FrameworkAPISnapshot | null = null;
-      if (pkgId === "core") {
-        // Use the legacy validator's baseline-building logic for Core drift
-        const { buildBrainBaselineSnapshot } = await import("./strada-drift-validator.js");
-        previousSnapshot = buildBrainBaselineSnapshot();
-      }
-      const driftReport = validateFrameworkDrift(pkgId, snapshot, previousSnapshot);
+      // Drift detection: core is checked against Brain's STRADA_API; others are a first sync
+      const driftReport =
+        pkgId === "core"
+          ? (await import("./strada-drift-validator.js")).validateAgainstBrainReference(snapshot)
+          : validateFrameworkDrift(pkgId, snapshot, null);
 
       if (opts.json) {
         console.log(JSON.stringify(driftReport, null, 2));

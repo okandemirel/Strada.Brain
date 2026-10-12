@@ -6,7 +6,8 @@
  *
  * @deprecated Use validateFrameworkDrift / formatFrameworkDriftReport from
  * ./framework/framework-drift.js instead. This module is retained for
- * backward compatibility with existing tests and the Brain baseline builder.
+ * backward compatibility with existing tests, and it holds the check of Brain's
+ * STRADA_API against a Core snapshot (validateAgainstBrainReference).
  */
 
 import { STRADA_API } from "../agents/context/strada-api-reference.js";
@@ -14,9 +15,11 @@ import type { CoreAPISnapshot } from "./strada-core-extractor.js";
 import {
   validateFrameworkDrift,
   formatFrameworkDriftReport,
+  scoreDrift,
 } from "./framework/framework-drift.js";
 import type {
   FrameworkAPISnapshot,
+  FrameworkDriftReport,
   DriftIssue as FrameworkDriftIssue,
 } from "./framework/framework-types.js";
 
@@ -79,11 +82,9 @@ function coreSnapshotToFramework(snapshot: CoreAPISnapshot): FrameworkAPISnapsho
 /**
  * Build a FrameworkAPISnapshot from Brain's static STRADA_API reference.
  * This represents what Brain currently believes the Core API looks like.
+ * Compare it with validateAgainstBrainReference, not as an ordinary previous
+ * snapshot: it is a subset of Core.
  */
-export function buildBrainBaselineSnapshot(): FrameworkAPISnapshot {
-  return stradaApiToFrameworkSnapshot();
-}
-
 function stradaApiToFrameworkSnapshot(): FrameworkAPISnapshot {
   const namespaces = Object.values(STRADA_API.namespaces) as string[];
 
@@ -170,17 +171,34 @@ function frameworkIssueToLegacy(issue: FrameworkDriftIssue): DriftIssue {
 // ─── Validator ──────────────────────────────────────────────────────────────
 
 /**
+ * Validate a Core snapshot against what Brain's STRADA_API says Core has.
+ *
+ * The reference names the part of Core Brain teaches, not all of it, so a type
+ * or namespace Core has and Brain does not mention is not drift. The generic
+ * validator counts each as an "added" info worth a point, and an aligned Brain
+ * scored 100/100 (HIGH) against Core HEAD over ~480 of them, which hid the few
+ * real findings. Here only what Brain names and Core lacks is scored.
+ */
+export function validateAgainstBrainReference(current: FrameworkAPISnapshot): FrameworkDriftReport {
+  // The reference is "previous" knowledge; the snapshot is current reality.
+  const report = validateFrameworkDrift("core", current, stradaApiToFrameworkSnapshot());
+  return {
+    ...report,
+    totalIssues: report.errors.length + report.warnings.length,
+    infos: [],
+    driftScore: scoreDrift(report.errors.length, report.warnings.length, 0),
+    changelog: { ...report.changelog, addedNamespaces: [], addedClasses: [], addedInterfaces: [] },
+  };
+}
+
+/**
  * Validate Brain's STRADA_API against a CoreAPISnapshot.
  * Returns a DriftReport with all discovered inconsistencies.
  *
  * @deprecated Use validateFrameworkDrift from ./framework/framework-drift.js instead.
  */
 export function validateDrift(snapshot: CoreAPISnapshot): DriftReport {
-  const coreSnapshot = coreSnapshotToFramework(snapshot);
-  const brainSnapshot = stradaApiToFrameworkSnapshot();
-
-  // brainSnapshot represents "previous" knowledge, coreSnapshot is "current" reality
-  const frameworkReport = validateFrameworkDrift("core", coreSnapshot, brainSnapshot);
+  const frameworkReport = validateAgainstBrainReference(coreSnapshotToFramework(snapshot));
 
   const errors = frameworkReport.errors.map(frameworkIssueToLegacy);
   const warnings = frameworkReport.warnings.map(frameworkIssueToLegacy);

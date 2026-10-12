@@ -71,7 +71,8 @@ describe("a source file past the limit", () => {
     // has repeatedly found useless.
     const prompt = promptFor(400);
 
-    expect(prompt).toContain("command per action");
+    // Core has no commands: a module's actions are signals with one handler each.
+    expect(prompt).toContain("signal and its handler per action");
     expect(prompt).toContain("service");
   });
 

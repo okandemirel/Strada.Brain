@@ -32,7 +32,7 @@ PROCESS RULE — ask before sinking hours: when an implementation fork has two o
 
 ### Code Conventions
 
-- Namespace: \`Strada.Core.*\` for framework, \`YourGame.*\` for game code
+- Namespace: \`Strada.Core.*\` for framework; game code keeps the project's root namespace, \`Game.Modules.<name>\` when it has none (the default of Core's module generator and of create_module)
 - One class per file, file name matches class name
 - Interfaces prefixed with 'I' (IInventoryService)
 - Components are unmanaged structs with \`IComponent\` and \`[StructLayout(LayoutKind.Sequential)]\`
@@ -42,8 +42,8 @@ PROCESS RULE — ask before sinking hours: when an implementation fork has two o
 - Controllers end with 'Controller' suffix
 - Mediators end with 'Mediator' suffix
 - Assembly definitions (.asmdef) per module folder
-- Service injection uses \`[Inject]\` attribute, not constructor parameters
-- Systems are marked with \`[StradaSystem]\` and ordered with \`[ExecutionOrder(int)]\`
+- Services take their dependencies as constructor parameters, which the container resolves. \`[Inject]\` member injection runs only in newer Core builds, and only for types registered through \`IModuleBuilder\`: prefer the constructor
+- Systems are marked with \`[StradaSystem]\` and ordered with \`[ExecutionOrder(int)]\` (both in \`Strada.Core.Modules\`)
 
 ### Module Decomposition
 
@@ -57,7 +57,7 @@ writing code, and create a module for each.
 - A module is a compilation boundary: its own folder under \`Assets/Modules/\`,
   its own \`.asmdef\`, its own \`*ModuleConfig\`, its own \`Tests/Runtime\` and
   \`Tests/Editor\`. Registering it with the framework is what makes it exist.
-- Depend through interfaces registered in \`Configure(IModuleBuilder)\`, never by
+- Depend through interfaces registered in \`ModuleConfig.Configure(IModuleBuilder)\`, never by
   reaching into another module's internals. A module that cannot be compiled
   without three others is not a module.
 - Go as fine as the concerns genuinely are. A grid game is not "a game module":
@@ -106,7 +106,6 @@ Assets/
 │       │   │   └── HealthComponent.cs     (IComponent)
 │       │   ├── Systems/
 │       │   │   └── DamageSystem.cs        (SystemBase)
-│       │   ├── Commands/
 │       │   ├── Data/
 │       │   │   ├── UnityObjects/          (ScriptableObject configs)
 │       │   │   └── ValueObjects/          (plain structs)
@@ -191,30 +190,31 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 
 ### 2. DI Container (Expression-compiled)
 - \`ContainerBuilder\` builds an immutable \`Container\`
-- Lifetimes: Singleton, Transient, Scoped
+- Lifetimes: \`Lifetime.Singleton\`, \`Lifetime.Transient\`, \`Lifetime.Scoped\`
 - Resolve<T>() uses TypeId<T> for O(1) lookup
-- Field injection via \`[Inject]\` attribute (\`using Strada.Core.DI.Attributes;\`)
+- Constructor injection is the default: the container resolves constructor parameters
+- \`[Inject]\` (\`using Strada.Core.DI.Attributes;\`) marks fields, properties and methods for member injection; only newer Core builds run it, for types registered through \`IModuleBuilder\`
 - \`IModuleBuilder\` wraps ContainerBuilder for module-scoped registration
-- Registration: \`builder.RegisterService<TInterface, TImpl>()\`, \`builder.RegisterController<T>()\`
-- Lock-free singletons: thread-safe lazy initialization without locks
-- \`DirectFactory<T>\`: lightweight factory binding for transient creation
-- Source-generated bindings: compile-time DI wiring via source generators
+- Registration: \`builder.RegisterService<TInterface, TImpl>()\`, \`builder.RegisterController<T>()\`, \`builder.RegisterModel<TInterface, TImpl>()\`, \`builder.RegisterInstance<T>(instance)\`, \`builder.Register<TInterface, TImpl>(Lifetime.Transient)\`
+- Lock-free singleton resolution (published with \`Interlocked.CompareExchange\`)
+- \`DirectFactory<T>\`: the slot the source generator fills with a compiled factory; game code registers through the builder instead
+- Source-generated bindings: compile-time DI wiring via source generators (\`Strada.SourceGeneration\`)
 - Auto-binding attributes: \`[AutoRegister]\`, \`[AutoRegisterSingleton]\`, \`[AutoRegisterTransient]\`, and \`[AutoRegisterScoped]\` enable runtime auto-discovery
 
 ### 3. ECS (Custom SparseSet-based)
 - \`EntityManager\`: NativeArray-based with versioned entity IDs and index recycling
-- \`ComponentStore\`: SparseSet storage per component type (\`IComponentStorage<T>\`)
+- \`ComponentStore\`: \`SparseSet<T>\` storage per component type, behind \`IComponentStorage\`
 - Components: unmanaged structs implementing \`IComponent\` with \`[StructLayout(LayoutKind.Sequential)]\`
 - Systems: inherit \`SystemBase\` (managed), \`JobSystemBase\` (Burst-compatible), or generic \`BurstSystem<TJob, T1..T4>\` variants (SIMD)
 - System lifecycle: \`OnInitialize()\` → \`OnUpdate(float deltaTime)\` → \`OnDispose()\`
-- System attributes: \`[StradaSystem]\` marks a class as a system, \`[ExecutionOrder(int)]\` controls ordering (lower = earlier)
-- Additional attributes: \`[UpdatePhase(UpdatePhase.X)]\`, \`[RunBefore(typeof(T))]\`, \`[RunAfter(typeof(T))]\`, \`[RequiresSystem(typeof(T))]\`
-- 3-phase update cycle: Update (gameplay), LateUpdate (post-processing), FixedUpdate (physics)
+- System attributes (\`using Strada.Core.Modules;\`): \`[StradaSystem]\` marks a class as a system, \`[ExecutionOrder(int)]\` controls ordering (lower = earlier)
+- Additional attributes: \`[UpdatePhase(UpdatePhase.FixedUpdate)]\`, \`[RunBefore(typeof(T))]\`, \`[RunAfter(typeof(T))]\`, \`[RequiresSystem(typeof(T))]\`
+- Update phases (\`UpdatePhase\`): \`Initialization\`, \`Update\` (gameplay), \`LateUpdate\` (post-processing), \`FixedUpdate\` (physics)
 - \`SystemRunner\`: Executes systems in order, manages lifecycle
-- Query pattern: \`ForEach<T1, T2>((int entity, ref T1 c1, ref T2 c2) => { })\` (delegate-based)
-- \`EntityQuery\` builder: \`WithAll<T1, T2>()\`, \`WithAny<T1, T2>()\`, \`WithNone<T>()\` for filtered iteration
+- Query pattern: \`ForEach<T1, T2>((int entity, ref T1 c1, ref T2 c2) => { })\` (delegate-based, up to 8 components)
+- Filtered iteration: \`Query().Filter<T1>().Also<T2>().None<T3>().ForEach(...)\`. \`Query()\` returns a \`QueryBuilder\`; \`Filter<T>()\` starts a \`FilteredQueryBuilder\` (up to 3 components) where \`Also<T>()\` requires another component and \`None<T>()\` excludes one; \`Query().Select<T1, T2>()\` returns an \`EntityQuery<T1, T2>\`
 - \`IJobComponent\`: Burst-compatible per-entity job interface
-- \`EntityCommandBuffer\`: Deferred structural changes (add/remove entities/components) applied between phases
+- \`EntityCommandBuffer\`: Deferred structural changes (add/remove entities/components), recorded through \`JobSystemBase.CommandBuffer\` and played back on the main thread after the system's update
 - Generic variants: \`SystemBase<T1>\` through \`SystemBase<T1,...,T8>\` with \`OnUpdateEntity()\`
 - Requires \`using Strada.Core.ECS;\` and \`using Strada.Core.ECS.Systems;\`
 
@@ -222,9 +222,9 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - \`Model\`: Plain data container class
 - \`View\`: MonoBehaviour-based UI/scene objects, binds to Controller
 - \`Controller<TModel>\`: Mediates Model↔View with DI injection
-- \`TickableController\`: Controller with \`OnTick(float dt)\` for per-frame logic
-- \`FullTickController\`: Controller with Update + LateUpdate + FixedUpdate hooks
-- \`Service\`: Base class for service implementations, registered via DI
+- \`TickableController\`: Controller with \`Tick(float deltaTime)\` for per-frame logic
+- \`FullTickController\`: Controller with \`Tick\`, \`FixedTick\` and \`LateTick\` hooks
+- \`Service\`: Base class for service implementations, registered via DI; \`TickableService\` adds \`Tick(float deltaTime)\`
 - Reactive data: \`ReactiveProperty<T>\` for observable value changes
 
 ### 5. Sync Layer (ECS ↔ View Bridge)
@@ -232,48 +232,49 @@ Strada.Core is a unified MVCS+ECS framework for Unity 6. It combines enterprise-
 - \`ComponentBinding<TComponent, TProperty>\`: Reactive one-way/two-way sync
 - \`AutoSyncBinding<T>\`: Automatic full-component sync
 - SyncBindings() pulls ECS data → View, PushBindings() pushes View → ECS
-- Reactive DSL operators: \`Select()\`, \`Where()\`, \`CombineLatest()\`, \`Throttle()\`, \`DistinctUntilChanged()\`
+- Reactive operators on \`ReactiveProperty<T>\`: \`Select()\`, \`Where()\`, \`CombineLatest()\`, \`Throttle()\`, \`DistinctUntilChanged()\`
 - Derived reactive properties: \`MappedProperty<TIn, TOut>\`, \`FilteredProperty<T>\`, \`CombinedProperty<T1, T2, TOut>\`, \`ThrottledProperty<T>\`
 
 ### 6. EventBus (Communication)
-- Zero-alloc pub/sub for struct messages (4ns/dispatch)
+- \`EventBus\` (\`Strada.Core.Communication\`, injected as \`IEventBus\`): zero-alloc dispatch of struct messages
 - 3 communication patterns:
-  - **Events**: \`Publish<T>()\` / \`Subscribe<T>()\` — fire-and-forget broadcast
-  - **Signals**: \`Send<T>()\` / \`Register<T>()\` — direct ECS system-to-system communication
-  - **Queries**: \`Query<TReq, TRes>()\` / \`Register<TReq, TRes>()\` — request/response pattern
-- Async support: \`SendAsync<T>()\`, \`QueryAsync<TReq, TRes>()\`, \`RegisterAsyncSignalHandler<T>()\`, \`RegisterAsyncQueryHandler<TReq, TRes>()\`
-- \`SignalSequence\`: Ordered signal chains for deterministic multi-step workflows
-- \`ComponentChanged<T>\`: Automatic events when components change
+  - **Events**: \`Publish<T>()\` / \`Subscribe<T>()\` — fire-and-forget broadcast to any number of subscribers
+  - **Signals**: \`Send<T>()\` / \`RegisterSignalHandler<T>()\` — exactly one handler; \`Send\` throws when none is registered
+  - **Queries**: \`Query<TQuery, TResult>()\` / \`RegisterQueryHandler<TQuery, TResult>()\` — request/response; \`TQuery\` is a struct implementing \`IQuery<TResult>\`
+- Every registration returns a \`SubscriptionToken\`; disposing it removes that handler (the bus has no unsubscribe method)
+- Async support (\`ValueTask\`): \`SendAsync<T>()\`, \`QueryAsync<TQuery, TResult>()\` (the query implements \`IAsyncQuery<TResult>\`), \`RegisterAsyncSignalHandler<T>()\`, \`RegisterAsyncQueryHandler<TQuery, TResult>()\`
+- \`SignalSequence\`: Ordered signal chains, \`Then(signal)\` and \`ThenIf(predicate, signal)\` then \`Execute()\`
+- \`ComponentChanged<T>\` (\`Strada.Core.Sync\`): an event struct Core never publishes itself; publish it when a component changes, and \`EntityMediator.OnComponentChanged<T>()\` hears it for the bound entity
 
 ### 7. Pooling
-- \`ObjectPool<T>\`: Generic high-performance pool for any class implementing \`IPoolable\`
-- \`IPoolable\`: Interface with \`OnSpawn()\` and \`OnDespawn()\` lifecycle callbacks
-- \`PoolRegistry\`: Central registry for all pools, supports global Prewarm/DrainAll
+- \`ObjectPool<T>\`: Generic pool for any reference type, built from a factory
+- \`IPoolable\`: Interface with \`OnSpawn()\` and \`OnDespawn()\` lifecycle callbacks, which the pool calls
+- \`PoolRegistry\`: Central registry of pools per type: \`GetOrCreate<T>()\`, \`Get<T>()\`, \`Spawn<T>()\`, \`Despawn()\`, \`Clear()\`
 - API: \`Spawn()\` to acquire, \`Despawn()\` to return, \`Prewarm(int count)\` to pre-allocate
 - Requires \`using Strada.Core.Pooling;\`
 
 ### 8. StradaLog (Logging)
 - Module-aware structured logging system
 - \`StradaLog.Log("msg", LogModule.ECS)\`, \`.LogWarning()\`, \`.LogError()\`
-- \`LogModule\` enum: Core, ECS, DI, Modules, Sync, Events, Pooling, Editor, etc.
-- Per-module log level filtering at runtime
-- Circular buffer for recent log history (configurable size)
+- \`LogModule\` enum: \`LogModule.General\`, \`LogModule.Core\`, \`LogModule.ECS\`, \`LogModule.DI\`, \`LogModule.Modules\`, \`LogModule.Sync\`, \`LogModule.Bootstrap\`, \`LogModule.Editor\`; a game's own modules take values from 1000
+- Per-module visibility in \`StradaLogSettings\`
+- Circular buffer for recent log history (size set by \`StradaLogSettings.MaxLogEntries\`)
 - Requires \`using Strada.Core.Logging;\`
 
 ### 9. Data Layer
-- \`ConfigDatabase\`: ScriptableObject-based key-value config store, queryable at runtime
-- \`AssetRegistry\`: Centralized asset reference tracking with lazy loading and unload policies
+- \`ConfigDatabase\`: runtime store of \`ConfigData\` assets (the \`CD_*\` configs), looked up by type with \`Get<T>()\` or by GUID with \`GetByGuid()\`
+- \`AssetRegistry\`: ScriptableObject list of asset references; \`RuntimeAssetDatabase\` looks them up by GUID or type at runtime
 - Requires \`using Strada.Core.Data;\`
 
 ### 10. Editor Tools
-- \`ArchitectureValidator\`: Validates module dependencies, DI registrations, and naming conventions at edit-time
-- \`HotReloadManager\`: Domain-reload-free code hot-reload for rapid iteration
-- \`SystemProfiler\`: Per-system timing and allocation profiling overlay
-- \`BenchmarkRunner\`: Automated performance regression testing for systems
+- \`ArchitectureValidator\`: edit-time rules on component types, controllers that reach into ECS, views that hold business logic and services that depend on Unity
+- \`HotReloadManager\`: Play Mode hot reload of \`CD_*\` config assets
+- \`SystemProfiler\`: Per-system execution timing samples
+- \`BenchmarkRunner\`: Benchmarks of Core itself (DI resolution, ECS queries, message dispatch)
 - Located in \`Strada.Core.Editor\` assembly
 
 ### 11. Bootstrap Flow
-- \`GameBootstrapper\` MonoBehaviour (\`DefaultExecutionOrder(-1000)\`)
+- \`GameBootstrapper\` MonoBehaviour (\`[DefaultExecutionOrder(-1000)]\`)
 - Phases: Config Validation → Container Build → ECS World → Module Init → System Init
 - Static properties: Container, Services, World, Systems
 `;
@@ -952,7 +953,7 @@ export function buildDepsContext(status?: StradaDepsStatus, options: DepsContext
       `4. NEVER hand-write a .unity scene or a .asset file. Measured: a run wrote scene YAML whose _gameConfig carried the right guid and the right fileID and \`type: 3\` instead of \`type: 2\`. Every static check passed — the reference is present and non-zero — and at runtime the bootstrapper saw null and logged "No configuration assigned!". One number, invisible on inspection, and the game does not start. \`unity_scene_build\` writes it correctly.`,
       `5. Use \`unity_scene_build\` to assemble the scene from a spec: it creates the assets, GameObjects and prefabs, assigns serialized fields (including GameBootstrapper._gameConfig), and verifies on disk that each reference is a real link rather than a {fileID: 0} that looks like one. It needs no Editor open.`,
       `6. Then call \`unity_playmode_verify\` to actually run the game headlessly. A wired scene is not a running one — a bootstrapper can initialize into a module that throws on its first frame, and the scene file reads identically either way.`,
-      `7. Keep a file under 200 lines. Strada.Core's shape exists to divide work — a command per action, a service for state and collaboration, a model for data, a system for per-frame work — and a class past that has usually stopped using it. A command is the cheapest cut: it takes one action out whole, with its own test.`,
+      `7. Keep a file under 200 lines. Strada.Core's shape exists to divide work — a controller per flow, a signal and its handler per action, a service for state and collaboration, a model for data, a system for per-frame work — and a class past that has usually stopped using it. A signal handler is the cheapest cut: it takes one action out whole, with its own test.`,
       `8. A test run in which nothing executed is NOT a pass. Unity reports \`result="Passed" total="0"\` and exit 0 for a project whose test assemblies are empty; the question is always what ran, never how many failed.`,
     );
   }

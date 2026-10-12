@@ -1983,8 +1983,8 @@ export class StradaConformanceGuard {
       );
     }
 
-    // Strada.Core exists so work can be split — commands, services, models,
-    // systems — and a file that outgrows that is a file that stopped using the
+    // Strada.Core exists so work can be split — controllers, signals, services,
+    // models, systems — and a file that outgrows that is a file that stopped using the
     // framework. The limit is a smell threshold, not a style rule: past it, a
     // class is almost always doing several jobs that the pattern set already has
     // homes for.
@@ -1994,9 +1994,10 @@ export class StradaConformanceGuard {
       return (
         "[STRADA FILE TOO LONG] These files are past " + `${MAX_SOURCE_LINES} lines: ` +
         `${oversized.join("; ")}. ` +
-        "Split them the way the framework already divides work: a command per action, a service " +
-        "for state and collaboration, a model for data, a system for per-frame work. A command is " +
-        "usually the cheapest cut — it takes one action out whole, with its own test." +
+        "Split them the way the framework already divides work: a controller per flow, a signal and " +
+        "its handler per action, a service for state and collaboration, a model for data, a system " +
+        "for per-frame work. A signal handler is usually the cheapest cut — it takes one action out " +
+        "whole, with its own test." +
         lastAskNote(oversizedAsk)
       );
     }

@@ -188,6 +188,32 @@ describe("attribute drift", () => {
     expect(attrWarnings).toHaveLength(1);
   });
 
+  it("compares attribute names, not the map keys: labels on one side, classes on the other", () => {
+    // Brain's reference keys attributes by its own labels; an extracted Core
+    // snapshot keys them by the class that carries them. Every attribute Brain
+    // taught used to read as "removed" from a Core that declares all of them.
+    const reference = makeSnapshot({
+      attributes: new Map([
+        ["stradaSystem", ["StradaSystem"]],
+        ["executionOrder", ["ExecutionOrder"]],
+        ["updatePhase", ["UpdatePhase"]],
+      ]),
+    });
+    const core = makeSnapshot({
+      attributes: new Map([["MovementSystem", ["StradaSystem", "UpdatePhase"]]]),
+      classes: [
+        { name: "StradaSystemAttribute", namespace: "Strada.Core.Modules", baseTypes: ["Attribute"], isAbstract: false },
+        { name: "ExecutionOrderAttribute", namespace: "Strada.Core.Modules", baseTypes: ["Attribute"], isAbstract: false },
+      ],
+    });
+    const report = validateFrameworkDrift("core", core, reference);
+    expect(report.warnings.filter((w) => w.category === "attribute")).toEqual([]);
+
+    const without = makeSnapshot({ attributes: new Map([["MovementSystem", ["StradaSystem"]]]) });
+    const missing = validateFrameworkDrift("core", without, reference).warnings.filter((w) => w.category === "attribute");
+    expect(missing.map((w) => w.brainValue).sort()).toEqual(["ExecutionOrder", "UpdatePhase"]);
+  });
+
   it("attribute removed with sourceLanguage 'typescript' → NOT reported", () => {
     const prev = makeSnapshot({
       attributes: new Map([["Decorator", ["some.module"]]]),
