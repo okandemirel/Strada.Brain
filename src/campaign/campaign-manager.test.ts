@@ -10300,6 +10300,34 @@ describe("CampaignManager", () => {
       expect(storage.listActive().find((c) => c.chatId === "chat-folder")?.gddPath).toBe("docs/design/Quillmoor_GDD.md");
     });
 
+    /**
+     * A path and anything BUILD_INTENT_RE matched — an adverb included — was
+     * an immediate build: "README.md'yi baştan sona oku" (read the README end
+     * to end) answered "Building from `README.md` … Sprint 1 starts now", and
+     * an idea that mentioned its style sheet was built FROM the style sheet.
+     */
+    it.each([
+      ["README.md'yi baştan sona oku", "README.md"],
+      ["Rewrite docs/save-notes.md from scratch", "docs/save-notes.md"],
+      ["Run the end-to-end tests in docs/e2e.md", "docs/e2e.md"],
+    ])("%s is the user's task, not a build from that document", async (text, rel) => {
+      writeFileSync(join(projectRoot, rel), "# Notes\n\n" + "n".repeat(400));
+      expect(await say("chat-task", text)).toBe(false);
+      expect(told("chat-task")).toBe("");
+      expect(storage.hasActiveForChat("chat-task")).toBe(false);
+    });
+
+    it("an idea that names its style sheet is drafted from the idea, at the approval gate", async () => {
+      writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+      const idea = "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.";
+      expect(await say("chat-idea", idea)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-idea");
+      expect(campaign?.ideaText).toBe(idea);
+      expect(campaign?.gddPath).toBeUndefined();
+      expect(told("chat-idea")).toContain("Game idea received");
+      expect(told("chat-idea")).not.toContain("Building from");
+    });
+
     it("says a named document that is not there could not be read, and builds no other design", async () => {
       expect(await say("chat-missing", "Build this game: docs/Missing_GDD.md")).toBe(true);
       const said = told("chat-missing");

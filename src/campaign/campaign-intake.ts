@@ -104,9 +104,19 @@ function intentFromText(text: string): CampaignIntent | undefined {
   // not count at all: "Build this game: docs/Foo_GDD.md" was nothing, and
   // past 40 characters an IDEA — a new design drafted from the sentence that
   // pointed at the old one.
-  const named = documentPathIn(text);
-  if (named) return { kind: "gdd-from-docs", path: named };
-  if (refersToGdd(text)) {
+  // …BUT ONLY A WHOLE-GAME BUILD AIMED AT IT MAKES A PATH THE DESIGN. An
+  // adverb or a feature request beside a path was an immediate build with no
+  // approval gate: "README.md'yi baştan sona oku" (read the README end to end)
+  // built the game from the README, and an idea that mentioned its style sheet
+  // was thrown away for the style sheet. A document named without a
+  // whole-game build is the user's task, not a campaign.
+  const named = namedDocumentsIn(text);
+  if (named.length > 0 && !WHOLE_GAME_BUILD_RE.test(text)) return undefined;
+  const design = designAmong(text, named);
+  if (design) return { kind: "gdd-from-docs", path: design };
+  // A document the message only mentions is no part of what it asks for.
+  const rest = withoutDocuments(text, named);
+  if (refersToGdd(rest)) {
     // …AND DESIGN TEXT WRITTEN IN THE MESSAGE IS THE DESIGN. "Build this
     // game. GDD: <the design>" was read as a reference to a document in the
     // repository and the supplied design was discarded (AD#6).
@@ -115,7 +125,7 @@ function intentFromText(text: string): CampaignIntent | undefined {
     return { kind: "gdd-from-docs" };
   }
 
-  if (text.length < MIN_IDEA_LENGTH) return undefined;
+  if (rest.trim().length < MIN_IDEA_LENGTH) return undefined;
 
   // 3. A written game idea with build intent.
   return { kind: "idea", ideaText: text };
@@ -164,20 +174,150 @@ function isSupportDocument(path: string): boolean {
 }
 
 /**
- * The design document the message names, when it names one. Beside a style
- * sheet or a changelog, the design: the one whose name says GDD, else the
- * first that is not a support document, in the order the message wrote them.
- * Taking the first path built the game from "docs/art-style.md" when the
- * message said "Following docs/art-style.md, build the game in docs/x.md".
+ * The folders and words an unquoted path with spaces began with:
+ * "docs/Quill Moor GDD.md" — DOCUMENT_PATH_RE sees only "GDD.md", and the
+ * manager's docs/ lookup then found docs/GDD.md, another file. A joining word
+ * ("docs/ui and GDD.md") is two names, not one.
  */
-export function documentPathIn(text: string): string | undefined {
-  const named: Array<{ at: number; path: string }> = [];
-  for (const m of text.matchAll(QUOTED_DOCUMENT_PATH_RE)) named.push({ at: m.index, path: m[1]! });
+const SPLIT_PATH_HEAD_RE =
+  /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/]|~[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])+[\p{L}\p{N}_~-]+(?:\s+(?!(?:and|or|ve|veya|ile|in|from|at|the|then|to|of|for)\s)[\p{L}\p{N}_~-]+){0,3})\s+$/iu;
+
+interface NamedDocument {
+  path: string;
+  /** Where the path begins and ends in the message. */
+  at: number;
+  end: number;
+}
+
+/** Every document path the message names, in the order it wrote them. */
+function namedDocumentsIn(text: string): NamedDocument[] {
+  const named: NamedDocument[] = [];
+  for (const m of text.matchAll(QUOTED_DOCUMENT_PATH_RE)) {
+    const at = m.index + m[0].length - 1 - m[1]!.length;
+    named.push({ path: m[1]!, at, end: at + m[1]!.length });
+  }
   // Quoted spans blanked to the same length, so every position still holds.
   const unquoted = text.replace(QUOTED_DOCUMENT_PATH_RE, (span) => " ".repeat(span.length));
-  for (const m of unquoted.matchAll(DOCUMENT_PATH_RE)) named.push({ at: m.index, path: m[1]! });
-  const paths = named.sort((a, b) => a.at - b.at).map((n) => n.path);
-  return paths.find(refersToGdd) ?? paths.find((path) => !isSupportDocument(path)) ?? paths[0];
+  for (const m of unquoted.matchAll(DOCUMENT_PATH_RE)) {
+    const end = m.index + m[0].length;
+    let at = end - m[1]!.length;
+    const head = /[\\/]/.test(m[1]!) ? null : SPLIT_PATH_HEAD_RE.exec(unquoted.slice(0, at));
+    if (head) at = head.index + head[0].indexOf(head[1]!);
+    named.push({ path: text.slice(at, end), at, end });
+  }
+  return named.sort((a, b) => a.at - b.at);
+}
+
+/** The message without the documents it names, each a single space. */
+function withoutDocuments(text: string, named: readonly NamedDocument[]): string {
+  let rest = text;
+  for (const doc of [...named].reverse()) rest = `${rest.slice(0, doc.at)} ${rest.slice(doc.end)}`;
+  return rest;
+}
+
+/** How a build runs — never, on its own, a request for one. */
+const BUILD_ADVERB = String.raw`(?:baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan)`;
+const TR_BUILD_VERB = String.raw`(?:yap(?:ın(?:ız)?)?|yaz(?:ar\s+mısın)?|geliştir|inşa\s+et|kodla)`;
+const BUILD_GAME_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|develop|make)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])`;
+const BUILD_GDD_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|implement)\s+(?:the|this|my|our)\s+(?:GDD|game\s+design\s+doc(?:ument)?)(?![\p{L}\p{N}_'’])`;
+const BUILD_GDD_TR = String.raw`(?<![\p{L}\p{N}_])GDD['’]y[iı](?:\s+${BUILD_ADVERB})?\s+(?:uygula|hayata\s+geçir|kodla)(?![\p{L}\p{N}_])`;
+const BUILD_GAME_TR = String.raw`(?<![\p{L}\p{N}_])oyun(?:u|unu)?(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_VERB}(?![\p{L}\p{N}_])`;
+
+/**
+ * Whole-game build intent, which BUILD_INTENT_RE alone is not: it also takes
+ * an adverb ("baştan sona oku", "end-to-end tests", "rewrite from scratch")
+ * and a feature request. "Make the game <adjective / verb>" is causative, so
+ * only a build's own shape may follow "make the game"; "develop the game
+ * further" is work on a game that exists.
+ */
+const WHOLE_GAME_BUILD_RE = new RegExp(
+  [
+    String.raw`(?<![\p{L}\p{N}_])(?:build|develop)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])(?!\s+(?:further|more|beyond|better)(?![\p{L}]))`,
+    String.raw`(?<![\p{L}\p{N}_])make\s+(?:this|the|a|my)\s+game(?=\s*(?:$|[:.,;!?()—–])|\s+(?:in|from|at|per|about|where|set|called|named|that|which|for|exactly|fully|completely|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)|end[- ]?to[- ]?end)(?![\p{L}]))`,
+    BUILD_GDD_EN,
+    BUILD_GDD_TR,
+    BUILD_GAME_TR,
+  ].join("|"),
+  "iu",
+);
+
+/**
+ * The build is aimed at the document written right after it: "Build this
+ * game: P", "build the game in / from / per P", "build the game from the GDD
+ * at P", "Bu oyunu yap: P".
+ */
+const BUILDS_FROM_NEXT_RE = new RegExp(
+  `(?:${BUILD_GAME_EN}|${BUILD_GDD_EN}|${BUILD_GDD_TR}|${BUILD_GAME_TR})(?:\\s+${BUILD_ADVERB})*` +
+    String.raw`(?:\s*:|\s+(?:in|from|at|per|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)\s+in))` +
+    String.raw`(?:\s+(?:the|this|that|my|our))?` +
+    String.raw`(?:\s+(?:GDD|game\s+design\s+doc(?:ument)?|design(?:\s+doc(?:ument)?)?|document|doc|spec(?:ification)?|file)(?:\s+(?:at|in)|\s*:)?)?` +
+    String.raw`\s*["'\x60“‘(]?$`,
+  "iu",
+);
+
+/**
+ * The game the build is aimed at is the one IN the document just written:
+ * "P'deki oyunu yap", "P dosyasındaki oyunu geliştir", "P oyununu baştan sona
+ * yap", "P'ye göre oyunu yap". "P'deki notlara göre oyunu geliştir" (improve
+ * the game by the notes in P) is not.
+ */
+const GAME_IN_PREVIOUS_RE = new RegExp(
+  String.raw`^(?:['’](?:[dt][ae]ki|[dt][ae]n|y?[ae]\s+göre)|\s+(?:dosya|belge|doküman|döküman)s[ıi]n(?:[dt][ae]ki|[dt][ae]n)|\s+içindeki)?` +
+    String.raw`\s+(?:bu\s+|şu\s+)?oyun(?:u|unu)(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_VERB}(?![\p{L}\p{N}_])`,
+  "iu",
+);
+
+/** The document is the GDD the message speaks of: "the GDD at P", "GDD: P", "GDD'li dosya P". */
+const GDD_NAMES_NEXT_RES = [GDD_ACRONYM_RE, GDD_SPELLED_RE].map(
+  (re) =>
+    new RegExp(
+      `(?:${re.source})` +
+        String.raw`(?:['’]\p{L}+)?(?:\s+(?:dosya(?:sı)?|belge(?:si)?|file|document|doc))?(?:\s+(?:at|in|is)|\s*[:=(—–-])?\s*["'\x60“‘(]?$`,
+      re.flags,
+    ),
+);
+
+/** "P and Q", "P, Q", "P ve Q": named together, aimed at together. */
+const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?|\s+(?:and|or|ve|veya|&|\+)\s+)["'`“‘(]?$/iu;
+
+/**
+ * The design among the documents the message names: one the build is aimed
+ * at (and one named together with it); beside them, the one whose name says
+ * GDD, else the first that is not a style sheet, changelog or readme. A GDD
+ * named anywhere else is the design when the message asks for "the GDD" or
+ * holds nothing else to build from — otherwise it is a reference beside an
+ * idea, and the idea is the design. A path the build is not aimed at was
+ * taken anyway: an idea that mentioned docs/art-style.md was built from it.
+ */
+function designAmong(text: string, named: readonly NamedDocument[]): string | undefined {
+  if (named.length === 0) return undefined;
+  const wholeGame = WHOLE_GAME_BUILD_RE.test(text);
+  const aimed = named.map(
+    (doc) =>
+      BUILDS_FROM_NEXT_RE.test(text.slice(0, doc.at)) ||
+      GAME_IN_PREVIOUS_RE.test(text.slice(doc.end)) ||
+      (wholeGame && GDD_NAMES_NEXT_RES.some((re) => re.test(text.slice(0, doc.at)))),
+  );
+  for (let spread = true; spread; ) {
+    spread = false;
+    for (let i = 1; i < named.length; i++) {
+      if (aimed[i - 1] !== aimed[i] && NAMED_TOGETHER_RE.test(text.slice(named[i - 1]!.end, named[i]!.at))) {
+        aimed[i - 1] = aimed[i] = true;
+        spread = true;
+      }
+    }
+  }
+  const paths = named.filter((_, i) => aimed[i]).map((doc) => doc.path);
+  if (paths.length > 0) return paths.find(refersToGdd) ?? paths.find((path) => !isSupportDocument(path)) ?? paths[0];
+  const gdd = named.find((doc) => refersToGdd(doc.path));
+  if (!gdd || !wholeGame) return undefined;
+  const rest = withoutDocuments(text, named);
+  return refersToGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH ? gdd.path : undefined;
+}
+
+/** The design document the message names, when it names one. */
+export function documentPathIn(text: string): string | undefined {
+  return designAmong(text, namedDocumentsIn(text));
 }
 
 /** The reference followed by a "GDD:" marker, read exactly as refersToGdd reads one. */

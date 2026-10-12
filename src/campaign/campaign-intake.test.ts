@@ -315,3 +315,67 @@ describe("a Turkish word that only begins like a build verb", () => {
     expect(detectCampaignIntent(msg(polite))).toEqual({ kind: "idea", ideaText: polite });
   });
 });
+
+/**
+ * Once a named path became a pointer at any length, BUILD_INTENT_RE alone
+ * decided whether a message built the game from it — and that pattern also
+ * matches adverbs ("baştan sona", "end-to-end", "from scratch", "sıfırdan")
+ * and feature phrasing ("make the game <adjective>", "develop the game
+ * further"). "README.md'yi baştan sona oku" (read the README end to end)
+ * answered "Building from `README.md` … Sprint 1 starts now", with no
+ * approval gate. And `?? paths[0]` took a style sheet an IDEA mentioned for
+ * the design: the idea was thrown away and the build ran from
+ * docs/art-style.md.
+ */
+describe("a named document is the design only when the build is aimed at it", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it.each([
+    "README.md'yi baştan sona oku",
+    "Run the end-to-end tests in docs/e2e.md",
+    "Run the end-to-end tests in docs/e2e.md and tell me which of them still fail on the CI runners",
+    "Rewrite docs/save-notes.md from scratch",
+    "Make the game follow docs/ui.md",
+    "Make the game harder, the way docs/Quillmoor_GDD.md describes the late levels",
+    "Develop the game further as docs/roadmap.md says, starting with the harbor levels",
+    "docs/notes.md dosyasını sıfırdan yaz",
+    "docs/geri-bildirim.md'deki notlara göre oyunu geliştir",
+  ])("%s → no campaign (no whole-game build is aimed at the document)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each([
+    "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.",
+    "Sıfırdan bir oyun yap: fener bekçisi her gece bir sokağı aydınlatır ve sis geri çekilir; görseller docs/art-style.md'deki gibi olsun.",
+    "Build this game: a lantern keeper lights one street per night and the fog retreats from it. Put the notes into docs/notes.md.",
+    "Build this game from scratch: a city of lanterns where every lit street pushes the fog back; keep docs/Old_GDD.md only as a tone reference.",
+  ])("%s → the idea it carries, not the document it mentions", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  it.each([
+    // The name that says GDD wins over another design-looking document…
+    ["Build the game in docs/notes.md and docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Following docs/notes.md, build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    // …a design over a style sheet named beside it…
+    ["Build the game in docs/art-style.md and docs/quillmoor.md", "docs/quillmoor.md"],
+    // …and a path written with spaces is the whole path, not its last word.
+    ["Build the game in docs/Quill Moor GDD.md", "docs/Quill Moor GDD.md"],
+    ["docs/Quill Moor GDD.md'deki oyunu yap", "docs/Quill Moor GDD.md"],
+    // The document a short build instruction names is the design.
+    ["Bu oyunu yap, tasarım docs/Quillmoor_GDD.md içinde", "docs/Quillmoor_GDD.md"],
+    ["docs/quillmoor.md'ye göre oyunu baştan sona yap", "docs/quillmoor.md"],
+    ["Build the game per docs/quillmoor.md", "docs/quillmoor.md"],
+    // A build aimed at the design document itself, with only an adverb for build intent.
+    ["Implement the GDD at docs/quillmoor.md end-to-end", "docs/quillmoor.md"],
+    ["GDD'yi baştan sona uygula: docs/quillmoor.md", "docs/quillmoor.md"],
+  ])("%s → %s", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
+  it("a GDD the message names beside its idea is still the design when it says so", () => {
+    expect(detectCampaignIntent(msg("Build the game in the GDD; follow the art direction in docs/art-style.md"))).toEqual({ kind: "gdd-from-docs" });
+    expect(detectCampaignIntent(msg("GDD'li dosya docs/quillmoor.txt, bu oyunu yap"))).toEqual({ kind: "gdd-from-docs", path: "docs/quillmoor.txt" });
+  });
+});
