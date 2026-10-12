@@ -247,6 +247,9 @@ export function createSupervisorNodeVerifier(
       };
     }
 
+    // Beside the worker's seat the verifier is benched as a chain benches its
+    // members; reviewing its own seat's work, it may be the only seat left.
+    const seat = { isSingleProvider: !independent };
     try {
       // STREAM the cross-provider verification review (mirrors the goal-decomposer fix).
       // The reviewer is drawn from the execution candidates, which can include a slow
@@ -262,13 +265,13 @@ export function createSupervisorNodeVerifier(
         undefined,
         { streaming: options.streamingEnabled },
       );
-      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), reviewer.provider, { response });
+      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), reviewer.provider, { response }, seat);
       const parsed = parseSupervisorVerificationVerdict(response.text, reviewer.providerName);
       return independent ? parsed : { ...parsed, independent: false };
     } catch (error) {
       // The health gate above sees only what is recorded, and nothing records
       // a bare verifier: a dead seat was sent every node of the task.
-      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), reviewer.provider, { error });
+      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), reviewer.provider, { error }, seat);
       return {
         verdict: "skipped",
         unanswered: "threw",

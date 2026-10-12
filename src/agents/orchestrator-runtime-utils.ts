@@ -403,17 +403,25 @@ function isCredentialRefusal(error: unknown, errorMsg: string): boolean {
  * seat that failed at call time stayed available to the health gate that
  * picks it, and every later review called it again. A chain is left to record
  * itself. Bookkeeping never fails the call it describes.
+ *
+ * `isSingleProvider` is whether this seat is the only one that could serve:
+ * that alone earns the short, non-escalating benches. A seat consulted beside
+ * another one is benched as the chain benches its members.
  */
 export function recordBareProviderOutcome(
   registry: Parameters<typeof recordProviderHealthFailure>[0] & { recordSuccess(name: string): void },
   provider: { readonly name: string },
   outcome: { readonly response: ProviderResponse } | { readonly error: unknown },
+  options: { readonly isSingleProvider: boolean },
 ): void {
   if ("providerCount" in provider) return;
   try {
     if ("error" in outcome) {
       const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
-      recordProviderHealthFailure(registry, provider.name, message, { isSingleProvider: true, error: outcome.error });
+      recordProviderHealthFailure(registry, provider.name, message, {
+        isSingleProvider: options.isSingleProvider,
+        error: outcome.error,
+      });
     } else if (holdsNoAnswer(outcome.response)) {
       // As the chain judges it: an empty 200 is the member failing. Recorded
       // as nothing, an empty reviewer was asked again on every critical step.

@@ -368,6 +368,22 @@ describe("a bare reviewer that fails at call time", () => {
     expect(verdict?.agreed).toBe(true);
     expect(ProviderHealthRegistry.getInstance().getEntry("openai")?.consecutiveFailures).toBe(0);
   });
+
+  it.each([
+    ["overloaded (503)", "openai: 503 service unavailable", 5 * 60_000],
+    ["a quota wall (403)", "openai API error 403: quota exceeded for this key", 8 * 60 * 60_000],
+  ])("%s: benched as long as the executor's chain benches its member, since consensus only runs beside another seat", async (_label, message, chainBenchMs) => {
+    const callError = () => Object.assign(new Error(message), { status: Number(/\b(\d{3})\b/.exec(message)![1]) });
+    liveSeats({ atCall: ["openai"], callError, labels: { openai: "OpenAI" } });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+
+    const before = Date.now();
+    await consensusOn(executor, resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1"));
+
+    // The short, non-escalating benches are for a setup with no other seat.
+    expect(ProviderHealthRegistry.getInstance().getEntry("openai")!.cooldownUntil - before).toBeGreaterThanOrEqual(chainBenchMs);
+  });
 });
 
 /**
@@ -506,6 +522,21 @@ describe("the node verifier never calls the worker's own seat independent", () =
     expect(verdicts[0]).toMatchObject({ verdict: "skipped", unanswered: "empty", verifierProvider: "openai" });
     expect(served.filter((name) => name === "openai")).toEqual(["openai", "openai"]);
     expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
+  });
+
+  it("an independent verifier's 503 earns the chain's bench; the only seat reviewing itself keeps the short one", async () => {
+    liveSeats({ atCall: ["openai", "claude"], labels: { openai: "OpenAI" } });
+    const before = Date.now();
+
+    await createSupervisorNodeVerifier(manager(["anthropic", "openai"], true))(node("claude"), { chatId: "chat:web:1" } as any);
+    const independentBench = ProviderHealthRegistry.getInstance().getEntry("openai")!.cooldownUntil - before;
+    ProviderHealthRegistry.resetInstance();
+    const lone = await createSupervisorNodeVerifier(manager(["anthropic"], true))(node("claude"), { chatId: "chat:web:1" } as any);
+
+    expect(independentBench).toBeGreaterThanOrEqual(5 * 60_000);
+    expect(lone.independent).toBe(false);
+    // A seat with nobody beside it gets the 30s single-provider bench (guard).
+    expect(ProviderHealthRegistry.getInstance().getEntry("claude")!.cooldownUntil - before).toBeLessThanOrEqual(60_000);
   });
 
   it("an openai node on the same chain is verified by the Claude seat", async () => {

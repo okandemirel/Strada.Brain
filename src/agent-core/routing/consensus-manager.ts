@@ -14,6 +14,12 @@ import { ProviderHealthRegistry } from "../../agents/providers/provider-health.j
 import { holdsNoAnswer, recordBareProviderOutcome } from "../../agents/orchestrator-runtime-utils.js";
 import { getLogger } from "../../utils/logger.js";
 
+/**
+ * Consensus runs only beside another provider (shouldConsult skips below two),
+ * so the reviewer's seat is never the only one that could serve.
+ */
+const REVIEWER_SEAT = { isSingleProvider: false } as const;
+
 export interface ConsensusConfig {
   mode: "auto" | "critical-only" | "always" | "disabled";
   threshold: number;       // 0.0-1.0
@@ -443,10 +449,10 @@ export class ConsensusManager {
       }
       // The reviewer is built bare: unrecorded, a dead seat stayed "available"
       // and was called again on every critical step.
-      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { error: err });
+      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { error: err }, REVIEWER_SEAT);
       throw err;
     }
-    recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { response });
+    recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { response }, REVIEWER_SEAT);
     // WHAT THIS CALL SPENT, attributed to who served it, the superseded
     // attempt's tokens included (Codex 2026-09-17 #1, #2).
     if (spent) {
