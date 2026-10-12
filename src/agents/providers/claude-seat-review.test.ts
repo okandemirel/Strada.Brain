@@ -122,13 +122,15 @@ beforeEach(() => {
  * Seats that answer the way the real registry builds them: every call is
  * logged in `served`, a seat down at call time throws (`callError`, a 503 by
  * default), one down at build time cannot be created, a seat in `replies`
- * answers 200 with that text, a bare seat may carry its display label as
- * createProvider gives it, and a chain falls over member by member as
- * FallbackChainProvider does after skipping the members it could not create.
+ * answers 200 with that text, a stalled seat answers only the caller's abort,
+ * a bare seat may carry its display label as createProvider gives it, and a
+ * chain falls over member by member as FallbackChainProvider does after
+ * skipping the members it could not create.
  */
 function liveSeats(down: {
   atCall?: string[];
   atBuild?: string[];
+  stalled?: string[];
   callError?: (name: string) => Error;
   replies?: Record<string, string>;
   labels?: Record<string, string>;
@@ -138,15 +140,21 @@ function liveSeats(down: {
     if (down.atBuild?.includes(name)) throw new Error(`${name}: no usable credential`);
     return {
       ...makeProvider(down.labels?.[name] ?? name),
-      chat: vi.fn(async (): Promise<ProviderResponse> => {
+      chat: vi.fn((...[, , , options]: Parameters<IAIProvider["chat"]>): Promise<ProviderResponse> => {
         served.push(name);
-        if (down.atCall?.includes(name)) throw down.callError?.(name) ?? new Error(`${name}: 503 service unavailable`);
-        return {
+        if (down.atCall?.includes(name)) return Promise.reject(down.callError?.(name) ?? new Error(`${name}: 503 service unavailable`));
+        if (down.stalled?.includes(name)) {
+          // Rejects the moment the caller aborts, in the same tick.
+          return new Promise<never>((_, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new Error(`${name}: request aborted`)), { once: true });
+          });
+        }
+        return Promise.resolve({
           text: down.replies?.[name] ?? '{"verdict":"approve","approved":true,"reasoning":"looks right"}',
           toolCalls: [],
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-        };
+        });
       }),
     };
   };
@@ -177,11 +185,11 @@ function liveSeats(down: {
   return { served };
 }
 
-async function consensusOn(executor: SupervisorAssignment, reviewer: SupervisorAssignment | null) {
+async function consensusOn(executor: SupervisorAssignment, reviewer: SupervisorAssignment | null, reviewTimeoutMs = 0) {
   const outcomes: Array<{ providerName: string; status: string }> = [];
   const usages: TaskUsageEvent[] = [];
   const verdict = await runConsensusVerification({
-    consensusManager: new ConsensusManager({ mode: "always", reviewTimeoutMs: 0 }),
+    consensusManager: new ConsensusManager({ mode: "always", reviewTimeoutMs }),
     availableProviderCount: 2,
     taskClass: { type: "code-generation", complexity: "simple", criticality: "critical" },
     confidence: 0.9,
@@ -422,6 +430,40 @@ describe("a bare reviewer that answers with nothing", () => {
     expect(checks[0]!.usages).toEqual([expect.objectContaining({ provider: "openai", inputTokens: 10, outputTokens: 5 })]);
     expect(served).toEqual(["openai", "openai"]);
     expect(reviewers).toEqual(["openai", "openai", undefined]);
+    expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
+  });
+});
+
+/**
+ * reviewTimeoutMs is the caller's budget for one whole, non-streamed reply. A
+ * chain told to stop by its caller records nothing against the member it was
+ * waiting on; recorded bare, two slow reviews marked a seat degraded for the
+ * executor's chain as well, and five put it down.
+ */
+describe("a reviewer slower than the consensus budget", () => {
+  it("is not benched for it: the caller's deadline is not the seat's failure", async () => {
+    const { served } = liveSeats({ stalled: ["openai"], labels: { openai: "OpenAI" } });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+
+    const verdicts: unknown[] = [];
+    for (let check = 0; check < 3; check += 1) {
+      const reviewer = resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1");
+      verdicts.push((await consensusOn(executor, reviewer, 20)).verdict);
+    }
+
+    expect(verdicts).toEqual([undefined, undefined, undefined]);
+    expect(served).toEqual(["openai", "openai", "openai"]);
+    expect(ProviderHealthRegistry.getInstance().getEntry("openai")).toBeUndefined();
+  });
+
+  it("a seat that refuses inside the budget is still recorded (guard)", async () => {
+    liveSeats({ atCall: ["openai"], labels: { openai: "OpenAI" } });
+    const m = manager(["anthropic", "openai"], true);
+    const executor = executorOf(m);
+
+    await consensusOn(executor, resolveConsensusReviewAssignment({ providerManager: m } as any, executor, executor, "chat:web:1"), 1_000);
+
     expect(ProviderHealthRegistry.getInstance().isAvailable("openai")).toBe(false);
   });
 });

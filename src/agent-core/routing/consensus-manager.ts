@@ -15,6 +15,14 @@ import { holdsNoAnswer, recordBareProviderOutcome } from "../../agents/orchestra
 import { getLogger } from "../../utils/logger.js";
 
 /**
+ * reviewTimeoutMs ran out. It is the caller's budget for one whole,
+ * non-streamed reply, not a measure of the seat: a chain told to stop by its
+ * caller records nothing against the member it was waiting on, and recorded,
+ * a slow reasoning reviewer was benched for the executor's chain too.
+ */
+class ReviewDeadlineError extends Error {}
+
+/**
  * Consensus runs only beside another provider (shouldConsult skips below two),
  * so the reviewer's seat is never the only one that could serve.
  */
@@ -449,7 +457,9 @@ export class ConsensusManager {
       }
       // The reviewer is built bare: unrecorded, a dead seat stayed "available"
       // and was called again on every critical step.
-      recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { error: err }, REVIEWER_SEAT);
+      if (!(err instanceof ReviewDeadlineError)) {
+        recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { error: err }, REVIEWER_SEAT);
+      }
       throw err;
     }
     recordBareProviderOutcome(ProviderHealthRegistry.getInstance(), provider, { response }, REVIEWER_SEAT);
@@ -503,8 +513,10 @@ export class ConsensusManager {
         chat,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
+            // Settled before the abort, so a provider that rejects on the
+            // signal at once cannot win the race as the seat's own failure.
+            reject(new ReviewDeadlineError(`Consensus review timed out after ${ms}ms`));
             controller.abort();
-            reject(new Error(`Consensus review timed out after ${ms}ms`));
           }, ms);
         }),
       ]);
