@@ -8197,16 +8197,30 @@ export class CampaignManager {
     if (ledger !== undefined && review?.ok !== true) {
       outcome = reviewGateUnchanged(`the independent review did not run (${review?.error ?? "no answer"}), so it reopened and added nothing; it blocks nothing`);
     } else if (ledger !== undefined) {
-      // The ledger the campaign holds NOW: a waiver or an amendment can land
-      // while the reviewer runs, and its findings must not be applied to a
-      // copy read before them.
+      const mode = this.scopeGateMode === "on" ? "on" : "shadow";
       const current = this.reviewedLedger(campaign);
       if (current === undefined) {
         outcome = reviewGateUnchanged("the requirement ledger could not be read when the review answered, so its findings were not applied");
+      } else if (!this.generationIsCurrent(campaign)) {
+        // persist() refuses a copy from before a revive: findings applied to
+        // it would be reported as reopened and never saved.
+        outcome = reviewGateUnchanged("the campaign was revived while the review ran, so this copy's save is refused and its findings were not saved; they reopened and added nothing");
+        campaign.independentReview = { ...review, gate: reviewGateRecord({ ledger: current, reopened: [], added: [], disclosed: outcome.disclosed }, mode) };
       } else {
-        const applied = applyReviewFindings(current, parseReviewFindings(review.text), { gddText: campaign.gddText, atMs: Date.now() });
+        // THE STORED LEDGER, read now. A waiver or an amendment that lands
+        // while the reviewer runs is saved from a copy of its own, never this
+        // one; persist() then puts the waiver back over a reopened row and the
+        // re-read rows over this copy's, and the outcome named changes that
+        // were not saved. Nothing awaits between this read and that save.
+        const stored = this.storage.get(campaign.id);
+        const amended = stored?.requirements !== undefined && stored.requirements.gddRevision > current.gddRevision ? stored : undefined;
+        const base = amended?.requirements ?? current;
+        campaign.requirements = base;
+        carryWaivers(stored?.requirements, campaign);
+        const applied = applyReviewFindings(base, parseReviewFindings(review.text), { gddText: (amended ?? campaign).gddText, atMs: Date.now() });
         campaign.requirements = applied.ledger;
-        campaign.independentReview = { ...review, gate: reviewGateRecord(applied, this.scopeGateMode === "on" ? "on" : "shadow") };
+        if (amended !== undefined) syncRequirementIds(campaign.milestones, applied.ledger.rows);
+        campaign.independentReview = { ...review, gate: reviewGateRecord(applied, mode) };
         outcome = reviewGateOutcome(applied);
       }
     }

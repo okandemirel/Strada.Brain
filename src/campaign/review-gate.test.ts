@@ -153,9 +153,34 @@ function reviewPaths(mode: ScopeGateMode, reviewer: Reviewer | null, saved: Camp
     projectFingerprint: () => "",
     scopeGateMode: mode,
     independentReviewer: reviewer,
-    storage: { listAcceptance: () => [SOURCE] },
+    storage: { listAcceptance: () => [SOURCE], get: () => undefined },
   });
   return manager as unknown as ReviewPaths;
+}
+
+/**
+ * The same paths over a store, saved by the manager's own persist(): a waiver,
+ * an amendment or a revive lands on a copy loaded from the store while the
+ * reviewer runs, the way `/campaign waive`, `amendGdd` and a revive do.
+ */
+function reviewPathsOverStore(reviewer: (store: Map<string, Campaign>) => ReturnType<Reviewer>, store: Map<string, Campaign>): ReviewPaths {
+  const manager = reviewPaths("on", async () => reviewer(store)) as unknown as Record<string, unknown>;
+  delete manager["persist"];
+  manager["storage"] = {
+    listAcceptance: () => [SOURCE],
+    get: (id: string) => structuredClone(store.get(id)),
+    save: (c: Campaign) => {
+      store.set(c.id, structuredClone(c));
+    },
+  };
+  return manager as unknown as ReviewPaths;
+}
+
+/** Another copy of the stored campaign, changed and saved, as a command handler would. */
+function landMeanwhile(store: Map<string, Campaign>, id: string, change: (c: Campaign) => void): void {
+  const other = structuredClone(store.get(id)!);
+  change(other);
+  store.set(id, other);
 }
 
 const FINDINGS_TAIL = JSON.stringify({
@@ -322,6 +347,95 @@ describe("the independent review as a gate (W13)", () => {
     expect(prompts[0]).not.toContain(WEAK_BODY_MARKER);
     expect(campaign.requirements).toEqual(ledger());
     expect(campaign.independentReview).toEqual({ ok: true, model: "fake-astra", text: REVIEW_TEXT, ms: 1 });
+  });
+
+  describe("a review that answers after the campaign moved on: the outcome is what the store holds", () => {
+    const answer = async (): ReturnType<Reviewer> => ({ ok: true, model: "fake-astra", text: REVIEW_TEXT, ms: 1 });
+
+    /** Every row the outcome names is in the store, in the state the outcome claims. */
+    function expectOutcomeStored(outcome: GateOutcome, saved: Campaign): void {
+      const rows = new Map(saved.requirements!.rows.map((r) => [r.rid, r]));
+      for (const rid of outcome.reopened) {
+        expect(rows.get(rid)?.checks.some((c) => c.kind === "test" && c.weak !== undefined)).toBe(true);
+        expect(closesByLedger(rows.get(rid)!, REV_NOW)).toBe(false);
+      }
+      for (const rid of outcome.added) expect(rows.get(rid)).toMatchObject({ source: "review-added", status: "open" });
+      expect(saved.independentReview?.gate?.reopened ?? []).toHaveLength(outcome.reopened.length);
+      expect(saved.independentReview?.gate?.added ?? []).toHaveLength(outcome.added.length);
+    }
+
+    it("a waiver saved while the reviewer ran is honoured: the row stays waived, its test stays, and it is not called reopened", async () => {
+      const campaign = campaignWith();
+      const store = new Map([[campaign.id, structuredClone(campaign)]]);
+      const paths = reviewPathsOverStore(async (s) => {
+        landMeanwhile(s, campaign.id, (other) => {
+          const waived = other.requirements!.rows.find((r) => r.rid === RID_2)!;
+          waived.status = "waived";
+          waived.waiver = { userId: "owner", atMs: 7, reason: "cut from this release" };
+        });
+        return answer();
+      }, store);
+
+      const outcome = await paths.gatherIndependentReview(campaign);
+
+      const saved = store.get(campaign.id)!;
+      const waived = saved.requirements!.rows.find((r) => r.rid === RID_2)!;
+      expect(waived.status).toBe("waived");
+      expect(waived.checks).toEqual(ledger().rows[1]!.checks);
+      expect(outcome.reopened).toEqual([]);
+      expect(outcome.disclosed.join("\n")).toContain("a person waived it");
+      expectOutcomeStored(outcome, saved);
+    });
+
+    it("an amendment saved while the reviewer ran keeps its re-read rows, and the findings land on them", async () => {
+      const amendedText = `${GDD_TEXT}\n## 6 Tides\nThe tide chart appears on the pause screen during every shift.`;
+      const amendedSha = createHash("sha256").update(amendedText).digest("hex");
+      const campaign = campaignWith();
+      const store = new Map([[campaign.id, structuredClone(campaign)]]);
+      const paths = reviewPathsOverStore(async (s) => {
+        landMeanwhile(s, campaign.id, (other) => {
+          other.gddText = amendedText;
+          other.gddSha256 = amendedSha;
+          other.gddRevision = 2;
+          const reread = other.requirements!;
+          other.requirements = { ...reread, gddSha256: amendedSha, gddRevision: 2, rows: reread.rows.map((r) => ({ ...r, gddSha256: amendedSha, gddRevision: 2 })) };
+        });
+        return answer();
+      }, store);
+
+      const outcome = await paths.gatherIndependentReview(campaign);
+
+      const saved = store.get(campaign.id)!;
+      // The amendment is not undone by the older copy…
+      expect(saved).toMatchObject({ gddText: amendedText, gddRevision: 2 });
+      expect(saved.requirements!.gddRevision).toBe(2);
+      // …and the review's findings are not dropped by it.
+      expect(outcome.reopened).toEqual([RID_2]);
+      expect(outcome.added).toHaveLength(1);
+      expectOutcomeStored(outcome, saved);
+    });
+
+    it("a revive saved while the reviewer ran refuses this copy's save: the outcome changes nothing and says so", async () => {
+      const campaign = campaignWith();
+      const store = new Map([[campaign.id, structuredClone(campaign)]]);
+      const paths = reviewPathsOverStore(async (s) => {
+        landMeanwhile(s, campaign.id, (other) => {
+          other.stopGeneration = 1;
+        });
+        return answer();
+      }, store);
+
+      const outcome = await paths.gatherIndependentReview(campaign);
+
+      expect(outcome.changed).toBe(0);
+      expect(outcome.reopened).toEqual([]);
+      expect(outcome.added).toEqual([]);
+      expect(outcome.disclosed.join("\n")).toMatch(/revived .*not saved/);
+      // The store holds the revived campaign, untouched by the review.
+      expect(store.get(campaign.id)).toMatchObject({ stopGeneration: 1, requirements: ledger() });
+      // Nor does the copy the caller still holds claim what was never saved.
+      expect(campaign.independentReview?.gate?.reopened ?? []).toEqual([]);
+    });
   });
 
   describe("storage", () => {
