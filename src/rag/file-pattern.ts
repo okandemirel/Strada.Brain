@@ -84,22 +84,29 @@ const MAX_GLOB_MULTI_STAR_COST = 8;
  * which every `*` run is a lazy `[^/]*?`, so a name that fails a segment with
  * k runs is tried about C(name length, k) ways, on the main thread. `?` makes
  * every ordinary name adversarial: `**` + `/*?*?*?*?*?*?*?*?#` took 1.2 s over
- * 100 Unity file names, and the extglob `+(?|??)` grows exponentially. On top
- * of filePatternProblem's limits, which refuse extglobs, this caps the `*` runs
- * in a segment and what segments with several of them may cost together.
+ * 100 Unity file names, and the extglob `+(?|??)` grows exponentially. Beyond
+ * filePatternProblem's limits, this refuses extglobs and caps the `*` runs in
+ * a segment and what segments with several of them may cost together.
  *
- * The alternatives counted are the ones glob compiles: minimatch's braceExpand,
- * which hands a pattern holding a `{...}` to brace-expansion (called on any
- * other, brace-expansion alone turns `\\*` into an escaped star). It follows
- * bash, where `{a},b}` is the two alternatives `a}` and `b` and `{1..9}` a
- * sequence; file-pattern's parser reads both as literal text, so ten `{a},b}`
- * passed as one segment that glob compiled into 1024.
+ * Every limit is checked on the alternatives glob compiles: minimatch's
+ * braceExpand, which hands a pattern holding a `{...}` to brace-expansion
+ * (called on any other, brace-expansion alone turns `\\*` into an escaped
+ * star). It follows bash, where `{a},b}` is the two alternatives `a}` and `b`
+ * and `{1..9}` a sequence; file-pattern's parser reads both as literal text, so
+ * ten `{a},b}` passed as one segment that glob compiled into 1024. Expansion
+ * also assembles extglobs the raw pattern does not spell (`{+,@}(` or `+{,}(`)
+ * and unescapes them (`\\\+(` becomes `\\+(`): `**` + `/{+,@}(?|??|???)#` passed
+ * filePatternProblem and ran 30 s.
  */
 export function globPatternProblem(pattern: string, label = "file_pattern"): string | undefined {
   const problem = filePatternProblem(pattern, label);
   if (problem !== undefined) return problem;
   const alternatives = braceExpand(pattern, { braceExpandMax: MAX_BRACE_ALTERNATIVES + 1 });
   if (alternatives.length > MAX_BRACE_ALTERNATIVES) return tooManyAlternatives(label);
+  if (alternatives.reduce((total, alternative) => total + alternative.length, 0) > MAX_EXPANDED_LENGTH) {
+    return expandsTooLong(label);
+  }
+  if (alternatives.some(hasExtglob)) return extglobRefused(label);
   let cost = 0;
   for (const alternative of alternatives) {
     for (const part of alternative.split("/")) {
@@ -130,6 +137,14 @@ function tooManyAlternatives(label: string): string {
   return `${label} expands to more than ${MAX_BRACE_ALTERNATIVES} {a,b} alternatives`;
 }
 
+function expandsTooLong(label: string): string {
+  return `${label}'s {a,b} alternatives expand past ${MAX_EXPANDED_LENGTH} characters`;
+}
+
+function extglobRefused(label: string): string {
+  return `${label} uses extglob syntax such as +(a|b) or @(a|b), which is not supported; list alternatives as {a,b}`;
+}
+
 /** glob (grep_search) defaults to case-insensitive matching on these platforms. */
 function caseInsensitivePlatform(): boolean {
   return process.platform === "darwin" || process.platform === "win32";
@@ -157,13 +172,11 @@ function compileFilePattern(
   if (pattern.length > MAX_FILE_PATTERN_LENGTH) {
     throw new Error(`${label} is too long (${pattern.length} characters, max ${MAX_FILE_PATTERN_LENGTH})`);
   }
-  if (hasExtglob(pattern)) {
-    throw new Error(
-      `${label} uses extglob syntax such as +(a|b) or @(a|b), which is not supported; list alternatives as {a,b}`,
-    );
-  }
+  if (hasExtglob(pattern)) throw new Error(extglobRefused(label));
   const directory = pattern.replace(/\/+$/, "") || pattern;
   const alternatives = expandBraces(directory, label);
+  // `{+,@}(a|b)` spells no extglob until its braces are expanded.
+  if (alternatives.some(hasExtglob)) throw new Error(extglobRefused(label));
   const compiled = alternatives
     .map((alternative) => alternative.replace(/^(\.\/)+/, ""))
     // An absolute alternative never names a project-relative path.
@@ -204,9 +217,7 @@ function expandBraces(pattern: string, label: string): string[] {
       out.push(p);
       expandedLength += p.length;
       if (out.length > MAX_BRACE_ALTERNATIVES) throw new Error(tooManyAlternatives(label));
-      if (expandedLength > MAX_EXPANDED_LENGTH) {
-        throw new Error(`${label}'s {a,b} alternatives expand past ${MAX_EXPANDED_LENGTH} characters`);
-      }
+      if (expandedLength > MAX_EXPANDED_LENGTH) throw new Error(expandsTooLong(label));
       return;
     }
     const prefix = p.slice(0, group.open);

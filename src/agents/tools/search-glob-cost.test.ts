@@ -66,6 +66,10 @@ describe("grep_search and glob_search bound what a glob may cost", () => {
     // alternatives `a}` and `b`: ten of them make one three-'*' segment into
     // 1024, which ran 0.2-1 s per call over these trees (2-6 s in review).
     [`**/*?*?*?#${"{a},b}".repeat(10)}`, /expands to more than 64 \{a,b\} alternatives/],
+    // Extglobs the brace expansion assembles: the first blocked the event loop
+    // for 30 s over the ordinary tree in review, answering 'No files found'.
+    ["**/{+,@}(?|??|???)#", /extglob/],
+    ["**/+{,}(?|??)#", /extglob/],
   ];
 
   it.each(backtracking)("glob_search refuses %j without walking the tree, saying why", async (pattern, why) => {

@@ -42,6 +42,9 @@ describe("createFilePatternFilter", () => {
     expect(() => createFilePatternFilter(braceBomb, [ROOT])).toThrow(/alternatives/);
 
     expect(filePatternProblem("**/+(a|aa)b")).toMatch(/extglob/);
+    // Assembled by the expansion, not spelled in the pattern.
+    expect(filePatternProblem("**/{+,@}(a|aa)b")).toMatch(/extglob/);
+    expect(() => createFilePatternFilter("**/{+,@}(a|aa)b", [ROOT])).toThrow(/extglob/);
     expect(filePatternProblem("**/*.{cs,shader}")).toBeUndefined();
   });
 
@@ -150,6 +153,32 @@ describe("globPatternProblem", () => {
   // itself would read `\\*` as an escaped star and miss these four runs.
   it("reads a pattern without braces the way glob does", () => {
     expect(globPatternProblem(String.raw`**/\\*?\\*?\\*?\\*?#`)).toMatch(/holds 4 '\*' wildcards/);
+  });
+
+  // glob compiles each alternative after brace expansion, which can assemble
+  // an extglob from pieces or unescape one (brace-expansion turns `\\` into
+  // `\`, leaving the `+` after it bare): '**/{+,@}(?|??|???)#' ran 30 s in
+  // review over a 100-file tree with no extglob in the raw pattern. The last
+  // two read as one extglob-free alternative to file-pattern's own parser.
+  it.each([
+    "**/{+,@}(?|??|???)#",
+    "**/{+,*}(?|??)#",
+    "**/{+,@}(?|??)#",
+    "**/+{,}(?|??|???)#",
+    "**/*{,}(?|??)#",
+    "**/{!,x}(?|??)#",
+    "Assets/**/{@,+}(*|?)*.cs",
+    String.raw`**/\\\+(?|??)#{a,b}`,
+    "**/{@},+}(?|??|???)#",
+  ])("refuses %j, an extglob once braces are expanded", (pattern) => {
+    expect(globPatternProblem(pattern)).toMatch(/^file_pattern uses extglob syntax/);
+  });
+
+  it("bounds the length of the alternatives glob compiles, not file-pattern's", () => {
+    // One 239-character alternative to file-pattern's parser; 64 of about 210 to glob.
+    expect(globPatternProblem(`**/${"x".repeat(200)}${"{a},b}".repeat(6)}`)).toMatch(
+      /^file_pattern's \{a,b\} alternatives expand past 1024 characters/,
+    );
   });
 
   it("keeps filePatternProblem's limits and names the argument it was given", () => {
