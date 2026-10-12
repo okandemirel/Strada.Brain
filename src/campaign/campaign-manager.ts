@@ -6524,8 +6524,14 @@ export class CampaignManager {
    * delivery gate judges. A campaign this manager does not know has none.
    */
   designDocOf(campaignId: string): RunDesignDoc {
-    const text = this.gddTextOf(this.storage.get(campaignId));
-    return text === undefined ? {} : { text };
+    const campaign = this.storage.get(campaignId);
+    const text = this.gddTextOf(campaign);
+    if (text === undefined) return {};
+    // THE FILE, only when it holds this very text: a run's asks name where the
+    // design is, and a text-only campaign (or one whose file cannot be read)
+    // has no file to name (review gdd-W10).
+    const path = campaign?.gddPath;
+    return path !== undefined && readGddFile(this.projectRoot, path) === text ? { text, path } : { text };
   }
 
   /**
@@ -7310,6 +7316,15 @@ export class CampaignManager {
         `${lastBreak > 0 ? head.slice(0, lastBreak) : head}\n` +
         "- (measurement trimmed here; re-run the structural check yourself for the rest)";
     }
+    // WHERE THE DESIGN IS, never "the GDD" with no file behind it: a
+    // text-only campaign has no GDD in the project, and the document the
+    // sprint finds in the repo is another one (review gdd-W10; gapSprint and
+    // the planner's unsaved-GDD rule guard the same hazard).
+    const design =
+      campaign.gddPath !== undefined
+        ? `It is not the design: read the sections of ${campaign.gddPath} your change implements and build what they specify. `
+        : "It is not the design. This campaign's GDD is not saved in the project, so no file holds it — do not look " +
+          "for one: a design document in the repo is another document. Build what this prompt states of the GDD. ";
     milestone.prompt =
       `${stripped}\n\n${open}\n- ${shown}\n` +
       "This is a file-level measurement of the tree as it stands, not a review of your plan. " +
@@ -7328,8 +7343,7 @@ export class CampaignManager {
       // trace M4, 2026-10-11).
       "DO NOT AUDIT. Counting or listing what exists is not the task, and an inventory will be " +
       "rejected. Do not re-audit the landed modules before acting: this measurement is that audit, " +
-      "already done. It is not the design: read the GDD sections your change implements and build " +
-      "what they specify. Spend the sprint on the change itself — open the " +
+      `already done. ${design}Spend the sprint on the change itself — open the ` +
       "entry scene, place the named prefabs in it (unity_place_prefab), bind real sprites to their " +
       "renderers (unity_bind_sprite) instead of engine primitives, save the scene, and let a captured frame and the " +
       "unfiltered suite be your report. Art comes from the purchased library (unity_my_assets_cloud " +

@@ -13,6 +13,7 @@
  */
 
 import { ACCEPTANCE_DIR, type RequirementLedger, type RequirementRow, type ScopeGateMode } from "./scope-types.js";
+import { rowDecides } from "./scope-verdict.js";
 import type { CampaignMilestone } from "./types.js";
 
 export const ACCEPTANCE_BLOCK_OPEN = "<<ACCEPTANCE — GDD rules this sprint is judged on>>";
@@ -41,11 +42,6 @@ function clip(text: string, max: number): string {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 }
 
-/** The same rows the judge lets decide: look and feel, aspirations, waived and excluded rows never block. */
-function decides(row: RequirementRow): boolean {
-  return row.status !== "excluded" && row.status !== "waived" && row.kind !== "aspiration" && row.kind !== "judgement";
-}
-
 /**
  * The rows this milestone is judged on, in the order the milestone lists them.
  * A row it lists stays unless the row itself names another owner (a time-box
@@ -63,7 +59,8 @@ export function rowsJudgedFor(
   const take = (row: RequirementRow | undefined): void => {
     if (!row || seen.has(row.rid)) return;
     if (row.owner !== undefined && row.owner !== milestone.id) return;
-    if (!decides(row)) return;
+    // The judge's own rule, so the sprint is shown the rows it is judged on.
+    if (!rowDecides(row)) return;
     seen.add(row.rid);
     out.push(row);
   };
@@ -106,8 +103,11 @@ function rowId(row: RequirementRow): string {
   return row.label ? `${row.label} (${row.rid})` : row.rid;
 }
 
-function renderRow(row: RequirementRow, unbound: ReadonlyMap<string, string>): string {
-  const head = `- ${rowId(row)} · "${flat(row.section)}", GDD line ${row.line}: "${clip(row.text, ROW_TEXT_CHARS)}"`;
+function renderRow(row: RequirementRow, unbound: ReadonlyMap<string, string>, gddSaved: boolean): string {
+  // A line number locates a row only in a file that holds the GDD; without
+  // one, a worker took it to whatever design document the repo held.
+  const where = gddSaved ? `"${flat(row.section)}", GDD line ${row.line}` : `"${flat(row.section)}"`;
+  const head = `- ${rowId(row)} · ${where}: "${clip(row.text, ROW_TEXT_CHARS)}"`;
   const facts: string[] = [];
   const test = currentTestName(row);
   if (test !== undefined) facts.push(`test ${test}`);
@@ -147,6 +147,8 @@ function overflowLine(rows: readonly RequirementRow[], room: number): string {
 export function acceptanceBlock(input: {
   readonly mode: ScopeGateMode;
   readonly rows: readonly RequirementRow[];
+  /** The campaign's GDD file; undefined when no file in the project holds the GDD (a text-only campaign). */
+  readonly gddPath: string | undefined;
   readonly unbound?: ReadonlyMap<string, string>;
   readonly maxChars?: number;
 }): string {
@@ -160,11 +162,19 @@ export function acceptanceBlock(input: {
         "changed file is restored and counted against the sprint."
       : `The system writes the checks to ${ACCEPTANCE_DIR}/ and runs them itself when the sprint settles, so they are ` +
         "not in your workspace. That folder is read-only and system-owned: the write-back refuses any change there.";
+  const gddSaved = input.gddPath !== undefined;
   const head = [
     ACCEPTANCE_BLOCK_OPEN,
     "The system judges this milestone on the GDD rows below, in the GDD's own words. A row closes only when its " +
       "system-written acceptance check passes on the committed tree, and every row that passed before must still pass. " +
       "Your own tests do not close rows.",
+    // The same notice a text-only gap sprint carries (gapSprint).
+    ...(gddSaved
+      ? []
+      : [
+          "This campaign's GDD is not saved in the project, so no file holds it — do not look for one: a design " +
+            "document in the repo is another document.",
+        ]),
     where,
   ].join("\n");
   const tailLines: string[] = [];
@@ -185,7 +195,7 @@ export function acceptanceBlock(input: {
     .map((row, i) => ({ row, i }))
     .sort((a, b) => urgency(a.row) - urgency(b.row) || a.i - b.i)
     .map(({ row }) => row);
-  const rendered = ordered.map((row) => renderRow(row, unbound));
+  const rendered = ordered.map((row) => renderRow(row, unbound, gddSaved));
   const fixed = head.length + tail.length + 2;
   const fits = (budget: number): number => {
     let used = 0;
@@ -214,7 +224,7 @@ export function acceptanceBlock(input: {
  * "" (gate off, no readable ledger, no rows).
  */
 export function acceptancePromptFor(
-  campaign: { readonly requirements?: RequirementLedger },
+  campaign: { readonly requirements?: RequirementLedger; readonly gddPath?: string },
   milestone: Pick<CampaignMilestone, "id" | "requirementIds" | "scopeVerdict">,
   mode: ScopeGateMode,
 ): string {
@@ -222,6 +232,7 @@ export function acceptancePromptFor(
   const block = acceptanceBlock({
     mode,
     rows: rowsJudgedFor(campaign.requirements, milestone),
+    gddPath: campaign.gddPath,
     unbound: unboundRowsOf(milestone),
   });
   return block === "" ? "" : `\n\n${block}`;

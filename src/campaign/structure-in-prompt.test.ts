@@ -49,13 +49,13 @@ function emptyGameProject(): string {
   return root;
 }
 
-function attach(root: string, prompt: string): string {
+function attach(root: string, prompt: string, campaign: { gddPath?: string; gddText?: string } = { gddText: "" }): string {
   const manager = Object.create(CampaignManager.prototype) as CampaignManager;
   (manager as unknown as { projectRoot: string }).projectRoot = root;
   const milestone = { prompt } as { prompt: string };
   (manager as unknown as {
     attachStructureMeasurement(c: unknown, m: unknown): void;
-  }).attachStructureMeasurement({ id: "c1", gddText: "" }, milestone);
+  }).attachStructureMeasurement({ id: "c1", ...campaign }, milestone);
   return milestone.prompt;
 }
 
@@ -86,13 +86,32 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("unity_place_prefab");
   });
 
-  it("does not keep the final sprint away from the GDD (GDD-drift trace M4)", () => {
+  it("sends the final sprint to the sections of its own GDD file (GDD-drift trace M4)", () => {
     // "Do not re-read the whole GDD" was read as "do not consult it": the
     // delivered game drifted from rules the sprint was told not to look up.
     // The measurement replaces an audit of the tree, not the design.
-    const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.");
+    const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.", {
+      gddPath: "docs/FerryDesign.md",
+      gddText: "# Ferry\n## 1. Crossings\nEvery quay moors at most two boats.\n",
+    });
     expect(prompt).not.toMatch(/re-read the (?:whole )?GDD/i);
-    expect(prompt).toContain("read the GDD sections your change implements");
+    expect(prompt).toContain("read the sections of docs/FerryDesign.md your change implements");
+    expect(prompt).toContain("re-audit the landed modules");
+    expect(prompt).not.toContain("not saved in the project");
+  });
+
+  it("never sends a text-only campaign's final sprint to look for a GDD file (review gdd-W10 P2)", () => {
+    // A campaign whose GDD could not be saved into the project has no file:
+    // docs/ may hold another document, and "read the GDD sections" sent the
+    // sprint to it. Such a campaign is told where its design is instead.
+    const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.", {
+      gddText: "# Ferry\n## 1. Crossings\nEvery quay moors at most two boats.\n",
+    });
+    expect(prompt).not.toMatch(/re-read the (?:whole )?GDD/i);
+    expect(prompt).not.toMatch(/read the (?:GDD )?sections/i);
+    expect(prompt).toContain("campaign's GDD is not saved in the project, so no file holds it");
+    expect(prompt).toContain("do not look for one");
+    expect(prompt).toMatch(/build what this prompt states of the GDD/i);
     expect(prompt).toContain("re-audit the landed modules");
   });
 

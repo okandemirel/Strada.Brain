@@ -69,7 +69,15 @@ describe("CampaignManager.designDocOf", () => {
     writeFileSync(join(root, "docs", "Game_GDD.md"), "# This game, as amended\n");
     storage.save(campaign(root, "cmp_path", { gddPath: "docs/Game_GDD.md", gddText: "# This game\n" }));
 
-    expect(manager.designDocOf("cmp_path")).toEqual({ text: "# This game, as amended\n" });
+    // Named with its file, so a run's asks can say where the design is (review gdd-W10).
+    expect(manager.designDocOf("cmp_path")).toEqual({ text: "# This game, as amended\n", path: "docs/Game_GDD.md" });
+  });
+
+  it("names no file when the file it names cannot be read and the intake text stands in", () => {
+    const { manager, storage, root } = build();
+    storage.save(campaign(root, "cmp_gone", { gddPath: "docs/Gone_GDD.md", gddText: "# This game\n" }));
+
+    expect(manager.designDocOf("cmp_gone")).toEqual({ text: "# This game\n" });
   });
 
   it("holds no text for a campaign that carries none, or one it does not know", () => {

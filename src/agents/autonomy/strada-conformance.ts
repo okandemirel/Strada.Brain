@@ -1078,11 +1078,23 @@ export class StradaConformanceGuard {
       // rule labels, layout and level structure, sent to every game; a sprint
       // told to build a showcase level builds content its design never asked
       // for (GDD-drift trace M4, 2026-10-11).
+      // …AND WHERE THEY ARE. A campaign's GDD that no file holds is not "the
+      // design document": the one a run finds in the repo is another one
+      // (review gdd-W10). A run that serves no campaign found its document
+      // in the project, so that wording stands.
+      const doc = this.opts?.designDoc;
+      const specifiedBy =
+        doc === undefined
+          ? "Implement each as the design document specifies it"
+          : doc.path !== undefined
+          ? `Implement each as ${doc.path} specifies it`
+          : "This campaign's GDD is not saved in the project, so no file holds it — do not look for one: a design " +
+            "document in the repo is another document. Implement each as your task states the GDD specifies it";
       return (
         `[STRADA SPEC SCOPE] The design document schedules ${report.scheduled} elements; ` +
         `${report.missing.length} have no implementation in this project: ${names}${rest}. ` +
         `The spec is the contract — a delivery that omits scheduled elements is partial, ` +
-        `not done. Implement each as the design document specifies it — its rules and its ` +
+        `not done. ${specifiedBy} — its rules and its ` +
         `interactions with the other elements — following the project's module pattern, ` +
         `and make it reachable in the shipped game.`
       );

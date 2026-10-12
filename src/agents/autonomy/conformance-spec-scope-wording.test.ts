@@ -14,6 +14,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { StradaConformanceGuard } from "./strada-conformance.js";
+import type { RunDesignDoc } from "./run-design-doc.js";
 
 const GDD = `
 ## 14. FERRY PIECES
@@ -32,7 +33,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function specScopeText(): string | null {
+function specScopeText(designDoc?: RunDesignDoc): string | null {
   const root = mkdtempSync(join(os.tmpdir(), "spec-scope-wording-"));
   roots.push(root);
   mkdirSync(join(root, "docs"), { recursive: true });
@@ -40,7 +41,7 @@ function specScopeText(): string | null {
   const scripts = join(root, "Assets", "Modules", "M", "Scripts");
   mkdirSync(scripts, { recursive: true });
   writeFileSync(join(scripts, "FogLamp.cs"), "public class FogLamp {}");
-  const guard = new StradaConformanceGuard(undefined, { projectPath: root, enabled: true });
+  const guard = new StradaConformanceGuard(undefined, { projectPath: root, enabled: true, designDoc });
   (guard as unknown as { wroteProjectCode: boolean }).wroteProjectCode = true;
   return (guard as unknown as { specScopePrompt(): string | null }).specScopePrompt();
 }
@@ -52,5 +53,21 @@ describe("the spec-scope prompt", () => {
     expect(text).toContain("Copper Buoy (W3)");
     expect(text).not.toMatch(/R-rule|showcases|sim module/i);
     expect(text).toContain("as the design document specifies it");
+  });
+
+  it("names the campaign's GDD file when one holds the document", () => {
+    const text = specScopeText({ text: GDD, path: "docs/FerryDesign.md" }) ?? "";
+    expect(text).toContain("Copper Buoy (W3)");
+    expect(text).toContain("Implement each as docs/FerryDesign.md specifies it");
+  });
+
+  it("never sends a text-only campaign's run to look for a design file (review gdd-W10)", () => {
+    // The campaign's GDD is in no file; docs/ here holds a document, and it
+    // is not that one. "As the design document specifies it" sent the run to it.
+    const text = specScopeText({ text: GDD }) ?? "";
+    expect(text).toContain("Copper Buoy (W3)");
+    expect(text).not.toContain("as the design document specifies it");
+    expect(text).toContain("campaign's GDD is not saved in the project, so no file holds it");
+    expect(text).toContain("do not look for one");
   });
 });

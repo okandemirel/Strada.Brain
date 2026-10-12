@@ -83,8 +83,12 @@ export function terminalReasonClass(key: TerminalKey): ReasonClass | undefined {
  * Look and feel, aspirations, and rows a person waived or the plan excluded
  * never block. The settle path filters them out of OWN; the judge filters
  * again, because a row that never blocks must not block by being passed in.
+ *
+ * Exported so the rows a worker is shown (acceptance-prompt.ts) and the rows
+ * the report counts (scope-report.ts) are decided by this rule, not by copies
+ * of it that could drift apart from the verdict.
  */
-function decides(row: RequirementRow): boolean {
+export function rowDecides(row: RequirementRow): boolean {
   return row.status !== "excluded" && row.status !== "waived" && row.kind !== "aspiration" && row.kind !== "judgement";
 }
 
@@ -204,19 +208,19 @@ export function judgeMilestone(input: GreenInput): Judgement {
   const own: RequirementRow[] = [];
   const seen = new Set<string>();
   for (const row of input.own) {
-    if (decides(row) && !seen.has(row.rid)) {
+    if (rowDecides(row) && !seen.has(row.rid)) {
       seen.add(row.rid);
       own.push(row);
     }
   }
   const regression: RequirementRow[] = [];
   for (const row of input.regression) {
-    if (decides(row) && !seen.has(row.rid)) {
+    if (rowDecides(row) && !seen.has(row.rid)) {
       seen.add(row.rid);
       regression.push(row);
     }
   }
-  const disclosed = input.own.filter((row) => !decides(row)).length;
+  const disclosed = input.own.filter((row) => !rowDecides(row)).length;
 
   // A row passes only inside an admitted run on this revision. A run that
   // counted failures it could not name has no passes to give.

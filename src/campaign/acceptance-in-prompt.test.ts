@@ -172,6 +172,7 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     const aspiration = row({ rid: "req-4-dddddddd", text: "Nine in ten captains finish the first crossing.", owner: "m1", kind: "aspiration" });
     const excluded = row({ rid: "req-5-eeeeeeee", text: "EXCLUDED BY THE PLAN", owner: "m1", status: "excluded" });
     const campaign = campaignWith(h.storage, h.dir, {
+      gddPath: "docs/FerryDesign.md",
       requirements: ledgerOf([owned, listed, elsewhere, aspiration, excluded]),
       milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa", "req-2-bbbbbbbb"] }), milestone("m2"), milestone("m3")],
     });
@@ -186,7 +187,7 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     expect(block).toContain('"Every quay moors at most two boats; a third boat is turned away."');
     expect(block).toContain("Q-4");
     expect(block).toContain("12.5 Quay rules");
-    expect(block).toContain("line 214");
+    expect(block).toContain("GDD line 214");
     expect(block).toContain("The crossing ends when the last cargo is landed.");
     // Its system check and what that check last said, clipped to 200 characters.
     expect(block).toContain("Strada.Acceptance.M1.Acceptance_M1.R1_aaaaaa");
@@ -206,6 +207,32 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     expect(block).toContain("ACCEPTANCE DISPUTE <test name or row id>: <why>");
     // Nothing in it arms an evidence demand the supervisor reads from the task prompt.
     expect(block).not.toMatch(/unity_|STRADA-REQUIRED-EVIDENCE|captur/i);
+  });
+
+  it("a text-only campaign's rows are quoted, never located in a file (review gdd-W10 P3)", () => {
+    // No file in the project holds this GDD: "GDD line 214" sent a worker to
+    // line 214 of whatever design document the repo happened to hold.
+    const h = harness("on");
+    const owned = row({ rid: "req-1-aaaaaaaa", label: "Q-4", text: "Every quay moors at most two boats.", line: 214, owner: "m1" });
+    const textOnly = campaignWith(h.storage, h.dir, {
+      requirements: ledgerOf([owned]),
+      milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa"] }), milestone("m2"), milestone("m3")],
+    });
+    const block = blockOf(h.submit(textOnly));
+    expect(block).toContain('"Every quay moors at most two boats."');
+    expect(block).toContain("12.5 Quay rules");
+    expect(block).not.toMatch(/line 214/);
+    expect(block).toContain("campaign's GDD is not saved in the project, so no file holds it");
+    expect(block).toContain("do not look for one");
+
+    const saved = campaignWith(h.storage, h.dir, {
+      gddPath: "docs/FerryDesign.md",
+      requirements: ledgerOf([owned]),
+      milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa"] }), milestone("m2"), milestone("m3")],
+    });
+    const savedBlock = blockOf(h.submit(saved));
+    expect(savedBlock).toContain("GDD line 214");
+    expect(savedBlock).not.toContain("not saved in the project");
   });
 
   it("an unbound row names what the sprint has to expose", () => {

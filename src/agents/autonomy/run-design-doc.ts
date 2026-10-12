@@ -6,6 +6,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 export interface RunDesignDoc {
   readonly text?: string;
+  /**
+   * The project-relative file that holds `text`; absent when no file in the
+   * project does (a text-only campaign), so an ask never sends a run to look.
+   */
+  readonly path?: string;
 }
 
 const current = new AsyncLocalStorage<RunDesignDoc | null>();

@@ -15,7 +15,7 @@
 
 import { isTerminalKey, worstTerminal, type RunIntegrity, type TerminalKey } from "../agents/autonomy/terminal-key.js";
 import { decodeRequirement } from "./requirement-identity.js";
-import { judgeMilestone, legacyRunIntegrity, type StampDecoder } from "./scope-verdict.js";
+import { judgeMilestone, legacyRunIntegrity, rowDecides, type StampDecoder } from "./scope-verdict.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import type {
   AcceptanceSource,
@@ -42,12 +42,13 @@ function clip(text: string, max: number): string {
 // =============================================================================
 
 /**
- * Whether a row can hold a milestone back: the judge's own rule
- * (`decides` in scope-verdict.ts). A person's waiver, the plan's exclusion,
- * an aspiration and look and feel never block.
+ * Whether a row can hold a milestone back: the judge's own rule, called
+ * rather than copied so the report cannot count a different set of rows from
+ * the one the verdict weighs. A person's waiver, the plan's exclusion, an
+ * aspiration and look and feel never block.
  */
 export function rowBlocks(row: RequirementRow): boolean {
-  return row.status !== "excluded" && row.status !== "waived" && row.kind !== "aspiration" && row.kind !== "judgement";
+  return rowDecides(row);
 }
 
 /** The kinds a system-written acceptance test decides; claims are measured at delivery, the rest never block. */
