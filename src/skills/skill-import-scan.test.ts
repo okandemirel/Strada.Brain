@@ -306,6 +306,20 @@ describe("specifierLeavesSkill / isSkillCodeFile", () => {
     expect(specifierLeavesSkill(root, entry, "../deploy-evil/x.js")).toBe(true);
   });
 
+  it("given the scan's listing, a relative specifier must reach something it hashed", () => {
+    const hashed = { files: new Set(["index.js", "lib/a.ts", "lib/b.cjs"]), dirs: new Set(["", "lib"]) };
+    const from = join(root, "lib", "x.js");
+    expect(specifierLeavesSkill(root, from, "./a.js", hashed)).toBe(false);
+    expect(specifierLeavesSkill(root, from, "./b", hashed)).toBe(false);
+    expect(specifierLeavesSkill(root, from, "..", hashed)).toBe(false);
+    expect(specifierLeavesSkill(root, from, "../index.js", hashed)).toBe(false);
+    expect(specifierLeavesSkill(root, from, "./GIT~1/x.js", hashed)).toBe(true);
+    expect(specifierLeavesSkill(root, from, "../.git::$INDEX_ALLOCATION", hashed)).toBe(true);
+    expect(specifierLeavesSkill(root, from, "./missing.js", hashed)).toBe(true);
+    // Without one, only the lexical rule applies.
+    expect(specifierLeavesSkill(root, from, "./GIT~1/x.js")).toBe(false);
+  });
+
   it("checks code files only, never declaration files", () => {
     expect(isSkillCodeFile("index.ts")).toBe(true);
     expect(isSkillCodeFile("lib/a.MJS")).toBe(true);

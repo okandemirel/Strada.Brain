@@ -14,7 +14,9 @@
 // `import.source(…)`, `require(…)`, `process.getBuiltinModule(…)`) is a Node
 // built-in or a relative path (`./`, `../`) that stays inside the skill
 // directory at every step, never enters the `.git` directory the hash skips,
-// and names a file the scan reads; and every such call takes a string
+// and names a file the scan reads — given the scan's listing, one it hashed,
+// since Windows reaches `.git` under names no lexical check can list (`GIT~1`,
+// `.git::$INDEX_ALLOCATION`); and every such call takes a string
 // literal. A relative path is resolved from the importer's REAL path, so one
 // that climbs out and back in can land elsewhere when a parent directory is a
 // symlink; and CommonJS runs a file of any unknown extension, or none, as
@@ -55,12 +57,29 @@
 // ---------------------------------------------------------------------------
 
 import { isBuiltin } from "node:module";
-import { dirname, extname, isAbsolute, relative, sep } from "node:path";
+import { dirname, extname, isAbsolute, posix, relative, sep } from "node:path";
+
+/**
+ * What scanSkillContent hashed under the skill root, as `/`-separated paths
+ * relative to it: every regular file, and every directory it walked (`""` is
+ * the root).
+ */
+export interface HashedSkillTree {
+  readonly files: ReadonlySet<string>;
+  readonly dirs: ReadonlySet<string>;
+}
 
 /** Extensions Node (or the tsx loader) runs as module code. */
 const CODE_EXTENSIONS: ReadonlySet<string> = new Set([".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"]);
 /** What a specifier may name besides code: JSON data, and native addons (hashed, but not text to scan). */
 const DATA_EXTENSIONS: ReadonlySet<string> = new Set([".json", ".node"]);
+/** The TypeScript files tsx loads for a `.js`-family specifier. */
+const TYPESCRIPT_TWINS: Readonly<Record<string, readonly string[]>> = {
+  ".js": [".ts", ".tsx"],
+  ".jsx": [".tsx"],
+  ".mjs": [".mts"],
+  ".cjs": [".cts"],
+};
 
 /**
  * Type-only imports/re-exports, removed before scanning (erased at run time).
@@ -132,9 +151,10 @@ export function isSkillCodeFile(name: string): boolean {
 
 /**
  * Does `specifier`, loaded from `fromFile`, resolve outside `skillRoot` (or to
- * a file the scan does not read, or to the loader itself)?
+ * a file the scan does not read, or to the loader itself)? With `hashed`, a
+ * relative specifier must also reach something in it.
  */
-export function specifierLeavesSkill(skillRoot: string, fromFile: string, specifier: string): boolean {
+export function specifierLeavesSkill(skillRoot: string, fromFile: string, specifier: string, hashed?: HashedSkillTree): boolean {
   if (UNCHECKED_CHARACTER.test(specifier)) return true;
   if (specifier === "module" || specifier === "node:module") return true;
   if (specifier.startsWith("node:") || isBuiltin(specifier)) return false;
@@ -158,7 +178,27 @@ export function specifierLeavesSkill(skillRoot: string, fromFile: string, specif
     if (HASH_EXCLUDED_DIRS.has(segment.toLowerCase().replace(/[. ]+$/, ""))) return true;
   }
   const last = segments[segments.length - 1] ?? "";
-  return !isSkillCodeFile(last) && !DATA_EXTENSIONS.has(extname(last).toLowerCase());
+  if (!isSkillCodeFile(last) && !DATA_EXTENSIONS.has(extname(last).toLowerCase())) return true;
+  if (hashed === undefined) return false;
+  const target = posix.normalize(posix.join(from.split(sep).join("/"), specifier)).replace(/\/+$/, "");
+  return !reachesHashed(hashed, target === "." ? "" : target);
+}
+
+/**
+ * Whether the loader, given `target` (a path under the skill root), reaches
+ * something the scan hashed: the file itself, a directory it walked (whose
+ * index is hashed and whose package.json main is checked on its own), the
+ * name with an extension added (CommonJS, tsx), or a `.js`-family name's
+ * TypeScript twin (tsx). Any other name is refused: it may be another
+ * spelling of a directory the hash skips.
+ */
+function reachesHashed(hashed: HashedSkillTree, target: string): boolean {
+  if (hashed.files.has(target) || hashed.dirs.has(target)) return true;
+  for (const ext of [...CODE_EXTENSIONS, ...DATA_EXTENSIONS]) {
+    if (hashed.files.has(target + ext)) return true;
+  }
+  const ext = extname(target);
+  return (TYPESCRIPT_TWINS[ext] ?? []).some((twin) => hashed.files.has(target.slice(0, -ext.length) + twin));
 }
 
 /**
@@ -208,15 +248,16 @@ function withoutTypeOnlyStatements(source: string): string {
 /**
  * The loading statements in `source` (the text of `file`, somewhere under
  * `skillRoot`) that leave the skill directory or cannot be checked, as short
- * descriptions. Empty when the file only loads built-ins and its own siblings.
+ * descriptions. Empty when the file only loads built-ins and its own siblings
+ * (ones in `hashed`, when given).
  */
-export function findOutsideImports(skillRoot: string, file: string, source: string): string[] {
+export function findOutsideImports(skillRoot: string, file: string, source: string, hashed?: HashedSkillTree): string[] {
   const code = withoutTypeOnlyStatements(source);
   const gaps = gapReader(code);
   const skipGap = gaps.skip;
   const found = new Set<string>();
   const check = (specifier: string): void => {
-    if (specifierLeavesSkill(skillRoot, file, specifier)) found.add(`"${specifier}"`);
+    if (specifierLeavesSkill(skillRoot, file, specifier, hashed)) found.add(`"${specifier}"`);
   };
   for (const match of code.matchAll(IDENTIFIER)) {
     let name = identifierName(match[0]);
@@ -351,15 +392,16 @@ function firstAtOrAfter(sorted: readonly number[], from: number): number | undef
 
 /**
  * The `main` entries of a package.json under the skill (`source`, the text of
- * `file`) that resolve outside it or to a file the scan does not read, as
- * short descriptions. CommonJS follows `main` for a directory specifier, so
- * `require("./lib")` lands wherever lib/package.json points. Every key
+ * `file`) that resolve outside it or to a file the scan does not read (or,
+ * given `hashed`, to nothing in it), as short descriptions. CommonJS follows
+ * `main` for a directory specifier, so `require("./lib")` lands wherever
+ * lib/package.json points. Every key
  * spelled `main` is checked, at any depth: Node matches the raw key (the last
  * one wins) while JSON.parse unescapes it. `exports` and `imports` are not:
  * Node consults them only for package and `#` specifiers, which are refused
  * everywhere in the skill.
  */
-export function findOutsidePackageTargets(skillRoot: string, file: string, source: string): string[] {
+export function findOutsidePackageTargets(skillRoot: string, file: string, source: string, hashed?: HashedSkillTree): string[] {
   const text = source.replace(/^\uFEFF/, "");
   try {
     JSON.parse(text);
@@ -375,7 +417,7 @@ export function findOutsidePackageTargets(skillRoot: string, file: string, sourc
         const main = token.slice(1, -1);
         // A bare `main` ("index.js") is a path relative to the package, not a package name.
         const specifier = RELATIVE_SPECIFIER.test(main) ? main : `./${main}`;
-        if (isAbsolute(main) || main.includes(":") || specifierLeavesSkill(skillRoot, file, specifier)) {
+        if (isAbsolute(main) || main.includes(":") || specifierLeavesSkill(skillRoot, file, specifier, hashed)) {
           found.add(`main "${main}"`);
         }
       }

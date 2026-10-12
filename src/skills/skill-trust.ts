@@ -82,7 +82,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveStradaHomeEntry } from "../common/strada-home-entry.js";
 import { parseFrontmatter } from "./frontmatter-parser.js";
 import { SKILL_ENTRY_POINTS, findSkillEntryPoint } from "./skill-entry-point.js";
-import { HASH_EXCLUDED_DIRS, findOutsideImports, findOutsidePackageTargets, isSkillCodeFile } from "./skill-import-scan.js";
+import { HASH_EXCLUDED_DIRS, findOutsideImports, findOutsidePackageTargets, isSkillCodeFile, type HashedSkillTree } from "./skill-import-scan.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -466,6 +466,7 @@ export async function scanSkillContent(
   limits: SkillScanLimits = DEFAULT_SKILL_SCAN_LIMITS,
 ): Promise<SkillContentScan | null> {
   const files: string[] = [];
+  const dirs = new Set<string>();
   const symlinks: string[] = [];
   let entryPoint: string | null = null;
   let exceeded: SkillScanLimitBreach | null = null;
@@ -479,6 +480,7 @@ export async function scanSkillContent(
     } catch {
       return;
     }
+    dirs.add(toRel(dir));
     if (depth === 1) {
       // Decide the entry point from the complete top-level listing, before any
       // recursion can stop the scan.
@@ -518,6 +520,9 @@ export async function scanSkillContent(
   const chunk = Buffer.allocUnsafe(SCAN_CHUNK_BYTES);
   let byteCount = 0;
   const outsideImports: string[] = [];
+  // A relative import must reach something in this listing: the walk sees
+  // `.git` only by that name, and a path can reach it under others.
+  const hashed: HashedSkillTree = { files: new Set(rels.map(({ rel }) => rel)), dirs };
   for (const { full, rel } of rels) {
     if (exceeded) break;
     hash.update(rel);
@@ -555,7 +560,7 @@ export async function scanSkillContent(
         outsideImports.push(`${rel}: too large to check its imports (over ${SKILL_IMPORT_CHECK_MAX_FILE_BYTES} bytes)`);
       } else {
         const check = isManifest ? findOutsidePackageTargets : findOutsideImports;
-        for (const found of check(skillPath, full, Buffer.concat(held).toString("utf-8"))) {
+        for (const found of check(skillPath, full, Buffer.concat(held).toString("utf-8"), hashed)) {
           outsideImports.push(`${rel}: ${found}`);
         }
       }
@@ -691,7 +696,7 @@ function outsideImportRefusal(found: readonly string[]): string {
   return (
     "Workspace skill loads code from outside its directory, or from a file the scan does not read, which the approval cannot cover " +
     "(only node: built-ins other than node:module, and literal relative imports that never climb out of the skill directory " +
-    "or into .git and name a JavaScript/TypeScript, extensionless, .json or .node file, can be approved; require may appear " +
+    "or into .git and name a JavaScript/TypeScript, extensionless, .json or .node file the skill holds, can be approved; require may appear " +
     "only as a direct call with a literal, no property of module but exports and require is read, and comments and strings " +
     'are read too; a package.json "main" is held to the same rule; ' +
     `vendor or bundle dependencies into the skill): ${shown.join(", ")}`

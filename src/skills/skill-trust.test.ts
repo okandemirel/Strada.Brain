@@ -722,6 +722,35 @@ describe("the imported module graph stays inside the skill directory (SEC-4)", (
     await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/payload: "\.\.\/\.\.\/outside\.js"/);
   });
 
+  // The hash skips `.git/`, and a path can reach that directory under names a
+  // lexical check cannot list (on Windows its 8.3 short name, or an NTFS
+  // stream suffix). A relative specifier must name what the scan hashed.
+  it("a relative specifier that names nothing the scan hashed is refused", async () => {
+    const dir = await writeSkill("unhashed", {
+      "index.js": 'require("./GIT~1/hooks/x.js");\nrequire("./.git::$INDEX_ALLOCATION/x.js");\nrequire("./GIT~1");\nexports.tools = [];',
+      "lib/package.json": '{"main":"../GIT~1/x.js"}',
+    });
+    expect((await scanSkillContent(dir))!.outsideImports).toEqual([
+      'index.js: "./GIT~1/hooks/x.js"',
+      'index.js: "./.git::$INDEX_ALLOCATION/x.js"',
+      'index.js: "./GIT~1"',
+      'lib/package.json: main "../GIT~1/x.js"',
+    ]);
+    await expect(approveWorkspaceSkill(projectRoot, dir)).rejects.toThrow(/index\.js: "\.\/GIT~1\/hooks\/x\.js"/);
+
+    // What the loader reaches from a hashed name: the file itself, a walked
+    // directory (its index or main), an added extension, a `.js` read as `.ts`.
+    const resolves = await writeSkill("resolves", {
+      "index.ts": 'import { a } from "./lib/a.js";\nimport "./lib";\nimport "./data.json";\nimport "./lib/b";\nimport "./lib/c.mjs";\nexport const tools = [];',
+      "lib/a.ts": "export const a = 1;",
+      "lib/index.ts": "export {};",
+      "lib/b.cjs": "",
+      "lib/c.mts": "export {};",
+      "data.json": "{}",
+    });
+    expect((await scanSkillContent(resolves))!.outsideImports).toEqual([]);
+  });
+
   // Node resolves a relative specifier from the importer's REAL path. With
   // `<project>/skills` a symlink to vendor/pool, "../../skills/deploy/x.js"
   // names the skill's own file lexically but loads vendor/skills/deploy/x.js.
