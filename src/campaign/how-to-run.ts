@@ -81,8 +81,8 @@ export function readUnityVersion(
  * heading marks, table pipes and a trailing colon — either alone on its line
  * (the value is the next non-empty line, as a converted table row writes it)
  * or followed by a colon and the value. A line that merely STARTS with the
- * words does not qualify: the real GDD's "Core loop fun-test: 20 graybox
- * levels…" is a production checklist, and a first-match-wins scan is exactly
+ * words does not qualify: a design document line such as "Core loop prototype:
+ * a dozen blockout levels…" is a production checklist, and a first-match-wins scan is exactly
  * how an earlier gate ended up reading a table of contents (audited
  * 2026-09-03).
  *

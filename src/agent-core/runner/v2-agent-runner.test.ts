@@ -508,7 +508,7 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     const toolTurn = mkResponse({
       text: "generating",
       stopReason: "tool_use",
-      toolCalls: [{ id: "tc-1", name: "unity_generate_sprite", input: { name: "BullTotem" } }],
+      toolCalls: [{ id: "tc-1", name: "unity_generate_sprite", input: { name: "StoneTotem" } }],
     });
     const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "the plan" }), toolTurn, mkResponse({ text: "done", stopReason: "end_turn" })]));
     const port = mkPort(mkProvider());

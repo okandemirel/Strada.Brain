@@ -206,7 +206,7 @@ export interface SpriteTableEntry {
  *   internalIDToNameTable:
  *   - first:
  *       213: 21300002       # 213 = Sprite; the value is the sub-asset's fileID
- *     second: pig_idle
+ *     second: hero_idle
  *
  * A Single-mode texture records one entry (fileID 21300000) or, in older
  * importer versions, none at all; a SHEET records one per slice, each with its

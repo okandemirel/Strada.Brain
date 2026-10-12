@@ -127,7 +127,7 @@ const LEVEL_COUNT_RE =
 /**
  * The subject of the timing is a LEVEL opening, not the application starting.
  * Read on a window that reaches BEHIND the match, because the boot regex
- * starts at the verb: in "level load ≤ 1.5 s" the noun is not in the match.
+ * starts at the verb: in "level load ≤ 2.5 s" the noun is not in the match.
  */
 const LOADS_A_LEVEL_RE =
   /\b(?:level|stage|scene|round|puzzle|match|map)s?\b[^.\n]{0,12}?\b(?:load|open|enter|ready|transition)|\b(?:load|open|enter)(?:s|ing)?\b[^.\n]{0,12}?\b(?:level|stage|scene|round|puzzle|match|map)s?\b/i;

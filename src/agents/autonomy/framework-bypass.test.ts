@@ -70,7 +70,7 @@ describe("what the project built instead of using", () => {
     // registered. The tests went green over the workaround.
     const found = assessFrameworkBypass("/p", io({
       "/p/Assets/A.cs": [
-        "[Inject] private IPigService _frog;",
+        "[Inject] private IMoverService _frog;",
         "if (_frog == null) GameBootstrapper.Services?.TryGet(out _frog);",
         "if (_board == null) GameBootstrapper.Services?.TryGet(out _board);",
       ].join("\n"),

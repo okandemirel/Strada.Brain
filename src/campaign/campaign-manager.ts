@@ -8171,7 +8171,7 @@ export class CampaignManager {
         else caveats.push(`${m.title}: ${line}`);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
           // AN IDLE FIRST SCREEN IS A DEFECT ONLY IF THE DOCUMENT DID NOT ASK
-          // FOR ONE. The vehicle's says "cold boot ≤ 6 s to Home", and the
+          // FOR ONE. A design can say "cold boot ≤ 4 s to the title screen", and the
           // report called its own design a defect (Codex 2026-09-12 V, Job
           // 3.9). What is unproven either way is the route from that screen
           // into play, which no producer measures yet.
