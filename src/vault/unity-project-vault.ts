@@ -38,6 +38,12 @@ export interface UnityVaultDeps {
    * out of a walk and dropped on a later reindex. Unset indexes the whole root.
    */
   includePath?: (relPath: string) => boolean;
+  /**
+   * Where the index, its canvas and its working folder live. Unset, they sit
+   * in `<rootPath>/.strada/vault`; a vault over a tree this system does not
+   * own (a framework package, an upstream checkout) keeps them elsewhere.
+   */
+  stateDir?: string;
 }
 
 // Minimal interface for the watcher — avoids hard import of not-yet-existing watcher.ts.
@@ -72,6 +78,8 @@ export class UnityProjectVault implements IVault {
   protected adapter: EmbeddingAdapter;
   protected emitter = new EventEmitter();
   protected dbPath: string;
+  /** The index, canvas and working folder (see UnityVaultDeps.stateDir). */
+  protected readonly stateDir: string;
   protected watcher: IVaultWatcher | null = null;
   /** Protected so subclasses that override init() keep the idempotence guard
    *  (audited 2026-09-02: SelfVault could not set it and re-walked per call). */
@@ -102,9 +110,10 @@ export class UnityProjectVault implements IVault {
   constructor(deps: UnityVaultDeps) {
     this.id = deps.id;
     this.rootPath = deps.rootPath;
-    this.dbPath = join(deps.rootPath, '.strada/vault/index.db');
+    this.stateDir = deps.stateDir ?? join(deps.rootPath, '.strada/vault');
+    this.dbPath = join(this.stateDir, 'index.db');
     // Create the DB directory synchronously so better-sqlite3 can open the file.
-    mkdirSync(join(deps.rootPath, '.strada/vault'), { recursive: true });
+    mkdirSync(this.stateDir, { recursive: true });
     this.store = new SqliteVaultStore(this.dbPath);
     this.adapter = new EmbeddingAdapter(deps.embedding, deps.vectorStore);
     this.includePath = deps.includePath;
@@ -132,7 +141,7 @@ export class UnityProjectVault implements IVault {
     // reconcile the index against the disk (files may have been deleted or
     // added while the vault was offline).
     if (this.disposed || (this.initialized && this.watcher)) return;
-    await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
+    await mkdir(join(this.stateDir, 'codebase'), { recursive: true });
     this.store.migrate();
     this.reconcileEmbeddingMode();
     await this.fullIndex();
@@ -605,7 +614,7 @@ export class UnityProjectVault implements IVault {
         const canvas = buildCanvas({ symbols, edges, files, wikilinks });
         // phase2-review L1: atomic write via temp + rename so readCanvas/GET /canvas
         // never observes a partial JSON document mid-write.
-        await writeFileAtomic(join(this.rootPath, '.strada/vault/graph.canvas'), JSON.stringify(canvas, null, 2));
+        await writeFileAtomic(join(this.stateDir, 'graph.canvas'), JSON.stringify(canvas, null, 2));
       } catch (err) {
         getLoggerSafe().warn(`[vault ${this.id}] canvas regen failed`, {
           error: err instanceof Error ? err.message : String(err),
@@ -616,7 +625,7 @@ export class UnityProjectVault implements IVault {
 
   async readCanvas(): Promise<unknown> {
     try {
-      const raw = await readFile(join(this.rootPath, '.strada/vault/graph.canvas'), 'utf8');
+      const raw = await readFile(join(this.stateDir, 'graph.canvas'), 'utf8');
       return JSON.parse(raw);
     } catch { return { nodes: [], edges: [] }; }
   }

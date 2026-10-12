@@ -210,7 +210,7 @@ export class SelfVault extends UnityProjectVault {
     // no longer exists.
     if (this.disposed || (this.initialized && this.watcher)) return;
     const { mkdir } = await import('node:fs/promises');
-    await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
+    await mkdir(join(this.stateDir, 'codebase'), { recursive: true });
     this.store.migrate();
     this.reconcileEmbeddingMode();
 

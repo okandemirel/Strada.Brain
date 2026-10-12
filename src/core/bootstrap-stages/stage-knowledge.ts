@@ -139,7 +139,9 @@ export async function initializeOpsMonitoringStage(
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { UnityProjectVault } from "../../vault/unity-project-vault.js";
+import type { FrameworkVaultTarget } from "../../vault/framework-vault-targets.js";
 import { discoverUnityRoots } from "../../vault/discovery.js";
 import type { VaultRegistry } from "../../vault/vault-registry.js";
 import type { IVault } from "../../vault/vault.interface.js";
@@ -220,6 +222,67 @@ export async function initVaultsFromBootstrap(
   // orphan already-started watchers outside the registry.
   const debounceMs = input.config.vault.debounceMs ?? 800;
   return indexInBackground(input.vaultRegistry, vault, "Unity project vault", () => vault.startWatch(debounceMs));
+}
+
+export interface InitFrameworkVaultsInput {
+  /** What frameworkVaultTargets chose; a target whose root is not on disk is skipped. */
+  targets: readonly FrameworkVaultTarget[];
+  vaultRegistry: VaultRegistry;
+  embedding: EmbeddingProvider;
+  /** One store per vault: a shared one let one vault's rebuild clear the others. */
+  createVectorStore: () => VectorStore;
+  debounceMs?: number;
+  /**
+   * Where a framework package's index lives (one folder per checkout), under
+   * the app home. Neither the vendored copy nor an upstream checkout is
+   * Brain's to write into.
+   */
+  stateRoot: string;
+}
+
+/**
+ * The codebases every plan is written against, one vault each, indexed in
+ * the background. Each framework package is indexed within its scope.
+ */
+export async function initFrameworkVaultsFromBootstrap(
+  input: InitFrameworkVaultsInput,
+): Promise<Array<VaultStartup<UnityProjectVault>>> {
+  const startups: Array<VaultStartup<UnityProjectVault>> = [];
+  for (const target of input.targets) {
+    if (!existsSync(target.rootPath)) continue;
+    const hash = createHash("sha1").update(target.rootPath).digest("hex").slice(0, 8);
+    const id = `generic:${hash}`;
+    if (input.vaultRegistry.list().some((v) => v.id === id)) continue;
+    const vault = new UnityProjectVault({
+      id,
+      rootPath: target.rootPath,
+      embedding: input.embedding,
+      vectorStore: input.createVectorStore(),
+      // The framework, not the notes runs left in its folder (WP-1.2).
+      includePath: target.includePath,
+      // A framework package is upstream's folder, vendored or checked out:
+      // its index lives here. This system's own tree (no state) keeps its own.
+      ...(target.state ? { stateDir: join(input.stateRoot, `${target.name}-${hash}`) } : {}),
+    });
+    const debounceMs = input.debounceMs ?? 800;
+    startups.push(
+      indexInBackground(
+        input.vaultRegistry,
+        vault,
+        `Framework vault (${target.name})`,
+        () => vault.startWatch(debounceMs),
+        target.name,
+      ),
+    );
+    getLoggerSafe().info("[vault] registered framework vault", {
+      id: vault.id,
+      name: target.name,
+      state: target.state,
+      scoped: target.includePath !== undefined,
+      rootPath: target.rootPath,
+    });
+  }
+  return startups;
 }
 
 export interface InitSelfVaultInput {

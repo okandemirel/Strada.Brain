@@ -1015,18 +1015,12 @@ async function bootstrapImpl(
       const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
       const runtimeVaultFactory = {
         watchDebounceMs: config.vault?.debounceMs ?? 800,
-        async create(spec: {
-          id: string;
-          rootPath: string;
-          kind: "unity" | "generic";
-          includePath?: (relPath: string) => boolean;
-        }) {
+        async create(spec: { id: string; rootPath: string; kind: "unity" | "generic" }) {
           return new UnityProjectVault({
             id: spec.id,
             rootPath: spec.rootPath,
             embedding: vaultEmbedding,
             vectorStore: createVaultVectorStore(),
-            includePath: spec.includePath,
           });
         },
       };
@@ -1157,7 +1151,7 @@ async function bootstrapImpl(
         // each incident.
         try {
           const { frameworkVaultTargets } = await import("../vault/framework-vault-targets.js");
-          const { indexInBackground } = await import("./bootstrap-stages/stage-knowledge.js");
+          const { initFrameworkVaultsFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
           // installRoot, not cwd: runtime-paths chdirs the process to the Strada
           // home at startup, so cwd here is ~/.strada and the vault registered
           // under the name "Strada.Brain" indexed the config directory instead
@@ -1174,33 +1168,14 @@ async function bootstrapImpl(
           const targets = frameworkVaultTargets(stradaDeps, brainRoot).filter(
             (t) => t.name !== "Strada.Brain" || !selfVaultActive,
           );
-          for (const target of targets) {
-            if (!existsSync(target.rootPath)) continue;
-            const hash = createHash("sha1").update(target.rootPath).digest("hex").slice(0, 8);
-            const id = `generic:${hash}`;
-            if (vaultRegistry.list().some((v) => v.id === id)) continue;
-            const vault = await runtimeVaultFactory.create({
-              id,
-              rootPath: target.rootPath,
-              kind: "generic",
-              // The framework, not the notes runs left in its folder (WP-1.2).
-              includePath: target.includePath,
-            });
-            indexInBackground(
-              vaultRegistry,
-              vault,
-              `Framework vault (${target.name})`,
-              () => vault.startWatch(config.vault?.debounceMs ?? 800),
-              target.name,
-            );
-            logger.info("[vault] registered framework vault", {
-              id: vault.id,
-              name: target.name,
-              state: target.state,
-              scoped: target.includePath !== undefined,
-              rootPath: target.rootPath,
-            });
-          }
+          await initFrameworkVaultsFromBootstrap({
+            targets,
+            vaultRegistry,
+            embedding: vaultEmbedding,
+            createVectorStore: createVaultVectorStore,
+            debounceMs: config.vault?.debounceMs ?? 800,
+            stateRoot: resolveStradaHomeEntry("vaults", "framework"),
+          });
         } catch (err) {
           logger.warn("[vault] framework vault registration failed", {
             error: err instanceof Error ? err.message : String(err),

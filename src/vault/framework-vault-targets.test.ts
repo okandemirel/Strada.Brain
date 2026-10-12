@@ -57,43 +57,26 @@ describe("which codebases get indexed", () => {
   });
 
   it("is what bootstrap actually registers", () => {
-    // The selection is worth nothing unless boot loops over it. Slice the
-    // registration block rather than the file: a mention in a comment would
-    // pass while nothing was registered. (Window covers target filtering +
-    // registration + the fire-and-forget init; it grew when boot grew a
-    // SelfVault-dedup filter between the call and the loop body.)
+    // The selection is worth nothing unless boot hands it on. What the stage
+    // does with it (register, scope, skip a missing root, index under the app
+    // home) is exercised in stage-knowledge-framework-vaults.test.ts; bootstrap
+    // itself cannot run in a unit test, so this checks only the hand-over.
+    // Sliced from the call rather than the file: a mention in a comment would
+    // pass while nothing was registered.
     const source = readFileSync("src/core/bootstrap.ts", "utf8");
     const at = source.indexOf("frameworkVaultTargets(");
-    const block = source.slice(at, at + 1500);
+    const block = source.slice(at, at + 1200);
 
     expect(at, "bootstrap never asks which codebases to index").toBeGreaterThan(-1);
-    // indexInBackground registers the vault under the target's name, runs its
-    // init and tracks it: a vault that is never initialised indexes nothing,
-    // and an untracked one reads "untracked" instead of "still indexing".
-    expect(block, "the target is never registered, initialised and tracked").toMatch(
-      /indexInBackground\(\s*vaultRegistry,\s*vault,[\s\S]*?target\.name,\s*\)/,
+    expect(block, "the targets never reach the stage that registers them").toMatch(
+      /initFrameworkVaultsFromBootstrap\(\{\s*targets,/,
+    );
+    expect(block, "framework indexes must live under the app home").toMatch(
+      /stateRoot: resolveStradaHomeEntry\(/,
     );
     expect(block, "the whole-repo Strada.Brain vault must stay skippable").toContain(
       't.name !== "Strada.Brain"',
     );
-  });
-
-  it("does not register a path that is not on disk", () => {
-    const source = readFileSync("src/core/bootstrap.ts", "utf8");
-    const at = source.indexOf("frameworkVaultTargets(");
-    const block = source.slice(at, at + 900);
-
-    expect(block).toContain("existsSync(target.rootPath)");
-  });
-
-  it("hands each target's scope to the vault it builds", () => {
-    // A scope the vault never receives indexes the whole package again.
-    const source = readFileSync("src/core/bootstrap.ts", "utf8");
-    const at = source.indexOf("frameworkVaultTargets(");
-    const block = source.slice(at, at + 1500);
-    expect(block).toContain("includePath: target.includePath");
-    const factory = source.slice(source.indexOf("const runtimeVaultFactory = {"), source.indexOf("vaultRegistry.setFactory("));
-    expect(factory).toMatch(/new UnityProjectVault\(\{[\s\S]*includePath: spec\.includePath/);
   });
 
   it("does not take this system's root from the working directory", () => {
