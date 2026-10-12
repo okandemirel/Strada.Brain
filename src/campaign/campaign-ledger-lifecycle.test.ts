@@ -527,6 +527,35 @@ describe("a GDD amendment reads the ledger again (W11)", () => {
     );
   });
 
+  it("a save from a copy read before the ledger was built does not drop it; only a deliberate clear does", async () => {
+    const { manager, storage, root } = build("shadow");
+    writeFileSync(join(root, "docs", "GDD.md"), APPROVED);
+    const seed = inFlightCampaign(root, QUEUED);
+    seed.state = "executing";
+    seed.gddSha256 = sha256(APPROVED);
+    seed.gddRevision = 1;
+    storage.save(seed);
+    // A settle holds this copy across its awaits; the ledger is built and saved meanwhile.
+    const stale = storage.get(seed.id)!;
+    const held = storage.get(seed.id)!;
+    expect((await ensureLedger(manager, held)).changed).toBe(true);
+    expect(persist(manager, held)).toBe(true);
+    expect(stale.requirements).toBeUndefined();
+
+    expect(persist(manager, stale)).toBe(true);
+
+    const kept = storage.get(seed.id)!;
+    expect(kept.requirements).toEqual(held.requirements);
+    expect(kept.milestones[0]!.requirementIds).toEqual(held.milestones[0]!.requirementIds);
+    expect(kept.milestones[0]!.requirementIds!.length).toBeGreaterThan(0);
+
+    // A copy that drops the rows on purpose says so.
+    const clearing = storage.get(seed.id)!;
+    clearing.requirements = undefined;
+    expect((manager as unknown as { persist(c: Campaign, o: { ledgerCleared: true }): boolean }).persist(clearing, { ledgerCleared: true })).toBe(true);
+    expect(storage.get(seed.id)!.requirements).toBeUndefined();
+  });
+
   it("off: an amendment changes the approved document and nothing else", async () => {
     const { manager, storage, root, id } = await amendable("shadow");
     const rowsBefore = storage.get(id)!.requirements!;

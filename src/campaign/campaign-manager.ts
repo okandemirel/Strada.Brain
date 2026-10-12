@@ -9224,8 +9224,12 @@ export class CampaignManager {
     return (stored.stopGeneration ?? 0) <= (campaign.stopGeneration ?? 0);
   }
 
-  /** Whether the row was actually written: a refused save is not an update. */
-  private persist(campaign: Campaign): boolean {
+  /**
+   * Whether the row was actually written: a refused save is not an update.
+   * `ledgerCleared` is a copy dropping its requirement ledger on purpose;
+   * without it a copy that holds none keeps the stored one.
+   */
+  private persist(campaign: Campaign, opts: { readonly ledgerCleared?: boolean } = {}): boolean {
     campaign.updatedAt = Date.now();
     // A SAVE FROM AN EARLIER GENERATION IS HISTORY, not an update. A person
     // revived the campaign while the independent reviewer was still awaiting;
@@ -9249,6 +9253,14 @@ export class CampaignManager {
         campaign.requirements = before.requirements;
         syncRequirementIds(campaign.milestones, before.requirements.rows);
       }
+    }
+    // …NOR A LEDGER BY A COPY READ BEFORE IT WAS BUILT. A settle holding its
+    // campaign across a revive's build saved "no ledger" over the rows, and
+    // with them every result, test and waiver recorded on them.
+    if (before?.requirements !== undefined && campaign.requirements === undefined && opts.ledgerCleared !== true) {
+      campaign.requirements = before.requirements;
+      campaign.requirementsUnreadable = undefined;
+      syncRequirementIds(campaign.milestones, before.requirements.rows);
     }
     if (before !== undefined && (before.stopGeneration ?? 0) > (campaign.stopGeneration ?? 0)) {
       getLoggerSafe().warn("Refused a campaign save from an earlier generation", {
