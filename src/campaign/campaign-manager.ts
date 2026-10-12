@@ -10359,13 +10359,13 @@ export class CampaignManager {
    * text to build from and the path that holds it — or what to say instead.
    * A refusal never falls back to another design.
    *
-   * A WORD FILE, AN ODT, AN RTF OR A PDF IS ITS TEXT. Read as UTF-8, the
-   * document's bytes went to the planner and every sprint prompt as the
-   * design. Its text is kept in docs/ as Markdown, as a shared attachment's
-   * is, because the campaign's path is read as text everywhere and
-   * startFromGdd writes the text it is given over that path.
+   * A WORD FILE, AN ODT, AN RTF, A DECK OR A PDF IS ITS TEXT. Read as UTF-8,
+   * the document's bytes went to the planner and every sprint prompt as the
+   * design. Its text is kept as Markdown beside it, because the campaign's
+   * path is read as text everywhere and startFromGdd writes the text it is
+   * given over that path.
    */
-  private readNamedGdd(named: string): { text: string; path: string | undefined; source: string } | { refusal: string } {
+  private readNamedGdd(named: string): { text: string; path: string; source: string } | { refusal: string } {
     const notInstead = "I am not starting from another design in the repo in its place.";
     const located = locateNamedGdd(this.projectRoot, named);
     if ("link" in located) {
@@ -10403,7 +10403,12 @@ export class CampaignManager {
           `I found \`${source}\`, but no text could be read from it — paste the design into the message, or keep it as Markdown, TXT or a PDF with selectable text. ${notInstead}`,
       };
     }
-    return { text, path: this.persistSuppliedGdd(text, basename(source)), source };
+    // BESIDE THE SOURCE, UNDER ITS WHOLE NAME. Kept as docs/<name>.md, the
+    // text of docs/design/Foo_GDD.pdf replaced a docs/Foo_GDD.md that was
+    // already there — possibly the user's own uncommitted design. Only an
+    // earlier text of this same document holds "Foo_GDD.pdf.md";
+    // startFromGdd writes it there.
+    return { text, path: `${source}.md`, source };
   }
 
   /**

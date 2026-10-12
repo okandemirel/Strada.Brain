@@ -10436,10 +10436,27 @@ describe("CampaignManager", () => {
         expect(await say("chat-pdf", "Build the game in docs/Quillmoor_GDD.pdf")).toBe(true);
         const campaign = storage.listActive().find((c) => c.chatId === "chat-pdf");
         expect(campaign?.gddText).toBe(PROSE);
-        expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.md");
-        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), "utf8")).toBe(PROSE);
+        expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.pdf.md");
+        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf.md"), "utf8")).toBe(PROSE);
         expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf")).equals(bytes)).toBe(true);
-        expect(told("chat-pdf")).toContain("Building from the text of `docs/Quillmoor_GDD.pdf`, kept as `docs/Quillmoor_GDD.md`");
+        expect(told("chat-pdf")).toContain("Building from the text of `docs/Quillmoor_GDD.pdf`, kept as `docs/Quillmoor_GDD.pdf.md`");
+      });
+
+      /**
+       * Its text was kept as docs/<name>.md, so naming docs/design/Foo_GDD.pdf
+       * replaced a docs/Foo_GDD.md that was already there — possibly the
+       * user's own uncommitted design — with flattened PDF text.
+       */
+      it("never replaces another document that already holds the same name", async () => {
+        const handWritten = "# Quillmoor\n\nThe design as the user wrote it by hand.\n";
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), handWritten);
+        mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
+        writeFileSync(join(projectRoot, "docs", "design", "Quillmoor_GDD.pdf"), pdf(`(${PROSE})`));
+        expect(await say("chat-same-name", "Build the game in docs/design/Quillmoor_GDD.pdf")).toBe(true);
+        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), "utf8")).toBe(handWritten);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-same-name");
+        expect(campaign?.gddText).toBe(PROSE);
+        expect(campaign?.gddPath).toBe("docs/design/Quillmoor_GDD.pdf.md");
       });
 
       it("with no text to read is said so, and no other design is built", async () => {
