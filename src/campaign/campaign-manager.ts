@@ -152,10 +152,11 @@ import {
 import {
   MAX_SCOPE_RESUBMITS,
   endedOnOutage,
-  failsOnlyOnAcceptance,
   infrastructureOnly,
   nextScopeAction,
   parseWorkerLines,
+  proseFailsOnlyOnAcceptance,
+  recordFailsOnlyOnAcceptance,
   scopeBounceText,
   scopeDeliveryProofs,
   timeBoxSplit,
@@ -4035,8 +4036,18 @@ export class CampaignManager {
         } | null)?.verification;
         // A RUN RED ONLY ON THE SYSTEM'S OWN CHECKS is the scope gate's to
         // judge: it measures those checks itself, on the committed tree. A
-        // mixed list, or one that left names out, is red as before.
-        const onlyAcceptance = scopeDecides && failsOnlyOnAcceptance(verdict?.failedTests, verdict?.failedTestsOmitted ?? 0);
+        // mixed list, or one that left names out, is red as before. The
+        // prose names failures only off the red line, and the whole-suite
+        // line names none, so this attempt's own record names them then.
+        let record: ReturnType<typeof readPlaymodeRun> | undefined;
+        if (scopeDecides && verdict?.testsGreen === false) {
+          try {
+            record = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
+          } catch {
+            record = undefined;
+          }
+        }
+        const onlyAcceptance = scopeDecides && proseFailsOnlyOnAcceptance(verdict, record);
         if (verdict?.testsGreen === false && !onlyAcceptance) {
           getLoggerSafe().warn("Milestone completion rejected: last test run was red", {
             id: campaign.id,
@@ -4050,8 +4061,9 @@ export class CampaignManager {
         // verdict beside a fresh RED run record advanced a non-final sprint
         // (Codex 2026-09-11 B#14).
         const run = readPlaymodeRun(this.projectRoot, this.sprintStartMs(milestone), attemptRunId(milestone));
-        const runOnlyAcceptance =
-          scopeDecides && run.found && failsOnlyOnAcceptance(run.failedNames, (run.failed ?? 0) - (run.failedNames?.length ?? 0));
+        // …and only a record red by those failures alone: its runtime
+        // exceptions or a failed process are not the checks' to answer for.
+        const runOnlyAcceptance = scopeDecides && recordFailsOnlyOnAcceptance(run);
         // THE READER'S OWN VERDICT, not one of the counters it printed. This
         // asked only whether `failed > 0`, so a record the reader calls red
         // for any other reason — the runner's own "Failed" result, a runtime

@@ -55,6 +55,51 @@ export function failsOnlyOnAcceptance(failedNames: readonly string[] | undefined
   return failedNames.every((name) => typeof name === "string" && isAcceptanceTestName(name));
 }
 
+/** A worker's run record as `readPlaymodeRun` reads it, as far as the acceptance exemption needs it. */
+export interface WorkerRunRecord {
+  readonly found: boolean;
+  readonly stampMissing?: boolean;
+  readonly redOnlyByFailures?: boolean;
+  readonly total?: number;
+  readonly failed?: number;
+  readonly failedNames?: readonly string[];
+}
+
+/**
+ * A record red ONLY because acceptance tests failed: every failure named, each
+ * name an acceptance test, and nothing else red in it. Runtime exceptions, a
+ * failed process, a suite that mostly never ran and counts that do not add up
+ * are not the acceptance checks' to answer for, so they still fail the sprint.
+ */
+export function recordFailsOnlyOnAcceptance(record: WorkerRunRecord | undefined): boolean {
+  if (record?.found !== true || record.redOnlyByFailures !== true) return false;
+  return failsOnlyOnAcceptance(record.failedNames, (record.failed ?? 0) - (record.failedNames?.length ?? 0));
+}
+
+const PROSE_COUNTS_RE = /(\d+) of (\d+) tests? failed/i;
+
+/**
+ * Whether a red verdict read off the tool's prose fails only on acceptance
+ * tests. The prose takes names off the red line alone, and at most five: the
+ * whole-suite line ("1 of 9 tests failed (unfiltered — …)") names none. So
+ * when it names nothing, or names only acceptance tests and leaves some out,
+ * this attempt's fresh run record decides — one with its own stamp, red only
+ * on acceptance tests, and of the same run: counts on the red line are its
+ * counts. A name of any other test in the prose fails the sprint as before.
+ */
+export function proseFailsOnlyOnAcceptance(
+  prose: { readonly detail?: string; readonly failedTests?: readonly string[]; readonly failedTestsOmitted?: number } | undefined,
+  record: WorkerRunRecord | undefined,
+): boolean {
+  const named = prose?.failedTests ?? [];
+  const omitted = prose?.failedTestsOmitted ?? 0;
+  if (named.some((name) => !isAcceptanceTestName(name))) return false;
+  if (named.length > 0 && omitted === 0) return failsOnlyOnAcceptance(named, 0);
+  if (!recordFailsOnlyOnAcceptance(record) || record?.stampMissing === true) return false;
+  const counts = PROSE_COUNTS_RE.exec(prose?.detail ?? "");
+  return counts === null || (Number(counts[1]) === record?.failed && Number(counts[2]) === record.total);
+}
+
 // =============================================================================
 // HOW THE RUN ENDED
 // =============================================================================

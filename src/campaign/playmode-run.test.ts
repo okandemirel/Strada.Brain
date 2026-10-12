@@ -45,6 +45,29 @@ describe("readPlaymodeRun — a record is counts that add up (Codex 2026-09-11 B
   });
 });
 
+describe("readPlaymodeRun — red only by its failed tests (GDD-drift W09)", () => {
+  it("is true only when the failures alone make the record red", () => {
+    const red = { total: 9, passed: 8, failed: 1, skipped: 0, failedNames: ["A.B.C"], unfiltered: true };
+    write({ ...red, result: "Failed" });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: false, redOnlyByFailures: true });
+    write(red);
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: false, redOnlyByFailures: true });
+    // Each of these is red on its own account.
+    for (const other of [
+      { exceptions: 2 },
+      { exitCode: 3 },
+      { result: "Inconclusive" },
+      { total: 30, skipped: 21 },
+      { total: 10 },
+    ]) {
+      write({ ...red, ...other });
+      expect(readPlaymodeRun(root, 0).redOnlyByFailures, JSON.stringify(other)).toBe(false);
+    }
+    write({ total: 9, passed: 9, failed: 0, skipped: 0, unfiltered: true });
+    expect(readPlaymodeRun(root, 0)).toMatchObject({ green: true, redOnlyByFailures: false });
+  });
+});
+
 describe("readPlaymodeRun", () => {
   it("absent and stale are not evidence", () => {
     expect(readPlaymodeRun(root, 0)).toEqual({ found: false });

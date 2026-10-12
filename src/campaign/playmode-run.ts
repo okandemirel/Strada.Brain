@@ -25,6 +25,13 @@ export const CLOCK_SKEW_TOLERANCE_MS = 5 * 60_000;
 export interface PlaymodeRunEvidence {
   /** failed === 0, at least one test PASSED, and the counts add up — computed here so no reader re-derives it loosely. */
   green?: boolean;
+  /**
+   * Red only because tests failed: read as passes, the failures would leave a
+   * green record. A runtime exception, a failed process, a runner verdict
+   * other than "Failed", a suite that mostly never ran or counts that do not
+   * add up are reds of their own, which no reading of the failed names waives.
+   */
+  redOnlyByFailures?: boolean;
   found: boolean;
   stale?: boolean;
   /** The file exists but is not a run record — never read as silence. */
@@ -211,6 +218,8 @@ export function readPlaymodeRun(projectRoot: string, sinceMs: number, expectRunI
     ...(stampMissing ? { stampMissing: true } : {}),
     green:
       consistent && failed === 0 && passed > 0 && overallSaysPass && exceptions === 0 && !mostlySkipped && !processFailed,
+    redOnlyByFailures:
+      consistent && failed > 0 && (overallSaysPass || /^failed$/i.test(overall)) && exceptions === 0 && !processFailed && skipped <= passed + failed,
     total,
     passed,
     failed,

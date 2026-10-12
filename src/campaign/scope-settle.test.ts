@@ -16,13 +16,17 @@ import {
   infrastructureOnly,
   nextScopeAction,
   parseWorkerLines,
+  proseFailsOnlyOnAcceptance,
   publicationLost,
+  recordFailsOnlyOnAcceptance,
   scopeBounceText,
   scopeDeliveryProofs,
   timeBoxSplit,
   withoutScopeBlock,
   writerFaultClass,
+  type WorkerRunRecord,
 } from "./scope-settle.js";
+import { deriveTestVerdict } from "../tasks/test-verdict.js";
 import { judgeMilestone } from "./scope-verdict.js";
 import type { GreenInput, GreenReason, Judgement, RequirementRow } from "./scope-types.js";
 import type { RunIntegrity, TerminalKey } from "../agents/autonomy/terminal-key.js";
@@ -61,6 +65,56 @@ describe("failsOnlyOnAcceptance", () => {
     expect(failsOnlyOnAcceptance(undefined, 0)).toBe(false);
     const capped = Array.from({ length: FAILED_NAMES_CAP }, (_, i) => `Strada.Acceptance.M1.Acceptance_M1.R${i}_x`);
     expect(failsOnlyOnAcceptance(capped, 0)).toBe(false);
+  });
+});
+
+describe("a red verdict that fails only on acceptance checks (the verdicts production derives)", () => {
+  const A1 = "Strada.Acceptance.M1.Acceptance_M1.R001_aaaaaa";
+  const A2 = "Strada.Acceptance.M1.Acceptance_M1.R002_bbbbbb";
+  const prose = (line: string) => deriveTestVerdict([{ toolName: "unity_playmode_verify", content: line }]);
+  const record = (fields: Partial<WorkerRunRecord> = {}): WorkerRunRecord => ({
+    found: true,
+    redOnlyByFailures: true,
+    total: 9,
+    failed: 1,
+    failedNames: [A1],
+    ...fields,
+  });
+
+  it("the whole-suite line names nothing: the attempt's record of the same run decides", () => {
+    const unfiltered = prose("PlayMode verification FAILED: 1 of 9 tests failed (unfiltered — the whole PlayMode suite).");
+    expect(unfiltered.failedTests).toBeUndefined();
+    expect(proseFailsOnlyOnAcceptance(unfiltered, record())).toBe(true);
+    // No record, a record of another run, one red for another reason, one with no stamp of its own, or a mixed one.
+    expect(proseFailsOnlyOnAcceptance(unfiltered, undefined)).toBe(false);
+    expect(proseFailsOnlyOnAcceptance(unfiltered, record({ total: 12 }))).toBe(false);
+    expect(proseFailsOnlyOnAcceptance(unfiltered, record({ redOnlyByFailures: false }))).toBe(false);
+    expect(proseFailsOnlyOnAcceptance(unfiltered, record({ stampMissing: true }))).toBe(false);
+    expect(proseFailsOnlyOnAcceptance(unfiltered, record({ failed: 1, failedNames: ["Ferry.Tests.Dock.Opens"] }))).toBe(false);
+    // A failure the record counts and does not name could be anything.
+    expect(proseFailsOnlyOnAcceptance(prose("PlayMode verification FAILED: 2 of 9 tests failed (unfiltered — the whole PlayMode suite)."), record({ failed: 2 }))).toBe(false);
+  });
+
+  it("a line that names its tests decides by them; a name of any other test fails the sprint whatever the record says", () => {
+    expect(proseFailsOnlyOnAcceptance(prose(`PlayMode verification FAILED: 2 of 2 tests failed (filter: ${A1};${A2})`), undefined)).toBe(true);
+    const mixed = prose(`PlayMode verification FAILED: 2 of 2 tests failed (filter: ${A1};Ferry.Tests.Dock.Opens)`);
+    expect(proseFailsOnlyOnAcceptance(mixed, record({ total: 2, failed: 2, failedNames: [A1, A2] }))).toBe(false);
+  });
+
+  it("a line that names only acceptance tests and leaves some out: the record names the rest", () => {
+    const six = Array.from({ length: 6 }, (_, i) => `Strada.Acceptance.M1.Acceptance_M1.R00${i}_cccccc`);
+    const cut = prose(`PlayMode verification FAILED: 6 of 6 tests failed (filter: ${six.join(";")})`);
+    expect(cut.failedTestsOmitted).toBe(1);
+    expect(proseFailsOnlyOnAcceptance(cut, undefined)).toBe(false);
+    expect(proseFailsOnlyOnAcceptance(cut, record({ total: 6, failed: 6, failedNames: six }))).toBe(true);
+  });
+
+  it("recordFailsOnlyOnAcceptance: every failure named, each an acceptance test, and nothing else red", () => {
+    expect(recordFailsOnlyOnAcceptance(record())).toBe(true);
+    expect(recordFailsOnlyOnAcceptance(record({ redOnlyByFailures: false }))).toBe(false);
+    expect(recordFailsOnlyOnAcceptance(record({ found: false }))).toBe(false);
+    expect(recordFailsOnlyOnAcceptance(record({ failed: 2 }))).toBe(false);
+    expect(recordFailsOnlyOnAcceptance(undefined)).toBe(false);
   });
 });
 

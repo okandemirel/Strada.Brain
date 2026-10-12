@@ -34,6 +34,7 @@ import {
 } from "./scope-types.js";
 import type { Campaign } from "./types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
+import { deriveTestVerdict } from "../tasks/test-verdict.js";
 import type { RunIntegrity, TerminalKey } from "../agents/autonomy/terminal-key.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -312,6 +313,15 @@ function completeSprint(h: Harness, opts: { key?: TerminalKey; verification?: Re
   return taskId;
 }
 
+/** The NUnit record the worker's own run left in the project, as the verification tool writes it. */
+function workerRecord(h: Harness, fields: Record<string, unknown>): void {
+  mkdirSync(join(h.root, "Recordings", "tests"), { recursive: true });
+  writeFileSync(
+    join(h.root, "Recordings", "tests", "playmode-last.json"),
+    JSON.stringify({ measuredAt: new Date().toISOString(), result: "Failed", skipped: 0, filter: null, categories: null, unfiltered: true, ...fields }),
+  );
+}
+
 async function start(h: Harness): Promise<Campaign> {
   const started = h.manager.startFromGdd(ctx, GDD, "docs/GDD.md");
   await vi.waitFor(() => expect(h.submitted).toHaveLength(1), { timeout: 15_000 });
@@ -434,21 +444,73 @@ describe("a milestone is green only by the judge (scope gate on, W09)", () => {
   it("a red record naming only acceptance tests is the gate's to judge; a mixed list fails the sprint as before", async () => {
     const h = build("on");
     const campaign = await start(h);
-    completeSprint(h, {
-      verification: { testsGreen: false, detail: "1 of 9 tests failed", failedTests: ["Strada.Acceptance.M1.Acceptance_M1.R001_aaaaaa"], failedTestsOmitted: 0 },
-    });
+    // Verdicts as the producer's reader derives them: a filtered run's red line names its tests.
+    const filtered = (names: string[]) =>
+      deriveTestVerdict([{ toolName: "unity_playmode_verify", content: `PlayMode verification FAILED: ${names.length} of ${names.length} tests failed (filter: ${names.join(";")})` }]);
+    completeSprint(h, { verification: { ...filtered(["Strada.Acceptance.M1.Acceptance_M1.R001_aaaaaa"]) } });
     await vi.waitFor(() => expect(h.storage.get(campaign.id)!.currentMilestone).toBe(1), { timeout: 20_000 });
     await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
     expect(h.storage.get(campaign.id)!.milestones[0]!.status).toBe("green");
 
-    completeSprint(h, {
-      verification: { testsGreen: false, detail: "2 of 9 tests failed", failedTests: ["Strada.Acceptance.M2.Acceptance_M2.R001_bbbbbb", "Ferry.Tests.DockTests.Opens"], failedTestsOmitted: 0 },
-    });
+    completeSprint(h, { verification: { ...filtered(["Strada.Acceptance.M2.Acceptance_M2.R001_bbbbbb", "Ferry.Tests.DockTests.Opens"]) } });
     await vi.waitFor(() => expect(h.submitted).toHaveLength(3), { timeout: 20_000 });
     const m2 = h.storage.get(campaign.id)!.milestones[1]!;
     expect(m2.status).toBe("running");
     expect(m2.attempts).toBe(2); // the failure path charged it
     expect(m2.prompt).toMatch(/Tests were RED at completion/);
+  }, 60_000);
+
+  it("an unfiltered run's red line names no test, as production derives it: this attempt's fresh record, red only on acceptance checks, leaves the sprint to the gate", async () => {
+    const h = build("on");
+    const campaign = await start(h);
+    const acceptance = "Strada.Acceptance.M1.Acceptance_M1.R001_aaaaaa";
+    // What the verification tool prints for a whole-suite run, read by the producer's own reader.
+    const verdict = deriveTestVerdict([
+      {
+        toolName: "unity_playmode_verify",
+        content: [
+          "PlayMode verification FAILED: 1 of 9 tests failed (unfiltered — the whole PlayMode suite).",
+          "",
+          "Failed:",
+          `  ${acceptance}`,
+          "      Expected: True  But was: False",
+        ].join("\n"),
+      },
+    ]);
+    expect(verdict.testsGreen).toBe(false);
+    expect(verdict.failedTests).toBeUndefined();
+    workerRecord(h, { total: 9, passed: 8, failed: 1, failedNames: [acceptance] });
+    completeSprint(h, { verification: { ...verdict } });
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.currentMilestone).toBe(1), { timeout: 20_000 });
+    const m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(m1.prompt).not.toMatch(/Tests were RED at completion/);
+    expect(m1.attempts).toBe(1);
+    expect(m1.scopeVerdict?.green).toBe(true);
+    expect(m1.status).toBe("green");
+  }, 60_000);
+
+  it("a record red only on acceptance names fails the sprint as before when it is red for another reason too, or is another run", async () => {
+    const h = build("on", { maxMilestoneAttempts: 3 });
+    const campaign = await start(h);
+    const acceptance = "Strada.Acceptance.M1.Acceptance_M1.R001_aaaaaa";
+    // No prose verdict; the record names only an acceptance check — and counts two runtime exceptions.
+    workerRecord(h, { total: 9, passed: 8, failed: 1, failedNames: [acceptance], exceptions: 2 });
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.submitted).toHaveLength(2), { timeout: 20_000 });
+    let m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(m1.attempts).toBe(2);
+    expect(m1.prompt).toMatch(/Tests were RED at completion \(NUnit record\)/);
+    expect(m1.scopeVerdict).toBeUndefined();
+
+    // A red line naming nothing, beside a record of ANOTHER run (its counts are not the line's).
+    const verdict = deriveTestVerdict([
+      { toolName: "unity_playmode_verify", content: "PlayMode verification FAILED: 3 of 9 tests failed (unfiltered — the whole PlayMode suite)." },
+    ]);
+    workerRecord(h, { total: 2, passed: 1, failed: 1, failedNames: [acceptance], unfiltered: false, filter: acceptance });
+    completeSprint(h, { verification: { ...verdict } });
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.milestones[0]!.prompt).toMatch(/Tests were RED at completion: PlayMode verification FAILED: 3 of 9/), { timeout: 20_000 });
+    m1 = h.storage.get(campaign.id)!.milestones[0]!;
+    expect(m1.scopeVerdict).toBeUndefined();
   }, 60_000);
 
   it("an outage key takes the existing outage path with the attempt uncharged", async () => {
