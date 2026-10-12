@@ -1073,12 +1073,18 @@ export class StradaConformanceGuard {
         .map((m) => `${m.name} (${m.unlock})`)
         .join(", ");
       const rest = report.missing.length > 8 ? ` — and ${report.missing.length - 8} more` : "";
+      // THE DOCUMENT'S OWN TERMS. "In the sim module with its R-rule
+      // interactions and a level that showcases it" was the test vehicle's
+      // rule labels, layout and level structure, sent to every game; a sprint
+      // told to build a showcase level builds content its design never asked
+      // for (GDD-drift trace M4, 2026-10-11).
       return (
         `[STRADA SPEC SCOPE] The design document schedules ${report.scheduled} elements; ` +
         `${report.missing.length} have no implementation in this project: ${names}${rest}. ` +
         `The spec is the contract — a delivery that omits scheduled elements is partial, ` +
-        `not done. Implement each in the sim module with its R-rule interactions and a ` +
-        `level that showcases it.`
+        `not done. Implement each as the design document specifies it — its rules and its ` +
+        `interactions with the other elements — following the project's module pattern, ` +
+        `and make it reachable in the shipped game.`
       );
     } catch {
       return null;
