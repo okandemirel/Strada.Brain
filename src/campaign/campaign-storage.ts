@@ -342,12 +342,33 @@ function parseIndependentReview(raw: string): Campaign["independentReview"] | un
   try {
     const p = JSON.parse(raw) as Record<string, unknown>;
     if (typeof p.ok !== "boolean" || typeof p.model !== "string") return undefined;
+    const strings = (value: unknown): string[] | undefined =>
+      Array.isArray(value) && value.every((v) => typeof v === "string") ? (value as string[]) : undefined;
+    const gate = isRecord(p.gate)
+      ? {
+          reopened: strings(p.gate.reopened),
+          added: strings(p.gate.added),
+          disclosed: strings(p.gate.disclosed),
+          mode: p.gate.mode === "shadow" || p.gate.mode === "on" ? p.gate.mode : undefined,
+        }
+      : undefined;
     return {
       ok: p.ok,
       model: p.model,
       text: typeof p.text === "string" ? p.text : "",
       ms: typeof p.ms === "number" ? p.ms : 0,
       ...(typeof p.error === "string" ? { error: p.error } : {}),
+      // What the review's findings did to the ledger (W13); a damaged record is dropped, never half-read.
+      ...(gate?.reopened && gate.added && gate.disclosed
+        ? {
+            gate: {
+              reopened: gate.reopened,
+              added: gate.added,
+              disclosed: gate.disclosed,
+              ...(gate.mode === undefined ? {} : { mode: gate.mode }),
+            },
+          }
+        : {}),
     } as Campaign["independentReview"];
   } catch {
     return undefined;

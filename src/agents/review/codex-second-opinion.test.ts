@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCodexSecondOpinion, extractCodexAnswer, hasVerdict, makeCodexSpawn, renderSecondOpinion, deliveryReviewPrompt, resolveCodexCommand, type CodexSpawn } from "./codex-second-opinion.js";
+import { runCodexSecondOpinion, extractCodexAnswer, hasVerdict, makeCodexSpawn, renderSecondOpinion, deliveryReviewPrompt, resolveCodexCommand, REVIEW_ROWS_MAX_CHARS, WINDOWS_REVIEW_PROMPT_MAX_CHARS, type CodexSpawn } from "./codex-second-opinion.js";
 
 describe("codex second opinion", () => {
   it("passes model, effort, read-only sandbox and the project dir, and keeps the answer after the footer", async () => {
@@ -113,6 +113,99 @@ describe("codex second opinion", () => {
     const onDisk = deliveryReviewPrompt({ gddPath: "docs/G.md", gddText: "# Space GDD\n\nThree asteroid fields.", measurements: [], ladder: [] });
     expect(onDisk).toContain("GDD: docs/G.md — read it.");
     expect(onDisk).not.toContain("Three asteroid fields.");
+  });
+
+  describe("the review as a gate (GDD-drift W13)", () => {
+    const base = { gddPath: "docs/G.md", measurements: ["0 renderers"], ladder: ["m1 Sprint: green"] };
+    const rows = [
+      { rid: "req-1-aa", label: "KP-01", where: "§3", text: "A kite gains one metre per second in an updraft.", test: "Strada.Acceptance.M1.Acceptance_M1.R1_aa" },
+      { rid: "req-2-bb", where: "Towns", text: "Every town has its own post office." },
+    ];
+    const checks = [{ path: "Assets/StradaAcceptance/Acceptance_M1.cs", source: "// REQ req-1-aa — KP-01\nAssert.That(true);" }];
+
+    it("without rows it is the advisory question it always was, byte for byte", () => {
+      expect(deliveryReviewPrompt(base)).toBe(
+        [
+          "You are an independent, adversarial release reviewer for a Unity game built autonomously from a GDD.",
+          "GDD: docs/G.md — read it.",
+          "The build system's own measurements of the tree as it stands:",
+          "- 0 renderers",
+          "Its milestone ladder:",
+          "- m1 Sprint: green",
+          "",
+          "Inspect the project (scenes, prefabs, scripts, tests, art) read-only. Answer in this exact shape:",
+          "VERDICT: DELIVERABLE | NOT DELIVERABLE",
+          "BLOCKERS: numbered list, each with the file(s) and the GDD requirement it fails; 'none' if none",
+          "DISAGREEMENTS: where the measurements above are wrong or misleading, with evidence; 'none' if none",
+          "NEXT: the three most valuable concrete changes, each one sentence",
+          "Be terse and specific. Do not restate the GDD.",
+        ].join("\n"),
+      );
+    });
+
+    it("with rows it carries the rows and the stored checks, and asks for a findings tail that can only reopen or add", () => {
+      const p = deliveryReviewPrompt({ ...base, rows, checks, platform: "linux" });
+      const tested = p.indexOf("- req-1-aa [KP-01] (§3): \"A kite gains one metre per second in an updraft.\" — test Strada.Acceptance.M1.Acceptance_M1.R1_aa");
+      const file = p.indexOf("// REQ req-1-aa — KP-01\nAssert.That(true);");
+      const untested = p.indexOf("- req-2-bb (Towns): \"Every town has its own post office.\"");
+      expect(tested).toBeGreaterThan(0);
+      // The checks a finding can call weak travel before the rows that only guard against re-reporting.
+      expect(file).toBeGreaterThan(tested);
+      expect(untested).toBeGreaterThan(file);
+      expect(p).toContain("VERDICT: DELIVERABLE | NOT DELIVERABLE");
+      expect(p).toContain('{"weakChecks":[{"rid":"<row id>"');
+      expect(p).toContain('"missing":[{"gddQuote":');
+      expect(p).toContain("they never close one");
+      expect(p.trimEnd().endsWith("Be terse and specific. Do not restate the GDD.")).toBe(true);
+    });
+
+    it("the rows and checks stay within REVIEW_ROWS_MAX_CHARS, and what does not fit is counted", () => {
+      const many = Array.from({ length: 600 }, (_, i) => ({ rid: `req-${i}-cc`, where: "§9", text: `Rule ${i}: ${"words ".repeat(30)}` }));
+      const p = deliveryReviewPrompt({ ...base, rows: many, checks: [], platform: "linux" });
+      const fixed = deliveryReviewPrompt({ ...base, rows: [], checks: [], platform: "linux" }).length;
+      expect(p.length - fixed).toBeLessThanOrEqual(REVIEW_ROWS_MAX_CHARS + 200);
+      expect(p).toMatch(/\(\d+ row\(s\) and 0 check file\(s\) not shown: the prompt's size cap\)/);
+    });
+
+    it("on Windows the whole prompt fits the command line: the rows and checks give way, never the question", () => {
+      const many = Array.from({ length: 600 }, (_, i) => ({ rid: `req-${i}-cc`, where: "§9", text: `Rule ${i}: ${"words ".repeat(30)}` }));
+      const gddText = "# Big GDD\n\n" + "Lore. ".repeat(40_000);
+      const p = deliveryReviewPrompt({ ...base, gddPath: undefined, gddText, rows: many, checks, platform: "win32" });
+      expect(p.length).toBeLessThanOrEqual(WINDOWS_REVIEW_PROMPT_MAX_CHARS);
+      expect(p).toContain("VERDICT: DELIVERABLE | NOT DELIVERABLE");
+      expect(p).toContain('{"weakChecks"');
+      expect(p).toContain("not shown: the prompt's size cap");
+    });
+
+    it("the report shows what the findings changed beside the verbatim answer", () => {
+      const lines = renderSecondOpinion({
+        ok: true,
+        model: "fake-astra",
+        text: "VERDICT: DELIVERABLE",
+        ms: 2000,
+        gate: { reopened: ["KP-01 (§3) — asserts true"], added: [], disclosed: ['missing "x": quote too short'] },
+      });
+      expect(lines[1]).toBe("> VERDICT: DELIVERABLE");
+      const shown = lines.join("\n");
+      expect(shown).toContain("1 GDD row(s) reopened, 0 added");
+      expect(shown).toContain("reopened, its check called weak: KP-01 (§3) — asserts true");
+      expect(shown).toContain("its VERDICT decides nothing");
+      expect(shown).toContain('disclosed only, changed nothing: missing "x": quote too short');
+      // In shadow the same findings are recorded and say they held nothing.
+      const shadow = renderSecondOpinion({
+        ok: true,
+        model: "fake-astra",
+        text: "VERDICT: DELIVERABLE",
+        ms: 2000,
+        gate: { reopened: ["KP-01 (§3) — asserts true"], added: [], disclosed: [], mode: "shadow" },
+      }).join("\n");
+      expect(shadow).toContain("would change (scope gate in shadow: recorded in the rows, delivery not held)");
+      // An opinion with no gate record (the gate off, an older row) renders as it always did.
+      expect(renderSecondOpinion({ ok: true, model: "m", text: "VERDICT: DELIVERABLE", ms: 1000 })).toEqual([
+        "**Independent review (m via Codex, read-only, 1s):**",
+        "> VERDICT: DELIVERABLE",
+      ]);
+    });
   });
 
   describe("starting the CLI (PRV-20)", () => {

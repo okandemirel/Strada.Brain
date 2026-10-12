@@ -226,26 +226,161 @@ function reviewGddLines(gddPath: string | undefined, gddText: string | undefined
   return [`${notHere} Its text${cut}:`, "<gdd>", gddText.slice(0, REVIEW_GDD_QUOTE_CHARS), "</gdd>"];
 }
 
-/** The delivery question, with the campaign's own measurements handed over so the reviewer argues against evidence, not prose. */
-export function deliveryReviewPrompt(params: { gddPath: string | undefined; gddText?: string; measurements: readonly string[]; ladder: readonly string[] }): string {
-  return [
+/**
+ * The most of the GDD rows and their system-written checks the review prompt
+ * carries (GDD-drift W13), counted in UTF-8 bytes: Linux caps ONE argument at
+ * 128 KiB, and a GDD in a non-Latin script is three bytes a character.
+ */
+export const REVIEW_ROWS_MAX_CHARS = 60_000;
+
+/**
+ * The whole prompt on Windows, where it is one argument of a command line
+ * capped at 32,767 characters; the rest of the line is the executable and its
+ * options. The rows and checks give way to it, never the question.
+ */
+export const WINDOWS_REVIEW_PROMPT_MAX_CHARS = 30_000;
+
+/** A GDD row the build system holds the game to, as the review prompt lists it. */
+export interface ReviewRow {
+  readonly rid: string;
+  readonly label?: string;
+  /** "§3.2", or the heading it sits under. */
+  readonly where: string;
+  /** The GDD's own words. */
+  readonly text: string;
+  /** The full name of its current system-written test, when it has one. */
+  readonly test?: string;
+}
+
+/** A system-written acceptance file, as stored. */
+export interface ReviewCheckFile {
+  readonly path: string;
+  readonly source: string;
+}
+
+/** What the scope gate did with a review's findings tail (GDD-drift W13), in a person's words. */
+export interface ReviewGateSummary {
+  readonly reopened: readonly string[];
+  readonly added: readonly string[];
+  readonly disclosed: readonly string[];
+  /** Shadow records what the findings would hold and decides nothing. */
+  readonly mode?: "shadow" | "on";
+}
+
+const flat = (text: string, max: number): string => {
+  const one = text.replace(/\s+/g, " ").trim();
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+};
+
+/**
+ * The rows and the checks, within `budget` UTF-8 bytes (never fewer than the
+ * characters, so a character cap holds too): rows that have a test first,
+ * then the test files, then the rows with none yet — so the checks a finding
+ * can call weak travel before the list that only stops a reviewer
+ * re-reporting a known row. What does not fit is counted, never cut mid-file.
+ */
+function reviewRowLines(rows: readonly ReviewRow[], checks: readonly ReviewCheckFile[], budget: number): string[] {
+  const out: string[] = [];
+  // Room for the closing "not shown" count, which is written past the budget.
+  const room = budget - 120;
+  let used = 0;
+  let rowsLeft = 0;
+  let filesLeft = 0;
+  const fits = (lines: readonly string[]): boolean => {
+    const size = lines.reduce((n, l) => n + Buffer.byteLength(l, "utf8") + 1, 0);
+    if (used + size > room) return false;
+    used += size;
+    out.push(...lines);
+    return true;
+  };
+  const rowLine = (r: ReviewRow): string =>
+    `- ${r.rid}${r.label ? ` [${r.label}]` : ""} (${flat(r.where, 60)}): "${flat(r.text, 240)}"${r.test ? ` — test ${r.test}` : ""}`;
+  const tested = rows.filter((r) => r.test !== undefined);
+  const untested = rows.filter((r) => r.test === undefined);
+  if (rows.length === 0) fits(["(no GDD row can block yet)"]);
+  if (tested.length > 0) fits(["Rows with a system-written check:"]);
+  for (const r of tested) if (!fits([rowLine(r)])) rowsLeft += 1;
+  if (checks.length > 0) fits(["The checks, as stored (system-owned under Assets/StradaAcceptance; each test's `// REQ <row id>` comment names its row):"]);
+  for (const file of checks) if (!fits([`<check-file path="${file.path}">`, file.source, "</check-file>"])) filesLeft += 1;
+  if (untested.length > 0) fits(["Rows with no check yet (already known: do not report them as missing):"]);
+  for (const r of untested) if (!fits([rowLine(r)])) rowsLeft += 1;
+  if (rowsLeft + filesLeft > 0) out.push(`(${rowsLeft} row(s) and ${filesLeft} check file(s) not shown: the prompt's size cap)`);
+  return out;
+}
+
+/**
+ * The delivery question, with the campaign's own measurements handed over so
+ * the reviewer argues against evidence, not prose.
+ *
+ * With `rows` (a requirement ledger decides, GDD-drift W13) it also carries the
+ * GDD rows and the checks the system wrote for them, and asks for a findings
+ * tail the gate reads: a weak check reopens its row, a verbatim GDD quote
+ * adds one. Without `rows` it is the advisory question it always was.
+ */
+export function deliveryReviewPrompt(params: {
+  gddPath: string | undefined;
+  gddText?: string;
+  measurements: readonly string[];
+  ladder: readonly string[];
+  rows?: readonly ReviewRow[];
+  checks?: readonly ReviewCheckFile[];
+  platform?: NodeJS.Platform;
+}): string {
+  const head = [
     "You are an independent, adversarial release reviewer for a Unity game built autonomously from a GDD.",
     ...reviewGddLines(params.gddPath, params.gddText),
     "The build system's own measurements of the tree as it stands:",
     ...params.measurements.map((m) => `- ${m}`),
     "Its milestone ladder:",
     ...params.ladder.map((m) => `- ${m}`),
+  ];
+  const shape = [
     "",
     "Inspect the project (scenes, prefabs, scripts, tests, art) read-only. Answer in this exact shape:",
     "VERDICT: DELIVERABLE | NOT DELIVERABLE",
     "BLOCKERS: numbered list, each with the file(s) and the GDD requirement it fails; 'none' if none",
     "DISAGREEMENTS: where the measurements above are wrong or misleading, with evidence; 'none' if none",
     "NEXT: the three most valuable concrete changes, each one sentence",
-    "Be terse and specific. Do not restate the GDD.",
-  ].join("\n");
+  ];
+  const close = ["Be terse and specific. Do not restate the GDD."];
+  if (params.rows === undefined) return [...head, ...shape, ...close].join("\n");
+
+  const findings = [
+    "FINDINGS: last, ONE JSON object on its own, with nothing after it:",
+    '{"weakChecks":[{"rid":"<row id>","why":"<how the check passes on a game that does not do what its row says>"}],"missing":[{"gddQuote":"<the GDD\'s exact words, at least 20 characters>","why":"<what the game lacks>"}]}',
+    "weakChecks: only checks shown above, named by their row id — a check that asserts a literal, reflects on types, or observes something other than its row. " +
+      "missing: only GDD rules the game does not meet that no row above states, quoted verbatim from the GDD; a paraphrase is discarded. " +
+      "Empty arrays when there is nothing. These findings can reopen a row or add one; they never close one.",
+  ];
+  const intro = ["", "The GDD rows the build system holds this game to, and the acceptance checks it wrote for them:"];
+  const fixed = [...head, ...intro, ...shape, ...findings, ...close].join("\n").length + 1;
+  const platform = params.platform ?? process.platform;
+  const budget = Math.min(REVIEW_ROWS_MAX_CHARS, platform === "win32" ? Math.max(0, WINDOWS_REVIEW_PROMPT_MAX_CHARS - fixed) : Infinity);
+  return [...head, ...intro, ...reviewRowLines(params.rows, params.checks ?? [], budget), ...shape, ...findings, ...close].join("\n");
 }
 
-export function renderSecondOpinion(opinion: SecondOpinion | undefined): string[] {
+function renderReviewGate(gate: ReviewGateSummary): string[] {
+  const head =
+    gate.mode === "shadow"
+      ? "**What the review's findings would change (scope gate in shadow: recorded in the rows, delivery not held):**"
+      : "**What the review's findings changed:**";
+  const lines = [
+    gate.reopened.length + gate.added.length === 0
+      ? `${head} nothing — no GDD row was reopened or added.`
+      : `${head} ${gate.reopened.length} GDD row(s) reopened, ${gate.added.length} added; ` +
+        "each stays open until a system check of its own passes. The review never closes a row, and its VERDICT decides nothing.",
+  ];
+  for (const r of gate.reopened.slice(0, 8)) lines.push(`- reopened, its check called weak: ${r}`);
+  if (gate.reopened.length > 8) lines.push(`- …and ${gate.reopened.length - 8} more reopened`);
+  for (const a of gate.added.slice(0, 8)) lines.push(`- added from the GDD's own words, queued: ${a}`);
+  if (gate.added.length > 8) lines.push(`- …and ${gate.added.length - 8} more added`);
+  if (gate.disclosed.length > 0) {
+    lines.push(`- disclosed only, changed nothing: ${flat(gate.disclosed.slice(0, 6).join("; "), 600)}${gate.disclosed.length > 6 ? ` (+${gate.disclosed.length - 6} more)` : ""}`);
+  }
+  return lines;
+}
+
+export function renderSecondOpinion(opinion: (SecondOpinion & { readonly gate?: ReviewGateSummary }) | undefined): string[] {
   if (!opinion) return ["**Independent review:** not run."];
   if (!opinion.ok) {
     return [`**Independent review (${opinion.model} via Codex):** UNAVAILABLE — ${opinion.error ?? "unknown error"}. This delivery carries no second opinion.`];
@@ -253,5 +388,6 @@ export function renderSecondOpinion(opinion: SecondOpinion | undefined): string[
   return [
     `**Independent review (${opinion.model} via Codex, read-only, ${Math.round(opinion.ms / 1000)}s):**`,
     ...opinion.text.split("\n").map((l) => (l.trim() ? `> ${l}` : ">")),
+    ...(opinion.gate ? renderReviewGate(opinion.gate) : []),
   ];
 }

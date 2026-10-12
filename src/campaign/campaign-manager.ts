@@ -120,6 +120,15 @@ import {
   type LedgerAmendment,
   type LedgerReadOptions,
 } from "./requirement-ledger.js";
+import {
+  applyReviewFindings,
+  parseReviewFindings,
+  reviewGateOutcome,
+  reviewGateRecord,
+  reviewGateUnchanged,
+  reviewRowsOf,
+  type ReviewGateOutcome,
+} from "./review-findings.js";
 
 /** The channel-agnostic way back to the conversation (approval gate, reports). */
 export type CampaignMessenger = (chatId: string, markdown: string) => Promise<void>;
@@ -8146,16 +8155,28 @@ export class CampaignManager {
    * campaign's own measurements in hand. Stored on the campaign so a re-sent
    * report carries the same opinion; a reviewer that cannot run is recorded
    * as unavailable — the report must never read as reviewed when it was not.
+   *
+   * THE REVIEW IS A GATE where a requirement ledger exists (GDD-drift W13).
+   * Its BLOCKERS were prose: a reviewer that read a check asserting a literal,
+   * or found a GDD rule no row states, changed nothing, and the weak check
+   * went on closing its row. It is now handed the rows and the checks the
+   * system wrote for them, and its findings tail is applied to the ledger: a
+   * weak check reopens its row, a verbatim GDD quote adds a queued one. The
+   * returned outcome names them for the delivery decision to hold as missing
+   * proofs. It can never close a row, its VERDICT decides nothing, and a
+   * review that did not run changes nothing. With the gate off it is the
+   * advice it always was.
    */
-  private async gatherIndependentReview(campaign: Campaign): Promise<void> {
+  private async gatherIndependentReview(campaign: Campaign): Promise<ReviewGateOutcome> {
     // Explicit opt-in: production wires the Codex runner at bootstrap; a
     // manager built without one (tests, embedded use) says so in the report.
     const reviewer = this.independentReviewer ?? null;
     if (reviewer === null) {
       campaign.independentReview = { ok: false, model: "none", text: "", ms: 0, error: "disabled by configuration" };
       this.persist(campaign);
-      return;
+      return reviewGateUnchanged("no independent reviewer is configured, so no review reopened or added a GDD row");
     }
+    const ledger = this.reviewedLedger(campaign);
     const structural = [...campaign.milestones].reverse().find((m) => m.structureFindings?.length);
     const prompt = deliveryReviewPrompt({
       gddPath: campaign.gddPath,
@@ -8164,21 +8185,60 @@ export class CampaignManager {
       gddText: campaign.gddText,
       measurements: structural?.structureFindings ?? ["(no structural measurement recorded)"],
       ladder: campaign.milestones.map((m) => `${m.id} ${m.title}: ${m.status}`),
+      ...(ledger === undefined ? {} : { rows: reviewRowsOf(ledger), checks: this.storedChecksFor(campaign) }),
     });
     try {
       campaign.independentReview = await reviewer({ projectRoot: this.projectRoot, prompt });
     } catch (err) {
       campaign.independentReview = { ok: false, model: "unknown", text: "", ms: 0, error: err instanceof Error ? err.message : String(err) };
     }
-    this.persist(campaign);
     const review = campaign.independentReview;
+    let outcome = reviewGateUnchanged();
+    if (ledger !== undefined && review?.ok !== true) {
+      outcome = reviewGateUnchanged(`the independent review did not run (${review?.error ?? "no answer"}), so it reopened and added nothing; it blocks nothing`);
+    } else if (ledger !== undefined) {
+      // The ledger the campaign holds NOW: a waiver or an amendment can land
+      // while the reviewer runs, and its findings must not be applied to a
+      // copy read before them.
+      const current = this.reviewedLedger(campaign);
+      if (current === undefined) {
+        outcome = reviewGateUnchanged("the requirement ledger could not be read when the review answered, so its findings were not applied");
+      } else {
+        const applied = applyReviewFindings(current, parseReviewFindings(review.text), { gddText: campaign.gddText, atMs: Date.now() });
+        campaign.requirements = applied.ledger;
+        campaign.independentReview = { ...review, gate: reviewGateRecord(applied, this.scopeGateMode === "on" ? "on" : "shadow") };
+        outcome = reviewGateOutcome(applied);
+      }
+    }
+    this.persist(campaign);
     getLoggerSafe().info("Independent delivery review", {
       id: campaign.id,
       ok: review?.ok,
       model: review?.model,
       ms: review?.ms,
       error: review?.error,
+      ...(ledger === undefined ? {} : { reopened: outcome.reopened, added: outcome.added, disclosed: outcome.disclosed.length }),
     });
+    return outcome;
+  }
+
+  /** The ledger the independent review argues against: none with the gate off, and an unreadable one is not an empty one. */
+  private reviewedLedger(campaign: Campaign): RequirementLedger | undefined {
+    if ((this.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE) === "off" || campaign.requirementsUnreadable === true) return undefined;
+    return campaign.requirements;
+  }
+
+  /** The acceptance files as stored, for the reviewer to read; a store that cannot hand them over leaves the rows alone in the prompt. */
+  private storedChecksFor(campaign: Campaign): Array<{ path: string; source: string }> {
+    try {
+      return this.storage.listAcceptance(campaign.id).map((file) => ({ path: file.path, source: file.source }));
+    } catch (err) {
+      getLoggerSafe().warn("The stored acceptance checks could not be read for the independent review", {
+        id: campaign.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   private buildDeliveryReport(campaign: Campaign): string {

@@ -1379,6 +1379,78 @@ export async function proposeRowsAddOnly(
   return { rows: [...rows, ...added], added, rejected, calls, failedCalls };
 }
 
+/**
+ * Rows for passages a reviewer names as unmet (the coverage audit, the
+ * independent review). The add-only pass's rules for a quote, without its
+ * per-section model call: in the approved text verbatim (whitespace aside), at
+ * least ADD_ONLY_MIN_QUOTE_CHARS long, outside document apparatus, and not a
+ * row already read — a duplicate is named by the row it repeats. Rows come
+ * back classified, with identities that do not collide with `rows`, and with
+ * no owner; `rows` is not changed.
+ */
+export function rowsFromQuotes(
+  gddText: string,
+  quotes: readonly string[],
+  rows: readonly RequirementRow[],
+  options: { readonly gddSha256: string; readonly gddRevision: number; readonly source: RequirementRow["source"] },
+): { added: RequirementRow[]; rejected: AddOnlyRejection[] } {
+  const doc = readDocument(gddText ?? "");
+  const fold = foldWhitespace(doc.text);
+  const accepted: Array<{ candidate: Candidate; section: SectionRecord }> = [];
+  const rejected: AddOnlyRejection[] = [];
+  const known = new Map(rows.map((r) => [contentFingerprint(r.text), r.rid]));
+  const spans = rows.map((r) => ({ ...r.span, rid: r.rid }));
+  for (const quote of quotes) {
+    const folded = quote.replace(/\s+/g, " ").trim();
+    const reject = (reason: string): void => {
+      rejected.push({ quote: folded.slice(0, 200), reason });
+    };
+    if (folded.length < ADD_ONLY_MIN_QUOTE_CHARS) {
+      reject(`quote too short (under ${ADD_ONLY_MIN_QUOTE_CHARS} characters)`);
+      continue;
+    }
+    const span = locate(fold, folded);
+    if (span === undefined) {
+      reject("quote is not verbatim in the approved GDD");
+      continue;
+    }
+    const section = sectionAt(doc, span.start);
+    if (section.apparatus) {
+      reject(`quote sits in document apparatus (${section.section})`);
+      continue;
+    }
+    const text = verbatim(doc, span.start, span.end);
+    const same = known.get(contentFingerprint(text)) ?? spans.find((s) => span.start >= s.start && span.end <= s.end)?.rid;
+    if (same !== undefined) {
+      reject(`duplicate of an existing row (${same})`);
+      continue;
+    }
+    known.set(contentFingerprint(text), "another quote in this list");
+    spans.push({ ...span, rid: "another quote in this list" });
+    const bounds = singleBounds(text);
+    accepted.push({ candidate: { text, start: span.start, end: span.end, ...(bounds === undefined ? {} : { bounds }) }, section });
+  }
+  if (accepted.length === 0) return { added: [], rejected };
+  const { encoded, result } = identifyRequirements({
+    previous: decodeIdentities(rows.map((r) => r.encoded)),
+    texts: [...rows.map((r) => r.text), ...accepted.map((a) => a.candidate.text)],
+    gdd: { sha256: options.gddSha256, revision: options.gddRevision },
+  });
+  const taken = new Set(rows.map((r) => r.rid));
+  const added: RequirementRow[] = [];
+  accepted.forEach(({ candidate, section }, i) => {
+    const rid = result.identities[rows.length + i]!.id;
+    // Results, budgets and waivers are keyed by rid: a second row under one id is damage, not a row.
+    if (taken.has(rid)) {
+      rejected.push({ quote: candidate.text.slice(0, 200), reason: `its identity is an existing row's (${rid})` });
+      return;
+    }
+    taken.add(rid);
+    added.push(toRow(doc, candidate, section, classify(doc, candidate, section), rid, encoded[rows.length + i]!, options.source, options));
+  });
+  return { added, rejected };
+}
+
 // =============================================================================
 // OWNERSHIP
 // =============================================================================

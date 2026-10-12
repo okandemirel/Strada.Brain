@@ -481,8 +481,17 @@ export interface Campaign {
    * The independent reviewer's verdict text for the last delivery report
    * (Codex / gpt-6-astra, read-only), or the reason it could not run.
    * Rendered verbatim in the report; never folded into the campaign's own verdict.
+   * `gate` is what its findings tail did to the requirement ledger (GDD-drift
+   * W13): rows reopened or added, and what was only disclosed.
    */
-  independentReview?: { ok: boolean; model: string; text: string; ms: number; error?: string };
+  independentReview?: {
+    ok: boolean;
+    model: string;
+    text: string;
+    ms: number;
+    error?: string;
+    gate?: { reopened: string[]; added: string[]; disclosed: string[]; mode?: "shadow" | "on" };
+  };
   /**
    * Set when the GDD-coverage audit did NOT run clean (skipped, budget spent,
    * or errored). Rendered in the delivery report so an unaudited delivery
