@@ -41,6 +41,24 @@ async function decompositionPrompt(
 }
 
 describe("planning a game", () => {
+  /**
+   * Rung 7 of the north star is "ready modules are used", and nothing in the
+   * plan's own rules had ever asked for one: measured mid-run 2026-10-14,
+   * Strada.Modules was installed in the project and 0 of its 16 game files
+   * referenced it, while the plan declared modules of its own.
+   */
+  it("plans a requirement a ready module already covers as a use of that module", async () => {
+    const prompt = await decompositionPrompt();
+
+    expect(prompt).toContain("A READY MODULE IS NOT REWRITTEN");
+    expect(prompt).toContain("never as a module of your own that does the same thing");
+    // And it must be named in the plan, or nobody can tell afterwards which
+    // requirement was supposed to use which module.
+    expect(prompt).toContain("Say in the plan which ready module each such requirement uses");
+    // A requirement no ready module covers is a line in the plan, not silence.
+    expect(prompt).toContain("if none fits");
+  });
+
   it("treats a design document plus 'build it' as a complete instruction", async () => {
     const prompt = await decompositionPrompt();
 
