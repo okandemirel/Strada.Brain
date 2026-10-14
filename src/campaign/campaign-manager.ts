@@ -52,6 +52,7 @@ import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
 import { identityAnswersSpec, readProjectIdentity } from "./project-identity.js";
+import { describeNegativeControls, runNegativeControls } from "./negative-controls.js";
 import { readPlaymodeRun, suiteDisagreesWithReceipt, PLAYMODE_RUN_RECORD_REL } from "./playmode-run.js";
 import { writtenBefore } from "./file-freshness.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
@@ -10116,6 +10117,28 @@ export class CampaignManager {
             "(see 'What the shipped scenes actually contain')",
         );
       }
+    // CAN THESE MEASUREMENTS FAIL ON THIS GAME? Every gate fires on a fixture
+    // at boot; that says nothing about whether it would have caught a defect
+    // in this project. The controls break the delivered tree in memory —
+    // nothing on disk is touched — and require the same readers to refuse it.
+    try {
+      const gddForControls = this.gddTextOf(campaign);
+      const controls = runNegativeControls(
+        this.projectRoot,
+        gddForControls,
+        gddPlatform(gddForControls).handheld,
+      );
+      lines.push("", ...describeNegativeControls(controls));
+      const silent = controls.filter((c) => c.skipped === undefined && !c.fired);
+      if (silent.length > 0) {
+        caveats.push(
+          `${silent.length} gate(s) did NOT refuse this project when it was broken on purpose ` +
+            `(${silent.map((c) => c.gate).join(", ")}) — their verdicts here prove less than they look`,
+        );
+      }
+    } catch (err) {
+      lines.push("", `Negative controls: could not run (${err instanceof Error ? err.message : String(err)})`);
+    }
     // WHAT THIS BUILD DECIDED FOR ITSELF. The campaign is told not to ask, so
     // the one honest alternative is to say afterwards what it chose where the
     // document was silent — and to say it in the report a person reads, not

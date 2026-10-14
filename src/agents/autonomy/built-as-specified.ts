@@ -91,7 +91,13 @@ function walk(dir: string, match?: (file: string) => boolean, budget = ASSET_WAL
   return out;
 }
 
-const defaultIo: BuiltAsSpecifiedIo = {
+/**
+ * The on-disk reader every measurement uses by default. Exported so a
+ * negative control can WRAP it — a control that rebuilt the walk itself would
+ * be measuring a different reader than the delivery does, which is the one
+ * thing a control may not do.
+ */
+export const defaultBuiltAsSpecifiedIo: BuiltAsSpecifiedIo = {
   listFiles: (dir, match) => walk(dir, match),
   readFile: (p) => readFileSync(p, "utf-8"),
   exists: (p) => existsSync(p),
@@ -808,14 +814,14 @@ function isRuntimeScript(rel: string): boolean {
 
 export function assessBuiltAsSpecified(
   projectRoot: string,
-  io: BuiltAsSpecifiedIo = defaultIo,
+  io: BuiltAsSpecifiedIo = defaultBuiltAsSpecifiedIo,
   /** Tests shrink the walk budget to exercise the truncation disclosure. */
   opts: { walkBudget?: number; runtime?: RuntimeSceneEvidence; artDirection?: string } = {},
 ): BuiltAsSpecifiedReport {
   const walkBudget = opts.walkBudget ?? ASSET_WALK_BUDGET;
   // The budget belongs to the walk, so a shrunken one really truncates rather
   // than only changing the arithmetic the disclosure is derived from.
-  if (io === defaultIo) io = { ...defaultIo, listFiles: (dir, match) => walk(dir, match, walkBudget) };
+  if (io === defaultBuiltAsSpecifiedIo) io = { ...defaultBuiltAsSpecifiedIo, listFiles: (dir, match) => walk(dir, match, walkBudget) };
   const assetsRoot = join(projectRoot, "Assets");
   const empty = {
     scenes: [] as SceneStructure[],
@@ -1434,7 +1440,7 @@ export async function assessBuiltAsSpecifiedAsync(
     await fsp.access(assetsRoot);
   } catch {
     // Nothing to walk; the synchronous call reports the missing folder.
-    return assessBuiltAsSpecified(projectRoot, defaultIo, opts);
+    return assessBuiltAsSpecified(projectRoot, defaultBuiltAsSpecifiedIo, opts);
   }
   const walkBudget = opts.walkBudget ?? ASSET_WALK_BUDGET;
   const snapshot: TreeSnapshot = await snapshotTree(assetsRoot, WALK_VISIT_CAP);

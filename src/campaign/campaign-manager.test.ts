@@ -2726,6 +2726,8 @@ describe("CampaignManager", () => {
     // (M7, measured 2026-10-14: nothing recorded or showed any of them).
     expect(report).toContain("What this build assumed, because the document does not say");
     expect(report).toContain("application identity");
+    // …and whether the measurements behind it can fail at all on this game.
+    expect(report).toContain("Negative controls:");
   });
 
   it("discloses the GDD's own dimensionality against the shipped scenes, without refusing", async () => {
