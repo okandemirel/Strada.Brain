@@ -1110,7 +1110,7 @@ export class StradaConformanceGuard {
    */
   /**
    * The design document is the checklist. Measured 2026-08-24 (the test game):
-   * the GDD schedules sixteen elements in a literal table; runs delivered a
+   * the GDD schedules its elements in a literal table; runs delivered a
    * subset and called it done because no gate compared code against spec.
    * Fires only after real code exists (module roots touched) so early boots
    * are not nagged.
@@ -1133,11 +1133,10 @@ export class StradaConformanceGuard {
         .map((m) => `${m.name} (${m.unlock})`)
         .join(", ");
       const rest = report.missing.length > 8 ? ` — and ${report.missing.length - 8} more` : "";
-      // THE DOCUMENT'S OWN TERMS. "In the sim module with its R-rule
-      // interactions and a level that showcases it" was the test vehicle's
-      // rule labels, layout and level structure, sent to every game; a sprint
-      // told to build a showcase level builds content its design never asked
-      // for (GDD-drift trace M4, 2026-10-11).
+      // THE DOCUMENT'S OWN TERMS. The wording this ask used to carry named
+      // one test vehicle's rule labels, module layout and level structure,
+      // and was sent to every game; a sprint told to build content its
+      // design never asked for builds it (GDD-drift trace M4, 2026-10-11).
       // …AND WHERE THEY ARE. A campaign's GDD that no file holds is not "the
       // design document": the one a run finds in the repo is another one
       // (review gdd-W10). A run that serves no campaign found its document
@@ -2073,8 +2072,8 @@ export class StradaConformanceGuard {
         "The design's element schedule is the contract for what must be VISIBLE, not only " +
         "implemented. For each named element: first run unity_my_assets_cloud for art the user " +
         "already owns; when nothing fits, generate with the tool that matches the element's " +
-        "layer — unity_generate_sprite for the flat, pixel or 2D pieces, unity_generate_mesh " +
-        "for the pieces THIS design describes as dimensional or 3D (those are not sprites; the " +
+        "layer — unity_generate_sprite for the pieces the design draws in 2D, unity_generate_mesh " +
+        "for the pieces THIS design describes as 3D (those are not sprites; the " +
         "design's own words decide which is which) — then bind the asset into the element's prefab " +
         "(a SpriteRenderer's sprite field, a MeshFilter's mesh, a config asset's reference). " +
         "An asset on disk that nothing references is the same as no asset." +

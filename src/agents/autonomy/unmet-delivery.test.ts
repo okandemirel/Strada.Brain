@@ -87,7 +87,7 @@ function assembled(renderers = 6): string {
   // has nothing to say and the drawing gate is the one whose budget gets spent.
   const art = join(root, "Assets", "Art");
   mkdirSync(art, { recursive: true });
-  writeFileSync(join(art, "tile.png"), "pixels");
+  writeFileSync(join(art, "drone.png"), "pixels");
   return root;
 }
 
@@ -214,13 +214,13 @@ describe("the ask budget does not silence it", () => {
 const GDD_SCHEDULING_MORE = [
   "# Test Game GDD",
   "",
-  "## 4.1 Element Schedule",
+  "## Cave features",
   "",
-  "| Unlock | Element | Notes |",
-  "| ------ | ------- | ----- |",
-  "| L18 | Firefly | lights a row |",
-  "| L30 | Frost Tile | freezes a cell |",
-  "| L48 | Colour Bomb | clears a colour |",
+  "| Stage | Feature | Effect |",
+  "| ----- | ------- | ------ |",
+  "| Cave 2 | Gas Vent | pushes the drone upward |",
+  "| Cave 5 | Crystal Seam | reveals the map nearby |",
+  "| Cave 9 | Glow Moss | lights a radius |",
   "",
 ].join("\n");
 

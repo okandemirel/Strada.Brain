@@ -22,8 +22,8 @@ function project(rows: readonly string[], code: string): string {
   mkdirSync(join(root, "docs"), { recursive: true });
   writeFileSync(
     join(root, "docs", "GDD.md"),
-    "## 4. GAME ELEMENTS\n\n| Unlock | Element | Pitch |\n|---|---|---|\n" +
-      rows.map((row, i) => `| L${i + 1} | ${row} | pitch |`).join("\n") + "\n",
+    "## Cave features\n\n| Stage | Feature | Effect |\n|---|---|---|\n" +
+      rows.map((row, i) => `| Cave ${i + 1} | ${row} | effect |`).join("\n") + "\n",
   );
   const scripts = join(root, "Assets", "Modules", "M", "Scripts");
   mkdirSync(scripts, { recursive: true });

@@ -1,11 +1,11 @@
 /**
  * Spec scope coverage — the system checks the DESIGN DOC against the CODE.
  *
- * Measured 2026-08-24 (the test game): its GDD schedules sixteen game
- * elements in a literal markdown table; runs kept delivering a subset and
- * calling it done, because every gate looked at CODE health and none compared
- * code against the SPEC. The decomposition could not carry this either — a
- * one-shot planner sees a summary, not all nineteen sections.
+ * Measured 2026-08-24 (the test game): its GDD lists what it is made of
+ * in a literal markdown table; runs kept delivering a subset and calling it
+ * done, because every gate looked at CODE health and none compared code
+ * against the SPEC. The decomposition could not carry this either — a
+ * one-shot planner sees a summary, not every section of the document.
  *
  * This module makes the spec itself the checklist: scheduled elements are
  * parsed from the document's element-schedule table, then each is searched
@@ -18,19 +18,19 @@ import { join } from "node:path";
 import { stripCsComments } from "./csharp-source.js";
 
 export interface ScheduledElement {
-  /** Unlock level tag from the schedule table, e.g. "L30". */
+  /** Unlock tag from the schedule table, e.g. "Cave 5". */
   readonly unlock: string;
-  /** Element name as the spec spells it, e.g. "Frost Tile". */
+  /** Element name as the spec spells it, e.g. "Gas Vent". */
   readonly name: string;
 }
 
 /** Strip formatting from a spec element name for code search. */
 export function elementCodeTokens(name: string): string[] {
   const tokens = new Set<string>();
-  // A PARENTHETICAL IS AN ANNOTATION, not part of the name. "Caged (Sealed)
-  // Lantern" produced only CagedSealedLantern/cagedsealedlantern, so a project whose code
-  // says `CagedLantern` was reported as missing the element it had implemented —
-  // the real two-element false refusal on the vehicle (Codex 2026-09-12 Y).
+  // A PARENTHETICAL IS AN ANNOTATION, not part of the name. "Survey (v2)
+  // Beacon" produced only SurveyV2Beacon/surveyv2beacon, so a project whose code
+  // says `SurveyBeacon` was reported as missing the element it had implemented —
+  // a false refusal measured on the test vehicle (Codex 2026-09-12 Y).
   // The annotated spelling stays a candidate: some code keeps it.
   const spellings = new Set<string>([name]);
   const withoutNotes = name.replace(/\s*\([^)]*\)\s*/g, " ").trim();
@@ -42,7 +42,7 @@ export function elementCodeTokens(name: string): string[] {
       ws.map((w) => (w[0] ?? "").toUpperCase() + w.slice(1).toLowerCase()).join("");
     tokens.add(pascalOf(words));
     tokens.add(words.join("").toLowerCase());
-    // Common compound splits the code might choose instead ("LockAndKey" vs "LockKey").
+    // Common compound splits the code might choose instead ("CrystalSeamCluster" vs "CrystalSeam").
     if (words.length > 1) tokens.add(pascalOf(words.slice(0, 2)));
   }
   return [...tokens];
@@ -52,8 +52,8 @@ export function elementCodeTokens(name: string): string[] {
  * Parse an element-introduction schedule out of a design document.
  *
  * Recognizes markdown pipe tables whose rows start with an unlock tag
- * (e.g. `L21`) followed by an element name — the shape GDDs in this genre
- * use for their element schedule, the test game's among them.
+ * (e.g. `L7` or `Cave 7`) followed by an element name — the shape many GDDs
+ * use for their element schedule.
  */
 // The walker lives in csharp-source.ts, shared by every C# rule; re-exported
 // here for the callers that import it from this module.
@@ -64,7 +64,7 @@ const NOT_AN_ELEMENT_RE = /\((?:producer|designer|artist|engineer|programmer|lea
 
 /** Blank lines a converter may leave between two rows of one table. */
 const MAX_ROW_SEPARATORS = 3;
-/** An unlock id in a schedule's first cell: "L21", "21", "E3", "Level 21". */
+/** An unlock id in a schedule's first cell: "L7", "7", "E3", "Cave 7". */
 const UNLOCK_CELL_RE = /^(?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?$/;
 /** A header cell naming WHEN an element arrives, and one naming the element. */
 const UNLOCK_HEADER_RE = /^(?:unlock(?:s|ed)?(?:\s+at)?|level|levels|introduced(?:\s+at)?|when|from|stage|arrives?)$/i;
@@ -74,11 +74,10 @@ const ELEMENT_HEADER_RE = /^(?:element|elements|name|mechanic|blocker|feature|it
  * A schedule table that lost its pipes.
  *
  * Documents converted out of Google Docs, Notion or PDF arrive as one cell per
- * LINE: a header block ("Unlock", "Element", "Summary", "Lane") and
- * then rows of that many lines. The pipe-table reader found nothing in the
- * real vehicle document, so its whole element schedule — every blocker and
- * special mechanic the game is made of — read as ZERO scheduled elements, and
- * zero suppresses the coverage check entirely (Codex 2026-09-12 W#12).
+ * LINE: a header block ("Stage", "Feature", "Effect") and then rows of
+ * that many lines. The pipe-table reader found nothing in the real vehicle
+ * document, so its whole element schedule read as ZERO scheduled elements,
+ * and zero suppresses the coverage check entirely (Codex 2026-09-12 W#12).
  */
 export function extractFlattenedSchedule(
   docText: string,
@@ -159,7 +158,7 @@ export function extractFlattenedSchedule(
       }
       if (rows.length === 0) continue;
       // A TRAILING ROW THE WIDTH DOES NOT COMPLETE is a row this reader did
-      // not read: "Unlock/Element/L1/Rotor/L2" loses L2's element silently
+      // not read: "Stage/Feature/Cave 1/Rotor/Cave 2" loses Cave 2's element silently
       // (Codex 2026-09-13 AF#8).
       const consumed = width + rows.length * width;
       if (out && window.slice(consumed).some((cell) => UNLOCK_CELL_RE.test(cell))) out.partial = true;
@@ -202,7 +201,7 @@ export function extractScheduledElements(docText: string, out?: { partial?: bool
   const found = new Map<string, ScheduledElement>();
   const lines = docText.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    // Any unlock id in the first cell: L21, 21, E3, W1-3, "Level 21",
+    // Any unlock id in the first cell: L7, 7, E3, W1-3, "Cave 7",
     // "Chapter 1" — one GDD's "L<number>" was the only shape recognized
     // (Codex 2026-09-11 B#18, C#29).
     const m = /^\s*\|\s*((?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?)\s*\|\s*([^|]+?)\s*\|/.exec(lines[i]!);
@@ -374,9 +373,9 @@ export function assessSpecScopeOfText(
     .join("\n");
   const corpus = rawCorpus.toLowerCase();
 
-  // A long token anywhere in the code is a signal; a short one ("Reed",
-  // "Wick", "Dock") only as a whole identifier word — as a substring it would
-  // match "reedbed" or "wickerwork", but ignoring it outright reported every
+  // A long token anywhere in the code is a signal; a short one ("Moss",
+  // "Vent", "Seam") only as a whole identifier word — as a substring it would
+  // match "eventually" or "seamless", but ignoring it outright reported every
   // short-named element as missing (measured 2026-09-10: a 4-letter element
   // with its own `public class` in the tree).
   // A TOKEN TWO ELEMENTS SHARE PROVES NEITHER. "Gate (one-way)" and "Gate

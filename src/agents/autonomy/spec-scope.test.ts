@@ -2,41 +2,39 @@ import { describe, it, expect } from "vitest";
 import { extractScheduledElements, extractFlattenedSchedule, elementCodeTokens, assessSpecScope, findDesignDoc, scheduleLooksPresent, stripCsComments } from "./spec-scope.js";
 
 const GDD_SNIPPET = `
-## 5. OBSTACLES
+## Cave features
 
-### 5.1 Element schedule
-
-| Unlock | Element | One-line pitch |
-|--------|---------|----------------|
-| L18 | Stone Tile | Takes two matches to clear |
-| L30 | Frost Tile | Sealed until a neighbour clears |
-| L42 | Reed Wall | Never clears; shapes the pond |
-| L55 | Bell & Rope | Pond closed until the bell rings |
+| Stage | Feature | Effect |
+|-------|---------|--------|
+| Cave 2 | Gas Vent | Pushes the drone upward |
+| Cave 5 | Crystal Seam | Reveals the map nearby |
+| Cave 9 | Rockfall | Closes a passage after a delay |
+| Cave 12 | Drill & Anchor | Holds the drone against a draught |
 `;
 
 describe("spec scope — the design document is the checklist", () => {
   it("word-prefixed unlocks are read, a staffing table is not a schedule, strings survive comment stripping (Codex 2026-09-11 C#29, C#30)", () => {
     const gdd = [
-      "| Unlock | Element | Notes |",
+      "| Stage | Feature | Notes |",
       "| --- | --- | --- |",
-      "| Level 21 | Frost Tile | slides |",
-      "| Chapter 1 | Fire Wall | burns |",
+      "| Cave 7 | Gas Vent | lifts |",
+      "| Chapter 1 | Glow Moss | lights |",
     ].join("\n");
-    expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Frost Tile", "Fire Wall"]);
+    expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Gas Vent", "Glow Moss"]);
     // A staffing table is not a game schedule.
     const staffing = ["| # | Who | Role |", "| --- | --- | --- |", "| 1 | Alice (producer) | plans |"].join("\n");
     expect(extractScheduledElements(staffing)).toEqual([]);
     // A string containing "//" does not swallow the rest of the file…
-    expect(stripCsComments('class C { string separator="//"; void FrostTile() {} }')).toContain("FrostTile");
+    expect(stripCsComments('class C { string separator="//"; void GasVent() {} }')).toContain("GasVent");
     // …and a comment after a label is still a comment.
-    expect(stripCsComments("void M() { retry:// TODO FrostTile\n }")).not.toContain("FrostTile");
+    expect(stripCsComments("void M() { retry:// TODO GasVent\n }")).not.toContain("GasVent");
   });
 
   it("an unlock id in any shape, and a comment is not an implementation (Codex 2026-09-11 B#18)", () => {
     const gdd = [
-      "| Unlock | Element | Notes |",
+      "| Stage | Feature | Notes |",
       "| --- | --- | --- |",
-      "| 21 | Teleporter | bends the path |",
+      "| 7 | Teleporter | bends the path |",
       "| E3 | Magnet | pulls items |",
       "| W1-2 | Springboard | launches |",
     ].join("\n");
@@ -47,13 +45,13 @@ describe("spec scope — the design document is the checklist", () => {
 
   it("extracts the element schedule from a GDD-style table", () => {
     const els = extractScheduledElements(GDD_SNIPPET);
-    expect(els.map((e) => e.name)).toEqual(["Stone Tile", "Frost Tile", "Reed Wall", "Bell & Rope"]);
-    expect(els[0]?.unlock).toBe("L18");
+    expect(els.map((e) => e.name)).toEqual(["Gas Vent", "Crystal Seam", "Rockfall", "Drill & Anchor"]);
+    expect(els[0]?.unlock).toBe("Cave 2");
   });
 
   it("builds code-token shapes an implementation might use", () => {
-    expect(elementCodeTokens("Frost Tile")).toContain("FrostTile");
-    expect(elementCodeTokens("Bell & Rope")).toContain("BellRope");
+    expect(elementCodeTokens("Crystal Seam")).toContain("CrystalSeam");
+    expect(elementCodeTokens("Drill & Anchor")).toContain("DrillAnchor");
   });
 
   it("names scheduled elements missing from Assets code", () => {
@@ -68,11 +66,11 @@ describe("spec scope — the design document is the checklist", () => {
       writeFileSync(gdd, GDD_SNIPPET + "\n# rest of a large document\n" + "x".repeat(500));
       const scripts = join(root, "Assets", "Modules", "M", "Scripts");
       mkdirSync(scripts, { recursive: true });
-      writeFileSync(join(scripts, "FrostTile.cs"), "public class FrostTile {}");
+      writeFileSync(join(scripts, "CrystalSeam.cs"), "public class CrystalSeam {}");
 
       const report = assessSpecScope(root);
       expect(report.scheduled).toBe(4);
-      expect(report.missing.map((m) => m.name)).toEqual(["Stone Tile", "Reed Wall", "Bell & Rope"]);
+      expect(report.missing.map((m) => m.name)).toEqual(["Gas Vent", "Rockfall", "Drill & Anchor"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -91,7 +89,7 @@ describe("findDesignDoc runs in this ESM module", () => {
     const root = mkdtempSync(join(tmpdir(), "spec-scope-"));
     try {
       mkdirSync(join(root, "docs"));
-      writeFileSync(join(root, "docs", "Game_GDD.md"), "# GDD\n\nElement schedule: lantern, shrine");
+      writeFileSync(join(root, "docs", "Game_GDD.md"), "# GDD\n\nFeature list: vents, seams");
       expect(findDesignDoc(root)).toBe(join(root, "docs", "Game_GDD.md"));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -109,11 +107,11 @@ describe("short element names count as whole words (measured 2026-09-10: a 4-let
     try {
       mkdirSync(join(root, "docs"));
       mkdirSync(join(root, "Assets"));
-      writeFileSync(join(root, "docs", "GDD.md"), "| L1 | Reed |\n| L2 | Wick |\n| L3 | Dock |\n");
-      writeFileSync(join(root, "Assets", "A.cs"), "public class Reed {} // wickerwork\nclass Dock {}\n");
+      writeFileSync(join(root, "docs", "GDD.md"), "| L1 | Moss |\n| L2 | Vent |\n| L3 | Seam |\n");
+      writeFileSync(join(root, "Assets", "A.cs"), "public class Moss {} // eventually\nclass Seam {}\n");
       const report = assessSpecScope(root, join(root, "docs", "GDD.md"));
       expect(report.scheduled).toBe(3);
-      expect(report.missing.map((m) => m.name)).toEqual(["Wick"]); // "wickerwork" is not Wick
+      expect(report.missing.map((m) => m.name)).toEqual(["Vent"]); // "eventually" is not Vent
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -122,85 +120,80 @@ describe("short element names count as whole words (measured 2026-09-10: a 4-let
 
 /**
  * A schedule table that lost its pipes. Measured by Codex 2026-09-12 (W#12)
- * on the real vehicle document: its whole element schedule — sixteen game
- * elements — read as ZERO scheduled elements, because a document
- * converted out of Google Docs arrives as one cell per LINE. Zero suppresses
- * the coverage check entirely, so none of that content was ever compared to
- * the code.
+ * on the real vehicle document: its whole element schedule read as ZERO
+ * scheduled elements, because a document converted out of Google Docs
+ * arrives as one cell per LINE. Zero suppresses the coverage check entirely,
+ * so none of that content was ever compared to the code.
  */
 describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
   const flattened = [
-    "5.1 Element schedule",
-    "Unlock",
-    "Element",
-    "Summary",
-    "Lane",
-    "L5",
-    "Twin current",
-    "Two currents run side by side",
-    "Water",
-    "L18",
-    "Stone Tile",
-    "Takes two matches to clear",
-    "Bank",
-    "L30",
-    "Frost Tile",
-    "Sealed until a neighbour clears",
-    "Bank",
+    "Cave features",
+    "Stage",
+    "Feature",
+    "Effect",
+    "Cave 2",
+    "Gas Vent",
+    "Pushes the drone upward",
+    "Cave 5",
+    "Crystal Seam",
+    "Reveals the map nearby",
+    "Cave 9",
+    "Rockfall",
+    "Closes a passage after a delay",
     "",
-    "5.2 Designer notes",
-    "Each new element first appears on its own, in an easy level.",
+    "Drone upgrades",
+    "The battery grows after every completed survey.",
   ].join("\n");
 
   it("reads the rows a converter flattened, with the right column for each", () => {
     expect(extractScheduledElements(flattened)).toEqual([
-      { unlock: "L5", name: "Twin current" },
-      { unlock: "L18", name: "Stone Tile" },
-      { unlock: "L30", name: "Frost Tile" },
+      { unlock: "Cave 2", name: "Gas Vent" },
+      { unlock: "Cave 5", name: "Crystal Seam" },
+      { unlock: "Cave 9", name: "Rockfall" },
     ]);
   });
 
   it("stops at the end of the table and does not invent elements from prose", () => {
-    const after = `${flattened}\nL99\nnot a table row at all — this is a sentence about L99.`;
+    const after = `${flattened}\nCave 99\nnot a table row at all — this is a sentence about Cave 99.`;
     expect(extractScheduledElements(after).map((e) => e.name)).toEqual([
-      "Twin current",
-      "Stone Tile",
-      "Frost Tile",
+      "Gas Vent",
+      "Crystal Seam",
+      "Rockfall",
     ]);
     // A document with no schedule still yields none.
     expect(extractScheduledElements("# GDD\n\nA puzzle game with 12 levels.")).toEqual([]);
     // …and a staffing table is still not a schedule.
     expect(
-      extractScheduledElements(["Unlock", "Element", "Owner", "L1", "Ada Lovelace (designer)", "art"].join("\n")),
+      extractScheduledElements(["Stage", "Feature", "Owner", "Cave 1", "Ada Lovelace (designer)", "art"].join("\n")),
     ).toEqual([]);
   });
 
   it("still reads an ordinary pipe table", () => {
     expect(extractScheduledElements(GDD_SNIPPET).map((e) => e.name)).toEqual([
-      "Stone Tile",
-      "Frost Tile",
-      "Reed Wall",
-      "Bell & Rope",
+      "Gas Vent",
+      "Crystal Seam",
+      "Rockfall",
+      "Drill & Anchor",
     ]);
   });
 });
 
 /**
- * The real two-element false refusal on the vehicle (Codex 2026-09-12 Y):
- * "Caged (Sealed) Lantern" and "Storm (boss)" produced only the annotated
- * spellings, so a project whose code says `CagedLantern` and `Storm` was
- * reported as missing the elements it had implemented.
+ * A false refusal measured on the test vehicle (Codex 2026-09-12 Y): names
+ * carrying a note in parentheses produced only the annotated spellings, so a
+ * project whose code used the plain name was reported as missing the
+ * elements it had implemented.
  */
 describe("a parenthetical is an annotation, not part of the name (Codex 2026-09-12 Y)", () => {
   it("offers the name without its notes as well as with them", () => {
-    expect(elementCodeTokens("Caged (Sealed) Lantern")).toEqual(
-      expect.arrayContaining(["CagedSealedLantern", "CagedLantern", "cagedlantern"]),
+    expect(elementCodeTokens("Survey (v2) Beacon")).toEqual(
+      expect.arrayContaining(["SurveyV2Beacon", "SurveyBeacon", "surveybeacon"]),
     );
-    expect(elementCodeTokens("Storm (boss)")).toEqual(expect.arrayContaining(["Storm", "storm", "StormBoss"]));
-    expect(elementCodeTokens("Frozen Lantern (+ moving current)")).toEqual(expect.arrayContaining(["FrozenLantern"]));
+    expect(elementCodeTokens("Rockfall (timed)")).toEqual(expect.arrayContaining(["Rockfall", "rockfall", "RockfallTimed"]));
+    expect(elementCodeTokens("Gas Vent (rare; see notes)")).toEqual(expect.arrayContaining(["GasVent", "gasvent"]));
     // A name with no annotation is unchanged.
-    expect(elementCodeTokens("Frost Tile")).toEqual(["FrostTile", "frosttile"]);
-    expect(elementCodeTokens("Bell & Rope")).toEqual(["BellRope", "bellrope"]);
+    expect(elementCodeTokens("Crystal Seam")).toEqual(["CrystalSeam", "crystalseam"]);
+    expect(elementCodeTokens("Drill & Anchor")).toEqual(["DrillAnchor", "drillanchor"]);
   });
 });
 
@@ -223,8 +216,8 @@ describe("a shared stripped name covers no variant (Codex 2026-09-12 Z#8)", () =
     return root;
   };
   const twoGates =
-    "\n## 5. OBSTACLES\n\n### 5.1 Element schedule\n\n" +
-    "| Unlock | Element | Pitch |\n|---|---|---|\n| L1 | Gate (one-way) | in only |\n| L2 | Gate (two-way) | both |\n";
+    "\n## Cave features\n\n" +
+    "| Stage | Feature | Effect |\n|---|---|---|\n| Cave 1 | Gate (one-way) | in only |\n| Cave 2 | Gate (two-way) | both |\n";
 
   it("reports both variants missing when only the shared name exists", () => {
     const { rmSync } = require("node:fs") as typeof import("node:fs");
@@ -257,22 +250,22 @@ describe("a shared stripped name covers no variant (Codex 2026-09-12 Z#8)", () =
  */
 describe("every flattened shape, and saying when a schedule cannot be read (Codex 2026-09-12 Y#4)", () => {
   const shapes: Array<[string, string]> = [
-    ["one cell per line", "Unlock\nElement\nPitch\nL1\nIce\nFreezes"],
-    ["a blank line between cells", "Unlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes"],
-    ["the element column first", "Element\nUnlock\nPitch\nIce\nL1\nFreezes"],
-    ["tab-separated rows", "Unlock\tElement\tPitch\nL1\tIce\tFreezes"],
-    // Two columns, and the vehicle's four: the width is whatever makes the
-    // rows line up, not a number this reader assumes.
-    ["two columns", "Unlock\nElement\nL1\nIce"],
-    ["four columns", "Unlock\nElement\nPitch\nSide\nL1\nIce\nFreezes\nBank"],
+    ["one cell per line", "Stage\nFeature\nEffect\nCave 1\nVent\nPushes"],
+    ["a blank line between cells", "Stage\n\nFeature\n\nEffect\n\nCave 1\n\nVent\n\nPushes"],
+    ["the element column first", "Feature\nStage\nEffect\nVent\nCave 1\nPushes"],
+    ["tab-separated rows", "Stage\tFeature\tEffect\nCave 1\tVent\tPushes"],
+    // Two columns, and five: the width is whatever makes the rows line up,
+    // not a number this reader assumes.
+    ["two columns", "Stage\nFeature\nCave 1\nVent"],
+    ["five columns", "Stage\nFeature\nEffect\nArt\nSound\nCave 1\nVent\nPushes\nvent.png\nhiss.wav"],
     // Two shapes AT ONCE: each worked alone and they failed together, because
     // the header walk stepped straight into a blank (Codex 2026-09-12 AB J2.5).
-    ["the element column first AND blank-separated", "Element\n\nUnlock\n\nPitch\n\nIce\n\nL1\n\nFreezes"],
+    ["the element column first AND blank-separated", "Feature\n\nStage\n\nEffect\n\nVent\n\nCave 1\n\nPushes"],
   ];
 
   it("reads the schedule in each of them", () => {
     for (const [name, doc] of shapes) {
-      expect(extractScheduledElements(doc), name).toEqual([{ unlock: "L1", name: "Ice" }]);
+      expect(extractScheduledElements(doc), name).toEqual([{ unlock: "Cave 1", name: "Vent" }]);
       expect(scheduleLooksPresent(doc), name).toBe(true);
     }
   });
@@ -281,10 +274,10 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
     // It ended the parse, so every later row vanished from coverage — and the
     // rows already read certified the schedule as complete (Codex 2026-09-12
     // AB J2.6).
-    const withSeparators = "Unlock\nElement\nPitch\nL1\nIce\nFreezes\n\nL2\nFire\nBurns";
+    const withSeparators = "Stage\nFeature\nEffect\nCave 1\nVent\nPushes\n\nCave 2\nMoss\nGlows";
     expect(extractScheduledElements(withSeparators)).toEqual([
-      { unlock: "L1", name: "Ice" },
-      { unlock: "L2", name: "Fire" },
+      { unlock: "Cave 1", name: "Vent" },
+      { unlock: "Cave 2", name: "Moss" },
     ]);
   });
 
@@ -297,7 +290,7 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
       mkdirSync(join(root, "docs"), { recursive: true });
       writeFileSync(
         join(root, "docs", "GDD.md"),
-        "## 4. GAME ELEMENTS\n\nUnlock\nElement\nPitch\nthe rows of this table were lost in conversion.\n" + "x".repeat(500),
+        "## Cave features\n\nStage\nFeature\nEffect\nthe rows of this table were lost in conversion.\n" + "x".repeat(500),
       );
       const report = assessSpecScope(root);
       expect(report.scheduled).toBe(0);
@@ -313,7 +306,7 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
   it("says a schedule is PRESENT even when its rows cannot be read, and absent when there is none", () => {
     // A header this reader recognizes with rows it cannot parse: the caller
     // must not read zero elements as "the document schedules nothing".
-    const unreadable = "Unlock\nElement\nPitch\nthe rows of this table were lost in conversion.";
+    const unreadable = "Stage\nFeature\nEffect\nthe rows of this table were lost in conversion.";
     expect(extractScheduledElements(unreadable)).toEqual([]);
     expect(scheduleLooksPresent(unreadable)).toBe(true);
     expect(scheduleLooksPresent("# GDD\n\nA puzzle game with 12 levels.")).toBe(false);
@@ -331,37 +324,37 @@ describe("a converted table's blank lines (Codex 2026-09-12 AC)", () => {
   it("folds blank-separated cells from the HEADER's parity, not the document's", () => {
     // The same table, shifted by one line — which is what a file with a
     // leading newline or a title line above the table looks like.
-    const shifted = "\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes";
-    expect(extractScheduledElements(shifted)).toEqual([{ unlock: "L1", name: "Ice" }]);
+    const shifted = "\nStage\n\nFeature\n\nEffect\n\nCave 1\n\nVent\n\nPushes";
+    expect(extractScheduledElements(shifted)).toEqual([{ unlock: "Cave 1", name: "Vent" }]);
     // …and preamble of its own, which moves the header off every parity the
     // reader might have assumed.
-    expect(extractScheduledElements("# GDD\n\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes"))
-      .toEqual([{ unlock: "L1", name: "Ice" }]);
-    expect(extractScheduledElements("# GDD\nA game about ice.\n\nUnlock\n\nElement\n\nPitch\n\nL1\n\nIce\n\nFreezes"))
-      .toEqual([{ unlock: "L1", name: "Ice" }]);
+    expect(extractScheduledElements("# GDD\n\nStage\n\nFeature\n\nEffect\n\nCave 1\n\nVent\n\nPushes"))
+      .toEqual([{ unlock: "Cave 1", name: "Vent" }]);
+    expect(extractScheduledElements("# GDD\nA game about caves.\n\nStage\n\nFeature\n\nEffect\n\nCave 1\n\nVent\n\nPushes"))
+      .toEqual([{ unlock: "Cave 1", name: "Vent" }]);
   });
 
   it("reads a blank-separated table whose rows are separated too (Codex 2026-09-13 AF#8)", () => {
     // Parity — the document's or the header's — breaks the moment one row
     // carries an extra blank line, and every later cell was discarded.
-    expect(extractScheduledElements("Element\n\nUnlock\n\nRotor\n\nL1\n\n\nMagnet\n\nL2")).toEqual([
-      { unlock: "L1", name: "Rotor" },
-      { unlock: "L2", name: "Magnet" },
+    expect(extractScheduledElements("Feature\n\nStage\n\nRotor\n\nCave 1\n\n\nMagnet\n\nCave 2")).toEqual([
+      { unlock: "Cave 1", name: "Rotor" },
+      { unlock: "Cave 2", name: "Magnet" },
     ]);
   });
 
   it("says so when the LAST row is cut short (Codex 2026-09-13 AF#8)", () => {
     const truncated: { partial?: boolean } = {};
-    expect(extractFlattenedSchedule("Unlock\nElement\nL1\nRotor\nL2", truncated)).toEqual([{ unlock: "L1", name: "Rotor" }]);
+    expect(extractFlattenedSchedule("Stage\nFeature\nCave 1\nRotor\nCave 2", truncated)).toEqual([{ unlock: "Cave 1", name: "Rotor" }]);
     expect(truncated.partial).toBe(true);
   });
 
   it("steps over TWO blank lines between rows", () => {
-    const doubled = "Unlock\nElement\nPitch\nL1\nIce\nFreezes\n\n\nL2\nFire\nBurns\n\n\nL3\nWind\nBlows";
+    const doubled = "Stage\nFeature\nEffect\nCave 1\nVent\nPushes\n\n\nCave 2\nMoss\nGlows\n\n\nCave 3\nSeam\nShines";
     expect(extractScheduledElements(doubled)).toEqual([
-      { unlock: "L1", name: "Ice" },
-      { unlock: "L2", name: "Fire" },
-      { unlock: "L3", name: "Wind" },
+      { unlock: "Cave 1", name: "Vent" },
+      { unlock: "Cave 2", name: "Moss" },
+      { unlock: "Cave 3", name: "Seam" },
     ]);
   });
 
@@ -369,19 +362,19 @@ describe("a converted table's blank lines (Codex 2026-09-12 AC)", () => {
     // A row the reader cannot parse in the middle of the table: the elements
     // below it are NOT in the coverage set, and the rows above must not
     // certify the schedule as complete.
-    const broken = "Unlock\nElement\nPitch\nL1\nIce\nFreezes\nthis sentence is not a row of the table at all, it is prose\nL9\nWind\nBlows";
+    const broken = "Stage\nFeature\nEffect\nCave 1\nVent\nPushes\nthis sentence is not a row of the table at all, it is prose\nCave 9\nSeam\nShines";
     const read: { partial?: boolean } = {};
-    expect(extractFlattenedSchedule(broken, read)).toEqual([{ unlock: "L1", name: "Ice" }]);
+    expect(extractFlattenedSchedule(broken, read)).toEqual([{ unlock: "Cave 1", name: "Vent" }]);
     expect(read.partial).toBe(true);
     // A table that ends cleanly says nothing of the kind — including one
     // followed by ordinary prose, where the reader stops because the TABLE
     // ended and not because a row was lost.
     const whole: { partial?: boolean } = {};
-    extractFlattenedSchedule("Unlock\nElement\nPitch\nL1\nIce\nFreezes\nL2\nFire\nBurns", whole);
+    extractFlattenedSchedule("Stage\nFeature\nEffect\nCave 1\nVent\nPushes\nCave 2\nMoss\nGlows", whole);
     expect(whole.partial).toBeUndefined();
     const thenProse: { partial?: boolean } = {};
     extractFlattenedSchedule(
-      "Unlock\nElement\nPitch\nL1\nIce\nFreezes\nThe elements above arrive in order.\nNothing below this line is a row.\nThe end.",
+      "Stage\nFeature\nEffect\nCave 1\nVent\nPushes\nThe elements above arrive in order.\nNothing below this line is a row.\nThe end.",
       thenProse,
     );
     expect(thenProse.partial).toBeUndefined();
@@ -402,7 +395,7 @@ describe("the spec-scope code walk is bounded (AUT-15)", () => {
       writeFileSync(join(root, "docs", "GDD.md"), GDD_SNIPPET);
       const assets = join(root, "Assets");
       mkdirSync(assets, { recursive: true });
-      writeFileSync(join(assets, "IceBlock.cs"), "public class IceBlock {}");
+      writeFileSync(join(assets, "Drone.cs"), "public class Drone {}");
       symlinkSync(assets, join(assets, "a"), "dir");
       symlinkSync(assets, join(assets, "b"), "dir");
 

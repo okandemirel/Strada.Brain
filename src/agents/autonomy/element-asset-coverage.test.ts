@@ -31,12 +31,12 @@ const GATE = "[STRADA ELEMENT ASSETS MISSING]";
 const GDD = [
   "# Test Game GDD",
   "",
-  "## 4.1 Element Schedule",
+  "## Cave features",
   "",
-  "| Unlock | Element | Notes |",
-  "| ------ | ------- | ----- |",
-  "| L18 | Firefly | lights a row |",
-  "| L30 | Frost Tile | freezes a cell |",
+  "| Stage | Feature | Effect |",
+  "| ----- | ------- | ------ |",
+  "| Cave 2 | Gas Vent | pushes the drone upward |",
+  "| Cave 5 | Crystal Seam | reveals the map nearby |",
   "",
 ].join("\n");
 
@@ -106,7 +106,7 @@ function guardFor(root: string): StradaConformanceGuard {
 /** Drive the guard to the phase where the coverage gate is allowed to speak. */
 function runToPlayedPhase(guard: StradaConformanceGuard, codePath: string): void {
   guard.trackToolCall("file_write", { path: codePath }, false);
-  guard.trackToolCall("unity_my_assets_cloud", { query: "firefly sprite" }, false);
+  guard.trackToolCall("unity_my_assets_cloud", { query: "gas vent sprite" }, false);
   guard.trackToolCall("unity_playmode_verify", {}, false);
 }
 
@@ -118,25 +118,26 @@ describe("element asset coverage", () => {
 
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain(GATE);
-    expect(prompt).toContain("Firefly");
-    expect(prompt).toContain("Frost Tile");
+    expect(prompt).toContain("Gas Vent");
+    expect(prompt).toContain("Crystal Seam");
     expect(prompt).toContain("unity_generate_sprite");
-    // THE DESIGN'S OWN WORDS, never one game's. The prompt quoted the test
-    // vehicle's art direction — its stage and character adjectives — at
-    // every game the system builds (Codex 2026-09-12 R#10, and the standing
-    // rule that no vehicle's wording belongs in system behaviour). This GDD
-    // states no look, so the prompt may carry none.
-    expect(prompt).not.toMatch(/glossy|3D-feel|rendered stage/i);
-    expect(prompt).toContain("THIS design describes as dimensional");
+    // THE DESIGN'S OWN WORDS, never one game's. The prompt once carried one
+    // game's art direction to every game the system builds (Codex 2026-09-12
+    // R#10, and the standing rule that no vehicle's wording belongs in system
+    // behaviour). This GDD states no look, so the prompt may carry none: no
+    // style word appears unless the design wrote it, and the 2D/3D split is
+    // left to the design's own words.
+    expect(prompt).not.toMatch(/cartoon|cel-shaded|low-poly|hand-painted|painterly|watercolou?r|photoreal|voxel|isometric/i);
+    expect(prompt).toContain("THIS design describes as 3D");
   });
 
   it("names elements whose art exists but is bound to nothing", () => {
     const { root, codePath } = assembledProject();
-    const fireflyGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    addSprite(root, "Firefly", fireflyGuid); // on disk, referenced by nothing
-    const iceGuid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    addSprite(root, "FrostTile", iceGuid);
-    addPrefab(root, [iceGuid]); // only FrostTile is bound
+    const ventGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    addSprite(root, "GasVent", ventGuid); // on disk, referenced by nothing
+    const seamGuid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    addSprite(root, "CrystalSeam", seamGuid);
+    addPrefab(root, [seamGuid]); // only CrystalSeam is bound
 
     const guard = guardFor(root);
     runToPlayedPhase(guard, codePath);
@@ -144,17 +145,17 @@ describe("element asset coverage", () => {
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain(GATE);
     expect(prompt).toContain("no prefab/asset/scene references");
-    expect(prompt).toContain("Firefly");
-    expect(prompt).not.toContain("Frost Tile");
+    expect(prompt).toContain("Gas Vent");
+    expect(prompt).not.toContain("Crystal Seam");
   });
 
   it("stays silent when every element has art bound into a prefab", () => {
     const { root, codePath } = assembledProject();
-    const fireflyGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const iceGuid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    addSprite(root, "Firefly", fireflyGuid);
-    addSprite(root, "FrostTile", iceGuid);
-    addPrefab(root, [fireflyGuid, iceGuid]);
+    const ventGuid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const seamGuid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    addSprite(root, "GasVent", ventGuid);
+    addSprite(root, "CrystalSeam", seamGuid);
+    addPrefab(root, [ventGuid, seamGuid]);
 
     const guard = guardFor(root);
     runToPlayedPhase(guard, codePath);
