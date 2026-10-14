@@ -715,6 +715,21 @@ describe("a build aimed only at a document that sits beside the design", () => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
   });
 
+  // Named alone, a style sheet, a changelog or a licence is still no design (none of these built on main).
+  it.each([
+    "Build the game per docs/art-style.md",
+    "Build this game: CHANGELOG.md",
+    "Build the game in docs/LICENSE.md",
+    "docs/art-style.md'ye göre oyunu yap",
+  ])("%s → no campaign (a document that is never the design)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it("a readme, which may hold the design, is still built when it is named alone or beside a style sheet", () => {
+    expect(detectCampaignIntent(msg("Build this game: docs/README.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/README.md" });
+    expect(detectCampaignIntent(msg("Build the game in docs/art-style.md and docs/README.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/README.md" });
+  });
+
   it("an idea written beside the style sheet the build is aimed at is the design", () => {
     const text = "Build this game from scratch per docs/art-style.md: a beekeeper moves her hives between meadows as the seasons turn.";
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });

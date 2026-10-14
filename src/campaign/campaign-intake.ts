@@ -263,8 +263,14 @@ function linkNamesDocument(link: string): boolean {
   return new RegExp(String.raw`\.(?:${DOCUMENT_EXTENSIONS})$`, "i").test(last) || refersToGdd(last);
 }
 
-/** Documents that sit beside a design — a style sheet, a changelog, a readme — and are not it when the message names it too. */
-const SUPPORT_DOCUMENT_WORDS = new Set(["style", "styles", "stylesheet", "styleguide", "stil", "changelog", "readme", "license", "licence", "contributing"]);
+/**
+ * Documents that sit beside a design — a style sheet, a changelog, a licence
+ * — and are never it: named alone, "Build the game per docs/art-style.md"
+ * (no campaign on main) was an immediate build with the style sheet for the
+ * design. A readme sits beside one too, but may hold it when it is all the
+ * message names.
+ */
+const NOT_A_DESIGN_WORDS = new Set(["style", "styles", "stylesheet", "styleguide", "stil", "changelog", "license", "licence", "contributing"]);
 /**
  * Instructions for compiling or shipping the game. In a Unity project "build
  * the game per docs/BUILD.md" is the player build: it started no campaign on
@@ -283,8 +289,12 @@ function isBuildInstructions(path: string): boolean {
   return documentWords(path).some((word) => BUILD_INSTRUCTION_WORDS.has(word));
 }
 
+function isNeverTheDesign(path: string): boolean {
+  return isBuildInstructions(path) || documentWords(path).some((word) => NOT_A_DESIGN_WORDS.has(word));
+}
+
 function isSupportDocument(path: string): boolean {
-  return isBuildInstructions(path) || documentWords(path).some((word) => SUPPORT_DOCUMENT_WORDS.has(word));
+  return isNeverTheDesign(path) || documentWords(path).includes("readme");
 }
 
 /**
@@ -528,10 +538,11 @@ function turnedAway(prose: string, doc: NamedDocument): boolean {
  * built the style sheet, ungated: the design is then the one named beside it
  * — the only GDD, else the only other document — unless the message turns it
  * away or names two, and then there is no campaign to start (the user's task
- * asks which). Named alone, with nothing else to build from, it is still the
- * document the message meant — unless it is build or release instructions:
- * then the build is the player build, and `null` says no campaign at all,
- * however long the message is (it is no idea to draft either).
+ * asks which). Named alone, with nothing else to build from, a readme is
+ * still the document the message meant; a style sheet, a changelog or a
+ * licence is no design at all; and build or release instructions make the
+ * build the player build — `null` says no campaign, however long the message
+ * is (it is no idea to draft either).
  */
 function designAmong(text: string, named: readonly NamedDocument[]): string | null | undefined {
   if (named.length === 0) return undefined;
@@ -569,7 +580,7 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | nu
   const designs = candidates.filter((doc) => !isSupportDocument(doc.path));
   if (designs.length > 0) return designs.length === 1 ? designs[0]!.path : undefined;
   if (beside.some((doc) => !isSupportDocument(doc.path))) return undefined;
-  return playerBuild ? null : aimedDocs.find((doc) => !isBuildInstructions(doc.path))!.path;
+  return playerBuild ? null : aimedDocs.find((doc) => !isNeverTheDesign(doc.path))?.path;
 }
 
 /** The design document the message names, when it names one. */
