@@ -1,11 +1,10 @@
 /**
  * Sound, motion and effects: what the GDD asks for against what ships.
  *
- * Until 2026-09-10 a GDD's cue list (menu music, a sound for each action),
- * its animation brief (walk and idle cycles) and its effects (smoke or spark
- * particles) were measured by nothing: the
- * structural gate counted renderers and sprites, the art inventory counted
- * clips on disk, and a silent, static delivery read as complete.
+ * Until 2026-09-10 a GDD's cue list, its animation brief and its effects were
+ * measured by nothing: the structural gate counted renderers and sprites, the
+ * art inventory counted clips on disk, and a silent, static delivery read as
+ * complete.
  *
  * This is the same shape as the dimensionality disclosure: the GDD's own
  * words with counts and excerpts, beside the counts the shipped scenes carry
@@ -40,11 +39,10 @@ export interface MediaDisclosure {
  * PLAYABLE in silence?
  *
  * A promise that the game stays playable with the sound off ("without sound,
- * every whistle shows a caption") is an accessibility requirement, and it
- * matched the denial, so the whole audio gate was switched off on a project
- * with twenty-nine imported clips and none reachable from a shipped scene
- * (Codex 2026-09-12 V). An accessibility promise cannot negate the sound the
- * same document specifies.
+ * each whistle and bell shows a caption") is an accessibility requirement, and
+ * it matched the denial, so the whole audio gate was switched off on a project
+ * whose imported clips no shipped scene reached (Codex 2026-09-12 V). An
+ * accessibility promise cannot negate the sound the same document specifies.
  */
 const DENIES_SOUND_RE = /\b(?:no (?:music|audio|sound|sfx)\b|silent by design|without (?:any )?(?:music|audio|sound))\b/gi;
 /** The clause words that make such a sentence an accessibility promise. */
@@ -56,7 +54,7 @@ export function deniesSoundAnywhere(documentText: string): boolean {
   let m: RegExpExecArray | null;
   while ((m = DENIES_SOUND_RE.exec(documentText)) !== null) {
     const at = m.index;
-    // …and "no music-ONLY stages" denies a KIND of content, not the sound itself.
+    // …and "no music-ONLY cutscenes" denies a KIND of content, not the sound itself.
     if (/^-?only\b/i.test(documentText.slice(at + m[0].length, at + m[0].length + 6))) continue;
     const from = Math.max(0, documentText.lastIndexOf("\n", at), documentText.lastIndexOf(".", at) + 1);
     let to = documentText.indexOf("\n", at);
@@ -75,8 +73,8 @@ export function deniesSoundAnywhere(documentText: string): boolean {
  */
 export function asksForSoundAnywhere(documentText: string): boolean {
   if (/\b(?:sfx|sound effects?|voice ?over|music)\s+(?:for|on|when|plays?|cue)/i.test(documentText)) return true;
-  // A colon, or a dash with a space: "music-only" is a kind of content, not a
-  // label introducing one.
+  // A colon, or a dash with a space: in "sfx-heavy scenes" the hyphen joins a
+  // compound word; it introduces no label.
   if (/\b(?:sfx|sound effects?|audio|music|soundtrack|jingle|voice ?over)\b\s*(?::\s*\S|[—–-]\s+\S)/i.test(documentText)) return true;
   // A heading or table column of its own: a document with an AUDIO section is
   // not a document asking for silence.
@@ -91,11 +89,12 @@ export const MEDIA_ASK_THRESHOLD = 3;
  * The audio CUES a document names, as its own sentences.
  *
  * One reachable clip used to clear a cue list of any length: the gate asked
- * whether ANY clip was reachable, so a document listing "SFX for the whistle,
- * music on the menu, a sound when the signal clears…" was satisfied by a single
- * imported sound (Codex 2026-09-12 R#12). Only explicit cue statements count —
- * a sound named FOR an event — so a document that merely says "audio" many
- * times names no cues and this measures nothing.
+ * whether ANY clip was reachable, so a document naming a voice-over when the
+ * dispatcher clears the line, ambient sound on the night stretch and SFX for
+ * the coal shovel was satisfied by a single imported sound (Codex 2026-09-12
+ * R#12). Only explicit cue statements count — a sound named FOR an event — so
+ * a document that merely says "audio" many times names no cues and this
+ * measures nothing.
  */
 const AUDIO_CUE_RE =
   /\b(sfx|sound\s+effects?|sound|music|soundtrack|jingle|voice[- ]?over|ambien(?:ce|t\s+sound))\b[^.\n]{0,40}?\b(?:for|on|when|plays?\s+(?:on|when)|cue(?:s|d)?\s+(?:on|when))\b([^.\n]{3,60})/giu;
@@ -179,9 +178,9 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
     // A game may generate its sound in code, and a document may ASK for
     // silence; neither is a missing cue list (Codex 2026-09-11 C#17).
     const proceduralAudio = /\b(?:onaudiofilterread|procedural(?:ly)?[- ]generated (?:audio|music|sound)|synthesi[sz]ed at runtime|audio synthesis)\b/i.test(documentText);
-    // Silence must be the WHOLE document's answer: "No music. SFX for hits"
-    // still asks for sound, and a blanket exemption let it ship silent (Codex
-    // 2026-09-11 D#28). A positive ask anywhere cancels it.
+    // Silence must be the WHOLE document's answer: "No music. SFX for the
+    // whistle" still asks for sound, and a blanket exemption let it ship
+    // silent (Codex 2026-09-11 D#28). A positive ask anywhere cancels it.
     const deniesSound = deniesSoundAnywhere(documentText);
     const asksForSound = asksForSoundAnywhere(documentText);
     const asksForSilence = deniesSound && !asksForSound;
@@ -210,9 +209,10 @@ export function describeMedia(gddText: string | undefined, report: BuiltAsSpecif
       // (Codex 2026-09-12 R#12). What the document states as cues is counted,
       // and the shortfall is named with both numbers.
       const cues = audioCuesNamed(documentText);
-      // A CUE IS NOT A CLIP. "SFX for win. SFX for retry. Use the same click
-      // clip for all three" names three cues and one correct clip, and
-      // comparing the counts refused it (Codex 2026-09-12 U#F8). When the
+      // A CUE IS NOT A CLIP. "SFX for departure. SFX for the crossing. SFX for
+      // coupling. One bell clip serves all three" names three cues and one
+      // correct clip, and comparing the counts refused it (Codex 2026-09-12
+      // U#F8). When the
       // document says the clips are shared, the counts are disclosed instead
       // — whether each event is actually wired is a producer measurement.
       const sharesClips = /\b(?:same|shared|one|single|reuse[ds]?|reusing)\b[^.\n]{0,40}\bclip\b|\bclip\b[^.\n]{0,30}\b(?:for all|shared|reused)\b/i.test(documentText);

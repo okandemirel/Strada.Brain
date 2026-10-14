@@ -51,22 +51,22 @@ describe("synthesis", () => {
 describe("unity_generate_audio", () => {
   it("writes a WAV the delivery measurement reads back, with an AudioImporter meta", async () => {
     // Measured 2026-09-07: the GDD's cue list had no tool to come from.
-    const r = await new AudioGenerateTool().execute({ name: "ui_click", preset: "click" }, ctx);
+    const r = await new AudioGenerateTool().execute({ name: "FireboxLatch", preset: "click" }, ctx);
     expect(r.isError).toBeFalsy();
-    const file = join(root, "Assets/Audio/Generated/ui_click.wav");
+    const file = join(root, "Assets/Audio/Generated/FireboxLatch.wav");
     expect(existsSync(file)).toBe(true);
     expect(readFileSync(`${file}.meta`, "utf8")).toContain("AudioImporter:");
     const clip = measureAudioClip(file);
     expect(clip.seconds).toBeCloseTo(0.06, 2);
-    expect(r.content).toContain("ui_click.wav");
+    expect(r.content).toContain("FireboxLatch.wav");
     expect(r.content).toContain("Bind it to an AudioSource");
   });
 
   it("writes a music loop and says it is procedural", async () => {
-    const r = await new AudioGenerateTool().execute({ name: "music_meadow", kind: "music", bpm: 100, key: "G", seconds: 8 }, ctx);
+    const r = await new AudioGenerateTool().execute({ name: "NightLineTheme", kind: "music", bpm: 100, key: "G", seconds: 8 }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("PROCEDURAL");
-    const clip = measureAudioClip(join(root, "Assets/Audio/Generated/music_meadow.wav"));
+    const clip = measureAudioClip(join(root, "Assets/Audio/Generated/NightLineTheme.wav"));
     expect(clip.seconds).toBeCloseTo(7.2, 1); // 100 bpm → 2.4 s bars → 3 bars
   });
 

@@ -44,7 +44,8 @@ const GDD =
   "# Night Freight\n\n## Weather\nSteam particles roll off the boiler, smoke particles trail from the stack, " +
   "and rain leaves a trail effect on the cab glass.\n" +
   "## Cab\nThe drive rods are animated from keyframes; the firebox door has an opening animation; the pressure needle tweens.\n" +
-  "## Audio\nSoundtrack: a slow harmonica theme on the night line; SFX for the whistle, brake hiss and coal shovel; the audio level rises with the cab window open.\n";
+  "## Audio\nA voice-over from the dispatcher opens each shift, the ambient sound of the rails runs under every stretch, " +
+  "and SFX for the whistle and the coal shovel sit above both.\n";
 
 function withScene(body: string, extraFiles?: (root: string) => void): ReturnType<typeof assessBuiltAsSpecified> {
   const root = project();
@@ -97,7 +98,7 @@ describe("describeMedia", () => {
         withClip(root);
         // The scene references a config asset that references the clip: code can play it.
         put(root, "Assets/Settings/Audio.asset", `MonoBehaviour:\n  clip: {fileID: 8300000, guid: ${CLIP}, type: 3}\n`, "55555555555555555555555555555555");
-        put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA}${SPRITE}--- !u!114 &9\nMonoBehaviour:\n  m_EditorClassIdentifier: A::B.Boot\n  cfg: {fileID: 11400000, guid: 55555555555555555555555555555555, type: 2}\n`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+        put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA}${SPRITE}--- !u!114 &9\nMonoBehaviour:\n  m_EditorClassIdentifier: A::B.Startup\n  cfg: {fileID: 11400000, guid: 55555555555555555555555555555555, type: 2}\n`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
       }),
     );
     expect(d.refusal).toBeUndefined();
@@ -107,15 +108,18 @@ describe("describeMedia", () => {
   it("a GDD that asks for audio with NO clip in the project is refused, not merely disclosed (Codex 2026-09-11 B#12)", () => {
     const none = describeMedia(GDD, withScene(""));
     expect(none.refusal).toContain("holds NO audio clip at all");
-    expect(describeMedia("# GDD\n\nA quiet puzzle.", withScene("")).lines).toEqual([
+    expect(describeMedia("# GDD\n\nA quiet night run.", withScene("")).lines).toEqual([
       "Sound/motion/effects: the GDD names no audio, animation or effects — nothing to compare the scenes against.",
     ]);
     expect(describeMedia(undefined, withScene("")).lines[0]).toContain("NOT checked");
   });
 
   it("partial silence still asks for sound, and an unused clip does not revoke a real exemption (Codex 2026-09-11 D#28, D#29)", () => {
-    // "No music" beside "SFX for hits" is not a silent game.
-    const partial = describeMedia("# GDD\n\nNo music. SFX for hits; audio for wins; sound effects for jumps.", withScene(""));
+    // "No music" beside "SFX for the whistle" is not a silent game.
+    const partial = describeMedia(
+      "# GDD\n\nNo music. SFX for the whistle; audio for the brake; sound effects for the coal shovel.",
+      withScene(""),
+    );
     expect(partial.refusal).toContain("NO audio clip at all");
     // A deliberately silent game stays exempt even when a package clip appears.
     const silentWithClip = describeMedia("# GDD\n\nNo music, no audio, no sound effects. Silent by design.", withScene("", withClip));
@@ -154,8 +158,9 @@ describe("describeMedia", () => {
 
 describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
   const cueList =
-    "# GDD\n\n## Audio\nMusic plays on the depot menu. SFX for the whistle. A sound plays when the signal bell rings. " +
-    "Sound effects for the coal shovel. Voice-over on the dispatcher call.\n";
+    "# GDD\n\n## Audio\nVoice-over when the dispatcher clears the line. Ambient sound on the long night stretch. " +
+    "SFX for the coal shovel. A soundtrack cue on arrival at each depot. Sound effects for the brake hiss. " +
+    "A jingle on the timetable board.\n";
 
   it("reads the cues the document states, and nothing from a document that only says 'audio'", () => {
     expect(audioCuesNamed(cueList).length).toBeGreaterThanOrEqual(4);
@@ -163,7 +168,7 @@ describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
     expect(audioCuesNamed("Audio matters. The audio budget is small. Audio, audio.")).toEqual([]);
   });
 
-  it("one reachable clip does not satisfy five named cues", () => {
+  it("one reachable clip does not satisfy six named cues", () => {
     // The gate asked only whether ANY clip was reachable, so a single imported
     // sound cleared a whole cue list.
     const one = describeMedia(cueList, withScene(`${AUDIO(CLIP)}`, withClip));
@@ -178,9 +183,9 @@ describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
 });
 
 /**
- * Measured by Codex 2026-09-12 (V) on the real vehicle document: the audio
- * gate was switched off entirely by one accessibility sentence, on a project
- * holding 29 imported clips with none reachable from a shipped scene.
+ * Measured by Codex 2026-09-12 (V) on a measured campaign's document: one
+ * accessibility sentence switched the audio gate off entirely, on a project
+ * whose imported clips no shipped scene reached.
  */
 describe("an accessibility promise is not a request for silence (Codex 2026-09-12 V)", () => {
   it("does not exempt a game whose document promises it stays playable without sound", () => {
@@ -192,9 +197,9 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     // No sentence here states a cue any reader can parse, so the accessibility
     // sentence is the ONLY thing that could exempt the game — and it must not.
     const doc =
-      "The whistle, the brake hiss and the coal shovel are each recorded as their own sfx. " +
-      "The audio follows the cab window. A harmonica soundtrack carries the night runs. " +
-      "Without sound the run stays playable: every whistle and bell shows a caption on screen.";
+      "A voice-over cast of three reads the dispatcher's lines. The ambient sound of the rails was taped at a real branch line. " +
+      "The jingle at the timetable board is a phrase from the harmonica soundtrack. " +
+      "Without sound a driver can still finish every run, because each whistle and bell shows a caption.";
     const d = describeMedia(doc, report);
     // The clips are there and no shipped scene reaches one: that is silent.
     expect(d.refusal).toContain("the delivery is silent");
@@ -209,9 +214,9 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     put(root, "Assets/Audio/whistle.wav", "RIFF", CLIP);
     const report = assessBuiltAsSpecified(root);
     const doc =
-      "# Night Freight\n\nNo music in the first release.\n\n## Audio\nMoment | Sound | Volume\n" +
-      "Leaving the station | sfx.whistle.depart | 0.9\nPulling into a siding | sfx.brake.release | 0.6\n" +
-      "Stoking the firebox | sfx.coal.shovel | 0.4\nNearing a crossing | sfx.bell.signal | 0.8\n";
+      "# Night Freight\n\nThe first release ships without music.\n\n## Audio\nMoment | Sound | Volume\n" +
+      "Leaving the station | sfx.whistle.depart | 0.73\nPulling into a siding | sfx.brake.release | 0.47\n" +
+      "Stoking the firebox | sfx.coal.shovel | 0.31\nNearing a crossing | sfx.bell.signal | 0.62\n";
     expect(describeMedia(doc, report).refusal).toContain("the delivery is silent");
   });
 
@@ -228,17 +233,17 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     const root = project();
     buildSettings(root, ["Assets/Scenes/Main.unity"]);
     put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO(CLIP));
-    put(root, "Assets/Audio/click.wav", "RIFF", CLIP);
+    put(root, "Assets/Audio/bell.wav", "RIFF", CLIP);
     const report = assessBuiltAsSpecified(root);
     const shared = describeMedia(
-      "# GDD\n\nSFX for win. SFX for retry. SFX for selection. Use the same click clip for all three events.",
+      "# GDD\n\nSFX for departure. SFX for the crossing. SFX for coupling. One bell clip serves all three.",
       report,
     );
     expect(shared.refusal).toBeUndefined();
     expect(shared.lines.join("\n")).toContain("clips are shared between cues");
     // …and a document that names distinct cues is still short of them.
     const distinct = describeMedia(
-      "# GDD\n\nSFX for win. SFX for retry. SFX for selection. Music for the menu.",
+      "# GDD\n\nSFX for departure. SFX for the crossing. SFX for coupling. Music for the night line.",
       report,
     );
     expect(distinct.refusal).toContain("the cue list is not produced");
