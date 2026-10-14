@@ -1484,3 +1484,66 @@ describe("a build whose sentence goes on to report a failure waits at the gate",
     expect(detectCampaignIntent(msg(text))).toEqual(now(DESIGN));
   });
 });
+
+/**
+ * NEVER SILENTLY NOTHING. "Make the game" takes only a build's own shape after
+ * it, because the verb is causative ("make the game faster" is a feature
+ * request) — but its list left out the connectives the document reader itself
+ * accepts, so "Make the game using docs/unity-setup.md" named a build AND a
+ * document and produced nothing at all, while "Make the game in …" started a
+ * campaign and "Develop the game following …" started one too (reviewed
+ * 2026-10-14, P3 #4).
+ */
+describe("make the game, with the connectives the document reader accepts", () => {
+  it.each([
+    ["using", "Make the game using docs/unity-setup.md"],
+    ["with", "Make the game with docs/unity-setup.md"],
+    ["following", "Make the game following docs/android-signing.md"],
+  ])("offers a document that is no design at the gate (%s)", (_word, text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm(text.slice(text.indexOf("docs/"))));
+  });
+
+  it.each([
+    ["following", "Make this game following docs/Quillmoor_GDD.md"],
+    ["using", "Make the game using docs/Quillmoor_GDD.md"],
+    ["in", "Make the game in docs/Quillmoor_GDD.md"],
+  ])("starts at once from a design the build names (%s)", (_word, text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now("docs/Quillmoor_GDD.md"));
+  });
+
+  it.each([
+    ["an adjective", "Make the game faster"],
+    ["a feature", "Make the game with more levels"],
+    ["a wish about a part", "Make the game with a louder menu"],
+  ])("still reads a causative as no build: %s", (_what, text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+});
+
+/**
+ * A DESIGN THE MESSAGE NAMES IS OFFERED, NOT REDRAFTED. A build order beside a
+ * document that says what it holds ("docs/X_GDD.md is the design I wrote last
+ * month") drafted a FRESH design and the gate's reply never named the file the
+ * user had pointed at: the document is the subject of its own sentence, so it
+ * ends no build's clause and nothing is aimed at it (reviewed 2026-10-14,
+ * P3 #2). The name is the whole test — a document that only explains
+ * something is still no design.
+ */
+describe("a design that states what it holds reaches the gate", () => {
+  it.each([
+    ["is the design", "Build this game: docs/Quillmoor_GDD.md is the design I wrote last month"],
+    ["has the mechanics, in a parenthesis", "Build the game in docs/Quillmoor_GDD.md (it has the mechanics)"],
+    ["has them, after a comma", "Build the game, docs/Quillmoor_GDD.md has all the mechanics in chapter two"],
+    ["is where the design lives", "Build the game. docs/Quillmoor_GDD.md is where the design lives, more or less."],
+  ])("offers the document the user named (%s)", (_shape, text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm("docs/Quillmoor_GDD.md"));
+  });
+
+  it.each([
+    ["a document that only explains a symptom", "Make the game (docs/perf.md explains the frame drops) faster", undefined],
+    ["a todo list", "Build this game: docs/notes.md is where I keep my todo list", "idea"],
+  ])("leaves %s as it was", (_what, text, kind) => {
+    const intent = detectCampaignIntent(msg(text));
+    expect(kind === undefined ? intent : intent?.kind).toEqual(kind === undefined ? undefined : kind);
+  });
+});

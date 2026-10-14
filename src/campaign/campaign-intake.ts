@@ -590,7 +590,11 @@ const BUILD_GAME_TR =
 const WHOLE_GAME_BUILD_RE = new RegExp(
   [
     String.raw`(?<![\p{L}\p{N}_])(?:build|develop)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])(?!\s+(?:further|more|beyond|better)(?![\p{L}]))`,
-    String.raw`(?<![\p{L}\p{N}_])make\s+(?:this|the|a|my)\s+game(?=(?:\s*\([^()\n]*\))?(?:\s*(?:$|[:.,;!?)—–])|\s+(?:in|from|at|per|about|where|set|called|named|that|which|for|exactly|fully|completely|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)|end[- ]?to[- ]?end)(?![\p{L}])))`,
+    // `using`, `with` and `following` belong here as well: BUILDS_FROM_NEXT_RE
+    // accepts them, so "Make the game using docs/unity-setup.md" named a build
+    // AND a document and still produced nothing at all, while "Make the game in
+    // …" started one and "Develop the game following …" started one.
+    String.raw`(?<![\p{L}\p{N}_])make\s+(?:this|the|a|my)\s+game(?=(?:\s*\([^()\n]*\))?(?:\s*(?:$|[:.,;!?)—–])|\s+(?:in|from|at|per|using|with|following|about|where|set|called|named|that|which|for|exactly|fully|completely|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)|end[- ]?to[- ]?end)(?![\p{L}])))`,
     BUILD_THE_WHOLE_GDD_EN,
     BUILD_GDD_TR,
     BUILD_GAME_TR,
@@ -1066,6 +1070,21 @@ function nameSaysDesign(path: string): boolean {
   return at >= 0 && words.slice(0, at).every((word) => GAME_WORDS.has(word)) && words.slice(at + 1).every((word) => DOCUMENT_WORDS.has(word));
 }
 
+/**
+ * A PREDICATE THE DOCUMENT MAKES ABOUT ITSELF, which is how a design gets
+ * named without ending a build's clause: "docs/X_GDD.md IS the design I
+ * wrote", "… HAS all the mechanics", "(it HOLDS the mechanics)". A name
+ * followed by its own design text after a marker ("Quillmoor_GDD: a puzzle
+ * where …") says nothing about a file, and neither does a document kept "only
+ * as a tone reference", so neither matches.
+ */
+const SAYS_WHAT_IT_HOLDS_RE = new RegExp(
+  String.raw`^["'\x60”’)]*\s*(?:\(\s*(?:it|this|that)\s+)?` +
+    String.raw`(?:is|was|has|have|holds?|contains?|carries|covers|describes?|documents?|spells\s+out|` +
+    String.raw`sets\s+out|lays\s+out|says)(?![\p{L}])`,
+  "iu",
+);
+
 /** The document a build is to be made from, whether it starts at once, and the others the message offered. */
 interface Design {
   path: string;
@@ -1132,6 +1151,21 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
     return offered(designs, design, designs.length === 1 && aim.request === "firm" && (aim.calledGdd || nameSaysDesign(design.path)));
   }
   const playerBuild = aimedDocs.length > 0 && aimedDocs.every((doc) => isBuildInstructions(doc.path));
+  // A DESIGN THE MESSAGE NAMES IS OFFERED, NOT REDRAFTED. A build order beside
+  // a document whose own name says it is the design ("Build this game:
+  // docs/X_GDD.md is the design I wrote last month", "Build the game in
+  // docs/X_GDD.md (it has the mechanics)") drafted a FRESH design and never
+  // named the file the user pointed at: the document is the subject of its own
+  // sentence, so it ends no build's clause and nothing was aimed at it. The
+  // name is the whole test — a document that only explains something
+  // ("docs/perf.md explains the frame drops") is still no design, and the
+  // message is still an idea (reviewed 2026-10-14).
+  if (request !== undefined && aimedDocs.length === 0) {
+    const designNamed = named.filter(
+      (doc, i) => !away[i] && (refersToGdd(doc.path) || nameSaysDesign(doc.path)) && SAYS_WHAT_IT_HOLDS_RE.test(text.slice(doc.end)),
+    );
+    if (designNamed.length > 0) return offered(designNamed, designNamed[0]!);
+  }
   const rest = withoutDocuments(text, named);
   if (!request || !(speaksOfTheGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
   const beside = named.filter((_, i) => !aims[i]);
