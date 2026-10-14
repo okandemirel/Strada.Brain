@@ -79,6 +79,24 @@ describe("planning a game", () => {
     expect(prompt).toContain("if none fits");
   });
 
+  /**
+   * Rung 6 is "code follows Strada.Core patterns": measured live 2026-10-14,
+   * 8 of the game's 9 services were registered nowhere and a file reached for
+   * GameObject.Find instead. The conformance gate now refuses the first; this
+   * is the rule that asks for it before a sprint is written, because a gate
+   * nobody is asked to satisfy fails every run for the same reason.
+   */
+  it("plans the registration with the service, and forbids finding things by name", async () => {
+    const prompt = await decompositionPrompt();
+
+    expect(prompt).toContain("NOTHING IS FOUND BY NAME AT RUN TIME");
+    expect(prompt).toContain("GameObject.Find");
+    expect(prompt).toContain("FindObjectOfType");
+    // The fix, not only the prohibition: where a registration goes.
+    expect(prompt).toContain("ModuleConfig.Configure");
+    expect(prompt).toContain("builder.RegisterService<T>");
+  });
+
   it("treats a design document plus 'build it' as a complete instruction", async () => {
     const prompt = await decompositionPrompt();
 
