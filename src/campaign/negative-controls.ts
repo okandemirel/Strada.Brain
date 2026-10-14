@@ -121,6 +121,17 @@ export function runNegativeControls(
       skipped: "the project is ALREADY refused, so breaking it further measures nothing",
       detail: live.refusal.slice(0, 160),
     });
+  } else if (live.shippedScenes.length === 0) {
+    // Nothing is enabled in the build, so there is no shipped scene for the
+    // defect to apply to. The delivery's own reading already says this;
+    // repeating it as a dead gate would be a false alarm.
+    controls.push({
+      gate: "built as specified",
+      defect: "every prefab instance removed from every shipped scene",
+      fired: false,
+      skipped: "no scene is enabled in the build, so this project ships no scene to break",
+      detail: "the structural gate's other readings still stand; this control did not run",
+    });
   } else if (!placesAnyPrefab(projectRoot, io)) {
     // Nothing to remove: a scene that instantiates nothing cannot be made
     // emptier, so a control over it would report "did not fire" and read as a
@@ -143,15 +154,41 @@ export function runNegativeControls(
         return undefined;
       }
     })();
-    controls.push({
-      gate: "built as specified",
-      defect: "every prefab instance removed from every shipped scene",
-      fired: broken?.refusal !== undefined,
-      detail:
-        broken === undefined
-          ? "the measurement threw on the broken project"
-          : (broken.refusal ?? "the measurement still passed — this gate would not have caught an empty scene here"),
-    });
+    if (broken === undefined) {
+      controls.push({
+        gate: "built as specified",
+        defect: "every prefab instance removed from every shipped scene",
+        fired: false,
+        detail: "the measurement threw on the broken project",
+      });
+    } else if (broken.refusal !== undefined) {
+      controls.push({
+        gate: "built as specified",
+        defect: "every prefab instance removed from every shipped scene",
+        fired: true,
+        detail: broken.refusal,
+      });
+    } else if (broken.shippedRenderers > 0) {
+      // The scenes draw through something other than prefab instances, so
+      // this defect never applied to this game: calling that a dead gate
+      // would be the false alarm a control is supposed to prevent.
+      controls.push({
+        gate: "built as specified",
+        defect: "every prefab instance removed from every shipped scene",
+        fired: false,
+        skipped:
+          `the shipped scenes still place ${broken.shippedRenderers} renderer(s) without any prefab instance, ` +
+          "so removing them is not the defect this gate catches here",
+        detail: "a stronger control would have to empty the scenes themselves",
+      });
+    } else {
+      controls.push({
+        gate: "built as specified",
+        defect: "every prefab instance removed from every shipped scene",
+        fired: false,
+        detail: "the broken project ships scenes with 0 renderers and the measurement still passed",
+      });
+    }
   }
 
   // 2. The registration gate: the container told about nothing.

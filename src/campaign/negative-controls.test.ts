@@ -96,9 +96,29 @@ describe("negative controls", () => {
     const structural = controls.find((c) => c.gate === "built as specified")!;
 
     expect(structural.fired).toBe(false);
-    expect(structural.skipped ?? "").toMatch(/ALREADY refused|could not be measured|nothing to remove|instantiates a prefab/u);
+    expect(structural.skipped ?? "").toMatch(/ALREADY refused|could not be measured|nothing to remove|instantiates a prefab|ships no scene/u);
     // …and the service control too: this project declares no service.
     expect(controls.find((c) => c.gate === "service registration")!.skipped).toContain("no service class");
+  });
+
+  it("does not call a gate dead for a defect that never applied to this game", () => {
+    // A scene that draws without prefab instances cannot be emptied by
+    // removing them. Reporting "DID NOT FIRE" there is the false alarm a
+    // control exists to prevent.
+    const root = mkdtempSync(join(tmpdir(), "controls-noprefab-"));
+    dirs.push(root);
+    mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
+    mkdirSync(join(root, "Assets", "Art"), { recursive: true });
+    writeFileSync(
+      join(root, "Assets", "Scenes", "Harbor.unity"),
+      `${UNITY_HEADER}${CAMERA}--- !u!1001 &1001\nPrefabInstance:\n  m_SourcePrefab: {fileID: 100100000, guid: 11111111111111111111111111111111, type: 3}\n--- !u!212 &212\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n`,
+    );
+
+    const structural = runNegativeControls(root, ANDROID_GDD, true).find((c) => c.gate === "built as specified")!;
+
+    // Either it refused (fired) or it says why the defect did not apply —
+    // never a bare "did not fire".
+    expect(structural.fired || structural.skipped !== undefined).toBe(true);
   });
 
   it("changes nothing on disk", () => {
