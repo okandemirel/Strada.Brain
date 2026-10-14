@@ -1640,7 +1640,9 @@ export class CampaignManager {
     const stopped = active === undefined && campaign.autoReviveAt === undefined;
     await this.tell(
       campaign,
-      hash === undefined && this.isIdeaModeBeforeApproval(campaign)
+      hash === undefined && campaign.gddToConfirm && this.isIdeaModeBeforeApproval(campaign)
+        ? `${capitalised(heldDocumentName(campaign))} is not confirmed as the design yet, so there is nothing to amend — confirm it at the gate (**evet/onay**) instead.`
+        : hash === undefined && this.isIdeaModeBeforeApproval(campaign)
         ? "The GDD is still a draft nobody has approved, so there is nothing to amend — approve it at the gate (**evet/onay**) instead."
         : hash === undefined
         ? `The GDD could not be re-read from ${campaign.gddPath ?? "its path"}, so nothing was amended.`

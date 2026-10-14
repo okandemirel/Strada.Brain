@@ -10481,6 +10481,15 @@ describe("CampaignManager", () => {
         reopened.close();
       });
 
+      it("calls the document it holds no draft when asked to amend it", async () => {
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-confirm-amend", "Build the game following docs/android-signing.md")).toBe(true);
+        expect(await say("chat-confirm-amend", "amend gdd")).toBe(true);
+        const said = told("chat-confirm-amend");
+        expect(said).toContain("`docs/android-signing.md` is not confirmed as the design yet");
+        expect(said).not.toMatch(/draft/i);
+      });
+
       // A message naming another design while the gate was open went on as an ordinary task, beside the gate.
       it("answers a new build request while it is open with how to name another design", async () => {
         writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
