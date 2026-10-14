@@ -192,13 +192,13 @@ describe("a storefront is not a compatibility layer (Codex 2026-09-12 V)", () =>
 
 
 describe("targetOfBuild: a definitive extension outranks a keyword (Codex 2026-09-17 #7)", () => {
-  it("AndroidPuzzle.app is a Mac bundle; Game.apk is Android; a label still reads by keyword", () => {
-    expect(targetOfBuild("/p/AndroidPuzzle.app")).toBe("macos");
+  it("AndroidCompanion.app is a Mac bundle; Game.apk is Android; a label still reads by keyword", () => {
+    expect(targetOfBuild("/p/AndroidCompanion.app")).toBe("macos");
     expect(targetOfBuild("/p/Builds/Android/Game.apk")).toBe("android");
     expect(targetOfBuild("/p/WindowsPort.x86_64")).toBe("linux");
     expect(targetOfBuild("StandaloneOSX")).toBe("macos");
     expect(targetOfBuild("Android")).toBe("android");
-    expect(artifactIsForeign("/p/AndroidPuzzle.app", "macos")).toBe(false);
+    expect(artifactIsForeign("/p/AndroidCompanion.app", "macos")).toBe(false);
     // An iOS build is a .app too.
     expect(targetOfBuild("/p/iOS.app")).toBe("ios");
     expect(buildSatisfiesTarget("ios", "iOS", "/p/iOS.app")).toBe(true);

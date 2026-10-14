@@ -24,33 +24,31 @@ afterEach(() => {
 
 /** A real GDD's shape (invented text): a flattened table row, its label alone on one line. */
 const REAL_GDD = [
-  "TABLE OF CONTENTS",
-  "1. Slice Goals",
-  "2. Dive Planning",
+  "TRENCH SALVAGE — DESIGN NOTES",
+  "Sections: crew, the turn and its core loop, salvage prices",
   "",
-  "1. SLICE GOALS",
-  "Core mechanic sign-off: three wreck sites playable end to end before the dive slice ships",
+  "THE TURN AND ITS CORE LOOP",
+  "Core loop owner: systems design; route rule changes go through the dive lead",
   "",
-  "2. DIVE PLANNING",
-  "2.3 A Salvage Turn",
-  "Phase",
-  "Rule",
+  "Turn structure",
+  "Step",
+  "What happens",
   "Survey",
   "Sweep the wreck field with sonar before committing a diver.",
   "Core loop",
-  "Plot a dive route, then winch salvage aboard before the air runs out. A diver still below when the gauge empties drops the haul.",
+  "Plot a dive route, then winch salvage aboard before the air runs out. Each haul is weighed and sold at the next port.",
   "Surfacing",
   "Trim the ballast on the way up, or the next dive starts late.",
 ].join("\n");
 
 describe("core-loop extraction", () => {
   it("takes the labelled field's value, not a heading and not a look-alike line", () => {
-    const loop = extractCoreLoop(REAL_GDD);
-    expect(loop).toContain("Plot a dive route");
-    expect(loop).toContain("when the gauge empties drops the haul");
-    // "Core mechanic sign-off: ..." is a different field, and it comes FIRST;
-    // matching it would put a production checklist in the play instructions.
-    expect(loop).not.toContain("wreck sites");
+    // Three lines name the loop before its field does: the contents line, the
+    // section title, and "Core loop owner: ...", a different field whose
+    // value would put an ownership note in the play instructions.
+    expect(extractCoreLoop(REAL_GDD)).toBe(
+      "Plot a dive route, then winch salvage aboard before the air runs out. Each haul is weighed and sold at the next port.",
+    );
   });
 
   it("reads the inline `Core loop: ...` form too", () => {
@@ -115,7 +113,7 @@ describe("HOW_TO_RUN.md rendering", () => {
     entryScene: "Assets/Scenes/DiveCampaign.unity",
     entryObjects: 23,
     scaffolding: ["Assets/Scenes/SonarSandbox.unity", "Assets/Scenes/WinchPrototype.unity"],
-    unclassified: ["Assets/Scenes/Main.unity"],
+    unclassified: ["Assets/Scenes/Drydock.unity"],
     otherEnabled: 6,
     coreLoop: "Plot a dive route, then winch salvage aboard before the air runs out.",
     gddPath: "docs/SampleGame_GDD.md",
@@ -139,7 +137,7 @@ describe("HOW_TO_RUN.md rendering", () => {
     expect(text).toContain("SonarSandbox.unity");
     expect(text).toContain("WinchPrototype.unity");
     // An unclassified scene is listed, and explicitly NOT called removable.
-    expect(text).toContain("Main.unity");
+    expect(text).toContain("Drydock.unity");
     expect(text).toContain("not classified as scaffolding");
     expect(text).not.toContain("Unknown");
   });
@@ -196,7 +194,7 @@ describe("HOW_TO_RUN.md rendering", () => {
     };
     const unread = tmp();
     const noneEnabled = tmp();
-    settings(noneEnabled, [["Assets/Scenes/Main.unity", 0]]);
+    settings(noneEnabled, [["Assets/Scenes/Drydock.unity", 0]]);
     const allEmpty = tmp();
     settings(allEmpty, [["Assets/Scenes/A.unity", 1], ["Assets/Scenes/B.unity", 1]]);
 

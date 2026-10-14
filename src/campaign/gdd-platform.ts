@@ -34,7 +34,7 @@ const PLATFORM_PATTERNS: ReadonlyArray<readonly [BuildTarget, RegExp]> = [
 /**
  * Does this text OPEN with a platform's name?
  *
- * A clause reader needs it: "Windows at least 60 fps, Android at most 30 fps"
+ * A clause reader needs it: "macOS at least 144 fps, Linux at most 56 fps"
  * is two requirements, and a comma between them is a clause end exactly as a
  * semicolon is (Codex 2026-09-13 AF#12). The names come from the same table
  * the platform reader uses — nothing game-specific is added here.
@@ -179,7 +179,7 @@ export function targetOfBuild(text: string | undefined): BuildTarget | undefined
   // 2026-09-11 O#6). A directory above the artifact names nothing about it.
   const lastSlash = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
   const t = (lastSlash >= 0 ? text.slice(lastSlash + 1) : text).toLowerCase();
-  // A DEFINITIVE EXTENSION OUTRANKS A KEYWORD. "AndroidPuzzle.app" is a Mac
+  // A DEFINITIVE EXTENSION OUTRANKS A KEYWORD. "AndroidCompanion.app" is a Mac
   // bundle whatever its name says; read by keyword first it was an Android
   // build, and on a Mac a real launch failure became a foreign host (Codex
   // 2026-09-17 on dcd4ce9b #7).
@@ -338,7 +338,7 @@ export function frameRateAnswersPlatform(platform: GddPlatform, builtTarget: str
   // ANY target the document named, not only the first: a document asking for
   // Windows AND Linux has its frame rate answered by either platform's own
   // measurement, and reading `target` alone made the second target's numbers
-  // unmeasurable — so a 10 fps Linux build satisfied "60 fps" by saying
+  // unmeasurable — so a 10 fps Linux build satisfied "56 fps" by saying
   // nothing (Codex 2026-09-12 Y#J4.3).
   const named = platform.targets.length > 0 ? platform.targets : platform.target ? [platform.target] : [];
   if (named.length > 0) return named.some((t) => built.includes(t));

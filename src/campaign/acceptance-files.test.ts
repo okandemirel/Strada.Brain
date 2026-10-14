@@ -63,9 +63,9 @@ function row(over: Partial<RequirementRow> = {}): RequirementRow {
 const constantRow = (): RequirementRow =>
   row({
     rid: "req-012-0123456789ab",
-    text: "Coyote time is 0.25–0.5 s.",
+    text: "Coyote time is 0.14–0.22 s.",
     kind: "range",
-    bounds: { kind: "range", lo: 0.25, hi: 0.5, unit: "s" },
+    bounds: { kind: "range", lo: 0.14, hi: 0.22, unit: "s" },
     span: { start: 300, end: 330 },
   });
 
@@ -180,7 +180,7 @@ describe("renderAcceptanceFile", () => {
     const { source } = renderAcceptanceFile("m2", [{ row: constantRow(), check }]);
     expect(source).toContain("            double observed = (double)(Service<global::Game.Movement.IJumpRules>().CoyoteSeconds * 1.0);");
     expect(source).toContain(
-      '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.25d, 0.5d), "req-012-0123456789ab: Coyote time is 0.25–0.5 s.");',
+      '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.14d, 0.22d), "req-012-0123456789ab: Coyote time is 0.14–0.22 s.");',
     );
     // Exactly one assertion, and it is the system's.
     expect(source.match(/Assert\./g)).toHaveLength(1);
@@ -208,7 +208,7 @@ describe("renderAcceptanceFile", () => {
     // The observation is a `double`, not a `var`: a worker's `class var` cannot type it.
     expect(source).toContain("            double observed = (double)(Service<global::Game.Movement.IJumpRules>().CoyoteSeconds);");
     expect(source).toContain(
-      '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.25d, 0.5d), "req-012-0123456789ab: Coyote time is 0.25–0.5 s.");',
+      '            global::NUnit.Framework.Assert.That(observed, global::NUnit.Framework.Is.InRange(0.14d, 0.22d), "req-012-0123456789ab: Coyote time is 0.14–0.22 s.");',
     );
     // The walk sees what a bare name would be, wherever it stands.
     const walk = (text: string) => unrootedNames(text, { allowed: ACCEPTANCE_HARNESS_MEMBERS });
@@ -233,7 +233,7 @@ describe("renderAcceptanceFile", () => {
   });
 
   it("writes exact values with the row's tolerance and one-sided or exclusive bounds as NUnit constraints", () => {
-    const exact = row({ rid: "req-001-aaaaaaaaaaaa", kind: "constant", text: "Sonar ping interval is 4 s.", bounds: { kind: "exact", value: 4, tolerance: 0.01 } });
+    const exact = row({ rid: "req-001-aaaaaaaaaaaa", kind: "constant", text: "Sonar ping interval is 4.5 s.", bounds: { kind: "exact", value: 4.5, tolerance: 0.01 } });
     const atLeast = row({ rid: "req-002-bbbbbbbbbbbb", kind: "range", text: "At least 3 divers in the crew.", bounds: { kind: "range", lo: 3 } });
     const below = row({ rid: "req-003-cccccccccccc", kind: "range", text: "Under 2 s, over 1 s.", bounds: { kind: "range", lo: 1, hi: 2, loExclusive: true, hiExclusive: true } });
     const { source } = renderAcceptanceFile("m3", [
@@ -241,7 +241,7 @@ describe("renderAcceptanceFile", () => {
       { row: atLeast, check: { rid: atLeast.rid, observe: "Service<global::Game.ICrew>().Divers" } },
       { row: below, check: { rid: below.rid, observe: "Service<global::Game.ITimer>().Seconds" } },
     ]);
-    expect(source).toContain("Is.EqualTo(4d).Within(0.01d)");
+    expect(source).toContain("Is.EqualTo(4.5d).Within(0.01d)");
     expect(source).toContain("Is.GreaterThanOrEqualTo(3d)");
     expect(source).toContain("Is.GreaterThan(1d).And.LessThan(2d)");
   });
@@ -406,18 +406,18 @@ describe("lintAcceptanceBody", () => {
     // named arguments, initializer members, and the harness's members.
     const own = lint(
       [
-        "var board = Service<global::Game.Grid.IBoard>();",
-        "int before = board.Columns;",
-        "global::Game.Grid.Cell first = board.Cells.First(c => c.IsEmpty);",
-        "yield return Until(() => board.Cells.Any((global::Game.Grid.Cell c) => c.IsLit), timeoutSeconds: 5f);",
-        "foreach (var cell in board.Cells) { if (cell.IsEmpty) before--; }",
-        "if (board.TryFind(3, out var found) && found is global::Game.Grid.Cell lit) { before += lit.Weight; }",
-        "var weights = from c in board.Cells where c.IsLit select c.Weight;",
-        "var spot = new global::Game.Grid.Spot { Row = 1, Column = 2 };",
-        "if (board.TryFind(4, out _)) { before -= board.Cells.Count(static c => c.IsLit); }",
+        "var hull = Service<global::Game.Diving.IHull>();",
+        "int before = hull.Compartments;",
+        "global::Game.Diving.Compartment first = hull.Sections.First(c => c.IsFlooded);",
+        "yield return Until(() => hull.Sections.Any((global::Game.Diving.Compartment c) => c.IsDry), timeoutSeconds: 5f);",
+        "foreach (var section in hull.Sections) { if (section.IsFlooded) before--; }",
+        "if (hull.TryFind(3, out var found) && found is global::Game.Diving.Compartment dry) { before += dry.Load; }",
+        "var loads = from c in hull.Sections where c.IsDry select c.Load;",
+        "var marker = new global::Game.Diving.Marker { Depth = 1, Bearing = 2 };",
+        "if (hull.TryFind(4, out _)) { before -= hull.Sections.Count(static c => c.IsDry); }",
         `string kind = Driver.Outcome switch { ${OUTCOME}.Won => "won", _ => "other" };`,
         "PlaythroughView view = Driver;",
-        `${NUNIT}.Assert.That(before + weights.Count() + spot.Row + first.Weight + kind.Length, ${NUNIT}.Is.GreaterThan(BootSeconds - view.Phase.Length));`,
+        `${NUNIT}.Assert.That(before + loads.Count() + marker.Depth + first.Load + kind.Length, ${NUNIT}.Is.GreaterThan(BootSeconds - view.Phase.Length));`,
       ].join("\n"),
     );
     expect(own).toEqual({ ok: true, problems: [] });
@@ -439,14 +439,14 @@ describe("a game whose root namespace shares a framework type's name", () => {
     (ns) => {
       const root = project();
       put(root, `Assets/${ns}Game/${ns}Game.asmdef`, asmdef(`${ns}Game.Runtime`));
-      put(root, `Assets/${ns}Game/Board.cs`, `namespace ${ns}\n{\n    public interface IBoard\n    {\n        int Columns { get; }\n    }\n}\n`);
-      const digest = publicSurfaceDigest(root, requirementTokens("The board has eight columns."));
-      expect(digest).toContain(`public interface global::${ns}.IBoard`);
+      put(root, `Assets/${ns}Game/Hull.cs`, `namespace ${ns}\n{\n    public interface IHull\n    {\n        int Compartments { get; }\n    }\n}\n`);
+      const digest = publicSurfaceDigest(root, requirementTokens("The hull has nine compartments."));
+      expect(digest).toContain(`public interface global::${ns}.IHull`);
       const r = constantRow();
-      const check: AcceptanceCheckBody = { rid: r.rid, observe: `Service<global::${ns}.IBoard>().Columns` };
+      const check: AcceptanceCheckBody = { rid: r.rid, observe: `Service<global::${ns}.IHull>().Compartments` };
       expect(lintAcceptanceBody(r, check)).toEqual({ ok: true, problems: [] });
       // Spelled bare, the name is whatever a using imports under it, or a worker's type.
-      const bare = lintAcceptanceBody(r, { rid: r.rid, observe: `Service<${ns}.IBoard>().Columns` });
+      const bare = lintAcceptanceBody(r, { rid: r.rid, observe: `Service<${ns}.IHull>().Compartments` });
       expect(bare.problems.find((p) => /from the root/.test(p))).toContain(`\`${ns}\``);
       // No using imports a type that could share the game namespace's name, so the shared assembly compiles whatever the game calls it.
       const { source } = renderAcceptanceFile("m1", [{ row: r, check }]);
@@ -506,7 +506,7 @@ describe("the harness", () => {
   });
 
   it("routes injected input to the game though a test run has no focused Game View, and puts the project's settings back", () => {
-    // Measured in a Unity 6000.3 PlayMode run: without this every injected tap, drag and key press was dropped.
+    // Measured in a Unity 6 PlayMode run: without this every injected tap, drag and key press was dropped.
     const boot = ACCEPTANCE_FIXTURE_SOURCE.slice(ACCEPTANCE_FIXTURE_SOURCE.indexOf("protected global::System.Collections.IEnumerator Boot()"));
     expect(boot.indexOf("EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView")).toBeGreaterThan(0);
     expect(boot.indexOf("EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView")).toBeLessThan(boot.indexOf("LoadSceneAsync"));
@@ -906,7 +906,7 @@ describe("scanForeignAcceptanceNamespace reads names as the compiler does", () =
       "Assets/Scripts/Nested.cs",
       "namespace Game { public class Kiln { class var { } public struct nint { } public delegate void dynamic(); public void Fire() { var heat = 3; } } }",
     );
-    put(root, "Assets/Scripts/FileScoped.cs", "namespace Game.Kilns;\npublic class Shelf { public record nuint(int Slots); }");
+    put(root, "Assets/Scripts/FileScoped.cs", "namespace Game.Kilns;\npublic class Shelf { public record nuint(int Width); }");
     // Still a type so named, at namespace level: a delegate named var, generic or not, and one in a file-scoped namespace.
     put(root, "Assets/Scripts/NamedVar.cs", "public delegate nint var<T>(T value);");
     put(root, "Assets/Scripts/FileScopedTop.cs", "namespace Strada;\npublic class Kiln { }\npublic struct nint { }");
