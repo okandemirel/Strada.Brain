@@ -22,13 +22,13 @@ function pdfWith(streamBody: string, compress = true): Buffer {
 
 describe("reading a PDF", () => {
   it("returns the shown text", () => {
-    const pdf = pdfWith("BT /F1 12 Tf (GRID QUEST) Tj ET");
+    const pdf = pdfWith("BT /F1 12 Tf (Saltmarsh Field Notes) Tj ET");
 
-    expect(pdfToText(pdf)).toBe("GRID QUEST");
+    expect(pdfToText(pdf)).toBe("Saltmarsh Field Notes");
   });
 
   it("reads an uncompressed stream too", () => {
-    expect(pdfToText(pdfWith("BT (Core Loop) Tj ET", false))).toBe("Core Loop");
+    expect(pdfToText(pdfWith("BT (Tide tables) Tj ET", false))).toBe("Tide tables");
   });
 
   it("ignores a stream that shows no text", () => {
@@ -52,9 +52,9 @@ describe("reading a PDF", () => {
 
 describe("reading an RTF", () => {
   it("returns the body without the control words", () => {
-    const rtf = "{\\rtf1\\ansi\\deff0 GRID QUEST\\par Core Loop\\par}";
+    const rtf = "{\\rtf1\\ansi\\deff0 Saltmarsh Field Notes\\par Tide tables\\par}";
 
-    expect(rtfToText(rtf)).toBe("GRID QUEST\nCore Loop");
+    expect(rtfToText(rtf)).toBe("Saltmarsh Field Notes\nTide tables");
   });
 
   it("drops the font table, which is not body text", () => {
@@ -141,18 +141,18 @@ const slideXml = (text: string): string =>
 describe("reading a PowerPoint deck", () => {
   it("reads every slide of a deck with a gap in the part numbers", () => {
     const deck = zipWithEntries({
-      "ppt/slides/slide1.xml": slideXml("GRID QUEST"),
-      "ppt/slides/slide2.xml": slideXml("Overview"),
-      "ppt/slides/slide4.xml": slideXml("Core Loop"),
-      "ppt/slides/slide5.xml": slideXml("Monetisation"),
+      "ppt/slides/slide1.xml": slideXml("Saltmarsh Field Notes"),
+      "ppt/slides/slide2.xml": slideXml("Bird list"),
+      "ppt/slides/slide4.xml": slideXml("Tide tables"),
+      "ppt/slides/slide5.xml": slideXml("Mudflat walks"),
     });
 
     const text = extractDocumentText("GDD.pptx", deck);
 
-    expect(text).toContain("GRID QUEST");
-    expect(text).toContain("Overview");
-    expect(text).toContain("Core Loop");
-    expect(text).toContain("Monetisation");
+    expect(text).toContain("Saltmarsh Field Notes");
+    expect(text).toContain("Bird list");
+    expect(text).toContain("Tide tables");
+    expect(text).toContain("Mudflat walks");
   });
 
   it("orders slides the way the presentation lists them", () => {

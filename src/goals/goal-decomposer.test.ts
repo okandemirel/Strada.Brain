@@ -193,7 +193,7 @@ describe("GoalDecomposer", () => {
       expect(hasDependency).toBe(true);
     });
 
-    it("folds a bare measurement node into the work that depends on it (measured 2026-09-09: four plans opened with one)", async () => {
+    it("folds a bare measurement node into the work that depends on it (measured 2026-09-09: plan after plan opened with one)", async () => {
       const provider = createMockProvider([
         JSON.stringify({
           nodes: [
@@ -294,13 +294,13 @@ describe("GoalDecomposer", () => {
     });
 
     it("rejects an exploration-only plan and tells the retry why", async () => {
-      // Measured 2026-09-08 08:21: seven "vault_search for …" nodes, thirty
-      // minutes, nothing produced.
+      // Measured 2026-09-08 08:21: a plan of nothing but "vault_search for …"
+      // nodes, and a sprint spent producing nothing.
       const provider = createMockProvider([
         JSON.stringify({
           nodes: [
-            { id: "s1", task: "vault_search for GDD files", dependsOn: [] },
-            { id: "s2", task: "Read SampleGame_GDD.md structure", dependsOn: ["s1"] },
+            { id: "s1", task: "vault_search for existing almanac panels", dependsOn: [] },
+            { id: "s2", task: "Read the almanac chapter of the design", dependsOn: ["s1"] },
           ],
         }),
         JSON.stringify({
@@ -319,7 +319,7 @@ describe("GoalDecomposer", () => {
       expect(retryMessages[0]!.content).toContain("ONLY exploration");
       const tasks = Array.from(tree.nodes.values()).map((n) => n.task);
       expect(tasks.some((t) => t.includes("Generate the almanac icon sprites"))).toBe(true);
-      expect(tasks.some((t) => t.includes("vault_search for GDD files"))).toBe(false);
+      expect(tasks.some((t) => t.includes("vault_search for existing almanac panels"))).toBe(false);
     });
 
     it("a review/audit request keeps its exploration plan — reading IS the work (Codex review 2026-09-09)", async () => {
@@ -796,9 +796,9 @@ describe("GoalDecomposer", () => {
 });
 
 describe("what the decomposer is told about the task's own deliverables", () => {
-  // Measured across three runs on 2026-08-20. The task read: "Deliver a scene I
+  // Measured across runs on 2026-08-20. The task read: "Deliver a scene I
   // can press play on: prefabs, references and the bootstrapper fully assigned,
-  // then verify it headlessly in play mode." Every plan came back as five or six
+  // then verify it headlessly in play mode." Every plan came back as nothing but
   // steps of "implement the scripts" — no scene, no prefabs, no play-mode run.
   // One plan turned the scene into a document ABOUT the scene.
   //

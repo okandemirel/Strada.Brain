@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 
 /**
- * Measured on the delivered test-game tree 2026-09-03: 14 scenes enabled in
- * Build Settings, and the person who opened it could not tell which one is
- * the game. These fixtures carry that tree's REAL shape — every enabled scene
- * and its real GameObject count — under neutral names.
+ * Measured on the delivered test-game tree 2026-09-03: a long list of scenes
+ * enabled in Build Settings, and the person who opened it could not tell which
+ * one is the game. The fixture below is an invented tree of that kind: the
+ * scene the build opens first, a richer one later, scaffolding by name and by
+ * size, and scenes that match neither rule.
  */
 const dirs: string[] = [];
 function tmp(): string {
@@ -40,74 +41,66 @@ function project(scenes: ReadonlyArray<[string, number]>, disabled: readonly str
   return root;
 }
 
-/** The delivered tree, measured 2026-09-03 (path, GameObject count). */
-const REAL_DELIVERY: ReadonlyArray<[string, number]> = [
-  ["Assets/Scenes/Gameplay.unity", 3],
-  ["Assets/Scenes/Main.unity", 6],
-  ["Assets/Scenes/CometShowcase.unity", 5],
-  ["Assets/Scenes/AssembledGame.unity", 2],
-  ["Assets/Scenes/ModuleBoundary.unity", 3],
-  ["Assets/InitTestScene4abd18f9-8be4-4a53-81df-6a2e7a8dfc19.unity", 5],
-  ["Assets/Scenes/LiveOpsAssembled.unity", 3],
-  ["Assets/Scenes/AssembledMain.unity", 3],
-  ["Assets/Scenes/AssembledCometRuntime.unity", 3],
-  ["Assets/Modules/LiveOpsModule/Scenes/LiveOpsVisualAssembly.unity", 1],
-  ["Assets/Scenes/LiveOpsVisualsVerified.unity", 3],
-  ["Assets/Scenes/LiveOpsPresentation.unity", 4],
-  ["Assets/Scenes/TargetedLevel42Verification.unity", 5],
-  ["Assets/Scenes/ProductionMain.unity", 17],
+/** A cluttered delivered build (path, GameObject count), in build order. */
+const CLUTTERED_DELIVERY: ReadonlyArray<[string, number]> = [
+  ["Assets/Scenes/Atrium.unity", 4],
+  ["Assets/Scenes/Observatory.unity", 7],
+  ["Assets/Scenes/KelpSandbox.unity", 6],
+  ["Assets/InitTestScene7c1e3a90-52d4-4f0b-9e6a-b83d1c05f2a7.unity", 5],
+  ["Assets/Scenes/Ballroom.unity", 2],
+  ["Assets/Scenes/DockSmokeTest.unity", 5],
+  ["Assets/Modules/AtlasModule/Scenes/AtlasPreview.unity", 1],
+  ["Assets/Scenes/Greenhouse.unity", 5],
+  ["Assets/Scenes/ReefTestScene.unity", 3],
+  ["Assets/Scenes/Planetarium.unity", 21],
 ];
 
-describe("scene hygiene — the real delivered shape", () => {
+describe("scene hygiene — a cluttered delivered build", () => {
   it("names the entry scene and discloses every other enabled scene", () => {
-    const report = assessSceneHygiene(project(REAL_DELIVERY));
+    const report = assessSceneHygiene(project(CLUTTERED_DELIVERY));
 
     expect(report.refusal).toBeUndefined();
-    expect(report.enabled).toHaveLength(14);
+    expect(report.enabled).toHaveLength(10);
     // The build opens its FIRST enabled scene; the richest one is named
     // beside it (Codex 2026-09-11 C#26).
-    expect(report.entry?.path).toBe("Assets/Scenes/Gameplay.unity");
-    expect(report.entry?.objects).toBe(3);
-    expect(report.richest?.path).toBe("Assets/Scenes/ProductionMain.unity");
-    // 13 enabled scenes are NOT the entry point — the whole of the user's
+    expect(report.entry?.path).toBe("Assets/Scenes/Atrium.unity");
+    expect(report.entry?.objects).toBe(4);
+    expect(report.richest?.path).toBe("Assets/Scenes/Planetarium.unity");
+    // 9 enabled scenes are NOT the entry point — the whole of the user's
     // "which one is the game?".
-    expect(report.otherEnabled).toBe(13);
-    // Of those 13, these match scaffolding shape (name, or fewer than 3
-    // GameObjects). Gameplay(3), Main(6) and LiveOpsPresentation(4) match
+    expect(report.otherEnabled).toBe(9);
+    // Of those 9, these match scaffolding shape (name, or fewer than 3
+    // GameObjects). Observatory(7), Greenhouse(5) and Planetarium(21) match
     // neither rule and are disclosed as unclassified, never as scaffolding.
     expect(report.scaffolding.map((s) => s.path).sort()).toEqual(
       [
-        "Assets/InitTestScene4abd18f9-8be4-4a53-81df-6a2e7a8dfc19.unity",
-        "Assets/Modules/LiveOpsModule/Scenes/LiveOpsVisualAssembly.unity",
-        "Assets/Scenes/AssembledGame.unity",
-        "Assets/Scenes/AssembledMain.unity",
-        "Assets/Scenes/AssembledCometRuntime.unity",
-        "Assets/Scenes/LiveOpsAssembled.unity",
-        "Assets/Scenes/LiveOpsVisualsVerified.unity",
-        "Assets/Scenes/ModuleBoundary.unity",
-        "Assets/Scenes/TargetedLevel42Verification.unity",
-        "Assets/Scenes/CometShowcase.unity",
+        "Assets/InitTestScene7c1e3a90-52d4-4f0b-9e6a-b83d1c05f2a7.unity",
+        "Assets/Modules/AtlasModule/Scenes/AtlasPreview.unity",
+        "Assets/Scenes/Ballroom.unity",
+        "Assets/Scenes/DockSmokeTest.unity",
+        "Assets/Scenes/KelpSandbox.unity",
+        "Assets/Scenes/ReefTestScene.unity",
       ].sort(),
     );
-    // Gameplay is now the entry (build index 0), so the non-entry
-    // unclassified list carries ProductionMain instead (Codex 2026-09-11 C#26).
+    // Atrium is the entry (build index 0), so the non-entry unclassified
+    // list carries Planetarium, the richest scene (Codex 2026-09-11 C#26).
     expect(report.unclassified.map((s) => s.path).sort()).toEqual([
-      "Assets/Scenes/LiveOpsPresentation.unity",
-      "Assets/Scenes/Main.unity",
-      "Assets/Scenes/ProductionMain.unity",
+      "Assets/Scenes/Greenhouse.unity",
+      "Assets/Scenes/Observatory.unity",
+      "Assets/Scenes/Planetarium.unity",
     ]);
 
     const text = renderSceneHygiene(report);
-    expect(text).toContain("Assets/Scenes/Gameplay.unity");
-    expect(text).toContain("ProductionMain.unity");
-    expect(text).toContain("17 objects");
-    expect(text).toContain("13 other scenes are enabled");
-    expect(text).toContain("10 of them");
+    expect(text).toContain("Assets/Scenes/Atrium.unity");
+    expect(text).toContain("Planetarium.unity");
+    expect(text).toContain("21 objects");
+    expect(text).toContain("9 other scenes are enabled");
+    expect(text).toContain("6 of them");
     expect(text).toContain("verification scaffolding");
     // A count with no names is not a disclosure a person can act on.
-    expect(text).toContain("TargetedLevel42Verification.unity");
+    expect(text).toContain("ReefTestScene.unity");
     // The three that match neither rule are named too — silence about them
-    // would read as "the other 13 are all disposable".
+    // would read as "the other 9 are all disposable".
     expect(text).toContain("3 match neither");
   });
 });

@@ -1,7 +1,7 @@
 /**
  * How long a delegation may run, learned from how the last ones ended.
  *
- * Measured 2026-09-07 from the delegation log: 17 code_review sub-agents in
+ * Measured 2026-09-07 from the delegation log: the code_review sub-agents of
  * one day, every one a timeout at exactly its configured 60 000 ms, plus one
  * analysis at 180 000 — the only live model was a queued free endpoint
  * (first byte 4-70 s, ~30 tokens/s), so the fixed budget could never be

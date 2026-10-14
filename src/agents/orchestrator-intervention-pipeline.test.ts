@@ -126,15 +126,15 @@ describe("handleBackgroundLoopRecovery", () => {
   });
 
   it("does not act on a 'stuck' verdict the step log contradicts", async () => {
-    // Measured 2026-09-07: "[OK] file_edit … (1 replacement made)" ×2, then
-    // "stuck (high confidence)" — the third such verdict ended the task.
+    // Measured 2026-09-07: successful "[OK] file_edit …" steps, then
+    // "stuck (high confidence)" — a repeat of that verdict ended the task.
     const executeToolCalls = vi.fn(async () => [{ content: "unused", isError: false, metadata: {} }]);
     const deps = makeDeps(executeToolCalls);
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 99, hardCapReplan: 99, hardCapBlock: 100 });
     tracker.incrementTextOnlyGate();
     const base = makeBaseParams({
       tracker,
-      strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Stop reflecting and edit BoardBuilder.cs"}'),
+      strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Stop reflecting and edit KilnTimer.cs"}'),
     });
     base.state.stepResults.push({
       toolName: "file_edit",
@@ -147,7 +147,7 @@ describe("handleBackgroundLoopRecovery", () => {
     expect(result.action).toBe("none");
     expect(executeToolCalls).not.toHaveBeenCalled();
     // …and the assessor was never asked: the step log answered first.
-    // Measured 2026-09-07 14:30: three assessments in thirty seconds, all vetoed.
+    // Measured 2026-09-07: back-to-back assessments within seconds, all vetoed.
     expect((base.strategy as { reviewer: { provider: { chat: ReturnType<typeof vi.fn> } } }).reviewer.provider.chat).not.toHaveBeenCalled();
   });
 
@@ -238,7 +238,7 @@ describe("handleBackgroundLoopRecovery", () => {
   });
 
   it("ARBITER: a block with an edit since the last intervention becomes a replan; with none it stands", async () => {
-    // Measured 2026-09-07: four attempts ended "Task blocked" with real edits
+    // Measured 2026-09-07: attempts ended "Task blocked" with real edits
     // made between the episodes that counted the strikes.
     const { measuredProgressSince } = await import("./orchestrator-intervention-pipeline.js");
     expect(measuredProgressSince([{ toolName: "file_edit", success: true, timestamp: 100 }], 50)).toEqual({ mutations: 1, tools: ["file_edit"] });
@@ -255,7 +255,7 @@ describe("handleBackgroundLoopRecovery", () => {
         tracker,
         availableToolNames: [],
         maxRecoveryEpisodes: 2,
-        strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Edit BoardBuilder.cs next"}'),
+        strategy: makeStrategy('{"verdict":"stuck","confidence":"high","directive":"Edit KilnTimer.cs next"}'),
       });
       if (withEdit) {
         // An edit 20 minutes ago: after the last intervention, but older than the
@@ -269,7 +269,7 @@ describe("handleBackgroundLoopRecovery", () => {
     const withEdit = await handleBackgroundLoopRecovery(blockedParams(true), makeDeps());
     expect(withEdit.action).toBe("replan");
     expect(withEdit.gate).toContain("[MEASURED PROGRESS] 1 successful edit(s)");
-    expect(withEdit.gate).toContain("Required next action: Edit BoardBuilder.cs next");
+    expect(withEdit.gate).toContain("Required next action: Edit KilnTimer.cs next");
 
     const noEdit = await handleBackgroundLoopRecovery(blockedParams(false), makeDeps());
     expect(noEdit.action).toBe("blocked");

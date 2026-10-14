@@ -594,8 +594,8 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
     putBytes(root, "Assets/Art/Real/Tent.png", png(56, 56, "noise"), "a0000000000000000000000000000000");
     putBytes(root, "Assets/Audio/caravan_bells.wav", wav(3, 7), "d1000000000000000000000000000000");
     putBytes(root, "Assets/Audio/dune_wind.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
-    putBytes(root, "Assets/Audio/ui_select.wav", wav(0.27, 3), "d3000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/sale.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/abacus_tick.wav", wav(0.27, 3), "d3000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/gong_hum.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -606,7 +606,7 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
     expect(line).toContain("4 clips, 3 distinct by content");
     expect(line).toContain("dune_wind.wav = Assets/Audio/caravan_bells.wav");
     expect(line).toContain("1 shorter than 0.5s");
-    expect(line).toContain("ui_select.wav");
+    expect(line).toContain("abacus_tick.wav");
   });
 
   it("says when there is no audio at all", () => {

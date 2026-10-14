@@ -1,5 +1,5 @@
 /**
- * "BoardModule" is what the module is called, and the tool has to accept it.
+ * "OrreryModule" is what the module is called, and the tool has to accept it.
  *
  * The generator composed every name off the raw input: `${name}ModuleConfig`
  * for the config class and its asset menu, `${name}Module` for the default
@@ -7,10 +7,10 @@
  * first, which the schema never said and no caller thought to do.
  *
  * Measured on a from-scratch run: the agent called strada_create_module with
- * name "BoardModule" and name "PixelModule" — the names it had just chosen for
- * those modules — and got BoardModuleModuleConfig.cs and
- * PixelModuleModuleConfig.cs, classes named twice over, with asset menus to
- * match. Nothing rejected it and nothing corrected it.
+ * names that already ended in "Module" — the names it had just chosen for
+ * those modules — and got <Name>ModuleModuleConfig.cs files, classes named
+ * twice over, with asset menus to match. Nothing rejected it and nothing
+ * corrected it.
  *
  * Both spellings must land in the same place: the suffix is part of what a
  * module is called, not part of what distinguishes one.
@@ -38,44 +38,44 @@ const create = async (input: Record<string, unknown>) => {
 
 describe("a module named with the Module suffix", () => {
   it("does not double the suffix in the config class", async () => {
-    const projectPath = await create({ name: "BoardModule" });
-    const config = join(projectPath, "Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs");
+    const projectPath = await create({ name: "OrreryModule" });
+    const config = join(projectPath, "Assets/Modules/OrreryModule/Scripts/OrreryModuleConfig.cs");
 
     expect(existsSync(config), "config file is not where the framework expects it").toBe(true);
     const code = readFileSync(config, "utf-8");
-    expect(code).toContain("class BoardModuleConfig : ModuleConfig");
-    expect(code).not.toContain("BoardModuleModuleConfig");
+    expect(code).toContain("class OrreryModuleConfig : ModuleConfig");
+    expect(code).not.toContain("OrreryModuleModuleConfig");
   });
 
   it("does not double it in the asset menu either", async () => {
     // The menu path is what a designer reads in Unity.
-    const projectPath = await create({ name: "BoardModule" });
+    const projectPath = await create({ name: "OrreryModule" });
     const code = readFileSync(
-      join(projectPath, "Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs"),
+      join(projectPath, "Assets/Modules/OrreryModule/Scripts/OrreryModuleConfig.cs"),
       "utf-8",
     );
 
-    expect(code).toContain('menuName = "Strada/Modules/Board"');
-    expect(code).not.toMatch(/Modules\/BoardModule"/);
+    expect(code).toContain('menuName = "Strada/Modules/Orrery"');
+    expect(code).not.toMatch(/Modules\/OrreryModule"/);
   });
 
-  it("puts the module in one BoardModule folder, not BoardModuleModule", async () => {
-    const projectPath = await create({ name: "BoardModule" });
+  it("puts the module in one OrreryModule folder, not OrreryModuleModule", async () => {
+    const projectPath = await create({ name: "OrreryModule" });
 
-    expect(existsSync(join(projectPath, "Assets/Modules/BoardModule"))).toBe(true);
-    expect(existsSync(join(projectPath, "Assets/Modules/BoardModuleModule"))).toBe(false);
+    expect(existsSync(join(projectPath, "Assets/Modules/OrreryModule"))).toBe(true);
+    expect(existsSync(join(projectPath, "Assets/Modules/OrreryModuleModule"))).toBe(false);
   });
 
   it("lands in the same place whether or not the caller wrote the suffix", async () => {
-    const withSuffix = await create({ name: "BoardModule" });
-    const without = await create({ name: "Board" });
+    const withSuffix = await create({ name: "OrreryModule" });
+    const without = await create({ name: "Orrery" });
 
     for (const file of [
-      "Assets/Modules/BoardModule/Board.asmdef",
-      "Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs",
+      "Assets/Modules/OrreryModule/Orrery.asmdef",
+      "Assets/Modules/OrreryModule/Scripts/OrreryModuleConfig.cs",
     ]) {
-      expect(existsSync(join(withSuffix, file)), `${file} missing for "BoardModule"`).toBe(true);
-      expect(existsSync(join(without, file)), `${file} missing for "Board"`).toBe(true);
+      expect(existsSync(join(withSuffix, file)), `${file} missing for "OrreryModule"`).toBe(true);
+      expect(existsSync(join(without, file)), `${file} missing for "Orrery"`).toBe(true);
     }
   });
 

@@ -179,10 +179,10 @@ export class VaultRegistry {
     if (byPrefix.length === 1) return byPrefix[0];
 
     // A bare hash. Measured 2026-09-06: every vault_search an agent ever
-    // issued in the test game's campaign (three, across two weeks) failed with
-    // "vault not found: 4ca9bd33 — registered: unity:4ca9bd33, …": the agent
+    // issued in the test game's campaign failed with
+    // "vault not found: <hash> — registered: unity:<hash>, …": the agent
     // copied the id it saw in a log line without its kind prefix, the exact
-    // match missed, and the indexed 84 MB project vault answered nothing. An
+    // match missed, and the indexed project vault answered nothing. An
     // id that is unambiguous without its prefix is not a wrong id.
     const bySuffix = all.filter((v) => v.id.endsWith(`:${requested}`));
     if (bySuffix.length === 1) return bySuffix[0];

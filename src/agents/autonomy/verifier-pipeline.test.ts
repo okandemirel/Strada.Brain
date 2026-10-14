@@ -406,17 +406,17 @@ DONE`,
   it("refuses a completion that walks past deliverables the task named", () => {
     const plan = planVerifierPipeline({
       prompt: [
-        "Continue building the game.",
-        "- Power-ups: 0 files. Implement them as the GDD specifies.",
-        "- Lose condition: 0 files. A game you cannot lose is not the game.",
-        "- A PlayMode test that plays a level to a win, and one to a loss.",
+        "Continue building the greenhouse.",
+        "- Pollen bursts: 0 files. Build them as the brief describes.",
+        "- Wilt condition: 0 files. A greenhouse where nothing can wilt is not the brief.",
+        "- A PlayMode test that grows a seedling to harvest, and one that lets it wilt.",
       ].join("\n"),
-      draft: "Done. The lose condition is implemented and verified.",
+      draft: "Done. The wilt condition is implemented and verified.",
       state: createState(),
       task: IMPLEMENTATION_TASK,
       verificationState: {
         pendingFiles: new Set(),
-        touchedFiles: new Set(["Assets/Game/Rules/LoseCondition.cs"]),
+        touchedFiles: new Set(["Assets/Game/Rules/WiltCondition.cs"]),
         hasCompilableChanges: false,
         lastBuildOk: true,
         lastVerificationAt: Date.now() - 100,
@@ -429,9 +429,9 @@ DONE`,
     });
 
     expect(plan.initialDecision).toBe("continue");
-    expect(plan.gate).toContain("Power-ups");
+    expect(plan.gate).toContain("Pollen bursts");
     expect(plan.gate).toContain("PlayMode test");
-    expect(plan.gate).not.toContain("Lose condition");
+    expect(plan.gate).not.toContain("Wilt condition");
   });
 
   it("records an exhausted compile gate as unverified debt, not as a clean build", () => {

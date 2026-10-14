@@ -76,9 +76,9 @@ describe("framework-paths write wall", () => {
 
   it("allows the Strada module layout, editor tooling, tests and plugins", async () => {
     for (const path of [
-      "Assets/Modules/BoardModule/Scripts/BoardSystem.cs",
-      "Assets/Editor/MainScenePresentationInstaller.cs",
-      "Assets/Tests/PlayMode/BoardTests.cs",
+      "Assets/Modules/KilnModule/Scripts/KilnSystem.cs",
+      "Assets/Editor/KilnMenuItems.cs",
+      "Assets/Tests/PlayMode/KilnTests.cs",
       "Assets/Plugins/ThirdParty/Lib.cs",
     ]) {
       const r = await review(orch, "file_write", { path, content: "class X {}" });
@@ -88,8 +88,8 @@ describe("framework-paths write wall", () => {
 
   it("does not touch non-code assets or non-Assets paths", async () => {
     for (const path of [
-      "Assets/Settings/PresentationPrefabConfig.asset",
-      "Assets/Art/Generated/frog.png",
+      "Assets/Settings/GlazePaletteConfig.asset",
+      "Assets/Art/Generated/saucer.png",
       "docs/notes.md",
       "src/whatever.cs",
     ]) {
@@ -150,16 +150,16 @@ describe("framework-paths write wall", () => {
 });
 
 describe("the wall names the module twin", () => {
-  // Measured 2026-09-07: nine refusals on Assets/Scripts/BoardBuilder.cs,
-  // a loose duplicate of the module copy, none naming it.
+  // Measured 2026-09-07: repeated refusals on a loose script that duplicated
+  // a module copy, none naming it.
   it("points at Assets/Modules/…/Same.cs and at file_delete for the loose copy", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const root = mkdtempSync(join(tmpdir(), "twin-"));
     try {
-      mkdirSync(join(root, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
-      writeFileSync(join(root, "Assets", "Modules", "PresentationModule", "Scripts", "BoardBuilder.cs"), "module copy");
+      mkdirSync(join(root, "Assets", "Modules", "GlazeModule", "Scripts"), { recursive: true });
+      writeFileSync(join(root, "Assets", "Modules", "GlazeModule", "Scripts", "GlazeRecipe.cs"), "module copy");
       const o = new Orchestrator({
         providerManager: {
           getProvider: () => createMockProvider(),
@@ -173,9 +173,9 @@ describe("the wall names the module twin", () => {
         requireConfirmation: true,
         conformanceFrameworkPathsOnly: true,
       } as never);
-      const r = await review(o, "file_edit", { path: "Assets/Scripts/BoardBuilder.cs", old_string: "a", new_string: "b" });
+      const r = await review(o, "file_edit", { path: "Assets/Scripts/GlazeRecipe.cs", old_string: "a", new_string: "b" });
       expect(r.approved).toBe(false);
-      expect(r.reason).toContain("loose duplicate of Assets/Modules/PresentationModule/Scripts/BoardBuilder.cs");
+      expect(r.reason).toContain("loose duplicate of Assets/Modules/GlazeModule/Scripts/GlazeRecipe.cs");
       expect(r.reason).toContain("file_delete");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -193,17 +193,17 @@ describe("the wall names the module twin", () => {
     const lease = mkdtempSync(join(tmpdir(), "twin-lease-"));
     try {
       writeFileSync(join(lease, ".strada-lease-owner.json"), JSON.stringify({ projectRoot: checkout }));
-      mkdirSync(join(lease, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
-      writeFileSync(join(lease, "Assets", "Modules", "PresentationModule", "Scripts", "BoardBuilder.cs"), "module copy");
+      mkdirSync(join(lease, "Assets", "Modules", "GlazeModule", "Scripts"), { recursive: true });
+      writeFileSync(join(lease, "Assets", "Modules", "GlazeModule", "Scripts", "GlazeRecipe.cs"), "module copy");
       const o = makeOrch(true, checkout);
       const r = await review(
         o,
         "file_edit",
-        { path: "Assets/Scripts/BoardBuilder.cs", old_string: "a", new_string: "b" },
+        { path: "Assets/Scripts/GlazeRecipe.cs", old_string: "a", new_string: "b" },
         { workspaceLease: { path: lease } },
       );
       expect(r.approved).toBe(false);
-      expect(r.reason).toContain("loose duplicate of Assets/Modules/PresentationModule/Scripts/BoardBuilder.cs");
+      expect(r.reason).toContain("loose duplicate of Assets/Modules/GlazeModule/Scripts/GlazeRecipe.cs");
     } finally {
       rmSync(checkout, { recursive: true, force: true });
       rmSync(lease, { recursive: true, force: true });
@@ -245,8 +245,8 @@ describe("the wall judges where the write lands, not how the path is spelled", (
 
   it("still allows the module layout and paths outside Assets/ when spelled absolutely", async () => {
     for (const path of [
-      "/tmp/test-project/Assets/Modules/BoardModule/Scripts/Board.cs",
-      "/tmp/test-project/Assets/Scripts/../Modules/BoardModule/Board.cs",
+      "/tmp/test-project/Assets/Modules/KilnModule/Scripts/Kiln.cs",
+      "/tmp/test-project/Assets/Scripts/../Modules/KilnModule/Kiln.cs",
       "/tmp/test-project/src/whatever.cs",
     ]) {
       const r = await review(orch, "file_write", { path, content: "class X {}" });

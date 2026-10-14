@@ -91,7 +91,7 @@ function harness(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> = {
 function row(over: Partial<RequirementRow> & { rid: string; text: string }): RequirementRow {
   return {
     encoded: over.text,
-    section: "12.5 Quay rules",
+    section: "21.3 Firing rules",
     line: 10,
     span: { start: 0, end: over.text.length },
     kind: "rule",
@@ -136,7 +136,7 @@ function campaignWith(storage: CampaignStorage, dir: string, over: Partial<Campa
     currentMilestone: 0,
     createdAt: now,
     updatedAt: now,
-    gddText: "# Ferry GDD\n## 12.5 Quay rules\nEvery quay moors at most two boats.\n",
+    gddText: "# Glassworks GDD\n## 21.3 Firing rules\nA kiln cools for a full night before it is opened.\n",
     ...over,
   };
   storage.save(campaign);
@@ -151,28 +151,28 @@ function blockOf(prompt: string): string {
 }
 
 const LONG_FAILURE =
-  "Expected: less than or equal to 2 But was: 3. " + "The quay moored a third boat after the second had tied up; ".repeat(8) + "TAIL-OF-THE-MESSAGE";
+  "Expected: True But was: False. " + "The kiln was opened at dusk, before the night had passed; ".repeat(8) + "TAIL-OF-THE-MESSAGE";
 
 describe("the ACCEPTANCE block in the submitted prompt", () => {
   it("shows each owned row in the GDD's own words, with its test and its last result", () => {
     const h = harness("shadow");
     const owned = row({
       rid: "req-1-aaaaaaaa",
-      label: "Q-4",
-      text: "Every quay moors at most two boats; a third boat is turned away.",
-      section: "12.5 Quay rules",
+      label: "K-4",
+      text: "A kiln cools for a full night before it is opened; opening it sooner cracks the glass.",
+      section: "21.3 Firing rules",
       line: 214,
       owner: "m1",
       checks: [{ kind: "test", testName: "Strada.Acceptance.M1.Acceptance_M1.R1_aaaaaa", path: "Assets/StradaAcceptance/M1/Acceptance_M1.cs", bodySha: "b" }],
       last: { revision: "1a2b3c4d5e6f", atMs: 1, outcome: "fail", detail: LONG_FAILURE },
     });
     // Listed by the milestone, owner not stamped yet: still this sprint's.
-    const listed = row({ rid: "req-2-bbbbbbbb", text: "The crossing ends when the last cargo is landed.", line: 220 });
+    const listed = row({ rid: "req-2-bbbbbbbb", text: "Each piece is signed by the glassblower who shaped it.", line: 220 });
     const elsewhere = row({ rid: "req-3-cccccccc", text: "OTHER MILESTONE ROW", owner: "m2" });
-    const aspiration = row({ rid: "req-4-dddddddd", text: "Captains should call the river calm.", owner: "m1", kind: "aspiration" });
+    const aspiration = row({ rid: "req-4-dddddddd", text: "Visitors should leave the showroom smiling.", owner: "m1", kind: "aspiration" });
     const excluded = row({ rid: "req-5-eeeeeeee", text: "EXCLUDED BY THE PLAN", owner: "m1", status: "excluded" });
     const campaign = campaignWith(h.storage, h.dir, {
-      gddPath: "docs/FerryDesign.md",
+      gddPath: "docs/GlassworksDesign.md",
       requirements: ledgerOf([owned, listed, elsewhere, aspiration, excluded]),
       milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa", "req-2-bbbbbbbb"] }), milestone("m2"), milestone("m3")],
     });
@@ -184,20 +184,20 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     expect(prompt.split(OPEN)).toHaveLength(2);
     expect(block.endsWith(CLOSE)).toBe(true);
     // The row, verbatim, where the GDD has it.
-    expect(block).toContain('"Every quay moors at most two boats; a third boat is turned away."');
-    expect(block).toContain("Q-4");
-    expect(block).toContain("12.5 Quay rules");
+    expect(block).toContain('"A kiln cools for a full night before it is opened; opening it sooner cracks the glass."');
+    expect(block).toContain("K-4");
+    expect(block).toContain("21.3 Firing rules");
     expect(block).toContain("GDD line 214");
-    expect(block).toContain("The crossing ends when the last cargo is landed.");
+    expect(block).toContain("Each piece is signed by the glassblower who shaped it.");
     // Its system check and what that check last said, clipped to 200 characters.
     expect(block).toContain("Strada.Acceptance.M1.Acceptance_M1.R1_aaaaaa");
     expect(block).toContain("fail on 1a2b3c4d");
-    expect(block).toContain("Expected: less than or equal to 2 But was: 3.");
+    expect(block).toContain("Expected: True But was: False.");
     expect(block).not.toContain("TAIL-OF-THE-MESSAGE");
     expect(block).toContain("not measured yet");
     // Rows the sprint is not judged on stay out.
     expect(block).not.toContain("OTHER MILESTONE ROW");
-    expect(block).not.toContain("call the river calm");
+    expect(block).not.toContain("leave the showroom smiling");
     expect(block).not.toContain("EXCLUDED BY THE PLAN");
     // The rules of the folder and of the verdict.
     expect(block).toContain("Assets/StradaAcceptance");
@@ -213,20 +213,20 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     // No file in the project holds this GDD: "GDD line 214" sent a worker to
     // line 214 of whatever design document the repo happened to hold.
     const h = harness("on");
-    const owned = row({ rid: "req-1-aaaaaaaa", label: "Q-4", text: "Every quay moors at most two boats.", line: 214, owner: "m1" });
+    const owned = row({ rid: "req-1-aaaaaaaa", label: "K-4", text: "A kiln cools for a full night before it is opened.", line: 214, owner: "m1" });
     const textOnly = campaignWith(h.storage, h.dir, {
       requirements: ledgerOf([owned]),
       milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa"] }), milestone("m2"), milestone("m3")],
     });
     const block = blockOf(h.submit(textOnly));
-    expect(block).toContain('"Every quay moors at most two boats."');
-    expect(block).toContain("12.5 Quay rules");
+    expect(block).toContain('"A kiln cools for a full night before it is opened."');
+    expect(block).toContain("21.3 Firing rules");
     expect(block).not.toMatch(/line 214/);
     expect(block).toContain("campaign's GDD is not saved in the project, so no file holds it");
     expect(block).toContain("do not look for one");
 
     const saved = campaignWith(h.storage, h.dir, {
-      gddPath: "docs/FerryDesign.md",
+      gddPath: "docs/GlassworksDesign.md",
       requirements: ledgerOf([owned]),
       milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa"] }), milestone("m2"), milestone("m3")],
     });
@@ -240,11 +240,11 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     const unbound: GreenReason = {
       reasonClass: "check-fault",
       code: "row-unbound",
-      detail: "the free berths of a quay",
+      detail: "the cooling hours left on a kiln",
       rid: "req-1-aaaaaaaa",
     };
     const campaign = campaignWith(h.storage, h.dir, {
-      requirements: ledgerOf([row({ rid: "req-1-aaaaaaaa", text: "Every quay moors at most two boats.", owner: "m1" })]),
+      requirements: ledgerOf([row({ rid: "req-1-aaaaaaaa", text: "A kiln cools for a full night before it is opened.", owner: "m1" })]),
       milestones: [
         milestone("m1", {
           requirementIds: ["req-1-aaaaaaaa"],
@@ -254,13 +254,13 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
         milestone("m3"),
       ],
     });
-    expect(blockOf(h.submit(campaign))).toContain("expose: the free berths of a quay");
+    expect(blockOf(h.submit(campaign))).toContain("expose: the cooling hours left on a kiln");
   });
 
   it("two submits leave one block, and the stored milestone prompt carries none", () => {
     const h = harness("shadow");
     const campaign = campaignWith(h.storage, h.dir, {
-      requirements: ledgerOf([row({ rid: "req-1-aaaaaaaa", text: "Every quay moors at most two boats.", owner: "m1" })]),
+      requirements: ledgerOf([row({ rid: "req-1-aaaaaaaa", text: "A kiln cools for a full night before it is opened.", owner: "m1" })]),
       milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa"] }), milestone("m2"), milestone("m3")],
     });
     h.submit(campaign);
@@ -275,7 +275,7 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
       row({
         rid: `req-${i}-${String(i).padStart(8, "0")}`,
         label: `FR-${i}`,
-        text: `Row ${i} of the rules: ${"the quay keeps its order while boats drift into their berths, ".repeat(5)}end ${i}.`,
+        text: `Row ${i} of the rules: ${"the furnace keeps its heat while the glass is drawn and shaped, ".repeat(5)}end ${i}.`,
         line: 100 + i,
         owner: "m1",
       }),
@@ -307,7 +307,7 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
   it("with the gate off, the sprint is submitted with exactly the prompt it had", () => {
     const h = harness("off");
     const campaign = campaignWith(h.storage, h.dir, {
-      requirements: ledgerOf([row({ rid: "req-1-aaaaaaaa", text: "Every quay moors at most two boats.", owner: "m1" })]),
+      requirements: ledgerOf([row({ rid: "req-1-aaaaaaaa", text: "A kiln cools for a full night before it is opened.", owner: "m1" })]),
       milestones: [milestone("m1", { requirementIds: ["req-1-aaaaaaaa"] }), milestone("m2"), milestone("m3")],
     });
     expect(h.submit(campaign)).toBe(campaign.milestones[0]!.prompt);
@@ -315,7 +315,7 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
 });
 
 describe("the planner's instructions", () => {
-  const GDD = "# Ferries\n## 1. Crossings\nSail boats across.\n## 2. Quays\nThere are 12 quays.\n";
+  const GDD = "# Glassworks\n## 1. Kilns\nFire the glass.\n## 2. Workshops\nThere are 12 workshops.\n";
   const BAR_OFF = "the relevant PlayMode tests green and UNFILTERED, a captured frame";
   const BAR_ON =
     "the relevant PlayMode tests green and UNFILTERED, the campaign's acceptance checks for this milestone's GDD rows pass " +
@@ -346,8 +346,8 @@ describe("the planner's instructions", () => {
     const systems: string[] = [];
     const ladder = JSON.stringify({
       milestones: [
-        { title: "Sprint A", prompt: "Build the crossings end to end, compile green, capture a frame.", coveredSections: ["1. Crossings"], deliverables: [] },
-        { title: "Sprint B", prompt: "Build the twelve quays end to end, compile green, capture a frame.", coveredSections: ["2. Quays"], deliverables: [] },
+        { title: "Sprint A", prompt: "Build the kilns end to end, compile green, capture a frame.", coveredSections: ["1. Kilns"], deliverables: [] },
+        { title: "Sprint B", prompt: "Build the twelve workshops end to end, compile green, capture a frame.", coveredSections: ["2. Workshops"], deliverables: [] },
       ],
       excluded: [],
     });
@@ -366,7 +366,7 @@ describe("the planner's instructions", () => {
   it("the campaign plans with its own gate mode", async () => {
     const planMilestones = vi.fn().mockResolvedValue({
       milestones: [
-        { title: "Sprint A", prompt: "Build the crossings, compile green.", coveredSections: [], deliverables: [] },
+        { title: "Sprint A", prompt: "Build the kilns, compile green.", coveredSections: [], deliverables: [] },
         { title: "Sprint B", prompt: "Deliver the game, full suite green.", coveredSections: [], deliverables: [] },
       ],
       excluded: [],

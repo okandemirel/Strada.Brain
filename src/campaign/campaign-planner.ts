@@ -366,8 +366,8 @@ export class CampaignPlanner {
         if (allProvidersCoolingDownMs() > 0) break;
       }
     }
-    // TWO SHORT ANSWERS INSTEAD OF ONE LONG ONE. A whole ladder — twenty
-    // milestones with their prompts — is a reply some models cannot finish:
+    // TWO SHORT ANSWERS INSTEAD OF ONE LONG ONE. A whole ladder — every
+    // milestone with its prompt — is a reply some models cannot finish:
     // measured live 2026-09-12, every attempt was spent enumerating the GDD's
     // headings and the campaign failed at its first step. Asking for the
     // titles alone, then each prompt on its own, is the same ladder in replies
@@ -544,7 +544,7 @@ export class CampaignPlanner {
     if (!this.provider) {
       throw new Error("campaign planning requires an LLM provider");
     }
-    // A LADDER IS A LONG ANSWER. Sixteen to twenty milestones, each with a
+    // A LADDER IS A LONG ANSWER. A whole ladder of milestones, each with a
     // prompt and its covered sections, does not fit in a provider's default
     // reply budget — and a model that thinks out loud first never reaches the
     // JSON at all: measured live 2026-09-12 00:52, the whole reply was an

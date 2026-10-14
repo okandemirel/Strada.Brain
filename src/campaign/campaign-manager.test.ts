@@ -618,7 +618,7 @@ describe("CampaignManager", () => {
   });
 
   it("a paused SPRINT is resubmitted with the milestone's current prompt, not replayed from a stale root", async () => {
-    // Measured 2026-09-08 04:18: the replay quoted a 29-sprints-old root
+    // Measured 2026-09-08 04:18: the replay quoted a many-sprints-old root
     // prompt with no delivery gate; the milestone held the current one.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
@@ -678,8 +678,8 @@ describe("CampaignManager", () => {
   });
 
   it("a third time-box overrun charges an attempt instead of running unbounded", async () => {
-    // Measured 2026-09-01: after escalation 2/2 the box switched off and m6
-    // ran 33h. The third overrun must be a charged, narrowest-scope retry.
+    // Measured 2026-09-01: after escalation 2/2 the box switched off and a
+    // sprint ran 33h. The third overrun must be a charged, narrowest-scope retry.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     const stored = storage.get(campaign.id)!;
@@ -880,9 +880,9 @@ describe("CampaignManager", () => {
   });
 
   it("cancels an ABANDONED mission the campaign no longer points at (Codex 2026-09-11 L#4)", async () => {
-    // Measured live 2026-09-03: two orphan roots (task_3f52a987 and
-    // task_ea50a818) kept reviving after delivery. Walking milestone.taskId
-    // could not reach them — the milestone pointed at the task that
+    // Measured live 2026-09-03: two orphan roots kept reviving after
+    // delivery. Walking milestone.taskId could not reach them — the
+    // milestone pointed at the task that
     // delivered, not at the lineages earlier resubmits had abandoned.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
@@ -1157,9 +1157,9 @@ describe("CampaignManager", () => {
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
-      failedTests: ["YourGame.SampleGame.PlayModeTests.SeasonOutcomeTests.FinishSeason_RecordsHarvest"],
+      failedTests: ["Kestrel.Harvest.PlayModeTests.SeasonOutcomeTests.FinishSeason_RecordsHarvest"],
       failedTestsOmitted: 5,
     } as never);
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1190,7 +1190,7 @@ describe("CampaignManager", () => {
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1207,7 +1207,7 @@ describe("CampaignManager", () => {
     writePlaythroughVerdict(false);
     tasks.verifications.set("task_4", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_4", "green, shipping");
@@ -1232,7 +1232,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
@@ -1278,7 +1278,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     afterPlayerRun = () => {
       const live = storage.get(campaign.id)!;
       live.stopGeneration = (live.stopGeneration ?? 0) + 1;
@@ -1304,7 +1304,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
@@ -1347,7 +1347,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(builds, "a build was attempted on a tree with no play-through").toBe(0);
@@ -1363,7 +1363,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1397,7 +1397,7 @@ describe("CampaignManager", () => {
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1426,7 +1426,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
@@ -1467,7 +1467,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
@@ -1496,7 +1496,7 @@ describe("CampaignManager", () => {
     // Captured by the final sprint: the frame the report is about.
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00012.png"), Buffer.from("89504e470d0a1a0a", "hex"));
-    tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     await waitFor(() => expect(attached).toHaveLength(1));
@@ -1519,7 +1519,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    tasks.verifications.set("task_3", { testsGreen: true, detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
     await waitFor(() => expect(storage.get(campaign.id)!.deliveryReported).toBe(true));
@@ -1551,7 +1551,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
@@ -1678,7 +1678,7 @@ describe("CampaignManager", () => {
   });
 
   it("the runtime dump that withdraws a structural refusal is THIS sprint's, and only from an ok play-through (Codex 2026-09-11 B#5)", () => {
-    const runtime = { renderers: 247, worldRenderers: 12, spriteRenderers: 9, meshRenderers: 3, canvases: 1, particleSystems: 0, audioSources: 2, audioPlaying: 1, sprites: ["Hero"], meshes: [], primitiveMeshes: [] };
+    const runtime = { renderers: 13, worldRenderers: 12, spriteRenderers: 9, meshRenderers: 3, canvases: 1, particleSystems: 0, audioSources: 2, audioPlaying: 1, sprites: ["Hero"], meshes: [], primitiveMeshes: [] };
     const withMilestones = (milestones: unknown[], current: number) => ({ milestones, currentMilestone: current }) as never;
     const latest = (c: unknown) => (manager as unknown as { latestRuntimeEvidence: (c: unknown) => unknown }).latestRuntimeEvidence(c);
     // An earlier sprint's dump does not speak for the sprint being delivered.
@@ -1822,7 +1822,7 @@ describe("CampaignManager", () => {
     // A frame of the running game captured during the final sprint.
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
     writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00040.png"), Buffer.from("89504e470d0a1a0a", "hex"));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     tasks.verifications.set("task_3", green);
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
@@ -1867,7 +1867,7 @@ describe("CampaignManager", () => {
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1928,7 +1928,7 @@ describe("CampaignManager", () => {
     expect(finalPrompt).toContain("the FIRST enabled scene in Build Settings");
     expect(finalPrompt).not.toContain("EXACTLY ONE");
     // The write-back declines deletions of files the system did not write
-    // (measured 2026-09-08: twelve scene deletes, none applied), so the
+    // (measured 2026-09-08: the scene deletes asked for, none applied), so the
     // instruction is to disable, and says why deleting is wasted.
     expect(finalPrompt).toContain("must be DISABLED in Build Settings");
     expect(finalPrompt).toContain("Do NOT delete scene files that existed before this sprint");
@@ -1938,7 +1938,7 @@ describe("CampaignManager", () => {
 
   it("the FINAL sprint carries the CURRENT structural measurement, not just a gate bounce", async () => {
     // Measured live 2026-09-04 10:32: the refusal was computed only inside
-    // the delivery-gate bounce, so the persisted m7 prompt held no "render
+    // the delivery-gate bounce, so the persisted final-sprint prompt held no "render
     // NOTHING", no unbound-art list and no CreatePrimitive line. Every sprint
     // resubmitted by an outage, a revival or a restart ran blind.
     buildSettings([["Assets/Scenes/Main.unity", 1]]);
@@ -2052,7 +2052,7 @@ describe("CampaignManager", () => {
   });
 
   it("writes HOW_TO_RUN.md from measured facts and links it from the report", async () => {
-    runRecordOnSettle = { total: 179, passed: 179, failed: 0, skipped: 0, unfiltered: true };
+    runRecordOnSettle = { total: 83, passed: 83, failed: 0, skipped: 0, unfiltered: true };
     // Measured 2026-09-03: the delivered project had no README at all, and
     // the report — a chat message — was the only thing that ever named the
     // entry scene.
@@ -2060,7 +2060,7 @@ describe("CampaignManager", () => {
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
     writeFileSync(
       join(projectRoot, "ProjectSettings", "ProjectVersion.txt"),
-      "m_EditorVersion: 6000.3.22f1\nm_EditorVersionWithRevision: 6000.3.22f1 (1c726e1fb402)\n",
+      "m_EditorVersion: 6000.2.41f1\nm_EditorVersionWithRevision: 6000.2.41f1 (4b8e19d07c35)\n",
     );
     const coreLoopGdd = "# GDD\n\nCore loop: plan a growing season on the walled orchard grid, then end the turn and weigh the harvest.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), coreLoopGdd);
@@ -2069,17 +2069,17 @@ describe("CampaignManager", () => {
     const campaign = await reachFinalSprint(coreLoopGdd);
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"));
 
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
-    expect(readme).toContain("6000.3.22f1");
+    expect(readme).toContain("6000.2.41f1");
     expect(readme).toContain("Assets/Scenes/WholeOrchard.unity");
     expect(readme).toContain("plan a growing season on the walled orchard grid");
-    expect(readme).toContain("179 of 179");
+    expect(readme).toContain("83 of 83");
     expect(readme).toContain("-testPlatform PlayMode");
     expect(readme).toContain("RootstockSandbox.unity");
     expect(readme).not.toContain("Unknown");
@@ -2092,16 +2092,16 @@ describe("CampaignManager", () => {
     // plan 6.1. Everything a reviewer needs lived in one chat message: after a
     // restart, or in another browser, the portal had milestone titles and
     // nothing else. The package is a row keyed by the campaign.
-    runRecordOnSettle = { total: 179, passed: 179, failed: 0, skipped: 0, unfiltered: true };
+    runRecordOnSettle = { total: 83, passed: 83, failed: 0, skipped: 0, unfiltered: true };
     buildSettings(UNTIDY_DELIVERED_BUILD);
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
-    writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.3.22f1\n");
+    writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.2.41f1\n");
     const gdd = "# GDD\n\nCore loop: plan a growing season on the walled orchard grid, then end the turn and weigh the harvest.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
     const campaign = await reachFinalSprint(gdd);
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -2161,7 +2161,7 @@ describe("CampaignManager", () => {
   });
 
   it("HOW_TO_RUN.md says Unknown, with the reason, for what nothing measured", async () => {
-    runRecordOnSettle = { total: 179, passed: 179, failed: 0, skipped: 0, unfiltered: true };
+    runRecordOnSettle = { total: 83, passed: 83, failed: 0, skipped: 0, unfiltered: true };
     // No ProjectVersion.txt, no core-mechanic field in the GDD, and a final
     // sprint whose verdict named no suite: three unmeasured fields that must
     // read as unmeasured, not be quietly dropped.
@@ -2184,7 +2184,7 @@ describe("CampaignManager", () => {
     // What WAS measured is still stated.
     expect(readme).toContain("Assets/Scenes/Main.unity");
     // The record is the source of the suite line now (Codex 2026-09-11 D#13).
-    expect(readme).toContain("179 of 179 tests passed");
+    expect(readme).toContain("83 of 83 tests passed");
   });
 
   it("keeps refusing delivery while the final sprint has attempts left", async () => {
@@ -2338,7 +2338,7 @@ describe("CampaignManager", () => {
     compileVerdict = { ok: true, ran: true, errors: 0 };
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "shipping it");
@@ -2369,7 +2369,7 @@ describe("CampaignManager", () => {
     // still not delivery while the project does not build.
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "shipping it");
@@ -2397,7 +2397,7 @@ describe("CampaignManager", () => {
     compileVerdict = { ok: true, ran: true, errors: 0 };
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+      detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
     });
     tasks.emit("task:completed", "task_3", "shipping it");
@@ -2864,7 +2864,7 @@ describe("CampaignManager", () => {
   });
 
   it("time-box forces scope narrowing when a sprint spins past its budget", async () => {
-    // Measured 2026-08-31: m6 ran 22h at attempts=1 because bounces and
+    // Measured 2026-08-31: one sprint ran 22h at attempts=1 because bounces and
     // deferrals deliberately never burn attempts — nothing bounded the run.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
@@ -2922,7 +2922,7 @@ describe("CampaignManager", () => {
   });
 
   it("the time-box binds the ADOPTION path too (a sprint cannot spin forever unadjudicated)", async () => {
-    // Measured 2026-09-01: m6 ran 7h+ with timeBoxEscalations=0 because every
+    // Measured 2026-09-01: one sprint ran 7h+ with timeBoxEscalations=0 because every
     // settle was adopted as an executor retry and never reached an outcome.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
@@ -6069,16 +6069,16 @@ describe("CampaignManager", () => {
     // not exist (plan 0-B.4, AK#4).
     expect(longRounds.sessions).toBe("1");
     // …AND NEVER MORE LEVELS THAN THE GAME HAS. Time and the producer's cap
-    // bounded the batch, the catalogue did not, so a three-level game with
-    // long rounds was asked for more sessions than it has and its driver
-    // refused the extra ones — a broken play-through for a correct game
-    // (Codex 2026-09-13 AK#4).
-    const threeLongRounds = (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string } })
+    // bounded the batch, the catalogue did not, so a small game with long
+    // rounds was asked for more sessions than it has and its driver refused
+    // the extra ones — a broken play-through for a correct game (Codex
+    // 2026-09-13 AK#4).
+    const fourLongRounds = (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string } })
       .playerRunSpec({
-        gddText: "# G\nThe game ships 3 levels. Each round lasts 260 seconds.",
-        milestones: [{ id: "m", title: "t", prompt: "p", status: "green", attempts: 1, playerPlaythrough: { found: true, ok: true, sessionCount: 3 } }],
+        gddText: "# G\nThe game ships 4 levels. Each round lasts 260 seconds.",
+        milestones: [{ id: "m", title: "t", prompt: "p", status: "green", attempts: 1, playerPlaythrough: { found: true, ok: true, sessionCount: 4 } }],
       } as never).sessions;
-    expect(threeLongRounds).toBe("1-3");
+    expect(fourLongRounds).toBe("1-4");
     // THE NEXT SESSIONS NOBODY HAS PLAYED YET. Asking for the first batch
     // every time left session 13 of a 13-level game never played at all
     // (Codex 2026-09-13 AJ#11) — and coverage measured on ANOTHER build says
@@ -8629,7 +8629,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
-    const green = { testsGreen: true, detail: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
+    const green = { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true };
     // Green suite, no play-through, every time: the gate bounces while the budget lasts…
     for (let round = 0; round < 6 && storage.get(campaign.id)!.state === "executing"; round++) {
       const before = tasks.submitted.length;

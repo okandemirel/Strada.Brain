@@ -362,7 +362,7 @@ const RULES: readonly AllowlistRule[] = [
     },
   },
   {
-    // Measured 2026-09-08 00:25: `ls Assets/Art/Generated/ | grep -i super`
+    // Measured 2026-09-08 00:25: `ls Assets/Art/Generated/ | grep -i kiln`
     // went to the LLM reviewer, which was "inconclusive" twice, and a sprint
     // collecting sprite guids lost two turns to a listing. A pipeline whose
     // every stage is a read-only inspection command cannot change anything.

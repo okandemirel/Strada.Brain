@@ -45,10 +45,10 @@ describe("workspace runtime bridge keeps a completed node's output", () => {
       rootId: "root-1",
       nodeId: "node-1",
       status: "completed",
-      output: "Generated 3 sprites under Assets/Art/Frogs (provider local).",
+      output: "Generated 23 sprites under Assets/Art/Kites (provider local).",
     });
     expect(updateNodeStatus).toHaveBeenCalledTimes(1);
-    expect(updateNodeStatus.mock.calls[0]?.[2]).toBe("Generated 3 sprites under Assets/Art/Frogs (provider local).");
+    expect(updateNodeStatus.mock.calls[0]?.[2]).toBe("Generated 23 sprites under Assets/Art/Kites (provider local).");
   });
 
   it("keeps the row's existing result when the event carries none", () => {

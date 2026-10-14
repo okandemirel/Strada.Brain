@@ -6,7 +6,7 @@ import { CampaignManager } from "./campaign-manager.js";
 
 /**
  * Measured live 2026-09-04 10:32. The structural refusal — "the shipped
- * scenes render NOTHING … 100 prefabs, 62 models and 198 sprites that no
+ * scenes render NOTHING … the prefabs, models and sprites that no
  * enabled scene reaches" — was computed only inside the delivery-gate bounce.
  * The persisted final-sprint prompt held none of it, so every sprint
  * resubmitted by an outage, a self-revival or a restart ran blind, and each
@@ -40,12 +40,12 @@ function emptyGameProject(): string {
   );
   put(
     root,
-    "Assets/Prefabs/Frog.prefab",
-    "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Frog\n" +
+    "Assets/Prefabs/Kettle.prefab",
+    "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Kettle\n" +
       "--- !u!212 &8\nSpriteRenderer:\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n",
     "11111111111111111111111111111111",
   );
-  put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+  put(root, "Assets/Art/kettle.png", "pixels", "22222222222222222222222222222222");
   return root;
 }
 
@@ -66,7 +66,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("REFUSED:");
     expect(prompt).toContain("render NOTHING");
     // The art it must bind, named — a count alone is not a starting point.
-    expect(prompt).toContain("Assets/Prefabs/Frog.prefab");
+    expect(prompt).toContain("Assets/Prefabs/Kettle.prefab");
     // And the entry scene's own emptiness, from the same measurement.
     expect(prompt).toContain("1 GameObject");
     // The anti-audit directive rides with it: it used to live ONLY in the
@@ -76,8 +76,8 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("DO NOT AUDIT");
     expect(prompt).toContain("re-audit the landed modules");
     // Discovery goes through the indexed vault, not directory walks
-    // (measured 2026-09-06: 45 minutes of file_read/list_directory, zero
-    // vault_search, against an 84 MB project vault).
+    // (measured 2026-09-06: a long stretch of file_read/list_directory, no
+    // vault_search, against an indexed project vault).
     expect(prompt).toContain("vault_search");
     // The recipe names the batch and the audio tool (added 2026-09-07).
     expect(prompt).toContain("`batch`");
@@ -91,11 +91,11 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     // delivered game drifted from rules the sprint was told not to look up.
     // The measurement replaces an audit of the tree, not the design.
     const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.", {
-      gddPath: "docs/FerryDesign.md",
-      gddText: "# Ferry\n## 1. Crossings\nEvery quay moors at most two boats.\n",
+      gddPath: "docs/GlassworksDesign.md",
+      gddText: "# Glassworks\n## 1. Kilns\nA kiln cools for a full night before it is opened.\n",
     });
     expect(prompt).not.toMatch(/re-read the (?:whole )?GDD/i);
-    expect(prompt).toContain("read the sections of docs/FerryDesign.md your change implements");
+    expect(prompt).toContain("read the sections of docs/GlassworksDesign.md your change implements");
     expect(prompt).toContain("re-audit the landed modules");
     expect(prompt).not.toContain("not saved in the project");
   });
@@ -105,7 +105,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     // docs/ may hold another document, and "read the GDD sections" sent the
     // sprint to it. Such a campaign is told where its design is instead.
     const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.", {
-      gddText: "# Ferry\n## 1. Crossings\nEvery quay moors at most two boats.\n",
+      gddText: "# Glassworks\n## 1. Kilns\nA kiln cools for a full night before it is opened.\n",
     });
     expect(prompt).not.toMatch(/re-read the (?:whole )?GDD/i);
     expect(prompt).not.toMatch(/read the (?:GDD )?sections/i);
@@ -155,13 +155,13 @@ describe("the final sprint is told what the tree renders, on every submit", () =
 
   it("keeps the art and audio inventory ahead of the trim", () => {
     // Measured 2026-09-07 14:23: the coverage sprint's block was cut before
-    // "Project art: … 410 of the 429 sprite textures are placeholder-grade".
+    // "Project art: … N of the M sprite textures are placeholder-grade".
     const manager = Object.create(CampaignManager.prototype) as CampaignManager;
     (manager as unknown as { projectRoot: string }).projectRoot = emptyGameProject();
     const filler = Array.from({ length: 40 }, (_, i) => `scene detail ${i}: ${"x".repeat(90)}`);
     (manager as unknown as { measureDeliveryStructure(): unknown }).measureDeliveryStructure = () => ({
       refusal: "the scenes render NOTHING",
-      lines: [...filler, "Project art: 429 sprite textures — 410 of the 429 sprite textures are placeholder-grade", "Project audio: 19 clips, 15 distinct by content"],
+      lines: [...filler, "Project art: 537 sprite textures — 518 of the 537 sprite textures are placeholder-grade", "Project audio: 23 clips, 17 distinct by content"],
     });
     const milestone = { id: "mcov1", title: "t", prompt: "Sprint.", status: "pending", attempts: 0 } as never;
     (manager as unknown as { attachStructureMeasurement(c: unknown, m: unknown): void }).attachStructureMeasurement(
@@ -170,8 +170,8 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     );
     const prompt = (milestone as { prompt: string }).prompt;
     expect(prompt).toContain("measurement trimmed here");
-    expect(prompt).toContain("410 of the 429 sprite textures are placeholder-grade");
-    expect(prompt).toContain("Project audio: 19 clips");
+    expect(prompt).toContain("518 of the 537 sprite textures are placeholder-grade");
+    expect(prompt).toContain("Project audio: 23 clips");
     expect(prompt.indexOf("Project art")).toBeLessThan(prompt.indexOf("scene detail 0"));
   });
 

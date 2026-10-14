@@ -919,7 +919,7 @@ export function extractNaturalLanguageDirectiveUpdates(params: {
  *
  * "/" counts as a base64 delimiter, so any run of 60+ path characters without
  * a dot or underscore matched the block rule. Measured 2026-08-20: the failure
- * log reported a missing file as "[base64:61ch].cs" — the redaction ate the
+ * log reported a missing file as "[base64:<n>ch].cs" — the redaction ate the
  * one thing the line existed to say, and the longer the path the likelier it
  * was eaten.
  *
@@ -934,7 +934,7 @@ function looksLikeFilePath(match: string, after: string): boolean {
   // An ABSOLUTE path starts with "/", so its first segment is empty — and
   // the every-segment-non-empty rule below called every absolute path base64.
   // Measured 2026-09-08 05:46: unity_bind_sprite's error reached the model as
-  // "[base64:63ch]-workspaces/task-…/Blocker.prefab holds no GameObject" —
+  // "[base64:<n>ch]-workspaces/task-…/Pulley.prefab holds no GameObject" —
   // the lease root "/private/var/folders/fd/<30 chars>/T/strada" eaten, the
   // one part of the line that said where the file was.
   const segments = (match.startsWith("/") ? match.slice(1) : match).split("/");

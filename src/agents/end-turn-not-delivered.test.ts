@@ -1,9 +1,9 @@
 /**
  * A run that every verifier approved, reporting what it did not deliver.
  *
- * Measured on run 52: [STRADA NOTHING DRAWN] fired three times, fell silent when
+ * Measured on one run: [STRADA NOTHING DRAWN] fired three times, fell silent when
  * its ask budget ran out, and the task finished `failed: false` with a
- * 123-character success message for a game whose sixty captured frames were
+ * one-line success message for a game whose captured frames were all
  * identical. The gates are asks and an ask must be able to give up; what must
  * not give up is the accounting of whether the thing asked for exists.
  *
@@ -95,7 +95,7 @@ function contextThatApproves(unmet: readonly string[]): BgEndTurnContext {
   } as unknown as BgEndTurnContext;
 }
 
-const NOT_DRAWN = "the game has never been observed to render: all 60 captured frames are identical";
+const NOT_DRAWN = "the game has never been observed to render: all 36 captured frames are identical";
 
 describe("a run with an unmet delivery condition", () => {
   it("does not report completion", async () => {
@@ -110,7 +110,7 @@ describe("a run with an unmet delivery condition", () => {
 
     if (result.flow !== "done") throw new Error("expected done");
     expect(result.visibleText).toContain("NOT DELIVERED");
-    expect(result.visibleText).toContain("all 60 captured frames are identical");
+    expect(result.visibleText).toContain("all 36 captured frames are identical");
   });
 
   it("keeps the work the run did report", async () => {
@@ -137,7 +137,7 @@ describe("a run with an unmet delivery condition", () => {
 
     if (result.flow !== "done") throw new Error("expected done");
     expect(result.visibleText).toContain("no playable level exists");
-    expect(result.visibleText).toContain("all 60 captured frames are identical");
+    expect(result.visibleText).toContain("all 36 captured frames are identical");
   });
 });
 

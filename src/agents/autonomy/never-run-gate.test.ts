@@ -4,8 +4,8 @@
  * Measured on a real project: breaking one reference to {fileID: 0} leaves a
  * scene that opens without complaint and a bootstrapper that logs
  * "[Strada][Bootstrap] No configuration assigned!" the moment play starts. The
- * headless play-mode run went from total=1 passed=1 to total=1 failed=1 on that
- * one change, and nothing that reads the scene file could tell the difference.
+ * headless play-mode run went from passing to failing on that one change, and
+ * nothing that reads the scene file could tell the difference.
  *
  * So the last gate asks whether the run ever started the game.
  */
@@ -30,19 +30,19 @@ const deps = {
 /** A project that clears every earlier gate, so only this one can speak. */
 function assembledProject(): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "never-run-"));
-  const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
+  const moduleRoot = join(root, "Assets", "Modules", "QuarryModule");
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
 
-  const configPath = join(scripts, "BoardModuleConfig.cs");
-  writeFileSync(configPath, "public class BoardModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Game.Modules.Board.asmdef"), '{"name":"Game.Modules.Board"}');
-  writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
+  const configPath = join(scripts, "QuarryModuleConfig.cs");
+  writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Modules.Quarry.asmdef"), '{"name":"Game.Modules.Quarry"}');
+  writeFileSync(join(moduleRoot, "QuarryModuleConfig.asset"), "%YAML 1.1");
 
   const tests = join(moduleRoot, "Tests", "Runtime");
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, "Game.Modules.Board.Tests.asmdef"), '{"name":"Game.Modules.Board.Tests"}');
-  writeFileSync(join(tests, "BoardTests.cs"), "public class T { [Test] public void A() { } }");
+  writeFileSync(join(tests, "Game.Modules.Quarry.Tests.asmdef"), '{"name":"Game.Modules.Quarry.Tests"}');
+  writeFileSync(join(tests, "QuarryTests.cs"), "public class T { [Test] public void A() { } }");
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });

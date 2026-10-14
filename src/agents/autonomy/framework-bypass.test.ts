@@ -1,11 +1,11 @@
 /**
  * Using the framework versus wearing it.
  *
- * Measured 2026-08-21 on a delivered project: 6 of Strada.Core's 194 public
- * types used. 22 hand-rolled public events against 0 uses of Communication's
- * 11 types; 37 Debug.Log calls against 0 uses of Logging's 10. It inherited
- * SystemBase for a tick, took [Inject], registered a ModuleConfig, and wrote a
- * plain C# game inside the shell.
+ * Measured 2026-08-21 on a delivered project: a small fraction of Strada.Core's
+ * public types used. Hand-rolled public events and no use of Communication;
+ * Debug.Log calls and no use of Logging. It inherited SystemBase for a tick,
+ * took [Inject], registered a ModuleConfig, and wrote a plain C# game inside
+ * the shell.
  *
  * The rule counts REIMPLEMENTATION, never mere non-use: a game owes nobody a
  * state machine, and a guard that demanded every subsystem would fire on every
@@ -64,15 +64,15 @@ describe("what the project built instead of using", () => {
   });
 
   it("names a service-locator fallback standing beside [Inject]", () => {
-    // Measured 2026-08-21: a character system declared [Inject] for three services and
+    // Measured 2026-08-21: a gameplay system declared [Inject] for its services and
     // reached for the locator in OnUpdate whenever they were null — every
-    // frame — while the boot check's wiring report said all three WERE
+    // frame — while the boot check's wiring report said all of them WERE
     // registered. The tests went green over the workaround.
     const found = assessFrameworkBypass("/p", io({
       "/p/Assets/A.cs": [
-        "[Inject] private IMoverService _frog;",
-        "if (_frog == null) GameBootstrapper.Services?.TryGet(out _frog);",
-        "if (_board == null) GameBootstrapper.Services?.TryGet(out _board);",
+        "[Inject] private ICourierService _courier;",
+        "if (_courier == null) GameBootstrapper.Services?.TryGet(out _courier);",
+        "if (_granary == null) GameBootstrapper.Services?.TryGet(out _granary);",
       ].join("\n"),
     }));
 
@@ -110,21 +110,21 @@ describe("the gate the guard actually raises", () => {
   /** An assembled, rendering game that still wrote its own event system. */
   function project(): { root: string; configPath: string; servicePath: string } {
     const root = mkdtempSync(join(os.tmpdir(), "bypass-gate-"));
-    const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
+    const moduleRoot = join(root, "Assets", "Modules", "QuarryModule");
     const scripts = join(moduleRoot, "Scripts");
     mkdirSync(scripts, { recursive: true });
 
-    const configPath = join(scripts, "BoardModuleConfig.cs");
-    writeFileSync(configPath, "public class BoardModuleConfig : ModuleConfig {}");
-    writeFileSync(join(scripts, "Board.asmdef"), JSON.stringify({ name: "Board" }));
-    writeFileSync(join(scripts, "CubeView.cs"), "public class CubeView : MonoBehaviour {}");
-    const servicePath = join(scripts, "BoardService.cs");
+    const configPath = join(scripts, "QuarryModuleConfig.cs");
+    writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
+    writeFileSync(join(scripts, "Quarry.asmdef"), JSON.stringify({ name: "Quarry" }));
+    writeFileSync(join(scripts, "ChiselView.cs"), "public class ChiselView : MonoBehaviour {}");
+    const servicePath = join(scripts, "QuarryService.cs");
     writeFileSync(servicePath, events(8));
-    writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
+    writeFileSync(join(moduleRoot, "QuarryModuleConfig.asset"), "%YAML 1.1");
 
     const prefabs = join(moduleRoot, "Prefabs");
     mkdirSync(prefabs, { recursive: true });
-    writeFileSync(join(prefabs, "Cube.prefab"), "GameObject:");
+    writeFileSync(join(prefabs, "Chisel.prefab"), "GameObject:");
 
     const scenes = join(root, "Assets", "Scenes");
     mkdirSync(scenes, { recursive: true });
@@ -139,7 +139,7 @@ describe("the gate the guard actually raises", () => {
 
   it("names the rendering problem too, instead of hiding it behind this one", () => {
     // Measured 2026-08-21: an agent told to stop reimplementing spent that time
-    // building a fourth service-and-system pair for rendering, because the gate
+    // building yet another service-and-system pair for rendering, because the gate
     // that would have said nothing renders was queued behind this one.
     const { root, configPath, servicePath } = project();
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
@@ -149,7 +149,7 @@ describe("the gate the guard actually raises", () => {
 
     const prompt = guard.getPrompt() ?? "";
 
-    // This project HAS a view (CubeView), so only the bypass is open and there
+    // This project HAS a view (ChiselView), so only the bypass is open and there
     // is nothing else to mention.
     expect(prompt).toContain("[STRADA REIMPLEMENTED]");
     expect(prompt).not.toContain("Also still true");

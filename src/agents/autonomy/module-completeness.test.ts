@@ -7,10 +7,9 @@
  * registered with the framework; without the second it cannot compile against
  * Strada.Core at all.
  *
- * Measured: a greenfield task with Strada installed produced 19 hand-written
- * files under Assets/Modules/GameModule/Scripts/{Domain,Models,Services} with
- * neither. The layout looked correct and the module did not exist as far as the
- * framework was concerned. Saying "prefer the generators" in the system prompt
+ * Measured: a greenfield task with Strada installed produced hand-written
+ * files under a module's Scripts/ subfolders with neither. The layout looked
+ * correct and the module did not exist as far as the framework was concerned. Saying "prefer the generators" in the system prompt
  * did not change that — verified, the directive reached the model and the next
  * run still hand-wrote everything.
  *
@@ -48,25 +47,25 @@ function writeCs(guard: StradaConformanceGuard, path: string): void {
 
 // The guard resolves module roots natively ("D:\proj\..." on Windows), so the
 // fixture keys each directory the same way.
-const MODULE_DIR = resolve("/proj/Assets/Modules/GameModule");
+const MODULE_DIR = resolve("/proj/Assets/Modules/TanneryModule");
 
 describe("module completeness gate", () => {
   it("flags a module written with neither ModuleConfig nor asmdef", () => {
-    const guard = guardSeeing({ [MODULE_DIR]: ["BoardService.cs", "PixelColor.cs"] });
-    writeCs(guard, "Assets/Modules/GameModule/Scripts/Services/BoardService.cs");
+    const guard = guardSeeing({ [MODULE_DIR]: ["HarvestService.cs", "FruitTint.cs"] });
+    writeCs(guard, "Assets/Modules/TanneryModule/Scripts/Services/HarvestService.cs");
 
     const prompt = guard.getPrompt();
     expect(prompt).toContain("STRADA MODULE INCOMPLETE");
     expect(prompt).toMatch(/ModuleConfig\.cs/);
     expect(prompt).toMatch(/\.asmdef/);
-    expect(prompt).toContain("Assets/Modules/GameModule");
+    expect(prompt).toContain("Assets/Modules/TanneryModule");
   });
 
   it("names only what is actually missing", () => {
     const guard = guardSeeing({
-      [MODULE_DIR]: ["GameModuleModuleConfig.cs", "BoardService.cs"],
+      [MODULE_DIR]: ["TanneryModuleModuleConfig.cs", "HarvestService.cs"],
     });
-    writeCs(guard, "Assets/Modules/GameModule/Scripts/Services/BoardService.cs");
+    writeCs(guard, "Assets/Modules/TanneryModule/Scripts/Services/HarvestService.cs");
 
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toMatch(/\.asmdef/);
@@ -76,9 +75,9 @@ describe("module completeness gate", () => {
   it("stays quiet for a complete module", () => {
     // Hand-written is fine — the gate is about the result, not the tool.
     const guard = guardSeeing({
-      [MODULE_DIR]: ["GameModuleModuleConfig.cs", "GameModule.asmdef", "BoardService.cs"],
+      [MODULE_DIR]: ["TanneryModuleModuleConfig.cs", "TanneryModule.asmdef", "HarvestService.cs"],
     });
-    writeCs(guard, "Assets/Modules/GameModule/Scripts/Services/BoardService.cs");
+    writeCs(guard, "Assets/Modules/TanneryModule/Scripts/Services/HarvestService.cs");
     expect(guard.getPrompt()).toBeNull();
   });
 
@@ -91,7 +90,7 @@ describe("module completeness gate", () => {
   it("ignores non-compilable writes", () => {
     // A README dropped in a module folder does not make it a module in progress.
     const guard = guardSeeing({ [MODULE_DIR]: [] });
-    guard.trackToolCall("file_write", { path: "Assets/Modules/GameModule/README.md" }, false, "ok");
+    guard.trackToolCall("file_write", { path: "Assets/Modules/TanneryModule/README.md" }, false, "ok");
     expect(guard.getPrompt()).toBeNull();
   });
 
@@ -99,7 +98,7 @@ describe("module completeness gate", () => {
     const guard = guardSeeing({ [MODULE_DIR]: [] });
     guard.trackToolCall(
       "file_write",
-      { path: "Assets/Modules/GameModule/Scripts/A.cs" },
+      { path: "Assets/Modules/TanneryModule/Scripts/A.cs" },
       true,
       "Error: Path is outside allowed paths",
     );
@@ -110,7 +109,7 @@ describe("module completeness gate", () => {
     // The check reads the project from disk; with no root it cannot run, and
     // must not guess.
     const guard = new StradaConformanceGuard(DEPS, {});
-    writeCs(guard, "Assets/Modules/GameModule/Scripts/Services/BoardService.cs");
+    writeCs(guard, "Assets/Modules/TanneryModule/Scripts/Services/HarvestService.cs");
     expect(guard.getPrompt()).toBeNull();
   });
 
@@ -119,33 +118,33 @@ describe("module completeness gate", () => {
     // at any depth of the module and creates none beside it. A gate that looks
     // only two levels down then asks for a config the tool will never make.
     const root = mkdtempSync(join(tmpdir(), "module-depth-"));
-    const mod = join(root, "Assets", "Modules", "BoardModule");
-    mkdirSync(join(mod, "Scripts", "Config", "Board"), { recursive: true });
-    writeFileSync(join(mod, "Board.asmdef"), "{}");
-    const deep = join(mod, "Scripts", "Config", "Board", "BoardModuleConfig.cs");
+    const mod = join(root, "Assets", "Modules", "QuarryModule");
+    mkdirSync(join(mod, "Scripts", "Config", "Quarry"), { recursive: true });
+    writeFileSync(join(mod, "Quarry.asmdef"), "{}");
+    const deep = join(mod, "Scripts", "Config", "Quarry", "QuarryModuleConfig.cs");
 
     // Control: without the config, this same disk view does trip the gate.
     const before = new StradaConformanceGuard(DEPS, { projectPath: root });
-    writeCs(before, "Assets/Modules/BoardModule/Scripts/Systems/BoardSystem.cs");
+    writeCs(before, "Assets/Modules/QuarryModule/Scripts/Systems/QuarrySystem.cs");
     expect(before.getPrompt() ?? "").toContain("STRADA MODULE INCOMPLETE");
 
-    writeFileSync(deep, "class BoardModuleConfig {}");
+    writeFileSync(deep, "class QuarryModuleConfig {}");
     const after = new StradaConformanceGuard(DEPS, { projectPath: root });
-    writeCs(after, "Assets/Modules/BoardModule/Scripts/Systems/BoardSystem.cs");
+    writeCs(after, "Assets/Modules/QuarryModule/Scripts/Systems/QuarrySystem.cs");
     expect(after.getPrompt() ?? "").not.toContain("STRADA MODULE INCOMPLETE");
   });
 
   it("reports every incomplete module it touched", () => {
     const guard = guardSeeing({
       [MODULE_DIR]: ["A.cs"],
-      [resolve("/proj/Assets/Modules/UiModule")]: ["B.cs"],
+      [resolve("/proj/Assets/Modules/ArchiveModule")]: ["B.cs"],
     });
-    writeCs(guard, "Assets/Modules/GameModule/Scripts/A.cs");
-    writeCs(guard, "Assets/Modules/UiModule/Scripts/B.cs");
+    writeCs(guard, "Assets/Modules/TanneryModule/Scripts/A.cs");
+    writeCs(guard, "Assets/Modules/ArchiveModule/Scripts/B.cs");
 
     const prompt = guard.getPrompt() ?? "";
-    expect(prompt).toContain("GameModule");
-    expect(prompt).toContain("UiModule");
+    expect(prompt).toContain("TanneryModule");
+    expect(prompt).toContain("ArchiveModule");
   });
 });
 

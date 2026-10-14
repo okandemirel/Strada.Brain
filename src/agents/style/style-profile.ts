@@ -41,7 +41,7 @@ export const styleProfileSchema = z.object({
   /** How the game should ship its characters/props. */
   pipeline: z.enum(RENDER_PIPELINES),
   proportions: z.object({
-    /** Body squash for plumpness (1.0 = natural). */
+    /** Body width factor (1.0 = natural). */
     plump: z.number().min(0.5).max(1.5).default(1.0),
     /** Head-bone scale (1.0 = natural; >1 for chibi). */
     headScale: z.number().min(0.5).max(2).default(1.0),
@@ -103,7 +103,7 @@ export function saveStyleProfile(projectRoot: string, profile: StyleProfile): vo
 export function describeStyleForPrompt(profile: StyleProfile): string {
   const parts: string[] = [];
   if (profile.family !== "unspecified") parts.push(`${profile.family.replace(/-/g, " ")} style`);
-  if (profile.shading === "glossy") parts.push("soft glossy shading");
+  if (profile.shading === "glossy") parts.push("glossy shading");
   else if (profile.shading === "flat") parts.push("flat shading");
   else if (profile.shading === "unlit") parts.push("unlit flat colours");
   else if (profile.shading === "pbr-realistic") parts.push("realistic materials");

@@ -7,8 +7,8 @@ import { StradaConformanceGuard } from './strada-conformance.js';
 /**
  * A game nobody has seen draw anything is not delivered.
  *
- * Measured across this whole session: 120 captured frames, every one byte-for-byte
- * identical, all of them empty sky — while the suite went from 33 tests to 54 and
+ * Measured across this whole session: every captured frame byte-for-byte
+ * identical, all of them empty sky — while the suite kept growing and
  * reported green each time. Runs reported success on a project that has never been
  * observed to render, and the only reason anyone knew otherwise was that a person
  * opened a PNG and looked at it.
@@ -25,16 +25,16 @@ const deps = {
 
 function project(frames: string[], renderers = 0): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), 'nothing-drawn-'));
-  const moduleRoot = join(root, 'Assets', 'Modules', 'BoardModule');
+  const moduleRoot = join(root, 'Assets', 'Modules', 'ApiaryModule');
   const scripts = join(moduleRoot, 'Scripts');
   mkdirSync(scripts, { recursive: true });
-  const configPath = join(scripts, 'BoardModuleConfig.cs');
-  writeFileSync(configPath, 'public class BoardModuleConfig : ModuleConfig {}');
-  writeFileSync(join(scripts, 'Game.Modules.Board.asmdef'), '{"name":"Game.Modules.Board"}');
-  writeFileSync(join(moduleRoot, 'BoardModuleConfig.asset'), '%YAML 1.1');
+  const configPath = join(scripts, 'ApiaryModuleConfig.cs');
+  writeFileSync(configPath, 'public class ApiaryModuleConfig : ModuleConfig {}');
+  writeFileSync(join(scripts, 'Game.Modules.Apiary.asmdef'), '{"name":"Game.Modules.Apiary"}');
+  writeFileSync(join(moduleRoot, 'ApiaryModuleConfig.asset'), '%YAML 1.1');
   const tests = join(moduleRoot, 'Tests', 'Runtime');
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, 'Game.Modules.Board.Tests.asmdef'), '{"name":"Game.Modules.Board.Tests"}');
+  writeFileSync(join(tests, 'Game.Modules.Apiary.Tests.asmdef'), '{"name":"Game.Modules.Apiary.Tests"}');
   writeFileSync(join(tests, 'T.cs'), '[Test] public void It() {}');
   const scenes = join(root, 'Assets', 'Scenes');
   mkdirSync(scenes, { recursive: true });
@@ -86,8 +86,8 @@ describe('a game that has never been seen to draw', () => {
   });
 
   it("finds this run's frames behind thousands of older ones", () => {
-    // Measured 2026-09-07 07:49: 19,864 frames from earlier runs in
-    // Recordings/, this run's 180 in Recordings/VerifierFinal — the 400-file
+    // Measured 2026-09-07 07:49: many thousands of frames from earlier runs
+    // in Recordings/, this run's own in a fresh subfolder — the 400-file
     // sample never reached them and the run was told it drew nothing.
     const old = Array.from({ length: 500 }, () => 'stale-pixels');
     const { root, configPath } = project(old);
@@ -95,7 +95,7 @@ describe('a game that has never been seen to draw', () => {
     const past = new Date(Date.now() - 3 * 60 * 60_000);
     for (const f of readdirSync(rec)) utimesSync(join(rec, f), past, past);
     utimesSync(rec, past, past);
-    const fresh = join(rec, 'VerifierFinal');
+    const fresh = join(rec, 'DuskPass');
     mkdirSync(fresh);
     for (let i = 0; i < 12; i++) writeFileSync(join(fresh, `frame_${i}.png`), `varied-${i}-${'x'.repeat(i * 7)}`);
 
@@ -111,8 +111,8 @@ describe('a game that has never been seen to draw', () => {
   });
 
   it('objects when frame variety is HUD-level (below the distinctiveness bar)', () => {
-    // Measured 2026-08-24 (the test game): sixty frames, only 8 distinct (13%) —
-    // the variety was the progress bar filling over an empty sky. The gate
+    // Measured 2026-08-24 (the test game): a run of frames with only a few
+    // distinct — the variety was the progress bar filling over an empty sky. The gate
     // requires >= 25% distinct digests as evidence of real drawing.
     const frames = [...Array(10).fill('same-pixels'), 'progress-bar-moved'];
     const { root, configPath } = project(frames);
@@ -162,7 +162,7 @@ describe('a game that has never been seen to draw', () => {
  * code had been written into Assets/. An art-and-scene sprint — the kind that
  * writes a sprite under Assets/Art and a scene under Assets/Scenes and no C# at
  * all — wrote nothing compilable, so the gate never applied and the run could
- * capture sixty identical frames and still report the sprint delivered.
+ * capture a run of identical frames and still report the sprint delivered.
  */
 describe('a sprint that wrote assets rather than code', () => {
   /** Only renderables: a sprite and a scene, no .cs anywhere. */

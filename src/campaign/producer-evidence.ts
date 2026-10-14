@@ -196,7 +196,7 @@ export const MAX_SESSIONS_PER_RUN = 12;
  * MIRRORS Strada.MCP's `PLAY_RUN_BUDGET_MS` and `sessionsThatFit`
  * (`src/tools/unity/run-player.ts`), which REFUSES a request needing more —
  * the coordinator asked for every session of a game whose document gives each
- * round five minutes, and the producer answered "nothing was played" (Codex
+ * round a long time limit, and the producer answered "nothing was played" (Codex
  * 2026-09-13 AJ#1). The two numbers must agree; if they ever drift, the
  * producer's refusal names the batch that fits, so the failure is explicit
  * rather than a silent abandonment.

@@ -1,13 +1,12 @@
 /**
  * The gate that asks what the user already owns.
  *
- * Measured on the test game: 25 sprites and zero meshes shipped for a design whose
- * own words ask for rendered 3D stages, while three Asset Store
- * packages the user had already downloaded sat on disk — one of them a vehicle
- * package containing two .fbx meshes. The tool that finds them, unity_my_assets_cloud,
- * was registered, advertised to the model in every phase, and described as
- * "use this BEFORE generating or importing any art". Across a 2 MB run log it
- * was called zero times.
+ * Measured on the test game: flat sprites and no meshes shipped for a design
+ * that asks for 3D content, while Asset Store packages the user had already
+ * downloaded sat on disk, some of them holding usable models. The tool that
+ * finds them, unity_my_assets_cloud, was registered, advertised to the model
+ * in every phase, and described as "use this BEFORE generating or importing
+ * any art". Across the whole run log it was never called.
  *
  * So the missing piece was never the capability. It was that nothing made the
  * run stop and look. This gate is that stop, and it is deliberately cheap to
@@ -156,11 +155,11 @@ describe("clearing the gate", () => {
  * The way it actually happened.
  *
  * The gate above keys on art being ORIGINATED, on the theory that the moment to
- * ask "does the user already have one of these" is just before making one. Run
- * 52 showed that is half the problem: the agent originated no art at all. It
- * wrote fifteen C# files, seven assembly definitions, six ScriptableObjects and
- * a scene — and zero sprites, zero prefabs, zero meshes. Then it played the game
- * and captured sixty identical frames.
+ * ask "does the user already have one of these" is just before making one. A
+ * measured run showed that is half the problem: the agent originated no art at
+ * all. It wrote C# files, assembly definitions, ScriptableObjects and a scene —
+ * and no sprites, no prefabs, no meshes. Then it played the game and captured
+ * a run of identical frames.
  *
  * The gate never fired, because nothing triggered it. The silence and the empty
  * scene both looked correct. [STRADA NOTHING DRAWN] reported the symptom without
@@ -200,7 +199,7 @@ function ranTheGame(root: string): StradaConformanceGuard {
     { path: join(root, "Assets", "Scripts", "Board.cs") },
     false,
   );
-  guard.trackToolCall("unity_playmode_verify", { captureFrames: 60 }, false);
+  guard.trackToolCall("unity_playmode_verify", { captureFrames: 24 }, false);
   return guard;
 }
 
@@ -260,7 +259,7 @@ describe("a game that was played and has nothing in it to draw", () => {
   it("says nothing to a run that wrote no game code", () => {
     const root = playedProject();
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
-    guard.trackToolCall("unity_playmode_verify", { captureFrames: 60 }, false);
+    guard.trackToolCall("unity_playmode_verify", { captureFrames: 24 }, false);
 
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });

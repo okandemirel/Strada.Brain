@@ -574,8 +574,8 @@ export function finishedSessionIndices(
    *
    * An endless or sandbox game states no win or lose condition, so every one
    * of its sessions correctly reports outcome "None" — and this counted none
-   * of them, which made a correct three-level endless game "0 of 3 levels
-   * reached an outcome" and blocked its delivery (Codex 2026-09-13 AI#2). The
+   * of them, which made a correct endless game report that none of its levels
+   * reached an outcome, and blocked its delivery (Codex 2026-09-13 AI#2). The
    * DOCUMENT decides, exactly as it does for the producer: when it requires no
    * outcome, a session that was identified and acted in is a level played.
    * Default true — the caller that knows the document says so.

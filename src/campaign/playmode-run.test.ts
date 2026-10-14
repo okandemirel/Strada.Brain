@@ -142,17 +142,17 @@ describe("readPlaymodeRun", () => {
   });
 
   it("green, unfiltered — the sentence the gate prints comes from the counts and the arguments", () => {
-    write({ total: 179, passed: 179, failed: 0, skipped: 0, failedNames: [], filter: null, categories: null, unfiltered: true, measuredAt: "2026-09-10T15:00:00.000Z" });
+    write({ total: 83, passed: 83, failed: 0, skipped: 0, failedNames: [], filter: null, categories: null, unfiltered: true, measuredAt: "2026-09-10T15:00:00.000Z" });
     const r = readPlaymodeRun(root, 0);
-    expect(r).toMatchObject({ found: true, total: 179, failed: 0, unfiltered: true });
-    expect(r.detail).toBe("PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)");
+    expect(r).toMatchObject({ found: true, total: 83, failed: 0, unfiltered: true });
+    expect(r.detail).toBe("PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)");
   });
 
   it("red with names, and a filtered run says which filter", () => {
-    write({ total: 215, passed: 205, failed: 10, failedNames: ["A.B.WinLevel_ReachesWonState", "A.B.Other"], filter: "SampleGame.*", unfiltered: false });
+    write({ total: 215, passed: 205, failed: 10, failedNames: ["A.B.TollPaid_OpensTheGate", "A.B.Other"], filter: "Tollgate.*", unfiltered: false });
     const r = readPlaymodeRun(root, 0);
-    expect(r.detail).toBe("PlayMode verification FAILED: 10 of 215 tests failed (filter: SampleGame.*)");
-    expect(r.failedNames).toEqual(["A.B.WinLevel_ReachesWonState", "A.B.Other"]);
+    expect(r.detail).toBe("PlayMode verification FAILED: 10 of 215 tests failed (filter: Tollgate.*)");
+    expect(r.failedNames).toEqual(["A.B.TollPaid_OpensTheGate", "A.B.Other"]);
     expect(r.unfiltered).toBe(false);
     write({ total: 0, passed: 0, failed: 0, unfiltered: true });
     expect(readPlaymodeRun(root, 0).detail).toBe("PlayMode run (NUnit): 0 tests executed (unfiltered — the whole PlayMode suite)");

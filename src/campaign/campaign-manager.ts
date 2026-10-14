@@ -319,7 +319,7 @@ export interface CampaignManagerOptions {
    * How long one milestone may run before the campaign forces a
    * scope-narrowing escalation (default 6h). Bounces and deferrals do not
    * burn attempts by design, so without this a sprint can spin forever —
-   * measured 2026-08-31: m6 ran 22h at attempts=1.
+   * measured 2026-08-31: one sprint ran 22h at attempts=1.
    */
   milestoneTimeBoxMs?: number;
   /** How long the envelope commit waits for the project write lock. */
@@ -2171,8 +2171,8 @@ export class CampaignManager {
    * arrived is context, and labelling it "Cause:" made a parked campaign read
    * as a failed one — measured live 2026-09-04:
    *
-   *   ⏸️ Campaign paused by a provider outage at Sprint 7.
-   *   Cause: Sprint 7 blocked after 2 attempts: Completed: 1. **Varsayım**: …
+   *   ⏸️ Campaign paused by a provider outage at Sprint N.
+   *   Cause: Sprint N blocked after 2 attempts: Completed: 1. **Varsayım**: …
    *
    * The sprint had not failed and its attempts had not been spent on work:
    * one account's monthly quota was out for 17 days and the other's for ~4h,
@@ -2428,7 +2428,7 @@ export class CampaignManager {
           // "still in flight" wedged the campaign forever; resume it instead.
           //
           // A SPRINT is resubmitted, not replayed. Measured 2026-09-08 04:18:
-          // the replay quoted the lineage root's prompt — 29 sprints old, no
+          // the replay quoted the lineage root's prompt — many sprints old, no
           // delivery gate, a stale measurement — while the milestone held the
           // current one. The milestone prompt is the sprint's contract; the
           // resubmission cancels the paused tip and charges no attempt.
@@ -2995,7 +2995,7 @@ export class CampaignManager {
     // (revive, bounce, gate refusal, outage, escalation) points the milestone
     // at a NEW task and forgets the old one, whose keep-alive keeps reviving
     // it — and once the campaign no longer references that lineage, nothing
-    // can find it to cancel. Measured live 2026-09-03: lineage task_3f52a987
+    // can find it to cancel. Measured live 2026-09-03: one lineage
     // was abandoned by a resubmit, then resurrected at 09:19, 09:37, 09:53 and
     // 10:20 — four times after the campaign had delivered, each able to write
     // to the project the user was inspecting.
@@ -3821,7 +3821,7 @@ export class CampaignManager {
    * Time-box check usable from BOTH the outcome path and the
    * adoption/deferral path. A sprint that keeps being adopted or deferred
    * never reaches an outcome — which is exactly the runaway case the box
-   * exists for (measured 2026-09-01: m6 ran 7h+ at escalations=0 because
+   * exists for (measured 2026-09-01: one sprint ran 7h+ at escalations=0 because
    * every settle was adopted). Returns true when it escalated.
    */
   private async escalateIfPastTimeBox(campaign: Campaign, milestone: CampaignMilestone): Promise<boolean> {
@@ -3845,7 +3845,7 @@ export class CampaignManager {
     })();
     if (escalations >= 2) {
       // Past the second narrowing the box used to switch OFF — the sprint
-      // could run unbounded again (measured 2026-09-01: m6 at 33h with
+      // could run unbounded again (measured 2026-09-01: one sprint at 33h with
       // escalations=2). A third overrun is a failed attempt: retry while
       // attempts remain, otherwise stop loudly so a person decides.
       const tipId = milestone.taskId
@@ -4159,8 +4159,8 @@ export class CampaignManager {
       // the lease write-back only copies files, and the agent's own git_commit
       // runs inside a detached worktree whose commits die with the worktree
       // (now preserved on lease-salvage/* branches, but still not on main).
-      // That is how a campaign once ended with 282 dirty files and a corrupted
-      // next-sprint seed. The envelope commits.
+      // That is how a campaign once ended with hundreds of dirty files and a
+      // corrupted next-sprint seed. The envelope commits.
       // THE SYSTEM'S CHECKS GO BACK FIRST (scope gate on): the envelope then
       // commits the stored bytes, and the measurement below reads a clean
       // tree. What differed is tamper, judged with the rows.
@@ -5301,7 +5301,7 @@ export class CampaignManager {
 
     // TIME-BOX: bounces and deferrals deliberately do not burn attempts, so a
     // sprint that keeps almost-finishing can spin indefinitely (measured
-    // 2026-08-31: m6 ran 22h at attempts=1).
+    // 2026-08-31: one sprint ran 22h at attempts=1).
     // A graceful shutdown is the OPERATOR stopping the process, not the sprint
     // failing (see below); it is judged before the time box, or a routine
     // restart of a sprint past its second narrowing ended the campaign
@@ -5323,7 +5323,7 @@ export class CampaignManager {
     // the provider's downtime and pushes a healthy sprint toward a stop.
     // Checked BEFORE the blocked-nudge branch: an outage surfaces as
     // `blocked:provider_unavailable`, and that branch charged it (measured
-    // 2026-09-02 02:36: m7 "blocked after 2 attempts" while all four
+    // 2026-09-02 02:36: the final sprint "blocked after 2 attempts" while all four
     // accounts were on quota walls).
     let outageCaused = isOutageCausedSettle(
       output,
@@ -5349,7 +5349,7 @@ export class CampaignManager {
     // A graceful shutdown is the OPERATOR stopping the process, not the sprint
     // failing: the executor aborts in-flight runs with "shutting down" and the
     // work done so far is kept. Charging it ended a campaign on a routine
-    // deploy — measured 2026-09-03 06:45: Sprint 7 "blocked after 2 attempts"
+    // deploy — measured 2026-09-03 06:45: the final sprint "blocked after 2 attempts"
     // whose cause was a daemon restart, with no self-revival armed because it
     // was not an outage.
     // A shutdown is exempt from the ATTEMPT BUDGET ITSELF, not merely from
@@ -7080,8 +7080,8 @@ export class CampaignManager {
       // dirtiness check and the add, or a .strada-only change would produce
       // an empty commit attempt.
       // Recordings/ is the system's capture output (and Unity Recorder's
-      // folder): measured 2026-09-07 21:33, one envelope commit added 2 300
-      // frames from eight capture runs to the user's history. Excluded like
+      // folder): measured 2026-09-07 21:33, one envelope commit added the
+      // frames of several capture runs to the user's history. Excluded like
       // .strada, and untracked in this commit if an earlier envelope swept it in.
       const isSystemPath = (path: string): boolean =>
         /^(?:\.strada|Recordings)(?:[/\\]|$)/.test(path);
@@ -9124,10 +9124,10 @@ export class CampaignManager {
    * Measured 2026-09-04 10:32: the refusal ("the shipped scenes render
    * NOTHING", with the prefabs, models and sprites no enabled scene reaches)
    * was computed only inside the delivery-gate bounce, so the
-   * persisted m7 prompt held none of it — no "render NOTHING", no
+   * persisted final-sprint prompt held none of it — no "render NOTHING", no
    * CreatePrimitive, no unbound art. Every sprint resubmitted by an outage, a
    * self-revival, a time-box escalation or a restart therefore ran as blind
-   * as the seven before it, and each one answered by writing a document.
+   * as every one before it, and each one answered by writing a document.
    *
    * Re-measured rather than cached: the whole point is to tell the sprint
    * what the tree looks like NOW, including what its own last attempt
@@ -9709,8 +9709,8 @@ export class CampaignManager {
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
-    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). A measured campaign went green six
-    // times on prose and no line here said which GDD rows any sprint had been
+    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). A measured campaign went green sprint
+    // after sprint on prose and no line here said which GDD rows any sprint had been
     // held to. A campaign the scope gate never saw reads exactly as before.
     const scopeMode = this.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE;
     const scopeSeen =

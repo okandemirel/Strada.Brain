@@ -12,7 +12,7 @@
     "  not_measured — nothing in this evidence can settle the requirement either way. These rows",
     "                 are reported on their own and are NEVER folded into either rate: a rate",
     "                 that absorbed them would be a claim about something nobody measured.",
-    "Every requirement text and every evidence line is a REAL shape from this repo:",
+    "Every evidence line is a REAL shape from this repo, and every requirement text follows one (some are invented in that shape):",
     "  requirement wordings and landed/suite/shipped-tree/document-numbers lines from",
     "  src/campaign/campaign-planner.test.ts and src/campaign/coverage-audit-retry.test.ts;",
     "  structure findings as campaign-manager.measureDeliveryStructure writes them;",
@@ -64,7 +64,7 @@
     {
       "id": "save-by-unrelated-suite-total",
       "requirement": "Save progress across restarts: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "A green suite total is a measured line whose scope is the suite; it names no feature, and this is the AK#14 false close.",
       "source": "src/campaign/campaign-planner.test.ts:81"
@@ -88,7 +88,7 @@
     {
       "id": "suite-requirement-by-suite-total",
       "requirement": "The full test suite runs green: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "proven",
       "rationale": "This requirement IS about the suite as a whole, and an unfiltered total is exactly its measurement.",
       "source": "src/campaign/campaign-planner.test.ts:82"
@@ -126,8 +126,8 @@
       "source": "src/campaign/coverage-audit-retry.test.ts:44"
     },
     {
-      "id": "determinism-by-contentless-commit",
-      "requirement": "Deterministic replay: absent",
+      "id": "timetable-by-contentless-commit",
+      "requirement": "Ferry timetable: absent",
       "evidence": { "status": "green", "commitNote": "Committed 1 file(s) as abcdef1" },
       "expected": "not_proven",
       "rationale": "A commit note that names no path, file or type says nothing about WHICH requirement it implements (Codex 2026-09-13 AJ).",
@@ -168,7 +168,7 @@
     {
       "id": "test-saving-by-suite-total",
       "requirement": "Test saving progress: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "A requirement that merely mentions a test still names a feature (saving); a total closes only the suite itself (round 6 #1).",
       "source": "src/campaign/campaign-planner.test.ts:94"
@@ -176,7 +176,7 @@
     {
       "id": "all-tests-pass-by-suite-total",
       "requirement": "All tests pass: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "proven",
       "rationale": "Once the suite words are removed nothing distinctive remains, so the requirement IS the suite.",
       "source": "src/campaign/campaign-planner.test.ts:95"
@@ -224,7 +224,7 @@
     {
       "id": "unit-tests-cover-saving-by-suite-total",
       "requirement": "All unit tests cover saving: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "'saving' survives the suite words, so this is a requirement about a feature's coverage, not about the suite (round 7 #3).",
       "source": "src/campaign/campaign-planner.test.ts:102"
@@ -232,7 +232,7 @@
     {
       "id": "whole-playmode-suite-by-suite-total",
       "requirement": "The whole PlayMode suite runs clean: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "proven",
       "rationale": "Every remaining word reports on the suite; the subject is the suite itself.",
       "source": "src/campaign/campaign-planner.test.ts:104"
@@ -280,7 +280,7 @@
     {
       "id": "tr-suite-requirement-by-suite-total",
       "requirement": "Tüm testler başarılı olmalı: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "proven",
       "rationale": "An ordinary Turkish formulation of 'all tests must pass'; the subject is the suite (round 9 #34).",
       "source": "src/campaign/campaign-planner.test.ts:129"
@@ -288,7 +288,7 @@
     {
       "id": "fr-suite-requirement-by-suite-total",
       "requirement": "Tous les tests doivent réussir: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "proven",
       "rationale": "The French formulation of the same suite requirement.",
       "source": "src/campaign/campaign-planner.test.ts:130"
@@ -296,7 +296,7 @@
     {
       "id": "de-suite-requirement-by-suite-total",
       "requirement": "Alle Tests müssen bestehen: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "proven",
       "rationale": "The German formulation of the same suite requirement.",
       "source": "src/campaign/campaign-planner.test.ts:132"
@@ -304,7 +304,7 @@
     {
       "id": "tr-feature-requirement-by-suite-total",
       "requirement": "Tüm testler kaydetmeyi kapsamalı: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "'kaydetmeyi' (saving) is a feature word: a total cannot close a requirement about a feature's coverage in any language.",
       "source": "src/campaign/campaign-planner.test.ts:136"
@@ -312,7 +312,7 @@
     {
       "id": "fr-feature-requirement-by-suite-total",
       "requirement": "Les tests de sauvegarde doivent réussir: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "Tests OF SAVING are not all the tests.",
       "source": "src/campaign/campaign-planner.test.ts:137"
@@ -320,7 +320,7 @@
     {
       "id": "test-passwords-by-suite-total",
       "requirement": "Test passwords: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "'password' merely starts like 'pass'; a feature name is not a suite predicate (round 10 #17).",
       "source": "src/campaign/campaign-planner.test.ts:143"
@@ -328,7 +328,7 @@
     {
       "id": "all-allocation-tests-by-suite-total",
       "requirement": "All allocation tests pass: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "'allocation' starts like 'all' and is a feature word; the requirement is about allocation tests.",
       "source": "src/campaign/campaign-planner.test.ts:144"
@@ -336,7 +336,7 @@
     {
       "id": "tr-save-tests-by-suite-total",
       "requirement": "Kayıt sistemi testleri: absent",
-      "evidence": { "status": "green", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_proven",
       "rationale": "A feature requirement in another language is still a feature requirement (round 8 #15).",
       "source": "src/campaign/campaign-planner.test.ts:151"
@@ -344,17 +344,17 @@
     {
       "id": "element-schedule-all-traced",
       "requirement": "Every scheduled element has a trace in code: absent",
-      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: all 14 scheduled element(s) have a trace in code"] },
+      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: all 33 scheduled element(s) have a trace in code"] },
       "expected": "proven",
       "rationale": "The structural scan measured the schedule against the code and every element was found.",
       "source": "src/campaign/campaign-manager.ts:6703 (measureDeliveryStructure)"
     },
     {
-      "id": "bomb-by-no-trace-finding",
-      "requirement": "Bomb element: absent",
-      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code: L3 Bomb, L5 Geyser"] },
+      "id": "brass-gull-by-no-trace-finding",
+      "requirement": "Brass Gull element: absent",
+      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: 2 of 33 scheduled element(s) have NO trace in code: Ch2 Tide Bell, Ch9 Brass Gull"] },
       "expected": "not_proven",
-      "rationale": "The line NAMES the bomb and says it has no trace in the code — the finding of absence, read back as the evidence of presence.",
+      "rationale": "The line NAMES the brass gull and says it has no trace in the code — the finding of absence, read back as the evidence of presence.",
       "source": "src/campaign/campaign-manager.ts:6706 (measureDeliveryStructure)"
     },
     {
@@ -367,8 +367,8 @@
     },
     {
       "id": "fps-by-not-met-claim",
-      "requirement": "Frame rate at least 60 fps: absent",
-      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 60 fps: NOT MET — 41 fps average in the editor under -batchmode"] },
+      "requirement": "Frame rate at least 144 fps: absent",
+      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 144 fps: NOT MET — 87 fps average in the editor under -batchmode"] },
       "expected": "not_proven",
       "rationale": "The document's own number was measured and MISSED; the line is about the requirement and refutes it.",
       "source": "src/campaign/gdd-claims.ts:1082 (describeClaims)"
@@ -431,7 +431,7 @@
     },
     {
       "id": "art-style-matches-direction",
-      "requirement": "The art matches the GDD's pixel-art direction: absent",
+      "requirement": "The art matches the GDD's watercolour direction: absent",
       "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Art/Hero.png" },
       "expected": "not_measured",
       "rationale": "Whether a sprite MATCHES a style is not something any predicate in this repo measures. The file landed; the judgement did not happen.",
@@ -512,7 +512,7 @@
     {
       "id": "fun-by-anything",
       "requirement": "The game is fun: absent",
-      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/FerryCrossing.cs, Assets/Prefabs/FerryRaft.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/FerryCrossing.cs, Assets/Prefabs/FerryRaft.prefab", "testVerdict": "83/83 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_measured",
       "rationale": "An aspiration, not scheduled content. The coverage system is instructed to be lenient about these, and no evidence kind settles it.",
       "source": "src/campaign/campaign-planner.ts (COVERAGE_SYSTEM: strict about scheduled content, lenient about aspiration)"
@@ -525,7 +525,7 @@
   },
   "ledgerRows": [
     {
-      "id": "probe-labelled-rule-by-system-file",
+      "id": "probe-labelled-rule-by-rules-file",
       "requirement": "K7 A lantern refills only at a shrine the player has lit.",
       "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Lantern/RefillRules.cs, Assets/Scripts/Lantern/LanternView.cs" },
       "revision": "rev-now",
@@ -640,7 +640,7 @@
     },
     {
       "id": "ledger-pass-now",
-      "requirement": "LR-01 The lantern drains one charge every 5 seconds.",
+      "requirement": "W9 The lantern drains one charge every 5 seconds.",
       "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Lantern/LanternDrain.cs" },
       "revision": "rev-now",
       "ledger": {
@@ -688,14 +688,14 @@
     },
     {
       "id": "ledger-pass-now-by-claim",
-      "requirement": "The game holds 60 fps on the target device.",
-      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 60 fps: met — 61 fps median over 3 sessions"] },
+      "requirement": "The game holds 144 fps on the target device.",
+      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 144 fps: met — 148 fps median over 5 sessions"] },
       "revision": "rev-now",
       "ledger": {
         "kind": "claim",
         "status": "passing",
         "checks": [{ "kind": "claim", "claimKind": "fps" }],
-        "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "61 fps median over 3 sessions" }
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "148 fps median over 5 sessions" }
       },
       "expected": "proven",
       "rationale": "The delivery gate measured the frame-rate claim on this revision and it met the GDD's number.",

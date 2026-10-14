@@ -1,11 +1,10 @@
 /**
  * A generator asks for what THIS project's document said, or for nothing.
  *
- * The fallbacks carried one game's art direction — "mobile casual game
- * character, thick clean outline, soft glossy shading" for sprites, "casual
- * mobile game character, soft glossy 3d-look" for meshes — whatever the
- * document asked for and whatever the asset was, so a StoneBridge was
- * generated as a glossy casual character (Codex 2026-09-12 T#13).
+ * The sprite and mesh fallbacks carried one game's art direction, a fixed
+ * character look written into each tool, whatever the document asked for and
+ * whatever the asset was, so a StoneBridge was generated as a character in
+ * that look (Codex 2026-09-12 T#13).
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -32,7 +31,7 @@ const pixelProfile = {
   pipeline: "sprite-native" as const,
   proportions: { plump: 1.0, headScale: 1.0 },
   palette: ["#101020"],
-  outline: { width: 0, color: "#1f1418" },
+  outline: { width: 0, color: "#2d3a4f" },
   shading: "unlit" as const,
   references: [],
   notes: "monochrome, no outline, 1-bit look",
@@ -68,7 +67,7 @@ describe("the sprite generator's default prompt", () => {
   it("asks for nothing in particular when the project has no style profile", async () => {
     const prompt = await promptFor(projectWith());
     expect(prompt).toContain("stone bridge");
-    expect(prompt).not.toMatch(/casual|glossy|character|thick clean outline/i);
+    expect(prompt).not.toMatch(/casual|glossy|character|outline/i);
   });
 
   it("honours a profile that asks for the opposite of the old default", async () => {

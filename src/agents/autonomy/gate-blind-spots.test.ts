@@ -43,8 +43,8 @@ describe("a game written outside Assets/Modules", () => {
     // scene gate on that folder made a run under Assets/Scripts exempt from
     // every rule the gates exist to enforce.
     const root = project();
-    const configPath = write(root, "Assets/Scripts/Board/BoardModuleConfig.cs", "public class BoardModuleConfig : ModuleConfig {}");
-    write(root, "Assets/Scripts/Board/Game.Board.asmdef", '{"name":"Game.Board"}');
+    const configPath = write(root, "Assets/Scripts/Quarry/QuarryModuleConfig.cs", "public class QuarryModuleConfig : ModuleConfig {}");
+    write(root, "Assets/Scripts/Quarry/Game.Quarry.asmdef", '{"name":"Game.Quarry"}');
 
     const guard = guardFor(root);
     guard.trackToolCall("file_write", { path: configPath }, false);
@@ -65,7 +65,7 @@ describe("a game written outside Assets/Modules", () => {
 describe("assembly names Unity actually enforces", () => {
   it("sees two modules declaring the same assembly name", () => {
     // The name Unity enforces is the `name` field inside the .asmdef, not the
-    // file name. Two files called Board.asmdef both declaring "Game.Board" is a
+    // file name. Two files called Quarry.asmdef both declaring "Game.Quarry" is a
     // project Unity refuses to compile at all, and it read as two distinct
     // assemblies because the check compared file names within one module.
     const root = project();
@@ -106,33 +106,33 @@ describe("which assembly owns a source file", () => {
     // of the parent assembly. Counting them meant the outer assembly — which
     // Unity compiles empty and runs zero tests from — passed the gate.
     const root = project();
-    const configPath = write(root, "Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs", "public class BoardModuleConfig : ModuleConfig {}");
-    write(root, "Assets/Modules/BoardModule/Scripts/Game.Board.asmdef", '{"name":"Game.Board"}');
-    write(root, "Assets/Modules/BoardModule/BoardModuleConfig.asset", "%YAML 1.1");
+    const configPath = write(root, "Assets/Modules/QuarryModule/Scripts/QuarryModuleConfig.cs", "public class QuarryModuleConfig : ModuleConfig {}");
+    write(root, "Assets/Modules/QuarryModule/Scripts/Game.Quarry.asmdef", '{"name":"Game.Quarry"}');
+    write(root, "Assets/Modules/QuarryModule/QuarryModuleConfig.asset", "%YAML 1.1");
     write(root, "Assets/Scenes/Main.unity", "  _gameConfig: {fileID: 11400000, guid: abc}");
 
     // The outer test assembly holds no test of its own...
-    write(root, "Assets/Modules/BoardModule/Tests/Runtime/Game.Board.Tests.asmdef", '{"name":"Game.Board.Tests"}');
+    write(root, "Assets/Modules/QuarryModule/Tests/Runtime/Game.Quarry.Tests.asmdef", '{"name":"Game.Quarry.Tests"}');
     // ...and the only [Test] belongs to a nested assembly.
-    write(root, "Assets/Modules/BoardModule/Tests/Runtime/Domain/Game.Board.Domain.Tests.asmdef", '{"name":"Game.Board.Domain.Tests"}');
-    write(root, "Assets/Modules/BoardModule/Tests/Runtime/Domain/DomainTests.cs", "public class D { [Test] public void A() { } }");
+    write(root, "Assets/Modules/QuarryModule/Tests/Runtime/Domain/Game.Quarry.Domain.Tests.asmdef", '{"name":"Game.Quarry.Domain.Tests"}');
+    write(root, "Assets/Modules/QuarryModule/Tests/Runtime/Domain/DomainTests.cs", "public class D { [Test] public void A() { } }");
 
     const guard = guardFor(root);
     guard.trackToolCall("file_write", { path: configPath }, false);
 
     const prompt = guard.getPrompt();
     expect(prompt).toContain("[STRADA TEST ASSEMBLY EMPTY]");
-    expect(prompt).toContain("Game.Board.Tests");
+    expect(prompt).toContain("Game.Quarry.Tests");
   });
 
   it("still accepts an assembly whose own folder holds the test", () => {
     const root = project();
-    const configPath = write(root, "Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs", "public class BoardModuleConfig : ModuleConfig {}");
-    write(root, "Assets/Modules/BoardModule/Scripts/Game.Board.asmdef", '{"name":"Game.Board"}');
-    write(root, "Assets/Modules/BoardModule/BoardModuleConfig.asset", "%YAML 1.1");
+    const configPath = write(root, "Assets/Modules/QuarryModule/Scripts/QuarryModuleConfig.cs", "public class QuarryModuleConfig : ModuleConfig {}");
+    write(root, "Assets/Modules/QuarryModule/Scripts/Game.Quarry.asmdef", '{"name":"Game.Quarry"}');
+    write(root, "Assets/Modules/QuarryModule/QuarryModuleConfig.asset", "%YAML 1.1");
     write(root, "Assets/Scenes/Main.unity", "  _gameConfig: {fileID: 11400000, guid: abc}");
-    write(root, "Assets/Modules/BoardModule/Tests/Runtime/Game.Board.Tests.asmdef", '{"name":"Game.Board.Tests"}');
-    write(root, "Assets/Modules/BoardModule/Tests/Runtime/BoardTests.cs", "public class B { [Test] public void A() { } }");
+    write(root, "Assets/Modules/QuarryModule/Tests/Runtime/Game.Quarry.Tests.asmdef", '{"name":"Game.Quarry.Tests"}');
+    write(root, "Assets/Modules/QuarryModule/Tests/Runtime/QuarryTests.cs", "public class B { [Test] public void A() { } }");
 
     const guard = guardFor(root);
     guard.trackToolCall("file_write", { path: configPath }, false);

@@ -532,8 +532,8 @@ function isArtSourceFile(filePath: string): boolean {
  * — and deliberately wider than COMPILABLE_EXT. audited 2026-09-02: the
  * drawing gate applied only to a run that wrote compilable code into Assets/,
  * so an art-and-scene sprint (a sprite under Assets/Art, a scene under
- * Assets/Scenes, no C#) was exempt from it entirely and could capture sixty
- * identical frames and still report itself delivered.
+ * Assets/Scenes, no C#) was exempt from it entirely and could capture a run
+ * of identical frames and still report itself delivered.
  */
 const RENDERABLE_EXT: ReadonlySet<string> = new Set([
   ".prefab", ".unity", ".mat",
@@ -1034,7 +1034,7 @@ export class StradaConformanceGuard {
    * Measured: asked to add tests, an agent created the framework's
    * Tests/Runtime + Tests/Editor pair AND kept its own habit of a Tests/ root
    * assembly, ending with Tests/YourGame.SampleGame.Tests.asmdef and
-   * Tests/Runtime/YourGame.SampleGame.Tests.asmdef claiming one name — plus six
+   * Tests/Runtime/YourGame.SampleGame.Tests.asmdef claiming one name — plus
    * test files at the Tests root, belonging to neither mode.
    */
   private duplicateAssemblyNames(): string[] {
@@ -1200,7 +1200,7 @@ export class StradaConformanceGuard {
     // Only frames captured in THIS run are this run's evidence. Audited
     // 2026-09-02: with no recency filter, an earlier sprint's varied frames
     // cleared a run that failed its play-mode verify and drew nothing, and —
-    // sampled ahead of this run's own files — hid sixty identical frames. The
+    // sampled ahead of this run's own files — hid this run's identical frames. The
     // 2s tolerance is for filesystem timestamp granularity, as in
     // prerender-frames.ts.
     //

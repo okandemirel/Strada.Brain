@@ -51,7 +51,7 @@ describe("planning a game", () => {
     expect(prompt).toContain("they already gave you one");
   });
 
-  it("never makes a measurement, check or commit its own goal, even when the task lists it as a step (measured 2026-09-09: three 60-minute node budgets on 'Run unity_delivery_measure')", async () => {
+  it("never makes a measurement, check or commit its own goal, even when the task lists it as a step (measured 2026-09-09: whole 60-minute node budgets on 'Run unity_delivery_measure')", async () => {
     const prompt = await decompositionPrompt();
 
     expect(prompt).toContain("never its own sub-goal, even when the task lists it as a numbered step");
@@ -100,8 +100,8 @@ describe("planning a game", () => {
   });
 
   it("knows a prefab nothing references is invisible", async () => {
-    // Measured 2026-08-22: twenty-five prefabs, twenty-five sprites, a config
-    // class declaring three GameObject fields — and zero .asset instances of
+    // Measured 2026-08-22: prefabs and sprites in place, a config class
+    // declaring GameObject fields — and no .asset instance of
     // it, so nothing held a reference to any prefab at run time. Making the
     // asset is not a detail discovered later; it is the step between having
     // prefabs and having a game.
@@ -126,7 +126,7 @@ describe("planning a game", () => {
   });
 
   it("does not accept a green suite as proof that anything was drawn", async () => {
-    // Forty-four of forty-four passed while every captured frame was the same
+    // The whole suite passed while every captured frame was the same
     // empty sky. Tests prove the simulation; only a frame proves the game.
     const prompt = await decompositionPrompt();
 

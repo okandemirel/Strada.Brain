@@ -168,11 +168,10 @@ const RECENT_MUTATION_STEPS = 4;
  * the measured step log contradicts it.
  *
  * The verdict is an LLM estimate over a snapshot; the step log is a
- * measurement. Measured 2026-09-07 (campaign mcov1): the last three loop
- * blocks came right after "[OK] file_edit … BoardBuilder.cs (1
- * replacement made)" ×2, "[OK] file_read", "[OK] git_diff" — each rated
- * "stuck (high confidence)", each spending a recovery episode, the third
- * ending the task. Four attempts died this way with real edits in flight.
+ * measurement. Measured 2026-09-07: the final loop blocks came right after
+ * successful file_edit steps, a file_read and a git_diff — each rated
+ * "stuck (high confidence)", each spending a recovery episode, the last
+ * ending the task. Attempts died this way with real edits in flight.
  */
 export function stuckVerdictContradictedBy(
   snapshot: Pick<BehavioralSnapshot, "timeSinceLastMutationMs" | "mutationStepCount">,

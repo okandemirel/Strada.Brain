@@ -3,8 +3,8 @@
  *
  * Under a workspace lease the tool context's `projectPath` is the lease
  * directory, which no vault is registered against. The tool resolved on it,
- * missed, and fell back to "every registered vault": measured, one call wrote
- * GapAudit_2026-09-02.md into the game, the vendored Strada.Core and Strada.MCP
+ * missed, and fell back to "every registered vault": measured, a single call wrote
+ * its note into the game, the vendored Strada.Core and Strada.MCP
  * packages, the knowledge vault and Strada.Brain's own tree, and reported the
  * five writes as success.
  *
@@ -111,7 +111,7 @@ describe("vault_write_note under a workspace lease", () => {
     for (const source of [project, projectLink]) {
       for (const v of vaults) v.writeFile.mockClear();
       const result = await new VaultWriteNoteTool().execute(
-        { path: "analysis/GapAudit.md", content: "# Gap audit" },
+        { path: "quarry-notes/Quarry_Review.md", content: "# Quarry review" },
         leasedContext(registryOf(vaults), source),
       );
 
@@ -125,7 +125,7 @@ describe("vault_write_note under a workspace lease", () => {
     const vaults = campaignVaults({ withProjectVault: false });
 
     const result = await new VaultWriteNoteTool().execute(
-      { path: "analysis/GapAudit.md", content: "# Gap audit" },
+      { path: "quarry-notes/Quarry_Review.md", content: "# Quarry review" },
       leasedContext(registryOf(vaults), project),
     );
 
@@ -141,7 +141,7 @@ describe("vault_write_note under a workspace lease", () => {
     const vaults = campaignVaults({ withProjectVault: true });
 
     const result = await new VaultWriteNoteTool().execute(
-      { path: "analysis/GapAudit.md", content: "# Gap audit" },
+      { path: "quarry-notes/Quarry_Review.md", content: "# Quarry review" },
       leasedContext(registryOf(vaults), undefined),
     );
 
@@ -155,7 +155,7 @@ describe("vault_write_note under a workspace lease", () => {
     const vaults = [brainAbove, ...campaignVaults({ withProjectVault: false }).slice(1)];
 
     const result = await new VaultWriteNoteTool().execute(
-      { path: "analysis/GapAudit.md", content: "# Gap audit" },
+      { path: "quarry-notes/Quarry_Review.md", content: "# Quarry review" },
       leasedContext(registryOf(vaults), project),
     );
 

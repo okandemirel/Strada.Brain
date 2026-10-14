@@ -1035,7 +1035,7 @@ export class Orchestrator {
    * How many failures on DIFFERENT targets before a tool is presumed broken.
    *
    * Kept well above the repeat threshold. Measured 2026-08-20: an agent probed
-   * seven files that did not exist, one in each of seven modules — ordinary
+   * files that did not exist, one in each of several modules — ordinary
    * exploration, every call a different path — and lost file_read for the rest
    * of the run. The tool was fine; the paths were not.
    */
@@ -1851,7 +1851,7 @@ export class Orchestrator {
     //
     // Measured, with the threshold at "complex":
     //   "write one C# file under Assets/Scripts…"  113 chars, moderate -> direct
-    //   the four-script test-game request          313 chars, complex  -> supervisor
+    //   a multi-script test-game request           longer,    complex  -> supervisor
     const isDecomposable = this.goalDecomposer?.shouldDecompose(coarsePlanningPrompt) ?? false;
     const meetsComplexity = classification
       ? this.shouldActivateSupervisor(classification)
@@ -4032,7 +4032,7 @@ export class Orchestrator {
    * the run and never sees a tool call, so while this method was gated on the credit flag (default
    * off, set by no config) every production trajectory had zero steps: chain detection, trajectory
    * error→fix extraction and chain post-validation, all on by default, never had a sequence to read
-   * (727 of 727 live rows, learning#4). The row is therefore written on every terminal that took a
+   * (every live row, learning#4). The row is therefore written on every terminal that took a
    * step, failures included, because a chain's success rate needs them; the credit stays gated.
    *
    * Fires from the v2 persistTerminal hook BEFORE {@link currentSessionInstinctIds}.delete clears
@@ -4314,7 +4314,7 @@ export class Orchestrator {
    * is the right answer to that. It is the wrong answer to a refusal: a quota
    * 403 will refuse the second call exactly as it refused the first.
    *
-   * Measured 2026-08-21, run 31: six Kimi calls in twenty-five seconds, six
+   * Measured 2026-08-21: six Kimi calls in twenty-five seconds, six
    * 403s, alternating streaming and non-streaming, with the quota exhausted
    * before the run began. Every second call was spent asking a provider that
    * had just said no whether it still meant it.
@@ -4891,8 +4891,8 @@ export class Orchestrator {
         // its operations directly, so none of them passes executeSingleToolCall
         // and none reaches the cases above. Before this case existed the batch
         // fell to `default` and was stamped approved without the operations
-        // array ever being read — measured, 368 writes reached disk that way,
-        // more than went through the gated path.
+        // array ever being read — measured, more writes reached disk that way
+        // than went through the gated path.
         const parsed = this.batchOperations(input);
         if (parsed.kind === "unreviewable") {
           return { approved: false, reason: `batch cannot be reviewed: ${parsed.reason}` };
@@ -4924,9 +4924,9 @@ export class Orchestrator {
       /^assets\//i.test(normalized) &&
       !/^assets\/(modules|editor|tests|plugins)\//i.test(normalized);
     if (!isLooseGameCode) return null;
-    // Name the way out. Measured 2026-09-07: nine refusals in one day on
-    // Assets/Scripts/BoardBuilder.cs — a loose duplicate of
-    // Assets/Modules/PresentationModule/Scripts/BoardBuilder.cs — each
+    // Name the way out. Measured 2026-09-07: repeated refusals in one day on
+    // a loose Assets/Scripts/<Name>.cs that duplicated
+    // Assets/Modules/<Owner>Module/Scripts/<Name>.cs — each
     // answered with the layout rule and nothing about the twin, so the agent
     // kept trying the loose copy while the build carried both definitions.
     // Looked up under the same root: a module copy made in the lease is not
@@ -5616,11 +5616,11 @@ export class Orchestrator {
     //
     // Except the ones whose job is to report failure. A verification tool
     // answers isError when the VERIFICATION failed, not when the tool did:
-    // measured, unity_verify_change ran its headless compile perfectly three
-    // times, reported 27 compile errors each time, and was taken away from the
-    // run for being unreliable. The agent was then left writing C# with no way
-    // to find out whether it compiles — which is the state this tool exists to
-    // prevent.
+    // measured, unity_verify_change ran its headless compile perfectly on
+    // every call, reported the project's compile errors each time, and was
+    // taken away from the run for being unreliable. The agent was then left
+    // writing C# with no way to find out whether it compiles — which is the
+    // state this tool exists to prevent.
     const breakerScope = this.toolBreakerScope(chatId);
     const breakerTarget = failureTarget(activeToolCall.input);
     const tripped = this.toolIsCircuitBroken(breakerScope.key, activeToolCall.name, breakerTarget);
@@ -6009,9 +6009,9 @@ export class Orchestrator {
    *
    * Measured: an agent registered `dynamic_write_minified_file` — a shell-backed
    * file writer — and the policy classified it "non-write operations execute
-   * without interactive confirmation". It then wrote five .asmdef files through
-   * a shell, which ate the JSON quoting, and reported success on all five. The
-   * project was left with four assembly definitions Unity cannot parse.
+   * without interactive confirmation". It then wrote .asmdef files through a
+   * shell, which ate the JSON quoting, and reported success on every one. The
+   * project was left with assembly definitions Unity cannot parse.
    *
    * So: the allowlist first, then what the tool says about itself, and for a
    * tool that says nothing, its shape. The default leans to "writes" because the

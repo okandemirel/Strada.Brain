@@ -780,7 +780,7 @@ function bareValueBounds(value: string): RequirementBounds {
   return { kind: "exact", value: parseNumber(token), tolerance: toleranceOf(token, approximate) };
 }
 
-/** "6–13 min in a calm season; up to 37 min in a storm season": the session lasts between the least and the most any clause allows. */
+/** "33–38 min solo; up to 53 min when a second player joins": the session lasts between the least and the most any clause allows. */
 function sessionClaimBounds(value: string): RequirementBounds | undefined {
   const clauses = value.split(";").filter((clause) => !OTHER_SUBJECT_RE.test(clause));
   const timed = clauses.flatMap(quantitiesIn).filter((q) => ["s", "ms", "min", "h"].includes(q.bounds.unit ?? ""));

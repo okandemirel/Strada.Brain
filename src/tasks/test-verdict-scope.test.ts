@@ -3,14 +3,14 @@ import { deriveTestVerdict } from "./test-verdict.js";
 
 /**
  * Audited 2026-09-03: the delivered test-game campaign's filtered runs were
- * green while its one unfiltered run reported 6 of 173 failing, including
- * WinLevel_ReachesWonState ("LevelWon event did not fire"). Delivery must be
- * able to tell a chosen subset from the whole suite.
+ * green while its one unfiltered run reported failures, among them the test
+ * of the win path itself (its won event never fired). Delivery must be able
+ * to tell a chosen subset from the whole suite.
  */
 describe("test verdict run scope", () => {
   it("reads unfiltered off the winning line", () => {
     const v = deriveTestVerdict([
-      { toolName: "unity_test_run", content: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)" },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)" },
     ]);
     expect(v.testsGreen).toBe(true);
     expect(v.unfiltered).toBe(true);
@@ -18,7 +18,7 @@ describe("test verdict run scope", () => {
 
   it("marks a filtered green as filtered", () => {
     const v = deriveTestVerdict([
-      { toolName: "unity_test_run", content: "PlayMode verification passed: 2 of 2 tests passed (filter: GameplayWinLossTests)" },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 2 of 2 tests passed (filter: QuarryRoundTests)" },
     ]);
     expect(v.testsGreen).toBe(true);
     expect(v.unfiltered).toBe(false);
@@ -31,12 +31,12 @@ describe("test verdict run scope", () => {
   it("names the failing tests from the red line itself", () => {
     const v = deriveTestVerdict([{
       toolName: "unity_test_run",
-      content: "PlayMode verification FAILED: 2 of 179 tests failed (unfiltered — the whole PlayMode suite). " +
-        "YourGame.SampleGame.PlayModeTests.GameplayWinLossTests.LossLevel_ReachesLostState",
+      content: "PlayMode verification FAILED: 2 of 83 tests failed (unfiltered — the whole PlayMode suite). " +
+        "Kestrel.Quarry.PlayModeTests.QuarryRoundTests.LastCartLost_EndsTheRound",
     }]);
     expect(v.testsGreen).toBe(false);
     expect(v.failedTests).toEqual([
-      "YourGame.SampleGame.PlayModeTests.GameplayWinLossTests.LossLevel_ReachesLostState",
+      "Kestrel.Quarry.PlayModeTests.QuarryRoundTests.LastCartLost_EndsTheRound",
     ]);
   });
 
@@ -69,7 +69,7 @@ describe("test verdict run scope", () => {
   it("takes the scope from the LAST observation, not the body", () => {
     const v = deriveTestVerdict([
       { toolName: "unity_test_run", content: "PlayMode verification passed: 2 of 2 tests passed (filter: WinLoss)" },
-      { toolName: "unity_test_run", content: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)" },
+      { toolName: "unity_test_run", content: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)" },
     ]);
     expect(v.unfiltered).toBe(true);
   });

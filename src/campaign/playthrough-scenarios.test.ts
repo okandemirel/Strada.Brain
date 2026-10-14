@@ -113,13 +113,13 @@ describe("scenario evidence contract", () => {
       ["Menu → game", ["menu-to-game"]], ["The player must win the game.", ["win"]],
       ["Lose", ["lose"]], ["Save and load progress", ["save-load"]],
       ["Transition between scenes", ["scene-transition"]], ["Win; lose", ["win", "lose"]],
-      ["All tests pass", []], ["Window layout", []], ["Win with 500 coins", []],
+      ["All tests pass", []], ["Window layout", []], ["Win with every beacon lit", []],
       ["Win; cloud leaderboards", []], ["", []],
     ];
     for (const [requirement, ids] of cases) expect(contract.scenariosForRequirement(requirement)).toEqual(ids);
     const won = { found: true, ok: true, scenarios: parse([reached[1]]) };
     expect(contract.isRequirementShownByPlaythrough("Win", won)).toBe(true);
-    for (const requirement of ["Lose", "Save and load progress", "Menu → game", "Scene transition", "Win; lose", "Win with 500 coins", "All tests pass"]) {
+    for (const requirement of ["Lose", "Save and load progress", "Menu → game", "Scene transition", "Win; lose", "Win with every beacon lit", "All tests pass"]) {
       expect(contract.isRequirementShownByPlaythrough(requirement, won)).toBe(false);
     }
     expect(contract.isRequirementShownByPlaythrough("Win; lose", { ...won, scenarios: parse(reached) })).toBe(true);

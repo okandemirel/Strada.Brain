@@ -6,7 +6,7 @@
  * simply dies under a message ("All providers failed") that describes an outage
  * that did not happen.
  *
- * Measured 2026-08-23 on run 52: the only live provider stayed silent past its
+ * Measured 2026-08-23 on one run: the only live provider stayed silent past its
  * whole 300s budget once, while direct requests to the same endpoint minutes
  * either side returned their first byte in 2.7s, 7.9s and 16s. The condition was
  * a queue spike that had already passed by the time the task was told it was

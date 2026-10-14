@@ -1,9 +1,9 @@
 /**
  * The gate has to say what a working spec contains.
  *
- * Measured on a 105-minute run: the agent chose unity_scene_build and called it
- * twice — the boot test it writes is on disk twice over — and the scene it
- * produced contains the word "GameBootstrapper" zero times. Running the same
+ * Measured on one long run: the agent chose unity_scene_build and called it
+ * more than once — the boot test it writes is on disk once per call — and the
+ * scene it produced never contains the word "GameBootstrapper". Running the same
  * tool by hand against that same project, with a spec that names the config
  * asset and the bootstrapper, assembled it on the first attempt with no
  * problems. The tool was never the difficulty; knowing what to put in the spec
@@ -24,11 +24,11 @@ const deps = {
 
 function libraryProject(): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "spec-gate-"));
-  const scripts = join(root, "Assets", "Modules", "BoardModule", "Scripts");
+  const scripts = join(root, "Assets", "Modules", "QuarryModule", "Scripts");
   mkdirSync(scripts, { recursive: true });
-  const configPath = join(scripts, "BoardModuleConfig.cs");
-  writeFileSync(configPath, "public class BoardModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Game.Board.asmdef"), '{"name":"Game.Board"}');
+  const configPath = join(scripts, "QuarryModuleConfig.cs");
+  writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Quarry.asmdef"), '{"name":"Game.Quarry"}');
   return { root, configPath };
 }
 
@@ -50,8 +50,8 @@ describe("what the not-assembled gate tells the run", () => {
   });
 
   it("says where a runtime-spawned object goes", () => {
-    // The design document asks for tiles spawned at runtime; without this the
-    // spec describes a scene and the prefabs never exist.
+    // A design that spawns objects at runtime needs this; without it the spec
+    // describes a scene and the prefabs never exist.
     expect(prompt).toContain("prefabPath");
     expect(prompt).toContain("keepInScene");
   });

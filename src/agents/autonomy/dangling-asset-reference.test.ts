@@ -7,17 +7,12 @@ import { StradaConformanceGuard } from './strada-conformance.js';
 /**
  * A reference that resolves to nothing.
  *
- * Measured 2026-08-22: RenderingModuleConfig.asset carried
- * `_prefabs: {guid: 6813063e...}` and no asset in the project had that guid —
- * the prefab config it was supposed to point at had a different one. The C#
- * hides it:
- *
- *   public PresentationPrefabsConfig Prefabs =>
- *       _prefabs != null ? _prefabs : ScriptableObject.CreateInstance<...>();
- *
- * so the null becomes an empty config, the spawner gets no prefabs, and nothing
- * is logged. Forty-four of forty-four tests passed over a game that drew an
- * empty sky.
+ * Measured 2026-08-22: a module config asset carried a reference to a guid
+ * that no asset in the project had — the prefab config it was supposed to
+ * point at had a different one. The C# hid it behind a property that hands
+ * back a fresh empty instance whenever the field is null, so the null becomes
+ * an empty config, the spawner gets no prefabs, and nothing is logged. The
+ * whole test suite passed over a game that drew an empty background.
  *
  * Unity's own built-in guids (the all-zero forms) and anything a package owns
  * are not dangling; a check that flagged those would be noise and would train
@@ -33,26 +28,26 @@ const deps = {
 
 function project(refGuid: string, realGuid: string): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), 'dangling-'));
-  const moduleRoot = join(root, 'Assets', 'Modules', 'RenderingModule');
+  const moduleRoot = join(root, 'Assets', 'Modules', 'DioramaModule');
   const scripts = join(moduleRoot, 'Scripts');
   mkdirSync(scripts, { recursive: true });
 
-  const configPath = join(scripts, 'RenderingModuleConfig.cs');
-  writeFileSync(configPath, 'public class RenderingModuleConfig : ModuleConfig {}');
-  writeFileSync(join(scripts, 'Game.Modules.Rendering.asmdef'), '{"name":"Game.Modules.Rendering"}');
+  const configPath = join(scripts, 'DioramaModuleConfig.cs');
+  writeFileSync(configPath, 'public class DioramaModuleConfig : ModuleConfig {}');
+  writeFileSync(join(scripts, 'Game.Modules.Diorama.asmdef'), '{"name":"Game.Modules.Diorama"}');
   const tests = join(moduleRoot, 'Tests', 'Runtime');
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, 'Game.Modules.Rendering.Tests.asmdef'), '{"name":"Game.Modules.Rendering.Tests"}');
+  writeFileSync(join(tests, 'Game.Modules.Diorama.Tests.asmdef'), '{"name":"Game.Modules.Diorama.Tests"}');
   writeFileSync(join(tests, 'T.cs'), '[Test] public void It() {}');
 
   // The module config asset, pointing at whatever the caller says.
   writeFileSync(
-    join(moduleRoot, 'RenderingModuleConfig.asset'),
-    `%YAML 1.1\n  _prefabs: {fileID: 11400000, guid: ${refGuid}, type: 2}\n  _builtin: {fileID: 0, guid: 0000000000000000f000000000000000, type: 0}\n`,
+    join(moduleRoot, 'DioramaModuleConfig.asset'),
+    `%YAML 1.1\n  _spawnables: {fileID: 11400000, guid: ${refGuid}, type: 2}\n  _builtin: {fileID: 0, guid: 0000000000000000f000000000000000, type: 0}\n`,
   );
   // The asset that actually exists, with its own guid.
-  writeFileSync(join(moduleRoot, 'PresentationPrefabs.asset'), '%YAML 1.1\n');
-  writeFileSync(join(moduleRoot, 'PresentationPrefabs.asset.meta'), `fileFormatVersion: 2\nguid: ${realGuid}\n`);
+  writeFileSync(join(moduleRoot, 'DioramaPrefabs.asset'), '%YAML 1.1\n');
+  writeFileSync(join(moduleRoot, 'DioramaPrefabs.asset.meta'), `fileFormatVersion: 2\nguid: ${realGuid}\n`);
 
   const scenes = join(root, 'Assets', 'Scenes');
   mkdirSync(scenes, { recursive: true });
@@ -67,8 +62,8 @@ const promptFor = (root: string, configPath: string): string =>
     return guard.getPrompt() ?? '';
   };
 
-const REAL = 'a3f1c9d84e2b47e6b0d5c8a1976f3210';
-const MISSING = '6813063e5baa844d7a169fbe5f43269c';
+const REAL = '5e1d0c2b9a8f47e3b6c4d2a19f0e7b38';
+const MISSING = '9b2e4f6a1c3d48e7a5b0c9d8e7f61a24';
 
 /**
  * An imported asset pack: `count` textures, each with its .meta, under a
@@ -92,7 +87,7 @@ describe('an asset reference that points at nothing', () => {
     const prompt = promptFor(root, configPath);
 
     expect(prompt).toContain('[STRADA REFERENCE DANGLING]');
-    expect(prompt).toContain('RenderingModuleConfig');
+    expect(prompt).toContain('DioramaModuleConfig');
     expect(prompt).toContain(MISSING.slice(0, 8));
   });
 

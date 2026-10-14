@@ -33,7 +33,7 @@ function project(): string {
 }
 
 /** A module built the way the generator builds one, fully assembled. */
-function assembledModule(root: string, name = "Board"): string {
+function assembledModule(root: string, name = "Quarry"): string {
   const moduleRoot = join(root, "Assets", "Modules", `${name}Module`);
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
@@ -62,7 +62,7 @@ describe("a module the run deleted", () => {
     const guard = guardFor(root);
 
     guard.trackToolCall("file_delete", { path: configPath }, false);
-    rmSync(join(root, "Assets", "Modules", "BoardModule"), { recursive: true, force: true });
+    rmSync(join(root, "Assets", "Modules", "QuarryModule"), { recursive: true, force: true });
 
     expect(guard.getPrompt() ?? "").not.toContain("[STRADA MODULE INCOMPLETE]");
   });
@@ -87,7 +87,7 @@ describe("a ModuleConfig class that was never meant to have an asset", () => {
     const root = project();
     const configPath = assembledModule(root);
     writeFileSync(
-      join(root, "Assets", "Modules", "BoardModule", "Tests", "Runtime", "FakeModuleConfig.cs"),
+      join(root, "Assets", "Modules", "QuarryModule", "Tests", "Runtime", "FakeModuleConfig.cs"),
       "public class FakeModuleConfig : ModuleConfig {}",
     );
 
@@ -102,7 +102,7 @@ describe("a ModuleConfig class that was never meant to have an asset", () => {
     const root = project();
     const configPath = assembledModule(root);
     writeFileSync(
-      join(root, "Assets", "Modules", "BoardModule", "Scripts", "BaseModuleConfig.cs"),
+      join(root, "Assets", "Modules", "QuarryModule", "Scripts", "BaseModuleConfig.cs"),
       "public abstract class BaseModuleConfig : ModuleConfig {}",
     );
 
@@ -115,12 +115,12 @@ describe("a ModuleConfig class that was never meant to have an asset", () => {
   it("still demands an asset for a real module config", () => {
     const root = project();
     const configPath = assembledModule(root);
-    rmSync(join(root, "Assets", "Modules", "BoardModule", "BoardModuleConfig.asset"));
+    rmSync(join(root, "Assets", "Modules", "QuarryModule", "QuarryModuleConfig.asset"));
 
     const guard = guardFor(root);
     guard.trackToolCall("file_write", { path: configPath }, false);
 
-    expect(guard.getPrompt()).toContain("BoardModuleConfig.cs has no BoardModuleConfig.asset");
+    expect(guard.getPrompt()).toContain("QuarryModuleConfig.cs has no QuarryModuleConfig.asset");
   });
 });
 
@@ -130,20 +130,20 @@ describe("a module built the recommended way", () => {
     // generator branch used to skip the module-root recording entirely — so
     // following the advice made every game gate go silent.
     const root = project();
-    const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
+    const moduleRoot = join(root, "Assets", "Modules", "QuarryModule");
     mkdirSync(join(moduleRoot, "Scripts"), { recursive: true });
-    writeFileSync(join(moduleRoot, "Scripts", "BoardModuleConfig.cs"), "public class BoardModuleConfig : ModuleConfig {}");
-    writeFileSync(join(moduleRoot, "Scripts", "Game.Modules.Board.asmdef"), '{"name":"Game.Modules.Board"}');
+    writeFileSync(join(moduleRoot, "Scripts", "QuarryModuleConfig.cs"), "public class QuarryModuleConfig : ModuleConfig {}");
+    writeFileSync(join(moduleRoot, "Scripts", "Game.Modules.Quarry.asmdef"), '{"name":"Game.Modules.Quarry"}');
 
     const guard = guardFor(root);
     guard.trackToolCall(
       "strada_create_module",
-      { name: "Board" },
+      { name: "Quarry" },
       false,
       [
-        "Created module Board:",
-        "  Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs",
-        "  Assets/Modules/BoardModule/Scripts/Game.Modules.Board.asmdef",
+        "Created module Quarry:",
+        "  Assets/Modules/QuarryModule/Scripts/QuarryModuleConfig.cs",
+        "  Assets/Modules/QuarryModule/Scripts/Game.Modules.Quarry.asmdef",
       ].join("\n"),
     );
 
@@ -155,7 +155,7 @@ describe("a module built the recommended way", () => {
     const root = project();
     const guard = guardFor(root);
 
-    guard.trackToolCall("strada_create_module", { name: "Board" }, true, "Error: invalid name");
+    guard.trackToolCall("strada_create_module", { name: "Quarry" }, true, "Error: invalid name");
 
     expect(guard.getPrompt() ?? "").not.toContain("[STRADA GAME NOT ASSEMBLED]");
   });

@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { CampaignManager } from "./campaign-manager.js";
 
 /**
- * Measured 2026-09-03: the delivered project carried 20 scenes, 14 enabled in
- * the build, most of them single-purpose verification scaffolding — and the
- * report never said which one is the game.
+ * Measured 2026-09-03: the delivered project carried many scenes, most of the
+ * enabled ones single-purpose verification scaffolding — and the report never
+ * said which one is the game.
  */
 const dirs: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), "proj-")); dirs.push(d); return d; }
@@ -22,13 +22,13 @@ describe("delivery report entry point", () => {
     const root = tmp();
     mkdirSync(join(root, "ProjectSettings"), { recursive: true });
     mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
-    writeFileSync(join(root, "Assets", "Scenes", "ProductionMain.unity"), scene(17));
-    writeFileSync(join(root, "Assets", "Scenes", "CometShowcase.unity"), scene(5));
+    writeFileSync(join(root, "Assets", "Scenes", "Concourse.unity"), scene(26));
+    writeFileSync(join(root, "Assets", "Scenes", "TideSandbox.unity"), scene(6));
     writeFileSync(join(root, "Assets", "InitTestScene-abc.unity"), scene(2));
     writeFileSync(
       join(root, "ProjectSettings", "EditorBuildSettings.asset"),
-      ["  - enabled: 1", "    path: Assets/Scenes/CometShowcase.unity",
-       "  - enabled: 1", "    path: Assets/Scenes/ProductionMain.unity",
+      ["  - enabled: 1", "    path: Assets/Scenes/TideSandbox.unity",
+       "  - enabled: 1", "    path: Assets/Scenes/Concourse.unity",
        "  - enabled: 1", "    path: Assets/InitTestScene-abc.unity",
        "  - enabled: 0", "    path: Assets/Scenes/Disabled.unity"].join("\n"),
     );
@@ -38,12 +38,12 @@ describe("delivery report entry point", () => {
     const text = (manager as unknown as { describeEntryPoint(): string | undefined }).describeEntryPoint();
 
     expect(text).toContain("How to run it");
-    // The build opens CometShowcase (index 0) — that is what a person gets —
-    // and ProductionMain is named beside it with what to do about it.
-    expect(text).toContain("Assets/Scenes/CometShowcase.unity");
+    // The build opens TideSandbox (index 0) — that is what a person gets —
+    // and Concourse is named beside it with what to do about it.
+    expect(text).toContain("Assets/Scenes/TideSandbox.unity");
     expect(text).toContain("FIRST enabled scene");
-    expect(text).toContain("ProductionMain.unity");
-    expect(text).toContain("17 objects");
+    expect(text).toContain("Concourse.unity");
+    expect(text).toContain("26 objects");
     expect(text).toContain("verification scaffolding");
   });
 

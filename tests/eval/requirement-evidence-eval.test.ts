@@ -206,14 +206,14 @@ describe("the measured rates", () => {
     const falseClosed = measures.find((m) => m.name === "false-closed-rate")!;
     expect(falseClosed.state).toBe(STATE.REGRESSED);
     expect(falseClosed.wrong).toBeGreaterThanOrEqual(6);
-    expect(falseClosed.rows).toContain("bomb-by-no-trace-finding");
+    expect(falseClosed.rows).toContain("brass-gull-by-no-trace-finding");
     expect(falseClosed.rows).toContain("fps-by-not-met-claim");
   });
 });
 
 describe("the ledger arm (GDD-drift W12): a row closes only on its own check passing on this revision", () => {
   const PROBES = [
-    "probe-labelled-rule-by-system-file",
+    "probe-labelled-rule-by-rules-file",
     "probe-feature-by-service-file",
     "probe-input-by-input-service",
     "probe-guardrail-by-interface-file",
@@ -239,10 +239,11 @@ describe("the ledger arm (GDD-drift W12): a row closes only on its own check pas
       expect(p.expected, p.id).toBe(ORACLE.NOT_PROVEN);
       expect(p.matcher, p.id).toBe("open");
     }
-    // …while today's word matcher closes three of the four (the tap row shares
-    // no word with InputService.cs), as measured on the trace itself.
+    // …while today's word matcher closes three of the four (the input row
+    // shares no word with its input-service file), as measured on the trace
+    // itself.
     expect(probes.filter((p: { wordMatcher: string }) => p.wordMatcher === "closed").map((p: { id: string }) => p.id)).toEqual([
-      "probe-labelled-rule-by-system-file",
+      "probe-labelled-rule-by-rules-file",
       "probe-feature-by-service-file",
       "probe-guardrail-by-interface-file",
     ]);
@@ -302,7 +303,7 @@ describe("the ledger arm (GDD-drift W12): a row closes only on its own check pas
     expect(run.status).toBe(EXIT.MEASURED_GOOD);
     const result = JSON.parse(run.stdout);
     expect(result.ledger.verdict).toBe(STATE.GOOD);
-    expect(result.ledger.wordMatcher.closed).toEqual(expect.arrayContaining(["probe-labelled-rule-by-system-file"]));
+    expect(result.ledger.wordMatcher.closed).toEqual(expect.arrayContaining(["probe-labelled-rule-by-rules-file"]));
 
     const dir = mkdtempSync(join(tmpdir(), "req-eval-ledger-"));
     try {

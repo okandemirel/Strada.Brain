@@ -6,11 +6,11 @@
  * can reach Presentation, no layer can be tested in isolation, and a change in
  * any layer rebuilds and reruns everything.
  *
- * Measured on a live run: a test-game module with five code assemblies —
- * Domain (22 files), Application (9), Infrastructure (8), Presentation (2),
- * Core (1) — carried a single YourGame.SampleGame.Tests at the module root whose
- * references listed all five. Four of the five assemblies had no test of their
- * own, and nothing in the system said so.
+ * Measured on a live run: a test-game module split into layer assemblies
+ * (domain, application, infrastructure, presentation, core) carried a single
+ * YourGame.SampleGame.Tests at the module root whose references listed every
+ * one of them. Most of those assemblies had no test of their own, and nothing
+ * in the system said so.
  */
 
 import { resolve } from "node:path";
@@ -50,7 +50,7 @@ function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
 
 describe("per-assembly test coverage", () => {
   it("names every assembly that nothing tests", () => {
-    // The measured shape: five code assemblies, one catch-all test assembly.
+    // The measured shape: several layer assemblies, one catch-all test assembly.
     const guard = guardSeeing([
       "Core/YourGame.SampleGame.Core.asmdef",
       "Domain/YourGame.SampleGame.Domain.asmdef",
@@ -65,7 +65,7 @@ describe("per-assembly test coverage", () => {
     expect(prompt).toContain("STRADA MODULE TESTS MISSING");
     // One .asmdef per folder, or the project does not build at all. Saying
     // "give each assembly its own tests" without this sent an agent to write
-    // five test assemblies into a single Tests/Editor folder; Unity answered
+    // every test assembly into a single Tests/Editor folder; Unity answered
     // "contains multiple assembly definition files" and nothing compiled.
     expect(prompt).toMatch(/ONE \.asmdef per folder/i);
     expect(prompt).toMatch(/its own directory/i);

@@ -121,8 +121,9 @@ const RUN_TAIL_RE =
 /**
  * List/heading decoration a document editor adds and removes without changing
  * the ask. The numbering branch demands WHITESPACE after the separator: "3."
- * opening "3. Save progress" is a list marker, and "3.000" opening "3.000
- * coins" is a figure — stripping the latter turned three thousand into zero.
+ * opening "3. Save progress" is a list marker, and "4.500" opening "4.500
+ * coins" is a figure — stripping the latter turned four and a half thousand
+ * into five hundred.
  */
 // A leading dash is decoration ("- Save progress") EXCEPT when it is stuck to
 // a digit: "-10 gravity" opens with a NEGATIVE NUMBER, and eating that sign made
@@ -185,7 +186,7 @@ const COSMETIC_FILLERS = new Set([
 const NEGATIONS = new Set(["not", "no", "never", "none", "nor", "without", "non", "cannot", "cant", "dont", "doesnt", "isnt"]);
 
 /**
- * "3,000" and "3.000" are 3000; "2.5" is 2.5 (a decimal, not a separator).
+ * "4,500" and "4.500" are 4500; "2.5" is 2.5 (a decimal, not a separator).
  *
  * THE SIGN IS PART OF THE VALUE. "-10" is not "10": a proven `Set gravity = -10`
  * reworded to `Set gravity = 10` had the same fingerprint, so it inherited the
@@ -234,10 +235,10 @@ const OPERATOR_CANONICAL: Record<string, string> = { "≤": "<=", "≥": ">=", "
  *
  * KEPT, because two readings that differ only here are different asks:
  *   • DIGITS, wherever they sit — on their own ("13 levels"), or GLUED TO A WORD
- *     ("WebGL1", "L3 Bomb", "HDRP2", "v1"). A digit after letters is a version,
+ *     ("WebGL1", "Ch2 Gull", "HDRP2", "v1"). A digit after letters is a version,
  *     a tier or an index; dropping it collapsed every identifier into its
- *     siblings (#17). Separators inside a figure are folded, so "3,000" and
- *     "3.000" are both 3000 and "2.5" stays 2.5.
+ *     siblings (#17). Separators inside a figure are folded, so "4,500" and
+ *     "4.500" are both 4500 and "2.5" stays 2.5.
  *   • A SIGN on a number ("-10" is not "10"), and only when it is stuck to the
  *     digits and preceded by nothing alphanumeric — see the dropped list.
  *     A leading PLUS is folded away, because "+10" is ten.

@@ -484,7 +484,8 @@ interface Tally {
   /**
    * Sound, motion and effects (2026-09-10): the GDD's audio, animation and
    * VFX asks were measured by nothing — a delivery could ship silent, static
-   * scenes against a cue list and a "juicy" brief and read as complete.
+   * scenes against a document that asks for sound and motion and read as
+   * complete.
    */
   audioSources: number;
   /** AudioSources whose m_audioClip points at a project asset. */
@@ -785,7 +786,7 @@ export function readEnabledBuildScenes(projectRoot: string, io: BuiltAsSpecified
  *
  * Only mechanical markers: Unity's own generated InitTestScene<guid>, and
  * anything under a Tests/ or Editor/ folder. Deliberately NOT a name list —
- * excusing a scene because it is called "Assembled…" would let the next
+ * excusing a scene because it is called "Rehearsal…" would let the next
  * delivery pass by renaming its empty scene.
  */
 export function isScaffoldingScene(scenePath: string): boolean {
@@ -1951,7 +1952,7 @@ export function isPlaceholderGradePng(absPath: string): boolean {
 /**
  * C. The project's sprite art is, in the overwhelming majority, placeholder
  *    shapes. A stylised game can be flat-shaded; a game whose "artwork" files
- *    are 300-byte squares has not had its art made. Strong case only: at least
+ *    are tiny flat squares has not had its art made. Strong case only: at least
  *    PLACEHOLDER_REFUSAL_MIN_SPRITES sprites and PLACEHOLDER_REFUSAL_SHARE of
  *    them placeholder-grade. Anything softer is the disclosure above.
  */

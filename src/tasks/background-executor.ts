@@ -1612,7 +1612,7 @@ export class BackgroundExecutor {
     /**
      * What publication DECLINED, as opposed to lost. A worker whose deletions
      * are refused learns nothing today, so it deletes the same files again on
-     * every attempt — measured live 2026-09-12 03:27, the same eight .meta
+     * every attempt — measured live 2026-09-12 03:27, the same .meta
      * deletions declined sprint after sprint.
      */
     let publicationNote: string | undefined;

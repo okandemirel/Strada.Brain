@@ -24,21 +24,21 @@ const deps = {
  */
 function project(): { root: string; scripts: string; moduleRoot: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "gate-scope-"));
-  const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
+  const moduleRoot = join(root, "Assets", "Modules", "QuarryModule");
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
-  const configPath = join(scripts, "BoardModuleConfig.cs");
-  writeFileSync(configPath, "public class BoardModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Game.Board.asmdef"), '{"name":"Game.Board"}');
-  writeFileSync(join(scripts, "CubeView.cs"), "public class CubeView : MonoBehaviour {}");
-  writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
+  const configPath = join(scripts, "QuarryModuleConfig.cs");
+  writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Quarry.asmdef"), '{"name":"Game.Quarry"}');
+  writeFileSync(join(scripts, "ChiselView.cs"), "public class ChiselView : MonoBehaviour {}");
+  writeFileSync(join(moduleRoot, "QuarryModuleConfig.asset"), "%YAML 1.1");
   const tests = join(moduleRoot, "Tests", "Runtime");
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, "Game.Board.Tests.asmdef"), '{"name":"Game.Board.Tests"}');
-  writeFileSync(join(tests, "BoardTests.cs"), "public class T { [Test] public void A() { } }");
+  writeFileSync(join(tests, "Game.Quarry.Tests.asmdef"), '{"name":"Game.Quarry.Tests"}');
+  writeFileSync(join(tests, "QuarryTests.cs"), "public class T { [Test] public void A() { } }");
   const prefabs = join(moduleRoot, "Prefabs");
   mkdirSync(prefabs, { recursive: true });
-  writeFileSync(join(prefabs, "Cube.prefab"), "GameObject:");
+  writeFileSync(join(prefabs, "Chisel.prefab"), "GameObject:");
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
   writeFileSync(
@@ -82,7 +82,7 @@ describe("C# is read through one comment-aware reader", () => {
     expect(isVendorPath("C:\\Game\\Library\\PackageCache\\com.unity.ugui\\X.cs")).toBe(true);
     expect(isVendorPath("/p/Packages/com.vendor.tool/Runtime/A.cs")).toBe(true);
     expect(isVendorPath("Assets/Game/Packages/Offer.cs")).toBe(false);
-    expect(isVendorPath("Assets/Modules/Board/Scripts/A.cs")).toBe(false);
+    expect(isVendorPath("Assets/Modules/Quarry/Scripts/A.cs")).toBe(false);
   });
 });
 
@@ -90,7 +90,7 @@ describe("gates judge the run's own work (AUT-4)", () => {
   it("a test declared beside another attribute is a test; a commented-out one is not", () => {
     const withTimeout = project();
     writeFileSync(
-      join(withTimeout.moduleRoot, "Tests", "Runtime", "BoardTests.cs"),
+      join(withTimeout.moduleRoot, "Tests", "Runtime", "QuarryTests.cs"),
       "public class T { [Timeout(1000), Test] public void A() { } }",
     );
     const guard = guardFor(withTimeout.root);
@@ -99,7 +99,7 @@ describe("gates judge the run's own work (AUT-4)", () => {
 
     const commented = project();
     writeFileSync(
-      join(commented.moduleRoot, "Tests", "Runtime", "BoardTests.cs"),
+      join(commented.moduleRoot, "Tests", "Runtime", "QuarryTests.cs"),
       "public class T { // [Test]\n public void A() { } }",
     );
     const other = guardFor(commented.root);
@@ -127,7 +127,7 @@ describe("gates judge the run's own work (AUT-4)", () => {
 
   it("a comment naming StradaLog does not excuse logging the run wrote", () => {
     const { root, scripts, configPath } = project();
-    const mine = join(scripts, "BoardLogger.cs");
+    const mine = join(scripts, "QuarryLogger.cs");
     writeFileSync(
       mine,
       "// TODO: switch to StradaLog\n" + Array.from({ length: 12 }, (_, i) => `Debug.Log("m${i}");`).join("\n"),
@@ -169,7 +169,7 @@ describe("gates judge the run's own work (AUT-4)", () => {
       join(root, "Packages", "manifest.json"),
       JSON.stringify({ dependencies: { "com.unity.textmeshpro": "3.0.6" } }),
     );
-    writeFileSync(join(moduleRoot, "BoardModuleConfig.asset.meta"), "guid: a3f1c9d84e2b47e6b0d5c8a1976f3210\n");
+    writeFileSync(join(moduleRoot, "QuarryModuleConfig.asset.meta"), "guid: d2c8a4e6f0b1493a8e7c5d3b1a9f2e60\n");
     writeFileSync(
       join(moduleRoot, "Hud.asset"),
       "%YAML 1.1\n  _font: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}\n",

@@ -1,8 +1,8 @@
 /**
  * The gate that separates a compiling library from a game.
  *
- * Measured on a 104-minute run: nine modules, fifty C# files, sixteen test
- * assemblies, all compiling — and zero scenes, zero ScriptableObject assets, no
+ * Measured on one long run: several modules, their C# files and test
+ * assemblies, all compiling — and no scene, no ScriptableObject asset, no
  * bootstrapper. The run reported success, and every conformance rule agreed,
  * because all of them read the shape of the code. None of them looked for the
  * artifacts that make the code run.
@@ -36,19 +36,19 @@ const deps = {
 /** A module that satisfies every *code-shaped* rule: config class + asmdef. */
 function projectWithModule(): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "scene-gate-"));
-  const scripts = join(root, "Assets", "Modules", "BoardModule", "Scripts");
+  const scripts = join(root, "Assets", "Modules", "QuarryModule", "Scripts");
   mkdirSync(scripts, { recursive: true });
 
-  const configPath = join(scripts, "BoardModuleConfig.cs");
-  writeFileSync(configPath, "public class BoardModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Board.asmdef"), JSON.stringify({ name: "Board" }));
+  const configPath = join(scripts, "QuarryModuleConfig.cs");
+  writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Quarry.asmdef"), JSON.stringify({ name: "Quarry" }));
   return { root, configPath };
 }
 
 /** Adds what makes it run: the config asset, and a scene wired to it. */
 function assemble(root: string): void {
-  const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
-  writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
+  const moduleRoot = join(root, "Assets", "Modules", "QuarryModule");
+  writeFileSync(join(moduleRoot, "QuarryModuleConfig.asset"), "%YAML 1.1");
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
@@ -72,7 +72,7 @@ describe("a run that wrote module code but assembled no game", () => {
 
     expect(prompt).toContain("[STRADA GAME NOT ASSEMBLED]");
     expect(prompt).toContain("library, not a game");
-    expect(prompt).toContain("BoardModuleConfig.cs has no BoardModuleConfig.asset");
+    expect(prompt).toContain("QuarryModuleConfig.cs has no QuarryModuleConfig.asset");
     // It has to say what to do, not only what is wrong.
     expect(prompt).toContain("unity_scene_build");
   });

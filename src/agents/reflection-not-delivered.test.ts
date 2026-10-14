@@ -8,7 +8,7 @@
  * that finishes through REFLECTING (the normal route once the agent reflects
  * and says done — reflection.ts sends DONE there and the v2 runner never falls
  * through to end-turn) reached completeBgReflectionDone, which recorded
- * "approved" and returned flow:"done" with no status. Run 52's exact failure —
+ * "approved" and returned flow:"done" with no status. That measured failure —
  * a bare success message for a game that never rendered — was still reachable
  * through this door. The interactive reflection approved path had the same
  * omission.
@@ -123,7 +123,7 @@ function interactiveContextThatApproves(unmet: readonly string[]): InteractiveRe
   } as unknown as InteractiveReflectionContext;
 }
 
-const NOT_DRAWN = "the game has never been observed to render: all 60 captured frames are identical";
+const NOT_DRAWN = "the game has never been observed to render: all 36 captured frames are identical";
 
 describe("background reflection DONE with an unmet delivery condition", () => {
   it("does not report completion", async () => {
@@ -138,7 +138,7 @@ describe("background reflection DONE with an unmet delivery condition", () => {
 
     if (result.flow !== "done") throw new Error("expected done");
     expect(result.visibleText).toContain("NOT DELIVERED");
-    expect(result.visibleText).toContain("all 60 captured frames are identical");
+    expect(result.visibleText).toContain("all 36 captured frames are identical");
     expect(result.visibleText).toContain("Implemented the board module");
   });
 
