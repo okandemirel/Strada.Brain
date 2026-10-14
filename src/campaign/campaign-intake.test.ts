@@ -645,3 +645,53 @@ describe("a build the message turns down or asks about", () => {
     });
   });
 });
+
+/**
+ * A style sheet the build connective landed on was the design, whatever the
+ * message named beside it: "Build the game per docs/art-style.md, see
+ * docs/Quillmoor_GDD.md" answered "Building from `docs/art-style.md` … Sprint
+ * 1 starts now", with no approval gate. Only the documents the build was
+ * aimed at were weighed, and when every one of them sat beside a design the
+ * first was taken anyway.
+ */
+describe("a build aimed only at a document that sits beside the design", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it.each([
+    ["Build this game: docs/art-style.md (design: docs/Quillmoor_GDD.md)", "docs/Quillmoor_GDD.md"],
+    ["Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Build the game in docs/art-style.md; the design is docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game in CHANGELOG.md; the GDD is in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game per docs/art-style.md, see docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Bu oyunu yap: docs/art-style.md, tasarım docs/quillmoor.md", "docs/quillmoor.md"],
+    ["docs/art-style.md'deki oyunu yap, docs/Quillmoor_GDD.md'ye de bak", "docs/Quillmoor_GDD.md"],
+    // Named as the design, with no style sheet beside it, it is the design too.
+    ["Please build this game, design is in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Bu oyunu yap, tasarım docs/quillmoor.md içinde", "docs/quillmoor.md"],
+  ])("%s → the design beside it, %s", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
+  it.each([
+    // The only design beside it is the one the message turns away…
+    "Build the game per docs/art-style.md, not docs/Old_GDD.md",
+    "Build the game per docs/art-style.md; docs/Old_GDD.md is outdated",
+    "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md'yi kullanma",
+    // …or there are two, and the message does not say which.
+    "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md or docs/Fernwick_GDD.md",
+    "Build the game per docs/art-style.md, see docs/quillmoor.md and docs/fernwick.md",
+    // A GDD the message turns away is no design when nothing is aimed either.
+    "Build the game, don't use docs/Old_GDD.md",
+    "Build the game, but not from docs/Old_GDD.md",
+    // "The art design" is the style sheet's subject, not the game's design.
+    "Build this game. The art design is in docs/art-style.md",
+  ])("%s → no campaign (no design the message settled on)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it("an idea written beside the style sheet the build is aimed at is the design", () => {
+    const text = "Build this game from scratch per docs/art-style.md: a beekeeper moves her hives between meadows as the seasons turn.";
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+});

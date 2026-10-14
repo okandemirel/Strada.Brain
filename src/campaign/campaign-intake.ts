@@ -467,13 +467,35 @@ const GDD_NAMES_NEXT_RES = [GDD_ACRONYM_RE, GDD_SPELLED_RE].map(
   (re) =>
     new RegExp(
       `(?:${re.source})` +
-        String.raw`(?:['’]\p{L}+)?(?:\s+(?:dosya(?:sı)?|belge(?:si)?|file|document|doc))?(?:\s+(?:at|in|is)|\s*[:=(—–-])?\s*["'\x60“‘(]?$`,
+        String.raw`(?:['’]\p{L}+)?(?:\s+(?:dosya(?:sı)?|belge(?:si)?|file|document|doc))?(?:\s+(?:is\s+(?:at|in)|at|in|is)|\s*[:=(—–-])?\s*["'\x60“‘(]?$`,
       re.flags,
     ),
 );
 
+/**
+ * The document is the design, said at the start of a clause: "the design is
+ * P", "design: P", "(design: P)", "tasarım P". A modifier makes it another
+ * design: "the art design is in P" names the style sheet.
+ */
+const DESIGN_NAMES_NEXT_RE =
+  /(?:^|[,;:(—–]\s*|[.!?]\s+|(?<![\p{L}])(?:and|ve)\s+)(?:(?:the|its|our|my)\s+)?(?:(?:game\s+)?design(?:\s+(?:doc(?:ument)?|file|spec))?\s*(?:(?:is|lives|sits)(?:\s+(?:in|at))?|at|in|[:=—–])|(?:oyunun\s+)?tasarım(?:ı)?(?:\s+(?:dosyası|belgesi))?\s*[:=—–]?)\s*["'\x60“‘(]?$/iu;
+
 /** "P and Q", "P, Q", "P ve Q": named together, aimed at together. */
 const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?|\s+(?:and|or|ve|veya|&|\+)\s+)["'`“‘(]?$/iu;
+
+/** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P". */
+const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without)(?![\p{L}])/iu;
+/** …and after it: "P is outdated", "P'yi kullanma", "P değil", "P yerine". */
+const TURNS_AWAY_AFTER_RE =
+  /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden)(?![\p{L}])/iu;
+
+function turnedAway(prose: string, doc: NamedDocument): boolean {
+  const before = clauseBefore(prose, doc.at);
+  if (TURNS_DOWN_RE.test(before) || TURNS_AWAY_BEFORE_RE.test(before)) return true;
+  const after = prose.slice(doc.end);
+  const clauseEnd = [...after.matchAll(CLAUSE_BREAK_RE)][0]?.index ?? after.length;
+  return TURNS_AWAY_AFTER_RE.test(after.slice(0, clauseEnd));
+}
 
 /**
  * The design among the documents the message names: one the build is aimed
@@ -483,6 +505,14 @@ const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?
  * holds nothing else to build from — otherwise it is a reference beside an
  * idea, and the idea is the design. A path the build is not aimed at was
  * taken anyway: an idea that mentioned docs/art-style.md was built from it.
+ *
+ * …AND A BUILD AIMED ONLY AT A STYLE SHEET OR A CHANGELOG IS AIMED AT NO
+ * DESIGN. "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md"
+ * built the style sheet, ungated: the design is then the one named beside it
+ * — the only GDD, else the only other document — unless the message turns it
+ * away or names two, and then there is no campaign to start (the user's task
+ * asks which). Named alone, with nothing else to build from, it is still the
+ * document the message meant.
  */
 function designAmong(text: string, named: readonly NamedDocument[]): string | undefined {
   if (named.length === 0) return undefined;
@@ -495,7 +525,7 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | un
     if (before && buildIsAsked(prose, before.index, doc.at)) return true;
     const after = GAME_IN_PREVIOUS_RE.exec(text.slice(doc.end));
     if (after && buildIsAsked(prose, doc.at, doc.end + after[0].length)) return true;
-    return wholeGame && GDD_NAMES_NEXT_RES.some((re) => re.test(text.slice(0, doc.at)));
+    return wholeGame && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => re.test(text.slice(0, doc.at)));
   });
   for (let spread = true; spread; ) {
     spread = false;
@@ -506,12 +536,19 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | un
       }
     }
   }
-  const paths = named.filter((_, i) => aimed[i]).map((doc) => doc.path);
-  if (paths.length > 0) return paths.find(refersToGdd) ?? paths.find((path) => !isSupportDocument(path)) ?? paths[0];
-  const gdd = named.find((doc) => refersToGdd(doc.path));
-  if (!gdd || !wholeGame) return undefined;
+  const aimedDocs = named.filter((_, i) => aimed[i]);
+  const design = aimedDocs.find((doc) => refersToGdd(doc.path)) ?? aimedDocs.find((doc) => !isSupportDocument(doc.path));
+  if (design) return design.path;
   const rest = withoutDocuments(text, named);
-  return refersToGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH ? gdd.path : undefined;
+  if (!wholeGame || !(refersToGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return undefined;
+  const beside = named.filter((doc) => !aimedDocs.includes(doc));
+  const candidates = beside.filter((doc) => !turnedAway(prose, doc));
+  const gdds = candidates.filter((doc) => refersToGdd(doc.path));
+  if (gdds.length > 0) return gdds.length === 1 ? gdds[0]!.path : undefined;
+  if (aimedDocs.length === 0) return undefined;
+  const designs = candidates.filter((doc) => !isSupportDocument(doc.path));
+  if (designs.length > 0) return designs.length === 1 ? designs[0]!.path : undefined;
+  return beside.some((doc) => !isSupportDocument(doc.path)) ? undefined : aimedDocs[0]!.path;
 }
 
 /** The design document the message names, when it names one. */

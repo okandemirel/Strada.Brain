@@ -10358,6 +10358,26 @@ describe("CampaignManager", () => {
       expect(tasks.submitted).toHaveLength(0);
     });
 
+    // A build aimed at the style sheet answered "Building from `docs/art-style.md` … Sprint 1 starts now".
+    it("builds the design named beside a style sheet the build is aimed at, not the style sheet", async () => {
+      writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+      writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-beside", "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md")).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-beside");
+      expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.md");
+      expect(campaign?.gddText).toBe(DESIGN);
+      expect(told("chat-beside")).not.toContain("art-style.md");
+    });
+
+    it("starts nothing when the only design beside the style sheet is one the message turns away", async () => {
+      writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+      writeFileSync(join(projectRoot, "docs", "Old_GDD.md"), DESIGN);
+      expect(await say("chat-away", "Build the game per docs/art-style.md, not docs/Old_GDD.md")).toBe(false);
+      expect(told("chat-away")).toBe("");
+      expect(storage.hasActiveForChat("chat-away")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
     it("an idea that names its style sheet is drafted from the idea, at the approval gate", async () => {
       writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
       const idea = "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.";
