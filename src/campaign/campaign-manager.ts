@@ -2467,7 +2467,7 @@ export class CampaignManager {
       // A re-send carries the SAME opinion the report was built with; a second
       // reviewer run is a second bill and a possibly different verdict.
       if (campaign.independentReview?.ok !== true) await this.gatherIndependentReview(campaign);
-      if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
+      if (await this.tell(campaign, this.buildDeliveryReport(campaign, { negativeControls: true }))) {
         campaign.deliveryReported = true;
         this.persist(campaign);
       }
@@ -5413,7 +5413,7 @@ export class CampaignManager {
           });
           return;
         }
-        if (await this.tell(campaign, `${this.buildDeliveryReport(campaign)}${commitNote}`)) {
+        if (await this.tell(campaign, `${this.buildDeliveryReport(campaign, { negativeControls: true })}${commitNote}`)) {
           campaign.deliveryReported = true;
           this.persist(campaign);
         }
@@ -5850,7 +5850,7 @@ export class CampaignManager {
         structureRefused: milestone.structureRefused,
       });
       await this.gatherIndependentReview(campaign);
-      if (await this.tell(campaign, this.buildDeliveryReport(campaign))) {
+      if (await this.tell(campaign, this.buildDeliveryReport(campaign, { negativeControls: true }))) {
         campaign.deliveryReported = true;
         this.persist(campaign);
       }
@@ -9836,7 +9836,16 @@ export class CampaignManager {
     }
   }
 
-  private buildDeliveryReport(campaign: Campaign): string {
+  /**
+   * @param opts.negativeControls Run the gates against a deliberately broken
+   * copy of the tree and print what refused. Only on a report that ANNOUNCES
+   * a delivery: it answers "could these verdicts have failed?", which a
+   * stopped-short report already answers with its refusal — and it costs two
+   * more asset walks, which a bounce loop pays on every round (measured on CI
+   * windows-test 2026-10-14: a 60-round delivery-bounce test went past its
+   * 30 s budget when every round ran them).
+   */
+  private buildDeliveryReport(campaign: Campaign, opts: { negativeControls?: boolean } = {}): string {
     // EVIDENCE, not stored booleans. The report used to render only
     // milestone.status — while the manager held commit hashes, capture
     // counts, test verdicts and every bounce/escalation and threw them away
@@ -10121,7 +10130,7 @@ export class CampaignManager {
     // at boot; that says nothing about whether it would have caught a defect
     // in this project. The controls break the delivered tree in memory —
     // nothing on disk is touched — and require the same readers to refuse it.
-    try {
+    if (opts.negativeControls) try {
       const gddForControls = this.gddTextOf(campaign);
       const controls = runNegativeControls(
         this.projectRoot,
