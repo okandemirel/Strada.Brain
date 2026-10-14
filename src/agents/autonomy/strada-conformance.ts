@@ -376,6 +376,15 @@ function defaultTestSources(dir: string): string[] {
 }
 
 /** Every .cs under a directory, with its path (relative to it) and line count. */
+/**
+ * A test source: anything under a Tests folder (Unity's own layout, and the
+ * `Tests~` form), or a file whose name says so. Both forms appear in a Unity
+ * project and the gate above must recognise either.
+ */
+export function isTestSourcePath(path: string): boolean {
+  return /(?:^|[/\\])Tests~?[/\\]/u.test(path) || /(?:^|[/\\])\w*Tests?\.cs$/u.test(path);
+}
+
 function defaultSourceSizes(dir: string): Array<{ path: string; lines: number }> {
   if (!existsSync(dir)) return [];
   const sizes: Array<{ path: string; lines: number }> = [];
@@ -1408,6 +1417,13 @@ export class StradaConformanceGuard {
       if (!existsSync(dir)) continue;
 
       for (const source of readSizes(dir)) {
+        // NOT A TEST FILE. This gate's advice is how the framework divides
+        // production work — a controller per flow, a signal per action — and
+        // a test file cannot follow it: its length is the number of cases it
+        // covers. Measured live 2026-10-14: a sprint split LevelSessionTests
+        // from 226 to 204 lines and the gate fired again, spending a second
+        // round of a quota-limited run on nothing.
+        if (isTestSourcePath(source.path)) continue;
         // Only what this run wrote: an untouched 261-line Legacy.cs beside a
         // one-line fix was named on every call (audited 2026-09-24).
         if (source.lines > MAX_SOURCE_LINES && this.wrote(joinPath(dir, source.path))) {

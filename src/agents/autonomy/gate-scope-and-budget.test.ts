@@ -151,6 +151,33 @@ describe("gates judge the run's own work (AUT-4)", () => {
     expect(wrote.getPrompt() ?? "").toContain("[STRADA FILE TOO LONG]");
   });
 
+  it("a long TEST file is not named: this gate's advice cannot be followed by one", () => {
+    // Measured live 2026-10-14: a sprint split LevelSessionTests from 226 to
+    // 204 lines, the gate fired again at 210, and a third round of a
+    // quota-limited run went on nothing. A test file's length is the number
+    // of cases it covers; "a controller per flow, a signal per action" is
+    // advice about production structure.
+    const { root, scripts, configPath } = project();
+    const tests = join(scripts, "Tests", "Runtime");
+    mkdirSync(tests, { recursive: true });
+    const suite = join(tests, "LevelSessionTests.cs");
+    writeFileSync(suite, "// case\n".repeat(261));
+    const guard = guardFor(root);
+    guard.trackToolCall("file_write", { path: configPath }, false);
+    guard.trackToolCall("file_write", { path: suite }, false);
+
+    expect(guard.getPrompt() ?? "").not.toContain("[STRADA FILE TOO LONG]");
+
+    // …and a long production file beside it is still named.
+    const long = join(scripts, "HarborSystem.cs");
+    writeFileSync(long, "// line\n".repeat(261));
+    const both = guardFor(root);
+    both.trackToolCall("file_write", { path: suite }, false);
+    both.trackToolCall("file_write", { path: long }, false);
+    expect(both.getPrompt() ?? "").toContain("[STRADA FILE TOO LONG]");
+    expect(both.getPrompt() ?? "").not.toContain("LevelSessionTests.cs");
+  });
+
   it("a vendor path shaped like a module is not an incomplete module", () => {
     const { root } = project();
     const vendor = join(root, "Assets", "Plugins", "Vendor", "Modules", "Net", "Scripts");
