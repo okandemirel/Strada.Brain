@@ -64,7 +64,7 @@ const prefabInstance = (guid: string, id = 1001): string =>
 
 /** A prefab whose SpriteRenderer binds a real project sprite. */
 const artPrefab = (spriteGuid: string): string =>
-  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Stall\n` +
+  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Tent\n` +
   `--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 2100000, guid: aaaabbbbccccddddeeeeffff00001111, type: 2}\n` +
   `  m_Sprite: {fileID: 21300000, guid: ${spriteGuid}, type: 3}\n`;
 
@@ -78,7 +78,7 @@ describe("readEnabledBuildScenes", () => {
   it("returns enabled scenes in build order and drops disabled ones", () => {
     const root = project();
     buildSettings(root, [
-      { path: "Assets/Scenes/Main.unity" },
+      { path: "Assets/Scenes/Entry.unity" },
       { path: "Assets/Scenes/Old.unity", enabled: false },
       { path: "Assets/Scenes/Extra.unity" },
     ]);
@@ -88,7 +88,7 @@ describe("readEnabledBuildScenes", () => {
       exists: (p: string): boolean => existsSync(p),
     };
     expect(readEnabledBuildScenes(root, io)).toEqual([
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Entry.unity",
       "Assets/Scenes/Extra.unity",
     ]);
   });
@@ -97,10 +97,10 @@ describe("readEnabledBuildScenes", () => {
 describe("isScaffoldingScene", () => {
   it("recognises Unity's generated test scene and Tests/Editor folders only", () => {
     expect(isScaffoldingScene("Assets/InitTestScene0e93b2d6-71fa.unity")).toBe(true);
-    expect(isScaffoldingScene("Assets/Tests/Runtime/Boot.unity")).toBe(true);
+    expect(isScaffoldingScene("Assets/Tests/Runtime/Probe.unity")).toBe(true);
     expect(isScaffoldingScene("Assets/Editor/Bake.unity")).toBe(true);
     // Never a name list: renaming an empty scene must not excuse it.
-    expect(isScaffoldingScene("Assets/Scenes/AutoComposed.unity")).toBe(false);
+    expect(isScaffoldingScene("Assets/Scenes/Scratch.unity")).toBe(false);
     expect(isScaffoldingScene("Assets/Scenes/RouteSmokeCheck.unity")).toBe(false);
   });
 });
@@ -125,21 +125,21 @@ describe("assessBuiltAsSpecified — refusal", () => {
     // the scene never places it.
     put(
       root,
-      "Assets/Settings/StallPrefabConfig.asset",
-      `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _stallPrefab: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n`,
+      "Assets/Settings/CampLayout.asset",
+      `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _tentTemplate: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n`,
       "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
     );
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
     // Unbound art: a prefab and a model nothing reaches.
     put(root, "Assets/Prefabs/SpiceJar.prefab", artPrefab("44444444444444444444444444444444"), "33333333333333333333333333333333");
-    put(root, "Assets/Art/Models/Stall.fbx", "binary", "55555555555555555555555555555555");
+    put(root, "Assets/Art/Models/Tent.fbx", "binary", "55555555555555555555555555555555");
     put(root, "Assets/Art/spice_jar.png", "pixels", "44444444444444444444444444444444");
     // The geometry the player actually sees.
     put(
       root,
-      "Assets/Scripts/MarketBuilder.cs",
-      "public class MarketBuilder { void Build() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }",
+      "Assets/Scripts/CampBuilder.cs",
+      "public class CampBuilder { void Build() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }",
       "66666666666666666666666666666666",
     );
 
@@ -153,7 +153,7 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toContain("0 world renderer components");
     // …and the unbound assets it found.
     expect(report.refusal).toContain("Assets/Prefabs/SpiceJar.prefab");
-    expect(report.refusal).toContain("Assets/Art/Models/Stall.fbx");
+    expect(report.refusal).toContain("Assets/Art/Models/Tent.fbx");
     expect(report.refusal).toContain("GameObject.CreatePrimitive");
     expect(report.refusal).toContain("unity_bind_sprite");
     expect(report.refusal).toContain("unity_place_prefab");
@@ -161,25 +161,25 @@ describe("assessBuiltAsSpecified — refusal", () => {
     // The scaffolding scene is measured but not judged as shipped work.
     expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/TradeHub.unity"]);
     // The prefab the config points at is NOT called unbound…
-    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Stall.prefab");
+    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Tent.prefab");
     // …but its 1 renderer is reported as referenced-only, never as shipped.
     expect(report.referencedOnlyRenderers).toBe(1);
     expect(report.unboundPrefabs).toContain("Assets/Prefabs/SpiceJar.prefab");
-    expect(report.primitiveScripts).toEqual(["Assets/Scripts/MarketBuilder.cs"]);
+    expect(report.primitiveScripts).toEqual(["Assets/Scripts/CampBuilder.cs"]);
   });
 
   it("refuses when every placed renderer is a Unity built-in and art sits unbound", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
     put(
       root,
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
     put(root, "Assets/Prefabs/Signpost.prefab", primitivePrefab(), "11111111111111111111111111111111");
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "33333333333333333333333333333333");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "33333333333333333333333333333333");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -189,22 +189,22 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toContain("Every renderer the shipped scenes have is a Unity built-in");
     expect(report.refusal).toContain("Default-Material");
     expect(report.refusal).toContain("built-in Cube mesh");
-    expect(report.refusal).toContain("Assets/Prefabs/Stall.prefab");
+    expect(report.refusal).toContain("Assets/Prefabs/Tent.prefab");
   });
 });
 
 describe("assessBuiltAsSpecified — passes", () => {
   it("passes a scene that places prefabs binding real project art", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
     put(
       root,
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(1)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -218,8 +218,8 @@ describe("assessBuiltAsSpecified — passes", () => {
 
   it("passes a project with no art at all, and records why no claim is possible", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(root, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -233,20 +233,20 @@ describe("assessBuiltAsSpecified — passes", () => {
   it("never triggers on test scaffolding: empty InitTestScene, Tests/ fixtures, Editor code", () => {
     const root = project();
     buildSettings(root, [
-      { path: "Assets/Scenes/Main.unity" },
+      { path: "Assets/Scenes/Entry.unity" },
       { path: "Assets/InitTestScene0e93b2d6-71fa-4c08.unity" },
       { path: "Assets/Tests/Runtime/BootFixture.unity" },
     ]);
     put(
       root,
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
     put(root, "Assets/InitTestScene0e93b2d6-71fa-4c08.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
     put(root, "Assets/Tests/Runtime/BootFixture.unity", `${HEADER}${CAMERA(0)}`, "5cd5d5d5d5d5d5d5d5d5d5d5d5d5d5d5");
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
     // A fixture prefab and an editor-only tool: neither is the game's art or
     // the game's geometry.
     put(root, "Assets/Tests/Runtime/Fixture.prefab", artPrefab("44444444444444444444444444444444"), "77777777777777777777777777777777");
@@ -270,7 +270,7 @@ describe("assessBuiltAsSpecified — passes", () => {
       "Assets/InitTestScene0e93b2d6-71fa-4c08.unity",
       "Assets/Tests/Runtime/BootFixture.unity",
     ]);
-    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/Main.unity"]);
+    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/Entry.unity"]);
     // A Tests/ fixture prefab is not the game's unshipped art.
     expect(report.unboundPrefabs).toEqual([]);
     // Editor and Tests geometry is not the game building primitives.
@@ -279,15 +279,15 @@ describe("assessBuiltAsSpecified — passes", () => {
 
   it("does not count a commented-out CreatePrimitive as geometry built in code", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
     put(
       root,
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
     put(
       root,
       "Assets/Scripts/Dead.cs",
@@ -321,10 +321,10 @@ describe("assessBuiltAsSpecified — what it could not measure", () => {
   it("records that the file walk was truncated instead of reporting a partial scan as whole", () => {
     // No silent caps: a truncated walk would call bound art unbound.
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(root, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root, undefined, { walkBudget: 2 });
     // Both walks are budgeted, and each says so in its own words.
@@ -334,7 +334,7 @@ describe("assessBuiltAsSpecified — what it could not measure", () => {
 
   it("records that no scene is enabled rather than passing silently", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity", enabled: false }]);
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity", enabled: false }]);
     const report = assessBuiltAsSpecified(root);
     expect(report.incomplete.join("\n")).toContain("lists no ENABLED scene");
     expect(report.refusal).toBeUndefined();
@@ -351,18 +351,18 @@ describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
    */
   it("names how empty the entry scene is, in the refusal and the disclosures", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
     put(
       root,
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Entry.unity",
       `${HEADER}--- !u!1 &100\nGameObject:\n  m_Name: MainCamera\n${CAMERA(0)}` +
         `--- !u!1 &200\nGameObject:\n  m_Name: Bootstrap\n` +
         `--- !u!114 &201\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: 703ceb5289d5847f5800cd363a983966, type: 3}\n` +
         `  m_EditorClassIdentifier: Strada.Core::Strada.Core.Bootstrap.GameBootstrapper\n`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root);
     const entry = report.scenes[0]!;
@@ -373,24 +373,24 @@ describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
     expect(report.refusal).toBeDefined();
     expect(report.refusal).toContain("2 GameObjects, 0 placed prefab instances, script GameBootstrapper");
     expect(report.disclosures.join("\n")).toContain(
-      "The entry scene Assets/Scenes/Main.unity holds 2 GameObjects, 0 placed prefab instances, script GameBootstrapper.",
+      "The entry scene Assets/Scenes/Entry.unity holds 2 GameObjects, 0 placed prefab instances, script GameBootstrapper.",
     );
   });
 
   it("counts the scene's OWN objects, not those inside the prefabs it places", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
     put(
       root,
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Entry.unity",
       `${HEADER}--- !u!1 &100\nGameObject:\n  m_Name: Root\n${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
 
     const entry = assessBuiltAsSpecified(root).scenes[0]!;
-    // The placed Stall prefab holds a GameObject of its own; the scene's count
+    // The placed Tent prefab holds a GameObject of its own; the scene's count
     // must stay 1, or "how full is this scene" answers with the prefab's guts.
     expect(entry.gameObjects).toBe(1);
     expect(entry.prefabInstances).toBe(1);
@@ -466,14 +466,14 @@ function putBytes(root: string, rel: string, body: Buffer, guid: string): void {
 
 /** A scene that places one sprite renderer bound to project art — the shape that passes A and B. */
 function boundSpriteProject(root: string, spriteGuid: string): void {
-  buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+  buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
   put(
     root,
-    "Assets/Scenes/Main.unity",
+    "Assets/Scenes/Entry.unity",
     `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
     "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
   );
-  put(root, "Assets/Prefabs/Stall.prefab", artPrefab(spriteGuid), "11111111111111111111111111111111");
+  put(root, "Assets/Prefabs/Tent.prefab", artPrefab(spriteGuid), "11111111111111111111111111111111");
 }
 
 describe("assessBuiltAsSpecified — placeholder-grade art", () => {
@@ -483,10 +483,11 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
   it("refuses when the sprite art is overwhelmingly flat shapes, naming counts, files and the tools", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Generated/Stall.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
-    for (let i = 1; i <= 11; i++) {
-      putBytes(root, `Assets/Art/Routes/SaltRoad/Stall_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
-    }
+    putBytes(root, "Assets/Art/Generated/Tent.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    // Eleven unbound flat shapes outside Generated/, one per prop, in one folder.
+    const flatProps = ["Awning", "Cistern", "Compass", "DateBasket", "Hourglass", "IndigoRug", "Saddlebag", "SaltBlock", "SilkBolt", "SpiceJar", "Waterskin"]
+      .map((name) => `Assets/Art/Props/${name}.png`);
+    flatProps.forEach((rel, i) => putBytes(root, rel, png(64, 64, "flat"), `b${String(i + 1).padStart(31, "0")}`));
     putBytes(root, "Assets/Art/Real/Hero.png", png(64, 64, "noise"), "c0000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
@@ -498,7 +499,13 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     expect(report.refusal).toContain("SAME name and the SAME path as the placeholder file");
     // …and what is real already, so the next sprint does not redraw it.
     expect(report.disclosures.join("\n")).toContain("1 are real art already (newest first: Assets/Art/Real/Hero.png)");
-    expect(report.refusal).toContain("Assets/Art/Routes/SaltRoad/Stall_1.png");
+    // The unbound examples it names are files of that set, path and all.
+    const named = report.placeholderSpritePaths.slice(1, 4);
+    expect(named).toHaveLength(3);
+    for (const rel of named) {
+      expect(flatProps).toContain(rel);
+      expect(report.refusal).toContain(rel);
+    }
     expect(report.refusal).toContain("unity_generate_sprite");
     expect(report.refusal).toContain("unity_my_assets_cloud");
   });
@@ -507,23 +514,23 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     // Measured 2026-09-07 22:40: a sprint wired several prefabs to
     // placeholder PNGs while the refusal's examples were icons nothing bound.
     const root = project();
-    boundSpriteProject(root, "a0000000000000000000000000000000"); // Stall.prefab placed, sprite a000… bound
-    putBytes(root, "Assets/Art/stall.png", png(64, 64, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
+    boundSpriteProject(root, "a0000000000000000000000000000000"); // Tent.prefab placed, sprite a000… bound
+    putBytes(root, "Assets/Art/tent.png", png(64, 64, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
     for (let i = 1; i <= 11; i++) {
-      putBytes(root, `Assets/Art/Waybills/Icon_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+      putBytes(root, `Assets/Art/Glyphs/Glyph_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
     }
     const report = assessBuiltAsSpecified(root);
     expect(report.boundPlaceholderSprites).toBe(1);
-    expect(report.placeholderSpritePaths[0]).toBe("Assets/Art/stall.png");
+    expect(report.placeholderSpritePaths[0]).toBe("Assets/Art/tent.png");
     expect(report.refusal).toContain("1 of them are bound into the shipped scenes");
     expect(report.refusal).toContain("do not wire more placeholders");
-    expect(report.refusal!.indexOf("Assets/Art/stall.png")).toBeLessThan(report.refusal!.indexOf("Icon_"));
+    expect(report.refusal!.indexOf("Assets/Art/tent.png")).toBeLessThan(report.refusal!.indexOf("Glyph_"));
   });
 
   it("only discloses when the placeholders are a minority", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Stall.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Tent.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
     for (let i = 1; i <= 8; i++) {
       putBytes(root, `Assets/Art/Real/Hero_${i}.png`, png(64, 64, "noise"), `c${String(i).padStart(31, "0")}`);
     }
@@ -540,7 +547,7 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
     // Fewer than the minimum, and one is not even a PNG.
-    putBytes(root, "Assets/Art/Generated/Stall.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Tent.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
     put(root, "Assets/Art/junk.png", "pixels", "e0000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
@@ -579,7 +586,7 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
   it("counts clips, duplicates by content and blips, and says so", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Stall.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Tent.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
     putBytes(root, "Assets/Audio/caravan_bells.wav", wav(3, 7), "d1000000000000000000000000000000");
     putBytes(root, "Assets/Audio/dune_wind.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
     putBytes(root, "Assets/Audio/ui_select.wav", wav(0.15, 3), "d3000000000000000000000000000000");
@@ -600,7 +607,7 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
   it("says when there is no audio at all", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Stall.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Tent.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
     expect(assessBuiltAsSpecified(root).disclosures).toContain("Project audio: no audio clips under Assets/ at all.");
   });
 });
@@ -614,11 +621,11 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
   it("a HUD CanvasRenderer does not lift the 'renders NOTHING' refusal", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(root, "Assets/Scenes/Main.unity",
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(root, "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Score\n--- !u!222 &31\nCanvasRenderer:\n  m_GameObject: {fileID: 30}\n`, G("5"));
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
-    put(root, "Assets/Art/stall.png", "pixels", G("2"));
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/tent.png", "pixels", G("2"));
     put(root, "Assets/Scripts/World.cs", "class W { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }", G("6"));
     const report = assessBuiltAsSpecified(root);
     expect(report.shippedRenderers).toBe(1);
@@ -629,12 +636,12 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
   it("a UI-driven game (a screen built from canvases, no primitives) is not 'renders NOTHING' (Codex 2026-09-11 B#16)", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
     // Canvases BOUND to the project's own art: a card game's screen.
     const canvases = Array.from({ length: 12 }, (_, i) =>
       `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n` +
       `--- !u!114 &${120 + i}\nMonoBehaviour:\n  m_GameObject: {fileID: ${40 + i}}\n  m_Sprite: {fileID: 21300000, guid: ${G("2")}, type: 3}\n`).join("");
-    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(root, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
     put(root, "Assets/Art/card.png", "pixels", G("2"));
     const report = assessBuiltAsSpecified(root);
     expect(report.shippedWorldRenderers).toBe(0);
@@ -643,19 +650,19 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
     // Bare renderers with NOTHING in them are not a game (Codex 2026-09-11 C#16).
     const empty = project();
-    buildSettings(empty, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(empty, [{ path: "Assets/Scenes/Entry.unity" }]);
     const bare = Array.from({ length: 12 }, (_, i) =>
       `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Blank${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n`).join("");
-    put(empty, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${bare}`, G("5"));
+    put(empty, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}${bare}`, G("5"));
     put(empty, "Assets/Art/unused.png", "pixels", G("2"));
     expect(assessBuiltAsSpecified(empty).refusal).toContain("render NOTHING");
 
     // …and the measured hole stays shut: canvases over engine primitives are
     // still a HUD over a world nobody made.
     const withPrimitives = project();
-    buildSettings(withPrimitives, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(withPrimitives, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
-    put(withPrimitives, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
+    buildSettings(withPrimitives, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(withPrimitives, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(withPrimitives, "Assets/Prefabs/Tent.prefab", artPrefab(G("2")), G("1"));
     put(withPrimitives, "Assets/Art/thing.png", "pixels", G("2"));
     put(withPrimitives, "Assets/Scripts/World.cs", "class W { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }", G("6"));
     expect(assessBuiltAsSpecified(withPrimitives).refusal).toContain("render NOTHING");
@@ -664,18 +671,18 @@ describe("defects the measurement review found (2026-09-07)", () => {
   it("a DANGLING sprite GUID is not a UI binding, and a bound movie is a video game's picture (Codex 2026-09-11 D#26, D#27)", () => {
     // Three canvases whose sprite reference resolves to nothing.
     const dangling = project();
-    buildSettings(dangling, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(dangling, [{ path: "Assets/Scenes/Entry.unity" }]);
     const canvases = Array.from({ length: 3 }, (_, i) =>
       `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n` +
       `--- !u!114 &${120 + i}\nMonoBehaviour:\n  m_GameObject: {fileID: ${40 + i}}\n  m_Sprite: {fileID: 21300000, guid: ${G("f")}, type: 3}\n`).join("");
-    put(dangling, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(dangling, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
     put(dangling, "Assets/Art/unbound.png", "pixels", G("2"));
     expect(assessBuiltAsSpecified(dangling).refusal).toContain("render NOTHING");
 
     // One VideoPlayer bound to a real movie: that IS the picture.
     const video = project();
-    buildSettings(video, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(video, "Assets/Scenes/Main.unity",
+    buildSettings(video, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(video, "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Screen\n--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`, G("5"));
     put(video, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
     // The project also holds cover art, so the "renders NOTHING despite art"
@@ -689,11 +696,11 @@ describe("defects the measurement review found (2026-09-07)", () => {
   it("an orphaned .meta does not resolve a sprite, and a switched-off video is not the picture (Codex 2026-09-11 E#6, E#12)", () => {
     // The sidecar carries the GUID the canvases reference; the PNG is gone.
     const orphaned = project();
-    buildSettings(orphaned, [{ path: "Assets/Scenes/Main.unity" }]);
+    buildSettings(orphaned, [{ path: "Assets/Scenes/Entry.unity" }]);
     const canvases = Array.from({ length: 3 }, (_, i) =>
       `--- !u!1 &${40 + i}\nGameObject:\n  m_Name: Card${i}\n--- !u!222 &${80 + i}\nCanvasRenderer:\n  m_GameObject: {fileID: ${40 + i}}\n` +
       `--- !u!114 &${120 + i}\nMonoBehaviour:\n  m_GameObject: {fileID: ${40 + i}}\n  m_Sprite: {fileID: 21300000, guid: ${G("f")}, type: 3}\n`).join("");
-    put(orphaned, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
+    put(orphaned, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
     put(orphaned, "Assets/Art/unbound.png", "pixels", G("2"));
     // Only the sidecar, never the asset.
     writeFileSync(join(orphaned, "Assets/Art/missing.png.meta"), `guid: ${G("f")}\n`);
@@ -708,8 +715,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
       `--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_Enabled: ${enabled}\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`;
     for (const [active, enabled] of [["1", "0"], ["0", "1"]] as const) {
       const off = project();
-      buildSettings(off, [{ path: "Assets/Scenes/Main.unity" }]);
-      put(off, "Assets/Scenes/Main.unity", videoScene(active, enabled), G("5"));
+      buildSettings(off, [{ path: "Assets/Scenes/Entry.unity" }]);
+      put(off, "Assets/Scenes/Entry.unity", videoScene(active, enabled), G("5"));
       put(off, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
       put(off, "Assets/Art/Cover.png", "pixels", G("8"));
       const offReport = assessBuiltAsSpecified(off);
@@ -719,8 +726,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
     // An inactive ANCESTOR switches the child off too, as Unity does (G#5).
     const parentOff = project();
-    buildSettings(parentOff, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(parentOff, "Assets/Scenes/Main.unity",
+    buildSettings(parentOff, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(parentOff, "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}` +
       `--- !u!1 &40\nGameObject:\n  m_Name: Root\n  m_IsActive: 0\n--- !u!4 &41\nTransform:\n  m_GameObject: {fileID: 40}\n  m_Father: {fileID: 0}\n` +
       `--- !u!1 &30\nGameObject:\n  m_Name: Screen\n  m_IsActive: 1\n--- !u!4 &32\nTransform:\n  m_GameObject: {fileID: 30}\n  m_Father: {fileID: 41}\n` +
@@ -734,8 +741,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
     // …but a disabled player the GAME'S OWN CODE enables is an FMV game, and
     // refusing it imposed one architecture on every GDD (Codex G#6).
     const scripted = project();
-    buildSettings(scripted, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(scripted, "Assets/Scenes/Main.unity", videoScene("1", "0"), G("5"));
+    buildSettings(scripted, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(scripted, "Assets/Scenes/Entry.unity", videoScene("1", "0"), G("5"));
     put(scripted, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
     put(scripted, "Assets/Art/Cover.png", "pixels", G("8"));
     put(scripted, "Assets/Scripts/MovieBoot.cs",
@@ -747,8 +754,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
     // An unrelated inactive object elsewhere in the scene disables nothing:
     // "no inactive objects at all" is not the question (Codex G#16).
     const bystander = project();
-    buildSettings(bystander, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(bystander, "Assets/Scenes/Main.unity",
+    buildSettings(bystander, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(bystander, "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}` +
       `--- !u!1 &50\nGameObject:\n  m_Name: DebugPanel\n  m_IsActive: 0\n--- !u!4 &51\nTransform:\n  m_GameObject: {fileID: 50}\n  m_Father: {fileID: 0}\n` +
       `--- !u!1 &30\nGameObject:\n  m_Name: Screen\n  m_IsActive: 1\n--- !u!4 &32\nTransform:\n  m_GameObject: {fileID: 30}\n  m_Father: {fileID: 0}\n` +
@@ -762,8 +769,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
     // UNRELATED code does not authenticate it: an unused field beside an
     // unrelated Play() call used to count (Codex 2026-09-11 I#16).
     const unrelated = project();
-    buildSettings(unrelated, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(unrelated, "Assets/Scenes/Main.unity", videoScene("1", "0"), G("5"));
+    buildSettings(unrelated, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(unrelated, "Assets/Scenes/Entry.unity", videoScene("1", "0"), G("5"));
     put(unrelated, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
     put(unrelated, "Assets/Art/Cover.png", "pixels", G("8"));
     put(unrelated, "Assets/Scripts/Sound.cs",
@@ -773,8 +780,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
     // …and a controller SPLIT across two partial-class files does: the field
     // is declared in one and played in the other.
     const split = project();
-    buildSettings(split, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(split, "Assets/Scenes/Main.unity", videoScene("1", "0"), G("5"));
+    buildSettings(split, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(split, "Assets/Scenes/Entry.unity", videoScene("1", "0"), G("5"));
     put(split, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
     put(split, "Assets/Art/Cover.png", "pixels", G("8"));
     put(split, "Assets/Scripts/MovieBoot.Fields.cs",
@@ -785,8 +792,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
     // …and the enabled one still is the picture.
     const on = project();
-    buildSettings(on, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(on, "Assets/Scenes/Main.unity",
+    buildSettings(on, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(on, "Assets/Scenes/Entry.unity",
       `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Screen\n  m_IsActive: 1\n--- !u!328 &31\nVideoPlayer:\n  m_GameObject: {fileID: 30}\n  m_Enabled: 1\n  m_VideoClip: {fileID: 32900000, guid: ${G("9")}, type: 3}\n`, G("5"));
     put(on, "Assets/Movies/Intro.mp4", "movie-bytes", G("9"));
     put(on, "Assets/Art/Cover.png", "pixels", G("8"));
@@ -823,8 +830,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
   it("a PrefabInstance of an imported model is a placed, project-bound mesh", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${prefabInstance(G("a"), 1001)}${prefabInstance(G("b"), 1002)}`, G("5"));
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(root, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}${prefabInstance(G("a"), 1001)}${prefabInstance(G("b"), 1002)}`, G("5"));
     put(root, "Assets/Models/Tree.fbx", "binary", G("a"));
     put(root, "Assets/Models/House.fbx", "binary", G("b"));
     const report = assessBuiltAsSpecified(root);
@@ -837,11 +844,11 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
   it("a Resources.Load game is referenced by name, not refused as unbound", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  m_EditorClassIdentifier: Assembly-CSharp::Spawner\n`, G("5"));
-    put(root, "Assets/Resources/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
-    put(root, "Assets/Art/stall.png", "pixels", G("2"));
-    put(root, "Assets/Scripts/Spawner.cs", "class Spawner { void S() { Instantiate(Resources.Load(\"Prefabs/Stall\")); } }", G("6"));
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(root, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  m_EditorClassIdentifier: Assembly-CSharp::Spawner\n`, G("5"));
+    put(root, "Assets/Resources/Prefabs/Tent.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/tent.png", "pixels", G("2"));
+    put(root, "Assets/Scripts/Spawner.cs", "class Spawner { void S() { Instantiate(Resources.Load(\"Prefabs/Tent\")); } }", G("6"));
     const report = assessBuiltAsSpecified(root);
     expect(report.refusal).toBeUndefined();
     expect(report.referencedOnlyRenderers).toBe(1);
@@ -861,7 +868,7 @@ describe("defects the measurement review found (2026-09-07)", () => {
       G("5"));
     put(root, "Assets/Tiles/Grass.asset", `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  m_Sprite: {fileID: 21300000, guid: ${G("3")}, type: 3}\n`, G("2"));
     put(root, "Assets/Art/grass.png", "pixels", G("3"));
-    put(root, "Assets/Art/hud.png", "pixels", G("8"));
+    put(root, "Assets/Art/emblem.png", "pixels", G("8"));
     put(root, "Assets/Prefabs/SpriteObject.prefab", SPRITE_PREFAB_BUILTIN_MAT("{fileID: 0}"), G("1"));
     put(root, "Assets/Art/player.png", "pixels", G("4"));
     put(root, "Assets/Art/unused_concept.png", "pixels", G("9"));
@@ -873,8 +880,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
   it("follows materials and animation clips to the textures they bind", () => {
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${prefabInstance(G("1"))}`, G("5"));
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(root, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}${prefabInstance(G("1"))}`, G("5"));
     put(root, "Assets/Prefabs/Tree.prefab",
       `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Tree\n--- !u!33 &9\nMeshFilter:\n  m_Mesh: {fileID: 4300000, guid: ${G("a")}, type: 3}\n` +
       `--- !u!23 &8\nMeshRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 2100000, guid: ${G("c")}, type: 2}\n`, G("1"));
@@ -890,10 +897,10 @@ describe("defects the measurement review found (2026-09-07)", () => {
     const crlf = `${HEADER}${CAMERA(0)}${prefabInstance(G("1"))}--- !u!212 &88 stripped\nSpriteRenderer:\n  m_PrefabInstance: {fileID: 1001}\n`.replace(/\n/g, "\r\n");
     expect(parseUnityDocuments(crlf).map((d) => d.className)).toEqual(["Camera", "PrefabInstance"]);
     const root = project();
-    buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-    put(root, "Assets/Scenes/Main.unity", crlf, G("5"));
-    put(root, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
-    put(root, "Assets/Art/stall.png", "pixels", G("2"));
+    buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+    put(root, "Assets/Scenes/Entry.unity", crlf, G("5"));
+    put(root, "Assets/Prefabs/Tent.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/tent.png", "pixels", G("2"));
     const report = assessBuiltAsSpecified(root);
     expect(report.refusal).toBeUndefined();
     expect(report.shippedRenderers).toBe(1); // not 2: the stripped doc is the same renderer
@@ -909,20 +916,20 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(t.shippedRenderers).toBe(1);
 
     const missing = project();
-    buildSettings(missing, [{ path: "Assets/Scenes/Gone.unity" }, { path: "Assets/Scenes/Main.unity" }]);
-    put(missing, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}`, G("5"));
-    put(missing, "Assets/Art/stall.png", "pixels", G("2"));
+    buildSettings(missing, [{ path: "Assets/Scenes/Gone.unity" }, { path: "Assets/Scenes/Entry.unity" }]);
+    put(missing, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}`, G("5"));
+    put(missing, "Assets/Art/tent.png", "pixels", G("2"));
     expect(assessBuiltAsSpecified(missing).refusal).toContain("Gone.unity — missing from disk");
   });
 
   it("one CreatePrimitive call site beside referenced art is a disclosure; two are the world", () => {
     const build = (calls: number): string => {
       const root = project();
-      buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
-      put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _config: {fileID: 11400000, guid: ${G("c")}, type: 2}\n`, G("5"));
-      put(root, "Assets/Settings/Config.asset", `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _stall: {fileID: 7, guid: ${G("1")}, type: 3}\n`, G("c"));
-      put(root, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
-      put(root, "Assets/Art/stall.png", "pixels", G("2"));
+      buildSettings(root, [{ path: "Assets/Scenes/Entry.unity" }]);
+      put(root, "Assets/Scenes/Entry.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _config: {fileID: 11400000, guid: ${G("c")}, type: 2}\n`, G("5"));
+      put(root, "Assets/Settings/Config.asset", `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _tent: {fileID: 7, guid: ${G("1")}, type: 3}\n`, G("c"));
+      put(root, "Assets/Prefabs/Tent.prefab", artPrefab(G("2")), G("1"));
+      put(root, "Assets/Art/tent.png", "pixels", G("2"));
       put(root, "Assets/Scripts/Fader.cs", `class Fader { void F() { ${"GameObject.CreatePrimitive(PrimitiveType.Quad); ".repeat(calls)} } }`, G("6"));
       return assessBuiltAsSpecified(root).refusal ?? "none";
     };

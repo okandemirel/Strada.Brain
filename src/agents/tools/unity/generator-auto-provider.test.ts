@@ -143,7 +143,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
 
   it("sprite: a batch draws every name through one runner call and reports each file", async () => {
     // Measured 2026-09-07: ~45-60 s per sprite plus a model load per call;
-    // a design with 36 stalls is 36 round-trips one by one.
+    // a design with 36 props is 36 round-trips one by one.
     const { root, ctx } = project();
     const batchCalls: number[] = [];
     const runner = {
@@ -187,7 +187,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
       textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string; seed?: number }>) => {
         calls++;
         for (const j of jobs) {
-          // Retry (a seed is set) succeeds for DateBasket, Lantern stays blank forever.
+          // Retry (a seed is set) succeeds for DateBasket, Saddlebag stays blank forever.
           if (j.seed !== undefined && j.out.endsWith("DateBasket.png")) real(j.out);
           else if (j.out.endsWith("DateBasket.png")) blank(j.out);
           else blank(j.out);
@@ -195,12 +195,12 @@ describe("the installed model is the default; the placeholder is the fallback", 
         return { ok: true, detail: `${jobs.length} written`, written: jobs.map((j) => j.out), missing: [], keptBackground: [] };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "DateBasket" }, { name: "Lantern" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "DateBasket" }, { name: "Saddlebag" }] }, ctx);
     expect(calls).toBe(2); // one batch, one retry of the blanks
     expect(r.content).toContain("✓ Assets/Art/Generated/DateBasket.png");
-    expect(r.content).toContain("✗ Assets/Art/Generated/Lantern.png — drew nothing usable twice");
-    expect(existsSync(join(root, "Assets/Art/Generated/Lantern.png"))).toBe(false);
-    expect(existsSync(join(root, "Assets/Art/Generated/Lantern.png.meta"))).toBe(false);
+    expect(r.content).toContain("✗ Assets/Art/Generated/Saddlebag.png — drew nothing usable twice");
+    expect(existsSync(join(root, "Assets/Art/Generated/Saddlebag.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/Saddlebag.png.meta"))).toBe(false);
   });
 
   it("sprite: a kept background is said, not hidden", async () => {
@@ -315,13 +315,14 @@ describe("realLocalAvailability is a measurement, not a require() that cannot ru
 describe("styleNotesForPrompt keeps the look and drops the report", () => {
   it("cuts at the first | and drops verification/config sentences", async () => {
     const { styleNotesForPrompt } = await import("./sprite-generate.js");
+    // A run's bookkeeping can land BEFORE the bar as well as after it.
     const notes =
-      "Sun-bleached sandstone under indigo ink linework. Hand-painted goods on every shelf. " +
-      "| verification: trade-route sprites integrated into the scene config and prefab references verified.";
+      "Sun-bleached sandstone under indigo ink linework. Palette matched to the import config on run 418. " +
+      "Hand-painted goods on every shelf. | run 418 log: 47 prefabs re-pointed, all checks green.";
     const out = styleNotesForPrompt(notes);
     expect(out).toContain("indigo ink linework");
     expect(out).toContain("Hand-painted goods on every shelf");
-    expect(out).not.toMatch(/verif|config|prefab/i);
+    expect(out).not.toMatch(/verif|config|prefab|run 418/i);
   });
 
   it("the default prompt handed to the runner carries no verification note", async () => {
@@ -335,7 +336,7 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
         outline: { width: 1, color: "#2e3a6b" },
         shading: "flat",
         references: [],
-        notes: "sun-bleached sandstone and indigo ink. | verification: prefab references verified.",
+        notes: "sun-bleached sandstone and indigo ink. | run 418 log: prefab bindings rechecked.",
       }),
     );
     const prompts: string[] = [];
@@ -541,8 +542,8 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
 
   it("the local batch job is aimed at the placeholder's real path, not the default directory", async () => {
     const { root, ctx } = project();
-    mkdirSync(join(root, "Assets/Art/Routes/SilkRoad"), { recursive: true });
-    writeFileSync(join(root, "Assets/Art/Routes/SilkRoad/Waystone.png"), pngFixture("flat"));
+    mkdirSync(join(root, "Assets/Art/Props"), { recursive: true });
+    writeFileSync(join(root, "Assets/Art/Props/Waystone.png"), pngFixture("flat"));
     const outs: string[] = [];
     const runner = {
       isModelInstalled: () => true,
@@ -562,7 +563,7 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
     // compare by suffix in one separator.
     expect(outs).toHaveLength(2);
     const [waystone, waterskin] = outs.map((o) => o.replace(/\\/g, "/"));
-    expect(waystone!.endsWith("/Assets/Art/Routes/SilkRoad/Waystone.png")).toBe(true);
+    expect(waystone!.endsWith("/Assets/Art/Props/Waystone.png")).toBe(true);
     expect(waterskin!.endsWith("/Assets/Art/Generated/Waterskin.png")).toBe(true);
     expect(existsSync(join(root, "Assets/Art/Generated/Waystone.png"))).toBe(false);
   });

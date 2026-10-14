@@ -970,7 +970,7 @@ describe("deletions of the system's own files are applied; the user's stay", () 
   it("removes a scaffolding scene and a campaign-authored duplicate, keeps a user file", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     writeFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"), "scene", "utf8");
-    writeFileSync(join(source, "Assets", "Scripts", "StallSpawner.cs"), "dup", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "CampSpawner.cs"), "dup", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "mine", "utf8");
     commitAll("campaign: Sprint 1 — project setup");
     appendFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "more\n");
@@ -978,20 +978,20 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     gitAt(source, "commit", "-qm", "my own tweak");
     const lease = await gitManager().acquireLease({ label: "t" });
     rmSync(join(lease.path, "Assets", "InitTestScene0e93b2d6.unity"));
-    rmSync(join(lease.path, "Assets", "Scripts", "StallSpawner.cs"));
+    rmSync(join(lease.path, "Assets", "Scripts", "CampSpawner.cs"));
     rmSync(join(lease.path, "Assets", "Scripts", "UserNotes.cs"));
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.deleted.map((d) => d.split(" — ")[0])).toEqual(
-      expect.arrayContaining([join("Assets", "InitTestScene0e93b2d6.unity"), join("Assets", "Scripts", "StallSpawner.cs")]),
+      expect.arrayContaining([join("Assets", "InitTestScene0e93b2d6.unity"), join("Assets", "Scripts", "CampSpawner.cs")]),
     );
     expect(result.deleted.join("\n")).toContain("scaffolding scene");
     expect(result.deleted.join("\n")).toContain("every commit that touched it was the system's own");
     expect(result.removed).toEqual([join("Assets", "Scripts", "UserNotes.cs")]);
     expect(existsSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"))).toBe(false);
-    expect(existsSync(join(source, "Assets", "Scripts", "StallSpawner.cs"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "Scripts", "CampSpawner.cs"))).toBe(false);
     expect(existsSync(join(source, "Assets", "Scripts", "UserNotes.cs"))).toBe(true);
   });
 });
@@ -1004,19 +1004,19 @@ describe("a loose script with a module twin is the system's own duplicate", () =
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     mkdirSync(join(source, "Assets", "Modules", "TradeModule", "Scripts"), { recursive: true });
     // Byte-identical: a duplicate by content, whatever its history says.
-    writeFileSync(join(source, "Assets", "Scripts", "StallSpawner.cs"), "module copy", "utf8");
-    writeFileSync(join(source, "Assets", "Modules", "TradeModule", "Scripts", "StallSpawner.cs"), "module copy", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "CampSpawner.cs"), "module copy", "utf8");
+    writeFileSync(join(source, "Assets", "Modules", "TradeModule", "Scripts", "CampSpawner.cs"), "module copy", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "Solo.cs"), "no twin", "utf8");
-    commitAll("feat: add the stall spawner");
+    commitAll("feat: add the camp spawner");
     const lease = await gitManager().acquireLease({ label: "t" });
-    rmSync(join(lease.path, "Assets", "Scripts", "StallSpawner.cs"));
+    rmSync(join(lease.path, "Assets", "Scripts", "CampSpawner.cs"));
     rmSync(join(lease.path, "Assets", "Scripts", "Solo.cs"));
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(result.deleted.join("\n")).toContain("StallSpawner.cs — loose duplicate of Assets/Modules/TradeModule/Scripts/StallSpawner.cs");
-    expect(existsSync(join(source, "Assets", "Scripts", "StallSpawner.cs"))).toBe(false);
+    expect(result.deleted.join("\n")).toContain("CampSpawner.cs — loose duplicate of Assets/Modules/TradeModule/Scripts/CampSpawner.cs");
+    expect(existsSync(join(source, "Assets", "Scripts", "CampSpawner.cs"))).toBe(false);
     expect(result.removed).toEqual([join("Assets", "Scripts", "Solo.cs")]); // no twin: stays, reported
   });
 });

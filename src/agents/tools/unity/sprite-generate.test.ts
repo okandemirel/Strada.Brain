@@ -80,16 +80,16 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("refuses names that would escape or collide weirdly", async () => {
-    for (const bad of ["../evil", "", "1startsWithDigit", "sp ace", "SaltRoad/../../evil"]) {
+    for (const bad of ["../evil", "", "1startsWithDigit", "sp ace", "Goods/../../evil"]) {
       const result = await tool.execute({ name: bad }, makeContext(dir));
       expect(result.isError, `name ${bad}`).toBe(true);
     }
   });
 
   it("a name carrying a directory, a whole Assets/ path, or a .png suffix lands where it says (measured 2026-09-09: a 'Folder/Name' tail lost a turn)", async () => {
-    const a = await tool.execute({ name: "SaltRoad/Stall_4", path: "Assets/Art/Routes" }, makeContext(dir));
+    const a = await tool.execute({ name: "Goods/Saddlebag", path: "Assets/Art" }, makeContext(dir));
     expect(a.isError, String(a.content)).toBeFalsy();
-    expect(existsSync(join(dir, "Assets/Art/Routes/SaltRoad/Stall_4.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Goods/Saddlebag.png"))).toBe(true);
     const b = await tool.execute({ name: "Assets/Art/Generated/SpiceJar.png" }, makeContext(dir));
     expect(b.isError, String(b.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Art/Generated/SpiceJar.png"))).toBe(true);
@@ -101,14 +101,14 @@ describe("SpriteGenerateTool", () => {
 
   it("a bare name that names an existing placeholder elsewhere under Assets/ overwrites THAT placeholder (measured 2026-09-09 19:24: 12 new files beside 12 untouched placeholders)", async () => {
     const flat = new Uint8Array(16 * 16 * 4).fill(200);
-    const placeholder = join(dir, "Assets/Art/Routes/SilkRoad/Waystone.png");
-    mkdirSync(join(dir, "Assets/Art/Routes/SilkRoad"), { recursive: true });
+    const placeholder = join(dir, "Assets/Art/Props/Waystone.png");
+    mkdirSync(join(dir, "Assets/Art/Props"), { recursive: true });
     writeFileSync(placeholder, encodePng(16, 16, flat));
     const before = readFileSync(placeholder);
 
     const result = await tool.execute({ name: "Waystone", acceptPlaceholder: true }, makeContext(dir));
     expect(result.isError, String(result.content)).toBeFalsy();
-    expect(String(result.content)).toContain("Redirected to Assets/Art/Routes/SilkRoad/Waystone.png");
+    expect(String(result.content)).toContain("Redirected to Assets/Art/Props/Waystone.png");
     expect(existsSync(join(dir, "Assets/Art/Generated/Waystone.png"))).toBe(false);
     expect(readFileSync(placeholder).equals(before)).toBe(false);
 
@@ -132,8 +132,8 @@ describe("SpriteGenerateTool", () => {
   it("finds the same-stem placeholder in a native Windows path too", () => {
     // The walk lists C:\...\Waystone.png on Windows; a "/<name>.png"
     // suffix never matched it, so the redirect above never happened there.
-    expect(isPngNamed("C:\\Game\\Assets\\Art\\Routes\\SilkRoad\\Waystone.png", "Waystone")).toBe(true);
-    expect(isPngNamed("/game/Assets/Art/Routes/SilkRoad/Waystone.png", "Waystone")).toBe(true);
+    expect(isPngNamed("C:\\Game\\Assets\\Art\\Props\\Waystone.png", "Waystone")).toBe(true);
+    expect(isPngNamed("/game/Assets/Art/Props/Waystone.png", "Waystone")).toBe(true);
     expect(isPngNamed("C:\\Game\\Assets\\Art\\OldWaystone.png", "Waystone")).toBe(false);
     expect(isPngNamed("C:\\Game\\Assets\\Waystone.png\\Other.png", "Waystone")).toBe(false);
   });
@@ -182,15 +182,15 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("accepts a custom output dir under Assets/", async () => {
-    mkdirSync(join(dir, "Assets", "Modules", "MarketModule", "Sprites"), { recursive: true });
+    mkdirSync(join(dir, "Assets", "Modules", "CampModule", "Sprites"), { recursive: true });
     // Pre-create the meta-less dir chain the way a module would.
-    writeFileSync(join(dir, "Assets", "Modules", "MarketModule", "Sprites", "keep.txt"), "x");
+    writeFileSync(join(dir, "Assets", "Modules", "CampModule", "Sprites", "keep.txt"), "x");
     const result = await tool.execute(
-      { name: "Stall_Corner", path: "Assets/Modules/MarketModule/Sprites" },
+      { name: "TentFlap", path: "Assets/Modules/CampModule/Sprites" },
       makeContext(dir),
     );
     expect(result.isError).toBeFalsy();
-    expect(existsSync(join(dir, "Assets", "Modules", "MarketModule", "Sprites", "Stall_Corner.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets", "Modules", "CampModule", "Sprites", "TentFlap.png"))).toBe(true);
   });
 });
 

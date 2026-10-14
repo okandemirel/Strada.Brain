@@ -8,15 +8,17 @@
  * could MAKE any. The art that does exist in that project came from ad-hoc
  * editor scripts the agent happened to improvise.
  *
- * This tool makes asset production a capability the agent always has: a flat,
- * pixel-art-style sprite written straight into Assets/ with a Unity .meta
+ * This tool makes asset production a capability the agent always has: a
+ * procedurally drawn sprite written straight into Assets/ with a Unity .meta
  * that imports it as a Sprite (textureType 8) — no Editor, no bridge, no
  * network, no new dependency (PNG framing + zlib via node:zlib).
  *
- * The output is deliberately placeholder-grade: readable silhouettes with a
- * darker outline and a light band, distinct per element. Sourced art from
- * unity_my_assets_cloud stays the preferred option; this is the floor every GDD
- * element can always reach.
+ * The output is deliberately placeholder-grade: one filled shape per element,
+ * its shape and colour picked deterministically from the name (the colour from
+ * the style profile's palette when there is one). How its edge and top rows
+ * are finished is the profile's call too (see finishGrid). Sourced art from
+ * unity_my_assets_cloud stays the preferred option; this is the floor every
+ * GDD element can always reach.
  */
 
 import { deflateSync } from "node:zlib";
@@ -495,11 +497,10 @@ export type LocalRunnerLike = Pick<
 
 /**
  * The part of style.json's notes that describes a LOOK. Measured 2026-09-07:
- * the project's notes read "…<the art direction>. | verification: visual assets
- * … integrated into the scene config and prefab references verified." — a
- * sprint had appended its report to the art direction, and
- * every default diffusion prompt carried that sentence. Only the first
- * "|"-segment, and never a sentence about verification, config or prefabs.
+ * a sprint had appended its own status report to the project's art-direction
+ * notes, after a "|", and every default diffusion prompt then carried that
+ * report as if it were part of the look. Only the first "|"-segment is kept,
+ * and within it no sentence about checks, config, prefabs or references.
  */
 export function styleNotesForPrompt(notes: string | undefined): string {
   if (!notes) return "";
@@ -672,7 +673,7 @@ export class SpriteGenerateTool implements ITool {
       },
       prompt: {
         type: "string",
-        description: "local only: the diffusion prompt. Default: a flat pixel-art mobile sprite of the name.",
+        description: "local only: the diffusion prompt. Default: built from the project's style.json (family and notes); without one, a plain isolated sprite of the name.",
       },
       negative: {
         type: "string",
@@ -949,7 +950,7 @@ export class SpriteGenerateTool implements ITool {
               case "painterly":
                 return `hand-painted game art of ${subject}, soft brush strokes, storybook style, single subject centered, plain background${tail}`;
               case "toon-casual":
-                return `flat vector game sprite of ${subject}, thick clean outline, solid colors, soft glossy shading, single subject centered, isolated on plain white background, studio quality${tail}`;
+                return `toon-style game sprite of ${subject}, simple bold shapes, cel shading, single subject centered, isolated on plain white background, studio quality${tail}`;
               default:
                 // UNSPECIFIED means unspecified: a plain, isolated game sprite
                 // of the subject, with whatever the profile's own notes say.
@@ -960,7 +961,7 @@ export class SpriteGenerateTool implements ITool {
   /**
    * Many sprites, one model load. Measured 2026-09-07: one sprite is ~45-60 s
    * on this machine and every call paid a ~10 s pipeline load plus a model
-   * round-trip; a design with 36 stalls is 36 round-trips.
+   * round-trip; a design with 36 props is 36 round-trips.
    */
   private async executeBatch(
     input: Record<string, unknown>,
