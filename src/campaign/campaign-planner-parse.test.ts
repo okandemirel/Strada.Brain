@@ -4,7 +4,7 @@ import { balancedJsonObjects, CampaignPlanner, groupHeadingsIntoMilestones, look
 
 /**
  * Measured live 2026-09-12 00:42: the campaign failed at its very first step
- * with "campaign planner returned no JSON object" on a 1 458-line GDD — the
+ * with "campaign planner returned no JSON object" on a long GDD — the
  * extractor took the first "{" in a reply that explained itself first, and the
  * retry sent the identical message to the same model.
  */
@@ -22,10 +22,10 @@ describe("reading a milestone ladder out of a reply", () => {
   const ladder = {
     milestones: [
       {
-        title: "Core loop",
-        prompt: "Build the core gameplay loop the GDD specifies: playfield, rules and the win condition, verified in PlayMode.",
-        coveredSections: ["3. CORE GAMEPLAY"],
-        deliverables: ["playfield"],
+        title: "Rope system",
+        prompt: "Build the rope system the GDD specifies: anchors, slack rules and the summit condition, verified in PlayMode.",
+        coveredSections: ["2. ROPE SYSTEM"],
+        deliverables: ["rope rig"],
       },
       {
         title: "Delivery",
@@ -55,11 +55,11 @@ describe("reading a milestone ladder out of a reply", () => {
     // <reasoning> block listing the GDD's headings — the model never reached
     // the JSON, and the retry asked the same question again.
     const { planner: p, asks } = planner([
-      "<reasoning>\nLet me produce the JSON milestone ladder. Need 16-20 milestones. Let me list headings:\n1. INTRODUCTION",
+      "<reasoning>\nLet me produce the JSON milestone ladder. Need 16-20 milestones. Let me list headings:\n1. THE CLIMB",
       JSON.stringify(ladder),
     ]);
 
-    const result = await p.planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+    const result = await p.planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
     expect(result.milestones).toHaveLength(2);
     expect(asks[1]).toContain("thinking out loud");
@@ -77,7 +77,7 @@ describe("reading a milestone ladder out of a reply", () => {
       }),
     };
     await new CampaignPlanner(provider as never)
-      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+      .planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
     // Twenty milestones with their prompts do not fit a provider default.
     expect(calls[0]?.maxTokens ?? 0).toBeGreaterThanOrEqual(8000);
@@ -86,15 +86,15 @@ describe("reading a milestone ladder out of a reply", () => {
   it("reads a ladder the model buried in prose", async () => {
     const { planner: p } = planner([`I'll plan this in two milestones. Note the {braces} in section 3.\n\n${JSON.stringify(ladder)}\n\nLet me know if you want changes.`]);
 
-    const result = await p.planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+    const result = await p.planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
-    expect(result.milestones.map((m) => m.title)).toEqual(["Core loop", "Delivery"]);
+    expect(result.milestones.map((m) => m.title)).toEqual(["Rope system", "Delivery"]);
   });
 
   it("the second ask says what was wrong with the first reply", async () => {
     const { planner: p, asks } = planner(["No JSON at all, just prose about the game.", JSON.stringify(ladder)]);
 
-    const result = await p.planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+    const result = await p.planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
     expect(result.milestones).toHaveLength(2);
     expect(asks).toHaveLength(2);
@@ -121,10 +121,10 @@ describe("reading a milestone ladder out of a reply", () => {
         if (ask.includes("Group them into between")) {
           // The headings themselves are in the ask — grouping a given list is
           // a small answer, unlike "read this GDD and cover every section".
-          expect(ask).toContain("3. CORE GAMEPLAY");
+          expect(ask).toContain("2. ROPE SYSTEM");
           expect(ask).toContain("9. RELEASE");
           return reply(JSON.stringify({ milestones: [
-            { title: "Core loop", coveredSections: ["3. CORE GAMEPLAY"] },
+            { title: "Rope system", coveredSections: ["2. ROPE SYSTEM"] },
             { title: "Delivery", coveredSections: ["9. RELEASE"] },
           ] }));
         }
@@ -134,11 +134,11 @@ describe("reading a milestone ladder out of a reply", () => {
     const reply = (text: string) => ({ text, toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
 
     const result = await new CampaignPlanner(provider as never)
-      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+      .planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
-    expect(result.milestones.map((m) => m.title)).toEqual(["Core loop", "Delivery"]);
+    expect(result.milestones.map((m) => m.title)).toEqual(["Rope system", "Delivery"]);
     expect(result.milestones[0]!.prompt.length).toBeGreaterThanOrEqual(40);
-    expect(result.milestones[0]!.coveredSections).toEqual(["3. CORE GAMEPLAY"]);
+    expect(result.milestones[0]!.coveredSections).toEqual(["2. ROPE SYSTEM"]);
     // EVERY staged sprint demands a captured frame, or the visual gate never
     // runs for it: the live 14-sprint ladder left four sprints ungated
     // (measured 2026-09-12 02:56).
@@ -170,7 +170,7 @@ describe("reading a milestone ladder out of a reply", () => {
     };
 
     const result = await new CampaignPlanner(provider as never)
-      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+      .planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
     expect(result.milestones.map((m) => m.title)).toEqual(["One", "Three"]);
   });
@@ -193,14 +193,14 @@ describe("reading a milestone ladder out of a reply", () => {
     };
 
     const result = await new CampaignPlanner(provider as never)
-      .planMilestones("# GDD\n\n## 3. CORE GAMEPLAY\nRules.\n\n## 5. CONTENT\nLevels.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+      .planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 5. CONTENT\nLevels.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
     expect(result.milestones.length).toBeGreaterThanOrEqual(2);
     expect(result.milestones.every((m) => m.prompt.length >= 40)).toBe(true);
   });
 
   it("groups the GDD's headings into a ladder without asking anyone", () => {
-    const scope = { headings: ["1. INTRO", "2. CORE", "3. CONTENT", "4. META", "5. RELEASE"], elements: 0, screens: 0, asks: {} as never, minMilestones: 2, maxMilestones: 4 };
+    const scope = { headings: ["1. THE CLIMB", "2. ROPE SYSTEM", "3. ROUTES", "4. WEATHER", "5. RELEASE"], elements: 0, screens: 0, asks: {} as never, minMilestones: 2, maxMilestones: 4 };
     const grouped = groupHeadingsIntoMilestones(scope as never);
 
     expect(grouped.length).toBeGreaterThanOrEqual(2);
@@ -230,13 +230,13 @@ describe("reading a milestone ladder out of a reply", () => {
           ] }));
         }
         return reply(ask.includes('"Input"')
-          ? "Implement input capture for the playfield so taps register on the board."
+          ? "Implement input capture for the rope so taps register on the anchors."
           : huge);
       }),
     };
 
     const result = await new CampaignPlanner(provider as never)
-      .planMilestones("# GDD\n\n## 3. CORE\nRules.\n\n## 4. INPUT\nTaps.\n", "docs/GDD.md");
+      .planMilestones("# GDD\n\n## 3. ANCHORS\nRules.\n\n## 4. TOUCH\nTaps.\n", "docs/GDD.md");
 
     for (const m of result.milestones) {
       expect(m.prompt.length).toBeLessThanOrEqual(8000);
@@ -248,7 +248,7 @@ describe("reading a milestone ladder out of a reply", () => {
   it("JSON where an instruction belongs is not an instruction (Codex 2026-09-12 P#9)", () => {
     expect(looksLikeJsonEcho('{"milestones":[{"title":"Only one","coveredSections":[]}]}')).toBe(true);
     expect(looksLikeJsonEcho('```json\n{"milestones":[]}\n```')).toBe(true);
-    expect(looksLikeJsonEcho("Build the playfield: place the board prefab and verify it in PlayMode.")).toBe(false);
+    expect(looksLikeJsonEcho("Build the cliff face: place the anchor prefab and verify it in PlayMode.")).toBe(false);
     // Prose that merely MENTIONS a JSON snippet is still prose.
     expect(looksLikeJsonEcho('Write the config as {"levels": 5} and verify the loader reads it, then capture a frame.')).toBe(false);
   });
@@ -277,7 +277,7 @@ describe("reading a milestone ladder out of a reply", () => {
     };
 
     const result = await new CampaignPlanner(provider as never)
-      .planMilestones("# GDD\n\n## 3. CORE\nRules.\n\n## 5. CONTENT\nLevels.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
+      .planMilestones("# GDD\n\n## 3. ANCHORS\nRules.\n\n## 5. CONTENT\nLevels.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
     expect(result.milestones.map((m) => m.title)).toEqual(["Real", "AlsoReal"]);
   });

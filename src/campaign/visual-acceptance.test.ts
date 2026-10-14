@@ -35,7 +35,7 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 
 const FRAME: FrameSelection = { path: "/proj/Recordings/f.png", capturedAtMs: 10 };
 
-function checked(matches: boolean | undefined, detail = "the frame shows a flat grid"): VisualConformance {
+function checked(matches: boolean | undefined, detail = "the frame shows an empty sky"): VisualConformance {
   return {
     status: "checked",
     detail,
@@ -58,7 +58,7 @@ describe("the verdict", () => {
     const a = visualAcceptance(checked(false), FRAME, { bounces: 1 });
     expect(a.status).toBe("refused");
     expect(a.reason).toBeUndefined();
-    expect(a.detail).toContain("flat grid");
+    expect(a.detail).toContain("empty sky");
     expect(describeVisualAcceptance(a)).toContain("REFUSED");
     expect(describeVisualAcceptance(a)).not.toContain("NOT MEASURED");
   });

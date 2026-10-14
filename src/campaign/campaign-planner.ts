@@ -30,9 +30,9 @@ import {
 /**
  * GDD windowing. The old 10k-head + 6k-tail window elided the MIDDLE of a
  * large GDD — which is where the element schedules, level structure, and
- * system tables actually live (the test game's requirements summary put its
- * whole element table at 40–60% depth). A ladder planned from a document
- * whose schedule was cut out cannot cover the game. Now: documents up to
+ * system tables actually live (a test GDD kept its whole element table well
+ * inside the elided middle). A ladder planned from a document whose schedule
+ * was cut out cannot cover the game. Now: documents up to
  * FULL_CHARS go through whole; larger ones keep a big head and tail plus a
  * structural outline of the middle (every heading and table row), so nothing
  * the GDD schedules is invisible to the planner.
@@ -51,7 +51,7 @@ const GDD_OUTLINE_CHARS = 20_000;
  */
 export function plannerSystem(scope: GddScope, gddSaved = true, scopeGate: ScopeGateMode = DEFAULT_SCOPE_GATE_MODE): string {
   const asks: string[] = [];
-  if (scope.asks.ui) asks.push("UI/screen flow (every screen the GDD names, wired Home → play → result)");
+  if (scope.asks.ui) asks.push("UI/screen flow (every screen the GDD names, wired from the first screen into play and on to the result)");
   if (scope.asks.audio) asks.push("audio (music and SFX bound to AudioSources in the shipped scenes)");
   if (scope.asks.onboarding) asks.push("onboarding/tutorial (FTUE)");
   if (scope.asks.save) asks.push("save/persistence");
@@ -394,7 +394,7 @@ export class CampaignPlanner {
   private async planInStages(system: string, userMessage: string, scope: GddScope): Promise<MilestoneLadder> {
     if (!this.provider) throw new Error("campaign planning requires an LLM provider");
     // THE HEADINGS, NOT THE DOCUMENT. Sending the whole GDD and asking to
-    // "cover every section" invited the model to enumerate all eighty headings
+    // "cover every section" invited the model to enumerate every heading
     // inside its reasoning and never answer (measured live 2026-09-12 01:10).
     // They are already measured; grouping a given list is a small answer.
     const headingList = scope.headings.map((h, i) => `${i + 1}. ${h}`).join("\n");
@@ -535,9 +535,9 @@ export class CampaignPlanner {
     "\n\nFinish by CAPTURING A FRAME of what this sprint built (unity_capture_frame) and name the captured file in your report — a sprint that shows nothing is not done. " +
     // ONE LOCATION CONTRACT. The frame reader only counts what is under
     // Recordings/ — a picture in Assets/ is an art asset and must not stand in
-    // for a frame of the running game — and a sprint told to write
-    // "docs/sprints/m2_frame.png" left the visual gate with nothing to read
-    // (Codex 2026-09-12 R#9).
+    // for a frame of the running game — and a sprint told to write its frame
+    // under docs/ left the visual gate with nothing to read (Codex 2026-09-12
+    // R#9).
     "The frame must land under Recordings/ (that is where the delivery gate reads it from); a picture written anywhere else is not evidence this system can see.";
 
   private async planOnce(system: string, userMessage: string): Promise<MilestoneLadder> {
@@ -556,7 +556,7 @@ export class CampaignPlanner {
     // EVERY balanced object, last first. Taking the first "{" in the reply
     // handed the parser whatever brace the model's prose happened to contain,
     // and the campaign failed at its first step with "returned no JSON
-    // object" — measured live 2026-09-12 00:42 on a 1 458-line GDD.
+    // object" — measured live 2026-09-12 00:42 on a long GDD.
     const stripped = stripLeakedReasoning(text);
     const candidates = balancedJsonObjects(stripped.text);
     if (candidates.length === 0) {
@@ -630,7 +630,7 @@ export class CampaignPlanner {
     const userMessage =
       `<gdd>\n${windowGdd(gddText, GDD_AUDIT_FULL_CHARS)}\n</gdd>\n\n` +
       `<completed-ladder>\n${ladderSummary}\n</completed-ladder>\n\n` +
-      `List the concrete items the GDD schedules (mechanics, game elements, blockers, set-pieces, screens, systems) that the EVIDENCE above does not show implemented and shipped. Respond ONLY with JSON: {"missing": ["<item>: <one-line what is missing>", ...]} — an empty array when every scheduled item has evidence behind it.`;
+      `List the concrete items the GDD schedules (rules, entities, levels, screens, systems, assets) that the EVIDENCE above does not show implemented and shipped. Respond ONLY with JSON: {"missing": ["<item>: <one-line what is missing>", ...]} — an empty array when every scheduled item has evidence behind it.`;
 
     // RETRY THE SHAPE, not the judgement. One malformed reply used to skip
     // the GDD-coverage check for the whole delivery — measured live
@@ -775,8 +775,8 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
     // 2026-09-12 Z#4). Whitespace still is not identity.
     const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
     // THE MEASURED LINES ONLY. The membership test searched the whole summary,
-    // so a requirement's own TITLE ("Storm boss: absent") and a failed
-    // sprint's prose ("the storm boss is NOT delivered") were both accepted
+    // so a requirement's own TITLE ("Photo mode: absent") and a failed
+    // sprint's prose ("the photo mode is NOT delivered") were both accepted
     // as the evidence that closed it (Codex 2026-09-12 W#3).
     // …AND ONLY THE LINES THAT SAY SOMETHING ABOUT CONTENT. A sprint's own
     // "status: failed" is fourteen characters of the record, so it was a
@@ -1087,13 +1087,12 @@ function milestoneFacts(m: {
  * The system's OWN negative measurements, as it writes them.
  *
  * A measured line that says a thing is NOT there is about that thing — it
- * names it, which is exactly what the typed predicate asks for — so
- * "GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code:
- * L3 Bomb, L5 Rocket" closed the Bomb requirement, "0 world renderers in the
- * shipped scenes" closed the renderer requirement, and
- * "GDD frame rate ≥ 60 fps: NOT MET — 41 fps" closed the frame-rate
- * requirement. The finding read back as the evidence against itself, the same
- * shape as Codex 2026-09-12 AD#1 ("status: failed" closing anything), and the
+ * names it, which is exactly what the typed predicate asks for — so an
+ * element-schedule finding listing the elements with NO trace in code closed
+ * the requirement of an element it listed, "0 world renderers in the shipped
+ * scenes" closed the renderer requirement, and a frame-rate finding marked
+ * NOT MET closed the frame-rate requirement. The finding read back as the
+ * evidence against itself, the same shape as Codex 2026-09-12 AD#1 ("status: failed" closing anything), and the
  * requirement–evidence eval measures it: 7 of the 25 unproven rows were closed
  * this way — a 28% false-closed rate, 0% with this filter
  * (scripts/eval/requirement-evidence-eval.mjs).
@@ -1107,7 +1106,7 @@ const NEGATIVE_MEASUREMENT_RES: readonly RegExp[] = [
   /\bnot\s+met\b/i, // GDD <kind> ≥ N: NOT MET — …
   /\bnot\s+measured\b/i, // "NOT MEASURED: …", "NOT measured: …" (claims and structure)
   /\bno\s+trace\s+in\s+code\b/i, // GDD element schedule: … have NO trace in code: …
-  /\b0\s+of\s+\d/, // … 0 of 14 scheduled element(s) …
+  /\b0\s+of\s+\d/, // … 0 of 9 scheduled element(s) …
   /\b0\s+(?:\S+\s+){1,3}in\s+the\s+shipped\s+scenes\b/i, // 0 world renderers in the shipped scenes
   /\brefusal\s+stands\b/i, // REFUSAL STANDS at delivery: …
   /\bnone\s+of\s+its\s+rows\s+could\s+be\s+read\b/i, // the schedule table was unreadable
@@ -1264,15 +1263,15 @@ function milestoneEvidence(m: {
 }): string {
   const facts = milestoneFacts(m);
   // The worker's own report travels for CONTEXT, and it is deliberately kept
-  // out of the quotable record below: a failed sprint's sentence "the storm
-  // boss is NOT delivered" was quoted back as the evidence that closed it
+  // out of the quotable record below: a failed sprint's sentence "the photo
+  // mode is NOT delivered" was quoted back as the evidence that closed it
   // (Codex 2026-09-12 W#3).
   if (m.resultExcerpt) facts.push(`report: ${m.resultExcerpt.slice(0, 300)}`);
   return facts.length > 0 ? facts.map((f) => `\n   ${f}`).join("") : "\n   (no evidence recorded)";
 }
 
 const COVERAGE_SYSTEM = `You audit whether a game design document's scheduled content is IMPLEMENTED AND SHIPPED, judged by the evidence each milestone carries.
-Be strict about scheduled content (element tables, mechanics lists, screens, win/lose rules) and lenient about aspiration (KPIs, live-ops roadmaps, marketing).
+Be strict about content the document schedules for building (content lists, rules, screens, systems) and lenient about aspiration (business targets, plans for after release, promotion).
 A milestone's TITLE or PLAN is not coverage. Its evidence is: what it committed, what the suite measured, what the shipped tree and the document's own numbers say. An item whose only trace is a title, a plan or a promise in prose is MISSING.
 Respond ONLY with the requested JSON.`;
 
@@ -1371,8 +1370,8 @@ export function groupHeadingsIntoMilestones(scope: GddScope): Array<{ title: str
     const group = headings.slice(i, i + perGroup);
     const first = group[0]!;
     out.push({
-      // "3. CORE GAMEPLAY SYSTEM" → "Core gameplay system", with the number
-      // dropped: a milestone title is a name, not a table-of-contents row.
+      // "24. Photo Mode" → "Photo Mode", with the number dropped: a
+      // milestone title is a name, not a table-of-contents row.
       title: first.replace(/^\s*[\d.]+\s*/, "").slice(0, 200) || first.slice(0, 200),
       coveredSections: group.slice(0, 40),
     });

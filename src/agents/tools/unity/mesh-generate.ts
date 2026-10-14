@@ -1,16 +1,15 @@
 /**
  * Procedural low-poly MESH generation — the 3D counterpart of the sprite tool.
  *
- * Measured 2026-08-27 (user: "iyi de oyun 3d idi"): the test game's GDD asks
- * for 3D elements as well as 2D ones (the 2D ones are covered by
- * unity_generate_sprite). Everything the pipeline had produced was flat 2D;
- * nothing could originate a mesh. The user's Asset Store cache holds exactly one 3D package
+ * Measured 2026-08-27 (user: "iyi de oyun 3d idi"): a design asked for 3D
+ * and everything the pipeline had produced was flat 2D; nothing could
+ * originate a mesh. The user's Asset Store cache holds exactly one 3D package
  * (an off-theme racing car), so the procedural floor matters here too.
  *
  * Writes Wavefront OBJ with smooth per-vertex normals (Unity imports .obj
  * natively; the written .meta pins the guid so references don't churn). No
  * Editor, no bridge, no deps. Placeholder-grade like the sprite tool: the
- * soft low-poly look comes from the shapes themselves (rounded box, sphere,
+ * geometry is only what the analytic shapes give (rounded box, sphere,
  * capsule), and sourced art from unity_my_assets_cloud stays the preferred option
  * whenever a package fits.
  */
@@ -75,8 +74,8 @@ function spherify(x: number, y: number, z: number): Vec3 {
 
 /**
  * Rounded box: a subdivided cube whose surface points are lerped toward their
- * sphere projection. `roundness` 0 = sharp cube, 1 = sphere; ~0.4 reads as a
- * soft, pillow-edged block.
+ * sphere projection. `roundness` 0 = sharp cube, 1 = sphere; ~0.4 keeps flat
+ * faces with wide bevelled edges.
  */
 function roundedBox(size: number, subdivisions: number, roundness: number): Mesh {
   const half = size / 2;
@@ -236,7 +235,7 @@ function cone(radius: number, height: number, segments: number): Mesh {
   return mesh;
 }
 
-/** Capsule (cylinder + hemispherical caps) along Y — the pill-shaped body. */
+/** Capsule (cylinder + hemispherical caps) along Y. */
 function capsule(radius: number, height: number, segments: number, rings: number): Mesh {
   const seg = Math.max(4, Math.min(48, Math.round(segments)));
   const rng = Math.max(2, Math.min(24, Math.round(rings)));
@@ -271,7 +270,7 @@ function capsule(radius: number, height: number, segments: number, rings: number
 }
 
 // =============================================================================
-// ORGANIC — metaball fields + marching tetrahedra (the soft, rounded tier)
+// ORGANIC — metaball fields + marching tetrahedra (blended blobs)
 // =============================================================================
 
 /** One blob of an organic build: an ellipsoid field centred at pos. */
@@ -283,8 +282,8 @@ export interface OrganicField {
 /**
  * Wyvill metaball potential: (1 - D²)² inside the ellipsoid, 0 outside, where
  * D is the normalized ellipsoid distance. Sum of these over the field list is
- * what the iso surface wraps — blobs fuse where their fields overlap, which is
- * exactly the fused, organic silhouette primitives can't give.
+ * what the iso surface wraps — blobs fuse where their fields overlap, which no
+ * union of separate primitives can do.
  */
 function makeField(fields: readonly OrganicField[]): (p: Vec3) => number {
   return (p) => {
@@ -533,9 +532,9 @@ export class MeshGenerateTool implements ITool {
   // GDD.
   readonly description =
     "Generate a 3D mesh (OBJ + import .meta, no Editor needed) for a game element that needs DIMENSION — " +
-    "a prop, a body, a block. Use unity_generate_sprite for flat art, and this for elements the project " +
-    "renders in 3D. Use when unity_my_assets_cloud has nothing the user already owns. Compose a character " +
-    "in the prefab from parts (for example a body mesh with a head mesh as a child). By default the " +
+    "a barrel, a tree, a vehicle part. Use unity_generate_sprite for flat art, and this for elements the project " +
+    "renders in 3D. Use when unity_my_assets_cloud has nothing the user already owns. Compose a multi-part " +
+    "element in the prefab from parts (for example a wheel mesh as a child of a cart mesh). By default the " +
     "installed local image-to-3D model produces the mesh (provider 'local'); an analytic primitive is a " +
     "placeholder the delivery gate counts as such.";
 
@@ -544,7 +543,7 @@ export class MeshGenerateTool implements ITool {
     properties: {
       name: {
         type: "string",
-        description: "Element name the mesh is for, e.g. 'HeroBody' or 'Crate'. Also the file name.",
+        description: "Element name the mesh is for, e.g. 'Mailbox' or 'Barrel'. Also the file name.",
       },
       path: {
         type: "string",
@@ -553,7 +552,7 @@ export class MeshGenerateTool implements ITool {
       shape: {
         type: "string",
         enum: MESH_SHAPES,
-        description: "Silhouette: rounded-box (soft block), sphere, capsule (pill-shaped body), cylinder, cone.",
+        description: "Silhouette: rounded-box (bevelled cube), sphere, capsule, cylinder, cone.",
       },
       size: {
         type: "number",
@@ -561,7 +560,7 @@ export class MeshGenerateTool implements ITool {
       },
       roundness: {
         type: "number",
-        description: "rounded-box only: 0 (sharp cube) to 1 (sphere). Default 0.4 — the soft pillow look.",
+        description: "rounded-box only: 0 (sharp cube) to 1 (sphere). Default 0.4 — flat faces, wide bevels.",
       },
       detail: {
         type: "number",
@@ -570,7 +569,7 @@ export class MeshGenerateTool implements ITool {
       fields: {
         type: "array",
         description:
-          "organic only: the blobs of the build as ellipsoid fields, e.g. a quadruped = body + head + 2 ears + snout. " +
+          "organic only: the blobs of the build as ellipsoid fields, e.g. a cactus = trunk + 2 arms + a flower. " +
           "Each: {pos:[x,y,z], radii:[rx,ry,rz]} in meters. Overlapping fields fuse into one smooth surface.",
         items: {
           type: "object",
@@ -829,7 +828,7 @@ export class MeshGenerateTool implements ITool {
     const rawName = String(input["name"] ?? "").trim();
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
       return {
-        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'HeroBody')",
+        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'Barrel')",
         isError: true,
       };
     }
@@ -847,7 +846,7 @@ export class MeshGenerateTool implements ITool {
       return {
         content:
           `Error: unknown shape "${shapeInput}" — mesh shapes are ${MESH_SHAPES.join(", ")}; ` +
-          "for a flat pixel-art piece use unity_generate_sprite instead.",
+          "for flat 2D art use unity_generate_sprite instead.",
         isError: true,
       };
     }
@@ -885,7 +884,7 @@ export class MeshGenerateTool implements ITool {
           return {
             content:
               "Error: shape 'organic' needs fields — the blobs of the build, e.g. " +
-              '[{"pos":[0,0.35,0],"radii":[0.3,0.28,0.22]}, {"pos":[0,0.72,0.05],"radii":[0.2,0.18,0.16]}]',
+              '[{"pos":[0,0.2,0],"radii":[0.11,0.24,0.11]}, {"pos":[0,0.47,0],"radii":[0.33,0.13,0.33]}]',
             isError: true,
           };
         }
@@ -910,8 +909,8 @@ export class MeshGenerateTool implements ITool {
         }
         const isoRaw = Number(input["iso"] ?? 0.5);
         const iso = Number.isFinite(isoRaw) ? Math.min(0.9, Math.max(0.1, isoRaw)) : 0.5;
-        // Cell size from the smallest radius present: fine enough to keep ears
-        // and snouts, coarse enough to stay fast.
+        // Cell size from the smallest radius present: fine enough to keep the
+        // smallest blob, coarse enough to stay fast.
         const minRadius = Math.min(...fields.flatMap((f) => f.radii));
         const cellSize = Math.max(0.01, minRadius / 4);
         mesh = organicMesh(fields, iso, cellSize);
@@ -926,7 +925,7 @@ export class MeshGenerateTool implements ITool {
     }
 
     // The game's own style profile shapes the silhouette: `plump` squashes
-    // X/Z outward and Y down — the rounder body a toon style asks for.
+    // X/Z outward and Y down — what a profile with plump above 1 asks for.
     // Explicit `plump` input wins; no profile = natural proportions.
     try {
       const { loadStyleProfile } = await import("../../style/style-profile.js");

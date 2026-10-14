@@ -1,9 +1,9 @@
 /**
  * GDD dimensionality — what the design asks for, against what the scenes hold.
  *
- * Audited 2026-09-03. The test game's GDD asks for 3D; the delivered entry
- * scene had no mesh renderers and bound none of the project's 62 imported
- * models. Nothing in the pipeline ever compared the two.
+ * Audited 2026-09-03. A test GDD asked for 3D; the delivered entry scene had
+ * no mesh renderers and bound none of the project's imported models. Nothing
+ * in the pipeline ever compared the two.
  *
  * The expectation is DERIVED FROM THE GDD TEXT, never hardcoded: the terms
  * below are counted across the whole document and reported with their own
@@ -11,9 +11,9 @@
  * look-conformance gate was refused on review 2026-09-02 for quoting the GDD's
  * table of contents that way.
  *
- * This never refuses. A design that asks for 3D can legitimately be met with
- * sprites, prerendered angles and flat quads, and no file scan can tell that
- * apart from a scene that simply has no art in it. The delivery report says what was measured —
+ * This never refuses. A design that asks for 3D can legitimately be met
+ * without a single mesh renderer, and no file scan can tell that apart from
+ * a scene that simply has no art in it. The delivery report says what was measured —
  * mesh renderers, bound models, sprite renderers, camera projection — and the
  * reader judges.
  */
@@ -114,7 +114,7 @@ export function describeDimensionality(
       `The GDD asks for 3D; the shipped scenes contain ${report.shippedMeshRenderers} mesh renderer(s) and bind ` +
         `${boundModels.size} imported model(s), against ${report.shippedSpriteRenderers} sprite renderer(s). ` +
         `The project holds ${report.artInventory.models} imported model file(s). ` +
-        `Sprites and prerendered angles can legitimately stand in for 3D geometry — these are the counts, not a verdict.`,
+        `A 3D design can legitimately be met without mesh renderers — these are the counts, not a verdict.`,
     );
   } else {
     lines.push(

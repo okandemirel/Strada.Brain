@@ -32,10 +32,10 @@ describe("MeshGenerateTool", () => {
   });
 
   it("writes a valid OBJ and a model .meta under Assets/", async () => {
-    const result = await tool.execute({ name: "FrogBody", shape: "capsule" }, makeContext(dir));
+    const result = await tool.execute({ name: "Bollard", shape: "capsule" }, makeContext(dir));
     expect(result.isError).toBeFalsy();
 
-    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "FrogBody.obj");
+    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "Bollard.obj");
     expect(existsSync(objPath)).toBe(true);
     const parsed = parseObj(readFileSync(objPath, "utf8"));
     expect(parsed.verts).toBeGreaterThan(30);
@@ -106,18 +106,18 @@ describe("MeshGenerateTool", () => {
   });
 
   it("organic: fuses metaball fields into one smooth closed mesh", async () => {
-    // A rough frog: body + head + two ears + snout.
+    // A rough cactus: trunk + two arms + a flower on top.
     const fields = [
-      { pos: [0, 0.3, 0], radii: [0.3, 0.26, 0.24] },
-      { pos: [0, 0.62, 0.06], radii: [0.2, 0.18, 0.17] },
-      { pos: [-0.1, 0.78, 0.02], radii: [0.05, 0.07, 0.03] },
-      { pos: [0.1, 0.78, 0.02], radii: [0.05, 0.07, 0.03] },
-      { pos: [0, 0.6, 0.22], radii: [0.08, 0.07, 0.08] },
+      { pos: [0, 0.42, 0], radii: [0.15, 0.44, 0.15] },
+      { pos: [-0.19, 0.47, 0], radii: [0.13, 0.08, 0.08] },
+      { pos: [-0.29, 0.63, 0], radii: [0.08, 0.17, 0.08] },
+      { pos: [0.18, 0.33, 0], radii: [0.12, 0.08, 0.08] },
+      { pos: [0, 0.87, 0], radii: [0.09, 0.06, 0.09] },
     ];
-    const result = await tool.execute({ name: "FrogOrganic", shape: "organic", fields }, makeContext(dir));
+    const result = await tool.execute({ name: "CactusOrganic", shape: "organic", fields }, makeContext(dir));
     expect(result.isError).toBeFalsy();
 
-    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "FrogOrganic.obj");
+    const objPath = join(dir, "Assets", "Art", "Generated", "Meshes", "CactusOrganic.obj");
     const parsed = parseObj(readFileSync(objPath, "utf8"));
     expect(parsed.verts).toBeGreaterThan(200);
     expect(parsed.normals).toBe(parsed.verts);

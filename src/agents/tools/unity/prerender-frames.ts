@@ -1,14 +1,12 @@
 /**
  * unity_prerender_frames — the prerendered-frames pipeline as a tool.
  *
- * A GDD that wants 2D frames of elements modelled in 3D describes a common
- * production route: render the 3D model once from several angles and ship the
- * frames as sprites. This tool runs that pipeline against any prefab the agent
- * points at: instantiate in a tuned 3-point-lit scene, stylize for the
- * project's own look (proportions, material and inverted-hull outline from its
- * style profile — measured on a realistic rigged model, which came out in the
- * profile's style), and capture N angles synchronously through an offscreen
- * RenderTexture (CaptureScreenshot never lands in batchmode).
+ * Renders a 3D prefab to 2D frames: instantiate it in a tuned 3-point-lit
+ * scene, apply what the project's style profile sets (proportions, material,
+ * inverted-hull outline; nothing when there is no profile), and capture N
+ * angles synchronously through an offscreen RenderTexture (CaptureScreenshot
+ * never lands in batchmode). Whether a project wants this at all is its own
+ * GDD's call, never this tool's.
  *
  * The editor script is written into the TARGET project for the run and
  * removed afterwards — the user's repo is not polluted.
@@ -93,15 +91,16 @@ export function resolvePrerenderStyle(
   const plumpRaw = Number(input.plump);
   const headRaw = Number(input.headScale);
   return {
-    // A neutral grey when nothing named a colour — the default was a pink
-    // that belonged to one game (Codex 2026-09-11 B#21).
+    // A neutral grey when nothing named a colour — the default was a body
+    // colour that belonged to one game (Codex 2026-09-11 B#21).
     bodyColor: input.bodyColor !== undefined ? String(input.bodyColor) : (profile.bodyColor ?? "#9aa0a6"),
     outlineWidth: Number.isFinite(outlineRaw) ? Math.max(0, Math.min(3, outlineRaw)) : (profile.outlineWidth ?? 0),
     plump: (() => {
-      // No style profile means NO styling: the squash was a fixed 0.86 for
-      // every character and the plumpness default 1.2, so a realistic model
-      // was squashed into a cartoon (Codex 2026-09-11 B#21). The Y factor now
-      // preserves volume, which is 1.0 when nothing asked for plumpness.
+      // No style profile means NO styling: the squash was one fixed factor
+      // for every character and the plumpness defaulted above 1, so a
+      // realistic model was squashed into a cartoon (Codex 2026-09-11 B#21).
+      // The Y factor now preserves volume, which is 1.0 when nothing asked
+      // for plumpness.
       const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (profile.plump ?? 1.0);
       // Both horizontal axes are scaled by p, so the vertical compensation
       // is 1/p² — 1/p left the volume 20% larger (Codex 2026-09-11 C#33).
@@ -513,8 +512,7 @@ export class PrerenderFramesTool implements ITool {
       return {
         content:
           `${frames.length} frames rendered to ${outRel} (+ sprite .meta each): ${frames.join(", ")}. ` +
-          "These are game-ready angles in the project's own style — use them as the element's view sprites, and " +
-          "animate between them when the design asks for frame-by-frame 2D motion." +
+          "Bind them as the element's sprites, one per view angle." +
           (retemplated.length > 0 ? ` Existing frame .meta re-templated (guid kept) — ${retemplated.join("; ")}.` : ""),
       };
     } catch (err) {

@@ -9,10 +9,10 @@ import { describeDimensionality } from "./gdd-dimensionality.js";
  * The GDD's own dimensionality, measured against the shipped scenes.
  *
  * Audited 2026-09-03: the GDD asked for 3D and the delivered scenes had no
- * mesh renderers and bound none of the project's 62 imported models.
- * Disclosure, never refusal — sprites or prerendered angles standing in for
- * 3D geometry are a legitimate choice, and only the counts can tell the
- * reader which one they got.
+ * mesh renderers and bound none of the project's imported models.
+ * Disclosure, never refusal — a 3D design met without mesh renderers is a
+ * legitimate choice, and only the counts can tell the reader which one they
+ * got.
  */
 
 const roots: string[] = [];
@@ -106,7 +106,7 @@ describe("describeDimensionality", () => {
   });
 
   it("counts every mention and quotes each, so a table-of-contents line cannot pass as the statement", () => {
-    const gdd = "CONTENTS\n  4.2 3D look ......... 17\n\n4.2 3D look\nThe climbers are 3D models on 3D cliffs.";
+    const gdd = "CONTENTS\n  6.8 3D look ......... 37\n\n6.8 3D look\nThe climbers are 3D models on 3D cliffs.";
     const d = describeDimensionality(gdd, spriteProject());
 
     expect(d.signals.find((s) => s.term === "3D")?.count).toBe(4);

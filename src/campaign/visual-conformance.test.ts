@@ -17,14 +17,14 @@ describe("look description", () => {
   it("a Markdown '## Art Direction' section is prose, not a contents listing (Codex 2026-09-11 B#23)", () => {
     const gdd = [
       "# Game", "## 1. Overview", "Some overview text.", "",
-      "## Art Direction", "### Palette", "Grey-blue ink washes with a single rust accent for ropes and anchors, nothing else saturated.",
-      "### Shapes", "Angular low-poly cliffs and climbers, no outlines; every handhold stays visible at 48 px on a phone screen.",
-      "### Motion", "Stiff, weighty climbing: each reach holds for 200 ms before the weight shifts, and the camera dips on a fall.",
+      "## Art Direction", "### Light", "One cold sun low on the left; every shadow is a flat band of grey-blue ink.",
+      "### Lines", "No outlines anywhere: edges come only from the facets of the low-poly cliffs and climbers.",
+      "### Accent", "Rust is the only accent colour, and only ropes and anchors carry it.",
     ].join("\n");
     const look = extractLookDescription(gdd);
     expect(look.found).toBe(true);
-    expect(look.text).toContain("Grey-blue ink washes");
-    expect(look.text).not.toContain("### Palette");
+    expect(look.text).toContain("One cold sun");
+    expect(look.text).not.toContain("### Light");
   });
 
   it("takes the art-direction PROSE, never the table of contents", () => {
@@ -32,21 +32,22 @@ describe("look description", () => {
     // section, both matching the same heading.
     const gdd = [
       "CONTENTS",
-      "2.  CLIMBING",
+      "1.  THE CLIMB",
+      "2.  ROPE SYSTEM",
       "3.  LOOK AND FEEL",
-      "4.  ROUTE EDITOR",
+      "4.  WEATHER",
+      "5.  ROUTE EDITOR",
       ...Array.from({ length: 40 }, (_, i) => `filler line ${i}`),
       "3.  LOOK AND FEEL",
-      "3.2 Art Style",
       "Ink-wash woodblock print: matte low-poly cliffs lit by a single cold sun, ",
       "a grey-blue palette with one rust accent kept for ropes and anchors, and angular ",
-      "low-poly climbers with no outlines whose stiff, weighty movement makes every reach look costly.",
+      "low-poly climbers with no outlines, drawn as if cut into the same block as the rock.",
     ].join("\n");
 
     const look = extractLookDescription(gdd);
     expect(look.found).toBe(true);
     expect(look.text).toContain("matte low-poly cliffs");
-    expect(look.text).not.toContain("ROUTE EDITOR");
+    expect(look.text).not.toContain("WEATHER");
   });
 
   it("says what is missing rather than guessing", () => {
@@ -106,7 +107,7 @@ describe("the judgement", () => {
     const root = tmp();
     const frame = join(root, "f.png");
     writeFileSync(frame, "x".repeat(64));
-    const chat = vi.fn(async () => ({ text: "No — the frame shows a plain grid of flat squares with no cliffs." }));
+    const chat = vi.fn(async () => ({ text: "No — the frame shows an empty sky with one debug label and no cliffs." }));
 
     const result = await judgeVisualConformance({
       look, frame: { path: frame },
@@ -114,7 +115,7 @@ describe("the judgement", () => {
     });
 
     expect(result.status).toBe("checked");
-    expect(result.detail).toContain("plain grid");
+    expect(result.detail).toContain("empty sky");
     expect(renderVisualConformance(result, { path: frame })).toContain("claude");
   });
 
@@ -166,10 +167,10 @@ describe("the judgement", () => {
     writeFileSync(frame, "x".repeat(64));
     const no = await judgeVisualConformance({
       look, frame: { path: frame },
-      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "The frame shows a flat grid, no climbers.\nMATCH: no" })), capabilities: { vision: true } } as never, name: "claude" },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "The frame shows an empty sky, no climbers.\nMATCH: no" })), capabilities: { vision: true } } as never, name: "claude" },
     });
-    expect(no).toMatchObject({ status: "checked", matches: false, detail: "The frame shows a flat grid, no climbers." });
-    expect(renderVisualConformance(no, { path: frame })).toContain("NO MATCH — The frame shows a flat grid");
+    expect(no).toMatchObject({ status: "checked", matches: false, detail: "The frame shows an empty sky, no climbers." });
+    expect(renderVisualConformance(no, { path: frame })).toContain("NO MATCH — The frame shows an empty sky");
     const yes = await judgeVisualConformance({
       look, frame: { path: frame },
       visionProvider: { provider: { chat: vi.fn(async () => ({ text: "MATCH: yes\nLow-poly climbers on a grey-blue cliff, as described." })), capabilities: { vision: true } } as never, name: "claude" },

@@ -15,11 +15,11 @@ describe("styleProfileSchema", () => {
   it("accepts a full toon-casual profile and fills defaults", () => {
     const parsed = styleProfileSchema.parse({
       family: "toon-casual",
-      pipeline: "prerendered-frames",
-      proportions: { plump: 1.2, headScale: 1.22 },
+      pipeline: "sprite-native",
+      proportions: { plump: 1.35, headScale: 1.4 },
       palette: ["#6a8caf"],
-      outline: { width: 1.0, color: "#1f1418" },
-      shading: "glossy",
+      outline: { width: 2.5, color: "#20262e" },
+      shading: "flat",
     });
     expect(parsed.references).toEqual([]);
     expect(parsed.notes).toBe("");
@@ -30,7 +30,7 @@ describe("styleProfileSchema", () => {
       styleProfileSchema.safeParse({
         family: "toon-casual",
         pipeline: "prerendered-frames",
-        palette: ["pink"],
+        palette: ["teal"],
       }).success,
     ).toBe(false);
     expect(
@@ -88,7 +88,7 @@ describe("familyDefaults", () => {
 describe("StyleAnalysis keyword fallback", () => {
   it("reads pixel-art docs as pixel, cartoon docs as toon, military as realistic", async () => {
     const analysis = new StyleAnalysis(undefined);
-    expect((await analysis.analyze("A crisp pixel-art puzzle, 16-bit sprites everywhere.")).profile.family).toBe("pixel");
+    expect((await analysis.analyze("An 8-bit pixel-art dungeon crawler, sprites everywhere.")).profile.family).toBe("pixel");
     expect((await analysis.analyze("Stubby cartoon robots with inked outlines.")).profile.family).toBe("toon-casual");
     expect((await analysis.analyze("A realistic military shooter with PBR materials.")).profile.family).toBe("realistic");
   });
@@ -114,7 +114,7 @@ describe("StyleAnalysis keyword fallback", () => {
     // A realistic document is rendered in real time, not to sprite sheets.
     const realistic = await analysis.analyze("A realistic military shooter with PBR materials.");
     expect(realistic.profile.pipeline).toBe("realtime-3d");
-    const pixel = await analysis.analyze("A crisp pixel-art puzzle, 16-bit sprites everywhere.");
+    const pixel = await analysis.analyze("An 8-bit pixel-art dungeon crawler, sprites everywhere.");
     expect(pixel.profile.pipeline).toBe("sprite-native");
   });
 

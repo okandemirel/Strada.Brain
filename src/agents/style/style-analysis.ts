@@ -31,8 +31,8 @@ You receive the art-direction sections of a game design document (or the whole d
 
 Rules:
 - The document is the only truth. Never import a style from another game: "stubby cartoon robots drawn with inked outlines" means toon-casual with plump>1 and outline>0; "gritty realistic military shooter" means realistic with plump=1 and outline=0.
-- "2D frames prerendered from 3D models" or "2D renderer" → pipeline prerendered-frames; realtime 3D gameplay → realtime-3d; pure sprite/pixel games → sprite-native.
-- Palette comes from the doc's named colors or its described mood (pastel/candy → bright soft hexes; muted/desaturated → grey-tinted hexes). Never fewer than 3.
+- "sprite sheets baked offline from 3D models" → pipeline prerendered-frames; realtime 3D gameplay → realtime-3d; pure sprite/pixel games → sprite-native.
+- Palette comes from the doc's named colors or its described mood (fluorescent → saturated hexes; sepia/monochrome → low-chroma hexes). Never fewer than 3.
 - Respond ONLY with the JSON object.`;
 
 /** Keyword fallback when the LLM is unavailable or unparseable. */
@@ -139,8 +139,8 @@ export class StyleAnalysis {
 
     const family = inferFamilyFromText(gddText);
     const defaults = familyDefaults(family);
-    // The document's own colours, never an invented palette: three pastels
-    // were stamped on every fallback profile (Codex 2026-09-11 B#20).
+    // The document's own colours, never an invented palette: one fixed set
+    // of three was stamped on every fallback profile (Codex 2026-09-11 B#20).
     const palette = paletteFromText(gddText);
     const fallback: StyleProfile = styleProfileSchema.parse({
       family,
