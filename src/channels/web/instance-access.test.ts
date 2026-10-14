@@ -387,7 +387,7 @@ describe("instance access model — privileged chat commands (round 13 #11)", ()
   // only the instance owner's here; listing rows and replaying the judge are reads.
   it("classifies a campaign waiver, in either language, as instance control and its reads as open", () => {
     for (const sub of ["waive", "WAIVE", "muaf", "feragat"]) {
-      expect(surfaceOf("campaign", [sub, "R-07", "cut", "from", "MVP"]), sub).toBe("instance:control");
+      expect(surfaceOf("campaign", [sub, "BK-12", "parked", "until", "beta"]), sub).toBe("instance:control");
     }
     for (const sub of ["rows", "satırlar", "rejudge", "yargila"]) {
       expect(isOpen("campaign", [sub, "m1"]), sub).toBe(true);

@@ -273,12 +273,12 @@ describe("judgePlanShape", () => {
   it("rejects the seven-node exploration plan measured 2026-09-08 (30 minutes, 55 reads, nothing produced)", () => {
     const nodes = [
       "Explore project structure: vault_search for GDD, modules, scenes, prefabs, audio, and existing patterns",
-      "vault_search for GDD files including SampleGame_GDD.md",
+      "vault_search for GDD files including docs/design/overview.md",
       "vault_search for module definitions and scripts",
       "vault_search for scene files",
       "vault_search for prefab files",
       "vault_search for audio assets",
-      "Read SampleGame_GDD.md structure and extract key game design requirements",
+      "Read docs/design/overview.md structure and extract key game design requirements",
     ].map((task) => ({ task }));
     const verdict = judgePlanShape(nodes);
     expect(verdict.explorationOnly).toBe(true);
@@ -287,7 +287,7 @@ describe("judgePlanShape", () => {
   });
 
   it("accepts a plan with at least one node that changes the project, and never judges a single-node tree", () => {
-    expect(judgePlanShape([{ task: "Read the GDD" }, { task: "Generate the Rocket sprites with unity_generate_sprite and bind them" }]).explorationOnly).toBe(false);
+    expect(judgePlanShape([{ task: "Read the GDD" }, { task: "Generate the bishop sprites with unity_generate_sprite and bind them" }]).explorationOnly).toBe(false);
     expect(judgePlanShape([{ task: "vault_search for everything" }]).explorationOnly).toBe(false);
     expect(judgePlanShape([]).explorationOnly).toBe(false);
     // Neutral labels say nothing about shape and are not judged.
@@ -300,7 +300,7 @@ describe("judgePlanShape", () => {
       ["Extract the shared movement logic into a MovementBase class", "Map legacy enemy IDs to the new EnemyKind enum", "Document the migration in CHANGELOG.md"],
       ["Extract PlayerController's input handling into InputReader.cs", "Extract the camera follow into CameraRig.cs"],
       ["Map the gamepad axes to the InputActions asset", "Document the control scheme in docs/controls.md"],
-      ["Inspect the compile error in RocketSystem.cs and fix the missing using", "Locate the null prefab reference and bind it"],
+      ["Inspect the compile error in OpeningBook.cs and fix the missing using", "Locate the null prefab reference and bind it"],
     ];
     for (const plan of plans) {
       expect(judgePlanShape(plan.map((task) => ({ task }))).explorationOnly).toBe(false);
@@ -313,11 +313,11 @@ describe("a read-only request is not an exploration-only failure (Codex review 2
     for (const t of [
       "Review the audio module and report what is short or duplicated",
       "Audit the shipped scenes against the GDD",
-      "Analyze why the dock module stalls",
+      "Analyze why the chess-clock module stalls",
       "Please summarize the delivery report",
       "Report on placeholder art coverage",
     ]) expect(isReadOnlyRequest(t), t).toBe(true);
-    for (const t of ["Build the HUD", "Deliver the art the GDD schedules", "Fix the compile error in RocketService"]) {
+    for (const t of ["Build the HUD", "Deliver the art the GDD schedules", "Fix the compile error in HintService"]) {
       expect(isReadOnlyRequest(t), t).toBe(false);
     }
   });
@@ -392,7 +392,7 @@ describe("folding a measurement never deletes the work (Codex 2026-09-11 M#4)", 
 
   it("a folded verifier keeps every barrier it waited on", () => {
     const { nodes } = foldMeasurementNodes([
-      { id: "a", task: "Build the playfield", dependsOn: [] },
+      { id: "a", task: "Build the drill board", dependsOn: [] },
       { id: "b", task: "Build the HUD", dependsOn: [] },
       { id: "v", task: "Report the measured results", dependsOn: ["a", "b"] },
     ]);

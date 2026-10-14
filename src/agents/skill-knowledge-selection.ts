@@ -3,8 +3,8 @@
  *
  * Measured 2026-09-08 04:42 on a test-game sprint turn: the "Skill Knowledge"
  * layer carried three project skills the agent itself had written with
- * create_skill on Aug 27, Sep 2 and Sep 3 — a set-piece plan, a replan
- * for a BoardBuilder compile error, a verification plan — ~7.4k chars on
+ * create_skill on Aug 27, Sep 2 and Sep 3 — a plan for one feature, a
+ * replan for one compile error, a verification plan — ~7.4k chars on
  * every turn of every task since, none of it about the task at hand. A
  * skill body is injected when the task names the skill (or one of its
  * declared triggers), or the skill says `inject: always`.

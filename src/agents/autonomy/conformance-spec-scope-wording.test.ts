@@ -17,15 +17,13 @@ import { StradaConformanceGuard } from "./strada-conformance.js";
 import type { RunDesignDoc } from "./run-design-doc.js";
 
 const GDD = `
-## 14. FERRY PIECES
+## Pottery shelf
 
-### 14.2 Ferry timetable
-
-| Sails | Piece | One-line note |
-|-------|-------|---------------|
-| W3 | Copper Buoy | marks a crossing |
-| W7 | Fog Lamp | lights two quays |
-| W9 | Tide Gate | opens on the hour |
+| Opens at | Ware |
+|----------|------|
+| Kiln 5 | Celadon Glaze |
+| Kiln 17 | Raku Tongs |
+| Kiln 33 | Slip Mould |
 `;
 
 const roots: string[] = [];
@@ -40,7 +38,7 @@ function specScopeText(designDoc?: RunDesignDoc): string | null {
   writeFileSync(join(root, "docs", "GDD.md"), `${GDD}\n# rest of a large document\n${"x".repeat(500)}`);
   const scripts = join(root, "Assets", "Modules", "M", "Scripts");
   mkdirSync(scripts, { recursive: true });
-  writeFileSync(join(scripts, "FogLamp.cs"), "public class FogLamp {}");
+  writeFileSync(join(scripts, "RakuTongs.cs"), "public class RakuTongs {}");
   const guard = new StradaConformanceGuard(undefined, { projectPath: root, enabled: true, designDoc });
   (guard as unknown as { wroteProjectCode: boolean }).wroteProjectCode = true;
   return (guard as unknown as { specScopePrompt(): string | null }).specScopePrompt();
@@ -50,22 +48,22 @@ describe("the spec-scope prompt", () => {
   it("names the missing elements without a test vehicle's rule labels or level structure", () => {
     const text = specScopeText() ?? "";
     expect(text).toContain("[STRADA SPEC SCOPE]");
-    expect(text).toContain("Copper Buoy (W3)");
+    expect(text).toContain("Celadon Glaze (Kiln 5)");
     expect(text).not.toMatch(/R-rule|showcases|sim module/i);
     expect(text).toContain("as the design document specifies it");
   });
 
   it("names the campaign's GDD file when one holds the document", () => {
-    const text = specScopeText({ text: GDD, path: "docs/FerryDesign.md" }) ?? "";
-    expect(text).toContain("Copper Buoy (W3)");
-    expect(text).toContain("Implement each as docs/FerryDesign.md specifies it");
+    const text = specScopeText({ text: GDD, path: "docs/PotteryBook.md" }) ?? "";
+    expect(text).toContain("Celadon Glaze (Kiln 5)");
+    expect(text).toContain("Implement each as docs/PotteryBook.md specifies it");
   });
 
   it("never sends a text-only campaign's run to look for a design file (review gdd-W10)", () => {
     // The campaign's GDD is in no file; docs/ here holds a document, and it
     // is not that one. "As the design document specifies it" sent the run to it.
     const text = specScopeText({ text: GDD }) ?? "";
-    expect(text).toContain("Copper Buoy (W3)");
+    expect(text).toContain("Celadon Glaze (Kiln 5)");
     expect(text).not.toContain("as the design document specifies it");
     expect(text).toContain("campaign's GDD is not saved in the project, so no file holds it");
     expect(text).toContain("do not look for one");

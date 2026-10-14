@@ -3,8 +3,7 @@
  *
  * The capture gate proves a frame exists (size + a distinct hash). It cannot
  * say what is in it: 11351 frames of a flat coloured grid satisfied it while
- * the GDD asked for drawn, stylised characters on a rendered stage (audited
- * 2026-09-03).
+ * the GDD asked for finished, illustrated art (audited 2026-09-03).
  *
  * This is DISCLOSURE, not a gate. A stylised look is a judgement call, the
  * model answering is fallible, and the structural check already refuses the
@@ -16,8 +15,8 @@
  * Two defects sank the earlier attempts and are the contract here:
  *   1. The look description was read from the GDD's TABLE OF CONTENTS,
  *      because the extractor took the first heading match. The real section
- *      sits ~1100 lines below its TOC entry, so the LAST/longest candidate
- *      wins and a block that is mostly numbered headings is rejected.
+ *      sits far below its TOC entry, so the LAST/longest candidate wins and a
+ *      block that is mostly numbered headings is rejected.
  *   2. The vision question was routed through the fallback chain, whose
  *      capability flag is an OR across members and which strips the image for
  *      a text-only member — "yes I can see", answered blind. The caller must

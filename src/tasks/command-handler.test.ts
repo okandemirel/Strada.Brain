@@ -801,15 +801,15 @@ describe("CommandHandler build commands (/campaign, /measure, /guardian)", () =>
     const waiveByCommand = vi.fn().mockResolvedValue(true);
     handler.setCampaignManager({ describeStatus: () => snapshot, reviveByCommand: vi.fn(), waiveByCommand });
 
-    await handler.handle("chat-1", "campaign", ["waive", "R-07", "cut", "from", "the", "MVP"], "u7");
-    expect(waiveByCommand).toHaveBeenCalledWith("chat-1", "u7", "R-07", "cut from the MVP");
+    await handler.handle("chat-1", "campaign", ["waive", "BK-12", "parked", "until", "the", "beta"], "u7");
+    expect(waiveByCommand).toHaveBeenCalledWith("chat-1", "u7", "BK-12", "parked until the beta");
 
-    await handler.handle("chat-1", "campaign", ["muaf", "§16.2", "MVP", "dışı"], "u7");
-    expect(waiveByCommand).toHaveBeenLastCalledWith("chat-1", "u7", "§16.2", "MVP dışı");
+    await handler.handle("chat-1", "campaign", ["muaf", "§23.4", "sonraki", "sürüm"], "u7");
+    expect(waiveByCommand).toHaveBeenLastCalledWith("chat-1", "u7", "§23.4", "sonraki sürüm");
     expect(sendMarkdown).not.toHaveBeenCalled(); // not the status view
 
     // No reason, no waiver: the usage line, and the campaign is not asked.
-    await handler.handle("chat-1", "campaign", ["waive", "R-07"], "u7");
+    await handler.handle("chat-1", "campaign", ["waive", "BK-12"], "u7");
     expect(waiveByCommand).toHaveBeenCalledTimes(2);
     expect(String(sendText.mock.calls.at(-1)?.[1])).toMatch(/waive <row id, label or §section> <reason>/);
   });
@@ -1082,15 +1082,15 @@ describe("Chat task and daemon commands act only for their owner (TSK-6)", () =>
     const source = { describeStatus: () => undefined, reviveByCommand: vi.fn(), waiveByCommand };
     const shared = handlerWith({ authority: chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111", "222"] } }) });
     shared.setCampaignManager(source);
-    await shared.handle("chat-222", "campaign", ["waive", "R-07", "not", "needed"], "222", "telegram");
-    await shared.handle("chat-222", "campaign", ["feragat", "R-07", "gerek", "yok"], "222", "telegram");
+    await shared.handle("chat-222", "campaign", ["waive", "BK-12", "not", "needed"], "222", "telegram");
+    await shared.handle("chat-222", "campaign", ["feragat", "BK-12", "gerek", "yok"], "222", "telegram");
     expect(waiveByCommand).not.toHaveBeenCalled();
     expect(sendText).toHaveBeenCalledWith("chat-222", expect.stringMatching(/^Refused: .*may not control this instance/));
 
     const single = handlerWith({ authority: chatInstanceAuthority({ telegram: { kind: "roster", userIds: ["111"] } }) });
     single.setCampaignManager(source);
-    await single.handle("chat-111", "campaign", ["waive", "R-07", "not", "needed"], "111", "telegram");
-    expect(waiveByCommand).toHaveBeenCalledWith("chat-111", "111", "R-07", "not needed");
+    await single.handle("chat-111", "campaign", ["waive", "BK-12", "not", "needed"], "111", "telegram");
+    expect(waiveByCommand).toHaveBeenCalledWith("chat-111", "111", "BK-12", "not needed");
   });
 
   it("a single-user setup keeps its daemon control and its daemon tasks", async () => {

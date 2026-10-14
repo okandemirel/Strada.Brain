@@ -2043,7 +2043,7 @@ export class CommandHandler {
       const target = args[1] ?? "";
       const reason = args.slice(2).join(" ").trim();
       if (target === "" || reason === "") {
-        await this.channel.sendText(chatId, "Usage: `/campaign waive <row id, label or §section> <reason>` — e.g. `/campaign waive §16.2 deferred past the MVP`.");
+        await this.channel.sendText(chatId, "Usage: `/campaign waive <row id, label or §section> <reason>` — e.g. `/campaign waive §23.4 parked until the beta`.");
         return;
       }
       await this.campaignStatusSource.waiveByCommand(chatId, userId ?? "", target, reason);

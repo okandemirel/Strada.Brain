@@ -13,21 +13,21 @@ const skill = (name: string, body: string, extra: Record<string, unknown> = {}, 
 
 describe("selectSkillKnowledge", () => {
   it("withholds an active skill the prompt never names, and says which and how big", () => {
-    const stale = skill("samplegame-replan-boardbuilder", "## REPLAN: Resolve BoardBuilder …".padEnd(3683, "x"));
-    const { included, withheld } = selectSkillKnowledge([stale], "Draw the area backgrounds the GDD schedules.");
+    const stale = skill("swarm-timer-notes", "## Notes: SwarmTimer retry order …".padEnd(4271, "x"));
+    const { included, withheld } = selectSkillKnowledge([stale], "Paint the meadow tiles the GDD lists.");
     expect(included).toEqual([]);
-    expect(withheld).toEqual([{ name: "samplegame-replan-boardbuilder", chars: 3683 }]);
+    expect(withheld).toEqual([{ name: "swarm-timer-notes", chars: 4271 }]);
   });
 
   it("includes a skill the prompt names, case-insensitively", () => {
-    const plan = skill("comet-set-piece-plan", "# Comet plan");
-    expect(selectSkillKnowledge([plan], "Follow Comet-Set-Piece-Plan for the finale.").included).toEqual([plan]);
+    const plan = skill("queen-rearing-plan", "# Queen rearing");
+    expect(selectSkillKnowledge([plan], "Follow Queen-Rearing-Plan for the spring split.").included).toEqual([plan]);
   });
 
   it("includes a skill when one of its declared triggers appears in the prompt", () => {
-    const plan = skill("verification-plan", "steps", { triggers: ["PlayMode verification", "conformance"] });
+    const plan = skill("hive-inspection-checklist", "steps", { triggers: ["PlayMode verification", "conformance"] });
     expect(selectSkillKnowledge([plan], "Run the playmode verification suite.").included).toEqual([plan]);
-    expect(selectSkillKnowledge([plan], "Draw sprites.").included).toEqual([]);
+    expect(selectSkillKnowledge([plan], "Draw the bee sprites.").included).toEqual([]);
   });
 
   it("includes a skill that says inject: always regardless of the prompt", () => {
@@ -62,7 +62,7 @@ describe("memoryDedupKey — a clamped entry's tail stays retrievable", () => {
     const shown = clampMemoryEntry(long);
     expect(shown.length).toBeLessThan(long.length);
     expect(memoryDedupKey(long, shown)).toBe(shown);
-    const short = "decision: ship the dock module first";
+    const short = "decision: ship the swarm-alarm module first";
     expect(memoryDedupKey(short, clampMemoryEntry(short))).toBe(short);
   });
 });
