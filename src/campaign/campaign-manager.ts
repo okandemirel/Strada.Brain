@@ -362,6 +362,13 @@ const APPROVE_RE = /^(evet|onay|onaylıyorum|yes|approve[ds]?|lgtm|go ahead)[.!\
  * unrelated question used to become a paid redraft and spend a revision round.
  */
 const REVISE_RE = /^(?:revise|revision|change|revize|revizyon|değiştir|degistir)\s*[:\-–—]\s*(\S[\s\S]*)$/i;
+/**
+ * The answers a gate on a document the user named takes. Another design is
+ * named in a new message once this one is cancelled: a reply naming it here
+ * is a revision, and a revision redrafts the gate's document in place.
+ */
+const CONFIRM_GATE_REPLY =
+  "Reply **evet/onay** to build the game from it, or **kampanya iptal** if it is not the design — then send the build again, naming the design.";
 /** "amend gdd" / "/campaign amend gdd" / "gdd amendment" / "gdd değişikliğini onayla". */
 const AMEND_GDD_RE = /^\/?(?:campaign\s+)?(?:amend\s+(?:the\s+)?gdd|gdd\s+amend(?:ment)?|accept\s+(?:the\s+)?gdd\s+(?:change|amendment)|gdd\s+değişikliğini\s+onayla)[.!\s]*$/i;
 
@@ -1425,7 +1432,8 @@ export class CampaignManager {
    */
   holdAtApprovalGate(ctx: CampaignContext, request: string, gddText: string, gddPath: string): Campaign {
     const kept = this.keepGddText(gddText, gddPath);
-    const campaign = this.newCampaign(ctx, kept === undefined ? { ideaText: request, gddText } : { ideaText: request, gddPath: kept });
+    const held = kept === undefined ? { gddText } : { gddPath: kept };
+    const campaign = this.newCampaign(ctx, { ideaText: request, ...held, gddToConfirm: true });
     campaign.state = "awaiting-approval";
     if (this.persist(campaign)) this.armApprovalExpiry(campaign.id);
     return campaign;
@@ -1580,7 +1588,7 @@ export class CampaignManager {
         await this.tell(
           campaign,
           `I would build the game from \`${found.source}\`${newest}${kept} — but the message did not plainly point the build at it, so I am asking first.${others} ` +
-            "Reply **evet/onay** to start the build from it, or **kampanya iptal** if it is not the design, and name the one to build from.",
+            CONFIRM_GATE_REPLY,
         );
         return true;
       }
@@ -1704,6 +1712,19 @@ export class CampaignManager {
 
     const revisionNote = userId === undefined ? trimmed : REVISE_RE.exec(trimmed)?.[1]?.trim();
     if (revisionNote === undefined || revisionNote === "") return false;
+
+    // A DOCUMENT THE USER NAMED IS CONFIRMED, NEVER REDRAFTED. A revision tells
+    // the drafter to revise the gate's document in place, and here that is the
+    // user's own file: "değiştir: docs/Real_GDD.md'yi kullan" — the natural
+    // answer to a gate that asks which design — had docs/android-signing.md
+    // rewritten as a GDD. Nothing is charged: no draft was asked for.
+    if (campaign.gddToConfirm) {
+      await this.tell(
+        campaign,
+        `This gate only confirms ${heldDocumentName(campaign)} as the design — I do not rewrite a document you named. ${CONFIRM_GATE_REPLY}`,
+      );
+      return true;
+    }
 
     // CLAIM THE GATE BEFORE YIELDING, on the revision path too. The approval
     // branch above learned this in 2026-09-02; this one still announced
@@ -2647,10 +2668,14 @@ export class CampaignManager {
     fresh.lastError = `the GDD approval gate expired — no answer in ${hours} h`;
     if (!this.persist(fresh)) return;
     getLoggerSafe().info("Campaign GDD approval gate expired", { id: campaignId, hours });
+    // The user's own document is no draft of ours.
+    const waited = fresh.gddToConfirm
+      ? `${capitalised(heldDocumentName(fresh))} waited ${hours} h for you to confirm it as the design with no answer`
+      : `The GDD draft${fresh.gddPath ? ` at \`${fresh.gddPath}\`` : ""} waited ${hours} h for approval with no answer`;
     await this.tell(
       fresh,
-      `The GDD draft${fresh.gddPath ? ` at \`${fresh.gddPath}\`` : ""} waited ${hours} h for approval with no answer, ` +
-        "so the campaign is parked and this chat and project are free again. Reply **kampanya devam** to reopen the gate on the same draft.",
+      `${waited}, so the campaign is parked and this chat and project are free again. ` +
+        `Reply **kampanya devam** to reopen the gate on ${fresh.gddToConfirm ? "it" : "the same draft"}.`,
     );
   }
 
@@ -2677,6 +2702,7 @@ export class CampaignManager {
    * boot resume must not re-announce the gate on every restart).
    */
   private async reenterApprovalGate(campaign: Campaign, lead?: string): Promise<void> {
+    if (campaign.gddToConfirm) return this.reenterConfirmGate(campaign, lead);
     const draft = campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : undefined;
     if (draft === undefined) {
       this.persist(campaign);
@@ -2695,9 +2721,32 @@ export class CampaignManager {
     );
   }
 
+  /**
+   * reenterApprovalGate for a gate on a document the user named: back at the
+   * gate on that document, or parked when it can no longer be read — never a
+   * draft. The request the gate keeps as its idea is a sentence that pointed
+   * at a document, and drafting from it wrote a design nobody asked for.
+   */
+  private async reenterConfirmGate(campaign: Campaign, lead?: string): Promise<void> {
+    const held = campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : campaign.gddText;
+    const name = heldDocumentName(campaign);
+    if (held === undefined) {
+      campaign.state = "cancelled";
+      campaign.lastError = `the document held at the approval gate (${campaign.gddPath ?? "its text"}) could not be read`;
+      if (!this.persist(campaign)) return;
+      await this.tell(campaign, `${lead ?? "The campaign is parked"} — I could not read ${name} any more, and I write no design in its place. Send the build again, naming the design.`);
+      return;
+    }
+    campaign.state = "awaiting-approval";
+    if (!this.persist(campaign)) return;
+    this.armApprovalExpiry(campaign.id);
+    if (lead === undefined) return;
+    await this.tell(campaign, `${lead} — ${name} was never confirmed as the design, so the build does not start from it. ${CONFIRM_GATE_REPLY}`);
+  }
+
   private newCampaign(
     ctx: CampaignContext,
-    seed: { ideaText?: string; gddText?: string; gddPath?: string },
+    seed: { ideaText?: string; gddText?: string; gddPath?: string; gddToConfirm?: boolean },
   ): Campaign {
     const now = Date.now();
     const campaign: Campaign = {
@@ -11282,6 +11331,15 @@ function locateNamedGdd(
   const found = places.flatMap((place) => NAMED_DESIGN_EXTENSIONS.map((ext) => `${place}${ext}`)).filter(isFile);
   if (found.length > 1) return { several: found };
   return found.length === 1 ? inside(found[0]!) : { missing: true };
+}
+
+/** The document a gate on a named document holds, as the chat names it. */
+function heldDocumentName(campaign: Campaign): string {
+  return campaign.gddPath !== undefined ? `\`${campaign.gddPath}\`` : "the document you named";
+}
+
+function capitalised(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** What a design named in chat is read from: text as it is, the rest through the document extractor. */

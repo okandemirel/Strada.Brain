@@ -10437,6 +10437,104 @@ describe("CampaignManager", () => {
         expect(tasks.submitted).toHaveLength(0);
       });
 
+      /**
+       * The confirm gate reused the idea gate's revision path: "değiştir: …"
+       * — the natural answer to "name the one to build from" — told the
+       * drafter "The current draft is `docs/android-signing.md` — revise THAT
+       * file in place", so the user's own document was rewritten as a GDD.
+       * A gate on a document the user named confirms it or nothing; it never
+       * drafts over it, after a restart or a revival too.
+       */
+      it("never rewrites the document it holds at the gate, whatever the reply asks", async () => {
+        const signing = "# Signing\n\nKeystore steps.\n" + "k".repeat(400);
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), signing);
+        expect(await say("chat-confirm-revise", "Build the game following docs/android-signing.md")).toBe(true);
+        atTheGate("chat-confirm-revise", "docs/android-signing.md");
+
+        expect(await say("chat-confirm-revise", "değiştir: docs/Gercek_GDD.md'yi kullan")).toBe(true);
+        expect(tasks.submitted).toHaveLength(0);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-confirm-revise")!;
+        expect(campaign.state).toBe("awaiting-approval");
+        expect(campaign.draftAttempts).toBe(0);
+        expect(readFileSync(join(projectRoot, "docs", "android-signing.md"), "utf8")).toBe(signing);
+        const said = told("chat-confirm-revise");
+        expect(said).not.toContain("Revision noted");
+        expect(said).toContain("kampanya iptal");
+
+        // …and the gate is still one that confirms, once the process restarts.
+        const reopened = new CampaignStorage(join(dir, "campaigns.db"));
+        const restarted = new CampaignManager({
+          storage: reopened,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+        });
+        expect(
+          await restarted.tryHandleIncoming({ channelType: "cli", chatId: "chat-confirm-revise", userId: "u1", text: "revise: make it a GDD", timestamp: new Date() } as unknown as IncomingMessage),
+        ).toBe(true);
+        expect(tasks.submitted).toHaveLength(0);
+        expect(reopened.get(campaign.id)!.state).toBe("awaiting-approval");
+        reopened.close();
+      });
+
+      it("calls the document it holds no draft when the gate expires and is revived, and offers no revision", async () => {
+        tasks = new FakeTaskManager();
+        storage.close();
+        storage = new CampaignStorage(join(dir, "campaigns-confirm-wording.db"));
+        manager = new CampaignManager({
+          storage,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+          approvalTimeoutMs: 300,
+        });
+        manager.attachEvents();
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-confirm-wording", "Build the game following docs/android-signing.md")).toBe(true);
+        const id = storage.listActive().find((c) => c.chatId === "chat-confirm-wording")!.id;
+        await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+        expect(await manager.tryHandleRevive("chat-confirm-wording", "kampanya devam")).toBe(true);
+        const said = told("chat-confirm-wording");
+        expect(said).toContain("`docs/android-signing.md`");
+        expect(said).not.toMatch(/draft/i);
+        expect(said).not.toContain("revise:");
+        expect(said).toContain("evet/onay");
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
+      // The idea a confirm gate keeps is the request that named a document: drafting from it wrote a design nobody asked for.
+      it("drafts nothing when the document it held is gone by the time the gate is revived", async () => {
+        tasks = new FakeTaskManager();
+        storage.close();
+        storage = new CampaignStorage(join(dir, "campaigns-confirm-gone.db"));
+        manager = new CampaignManager({
+          storage,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+          approvalTimeoutMs: 300,
+        });
+        manager.attachEvents();
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-confirm-gone", "Build the game following docs/android-signing.md")).toBe(true);
+        const id = storage.listActive().find((c) => c.chatId === "chat-confirm-gone")!.id;
+        await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+        rmSync(join(projectRoot, "docs", "android-signing.md"));
+        expect(await manager.tryHandleRevive("chat-confirm-gone", "kampanya devam")).toBe(true);
+        expect(tasks.submitted).toHaveLength(0);
+        expect(storage.get(id)!.state).toBe("cancelled");
+        expect(told("chat-confirm-gone")).toContain("could not read `docs/android-signing.md`");
+      });
+
       // "Can we…?" and "I was wondering if you could…" started nothing at all.
       it("holds the design a question-form request names at the gate", async () => {
         writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
