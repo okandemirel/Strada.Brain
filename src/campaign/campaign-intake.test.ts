@@ -844,7 +844,7 @@ describe("a build the message turns down or asks about", () => {
       "Can we build the game from this?",
       "I was wondering if you could build the game from this GDD",
       "We'd like you to build the game from this",
-      "When I build the game from this GDD, Unity crashes",
+      "I tried to build the game from this GDD",
     ])("%s → the attached design, confirmed first", (text) => {
       expect(shared(text)).toEqual({ kind: "gdd-attachment", gddText: design, sourceName: "Quillmoor_GDD.md", confirm: true });
     });
@@ -855,6 +855,11 @@ describe("a build the message turns down or asks about", () => {
 
     it("…and a caption that asks for work on the document is still no build", () => {
       expect(shared("I tried to build the game from this, please fix the typo")).toBeUndefined();
+    });
+
+    // A bug report with the design attached was confirmed at the gate, and the report itself never ran.
+    it("…nor one that reports a crash in a \"when\" clause", () => {
+      expect(shared("When I build the game from this GDD, Unity crashes")).toBeUndefined();
     });
   });
 });
@@ -1074,13 +1079,14 @@ describe("a document the build names, read to the end of its clause", () => {
     ["Build the game for Android. The design is in docs/ui-mockups.md for the buttons.", IDEA],
     // A design with a qualifier after its name, or "the GDD" the build is not aimed at, is confirmed first.
     ["Build the game in docs/Quillmoor_GDD.md for the buttons", confirm("docs/Quillmoor_GDD.md")],
-    ["Make the game in docs/Quillmoor_GDD.md faster", confirm("docs/Quillmoor_GDD.md")],
+    // …but what the game is to become is a feature request (as on main).
+    ["Make the game in docs/Quillmoor_GDD.md faster", undefined],
     ["Bu oyunu yap: docs/Quillmoor_GDD.md'de hata var", confirm("docs/Quillmoor_GDD.md")],
     // A document named together with the one the build is aimed at is held to its own clause too.
     ["Build the game in docs/art-style.md and docs/Quillmoor_GDD.md has the new levels", IDEA],
     ["Build the game (the GDD has the fix) and send me the APK", { kind: "gdd-to-confirm" }],
     ["Build the game and fix the GDD typo", { kind: "gdd-to-confirm" }],
-    ["Make the game in the GDD faster", { kind: "gdd-to-confirm" }],
+    ["Make the game in the GDD faster", undefined],
     ["Bu oyunu yap, GDD'de hata var", { kind: "gdd-to-confirm" }],
   ])("%s → %j, never an immediate build", (text, expected) => {
     const intent = detectCampaignIntent(msg(text));
@@ -1197,10 +1203,11 @@ describe("a document the message only calls the design", () => {
  * build the game in docs/Bramble_GDD.md, Unity crashes." and "I tried to
  * build the game in … but the editor freezes" each answered "Building from …"
  * and the planner ran — bug reports, read as orders because nothing before
- * the verb was a "not", an "if" or a question word. Any other opening asks
- * the user at the gate. Turkish orders by the verb's own form ("yap"); a
- * report there is another form ("yaparken", "yaptığımda") or words after the
- * verb ("yap dedim").
+ * the verb was a "not", an "if" or a question word. A build in a "when"
+ * clause is a condition, as one in an "if" clause is, and no request; any
+ * other opening asks the user at the gate. Turkish orders by the verb's own
+ * form ("yap"); a report there is another form ("yaparken", "yaptığımda") or
+ * words after the verb ("yap dedim").
  */
 describe("a build the message reports, not orders", () => {
   const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
@@ -1208,28 +1215,68 @@ describe("a build the message reports, not orders", () => {
   const P = "docs/Bramble_GDD.md";
 
   it.each([
-    `When I build the game in ${P}, Unity crashes.`,
-    `Unity crashes when I build the game from ${P}`,
     `I tried to build the game in ${P} but the editor freezes`,
-    `The CI fails every time we build the game in ${P}.`,
     `It took me two weeks to build the game in ${P}`,
     `My friend will build the game in ${P}`,
     `Once you build the game in ${P}, tell me the size.`,
     `I tried to build this game: ${P}`,
     `We want to build the game in ${P}`,
-    `When I make the game in ${P}, the build is 2 GB`,
     `I tried to develop the game in ${P}`,
     `${P}'deki oyunu yap dedim ama Unity çöktü`,
   ])("%s → confirmed first, never built at once", (text) => {
     expect(detectCampaignIntent(msg(text))).toEqual(confirm(P));
   });
 
-  it.each(["When I build the game in the GDD, Unity crashes", "The editor freezes when I implement the GDD"])(
-    "%s → the repository's GDD, confirmed first",
-    (text) => {
-      expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-to-confirm" });
-    },
-  );
+  // Confirmed at the gate, a bug report took the message over and the user's own task never ran.
+  it.each([
+    `When I build the game in ${P}, Unity crashes.`,
+    `Unity crashes when I build the game from ${P}`,
+    `When I make the game in ${P}, the build is 2 GB`,
+    `Whenever we build the game in ${P}, the editor freezes`,
+    `Unity freezes while I build the game in ${P}`,
+    `The CI fails every time we build the game in ${P}.`,
+    `Each time I build the game in ${P} the editor freezes`,
+    "When I build the game in the GDD, Unity crashes",
+    "The editor freezes when I implement the GDD",
+  ])("%s → no campaign (a build in a \"when\" clause is a condition)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  /**
+   * What follows the document can make the build no request at all: the
+   * build reported ("Build the game in P fails on Android") or, after "make",
+   * what the game is to become ("Make the game in P faster"). Each was
+   * confirmed at the gate as a build of P — main started nothing for the
+   * second — and the user's own task never ran.
+   */
+  const REPORTED = ["fails on Android", "failed again", "crashes on start", "crashed twice", "breaks the CI", "freezes the editor", "hangs at 90%",
+    "doesn't compile", "didn't load", "won't open", "isn't working", "does not start", "did not finish", "will not run", "is not loading"];
+  const BECOMES = ["faster", "slower", "better", "harder", "easier", "smoother", "bigger", "smaller", "longer", "shorter", "more fun", "less grindy", "run at 60 fps"];
+  it.each([
+    ...REPORTED.map((tail) => `Build the game in ${P} ${tail}`),
+    ...BECOMES.map((tail) => `Make the game in ${P} ${tail}`),
+    `Can you make the game in ${P} faster?`,
+    `Make the game from "${P}" faster`,
+    "Make the game in the GDD faster",
+    "Build the game in the GDD fails on Android",
+  ])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  // …while a qualifier after it, or a build verb other than "make" with a complement, is still confirmed first.
+  it.each([
+    `Make the game in ${P} with multiplayer`,
+    `Make the game in ${P} for my portfolio`,
+    `Build the game in ${P} faster`,
+    `Build the game in ${P} section 3`,
+  ])("%s → confirmed first", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm(P));
+  });
+
+  // What the game is to become is read only past a document: "in less than a week" is when, not what.
+  it("Make the game in less than a week, follow the GDD → the repository's GDD, confirmed first", () => {
+    expect(detectCampaignIntent(msg("Make the game in less than a week, follow the GDD"))).toEqual({ kind: "gdd-to-confirm" });
+  });
 
   // A Turkish report is a verb form no build pattern reads: no campaign.
   it.each([`${P}'deki oyunu yaparken Unity çöktü`, `${P}'deki oyunu yaptığımda editör donuyor`])("%s → no campaign", (text) => {
@@ -1381,6 +1428,7 @@ describe("intake cost grows with the message's length, not its square", () => {
     ["one unbroken token", "Build the game " + "x".repeat(200_000)],
     ["one unbroken path", "Build the game in " + "a/".repeat(100_000) + "x"],
     ["a build asked for in every sentence", "Build the game in docs/Quillmoor_GDD.md, then ".repeat(5000) + "send it?"],
+    ["a feature request in every sentence", "Make the game in docs/Quillmoor_GDD.md faster and ".repeat(4500) + "ship it"],
   ])("%s", (_what, text) => {
     expect(text.length).toBeGreaterThan(190_000);
     expect(timed(text)).toBeLessThan(2000);

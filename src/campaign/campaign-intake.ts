@@ -631,8 +631,13 @@ function buildIsAsked(prose: string, at: number, end: number): boolean {
 
 /** A word that turns down what follows it in its clause. */
 const TURNS_DOWN_RE = /(?<![\p{L}])(?:not|never|dont|cannot|rather\s+than|instead\s+of|\p{L}+n['’]t)(?![\p{L}])/giu;
-/** A word that makes the build a condition or a question about it. */
-const ASKS_ABOUT_RE = /(?<![\p{L}])(?:if|unless|whether|how|why|what|which|where)(?![\p{L}])/giu;
+/**
+ * A word that makes the build a condition or a question about it — a time
+ * too, as "if" does: "When I build the game in P, Unity crashes" and "The CI
+ * fails every time we build the game in P" are bug reports, which the gate
+ * took over so the report itself never ran.
+ */
+const ASKS_ABOUT_RE = /(?<![\p{L}])(?:if|unless|whether|how|why|what|which|where|when|whenever|while|every\s+time|each\s+time)(?![\p{L}])/giu;
 /** A clause opened as a yes/no question; "can you" and its kin are requests. */
 const QUESTION_OPENER_RE =
   /^\s*(?:(?:hey|so|ok(?:ay)?|wait|well|also|now)\s+)*(?:should|shall|did|does|do|is|are|was|were|am|have|has|had|may|might|must|(?:can|could|would|will)(?!\s+(?:you|u|ya)(?![\p{L}])))(?![\p{L}])/iu;
@@ -756,10 +761,11 @@ function requestAt(prose: string, at: number, end: number): Request | undefined 
 const WHOLE_GAME_BUILDS_RE = new RegExp(WHOLE_GAME_BUILD_RE.source, "giu");
 const BUILD_INTENTS_RE = new RegExp(BUILD_INTENT_RE.source, "gi");
 
-/** The firmest request among the builds `re` finds in the prose. */
-function strongestRequest(prose: string, re: RegExp): Request | undefined {
+/** The firmest request among the builds `re` finds in the prose that `counts` keeps. */
+function strongestRequest(prose: string, re: RegExp, counts: (m: RegExpExecArray) => boolean = () => true): Request | undefined {
   let found: Request | undefined;
   for (const m of prose.matchAll(re)) {
+    if (!counts(m)) continue;
     const request = requestAt(prose, m.index, m.index + m[0].length);
     if (request === "firm") return request;
     found ??= request;
@@ -767,9 +773,30 @@ function strongestRequest(prose: string, re: RegExp): Request | undefined {
   return found;
 }
 
-/** A whole-game build the message asks for (see buildIsAsked). */
+/**
+ * What follows the document a build names — its blank in the prose, or "the
+ * GDD" — can make the build no request: the build reported ("Build the game
+ * in P fails on Android"), or, after "make", what the game is to become
+ * ("Make the game in P faster"). Each was confirmed at the gate as a build of
+ * P, and the user's own task never ran; main started nothing for the second.
+ */
+const PAST_ITS_DOCUMENT = String.raw`\s+(?:in|from|at|per|using|following|with)(?:\s*["'\x60“‘]?\s{3,}["'\x60”’]?|\s+(?:the|this|that|my|our)\s+(?:GDD|game\s+design\s+doc(?:ument)?|design(?:\s+doc(?:ument)?)?))\s+`;
+const BUILD_REPORTED_RE = new RegExp(
+  String.raw`^${PAST_ITS_DOCUMENT}(?:fail(?:s|ed)|crash(?:es|ed)|breaks|freezes|hangs|(?:doesn|didn|won|isn)['’]?t|(?:does|did|will|is)\s+not)(?![\p{L}])`,
+  "iu",
+);
+const GAME_MADE_INTO_RE = new RegExp(
+  String.raw`^${PAST_ITS_DOCUMENT}(?:faster|slower|better|harder|easier|smoother|bigger|smaller|longer|shorter|more|less|run)(?![\p{L}])`,
+  "iu",
+);
+
+/** A whole-game build the message asks for (see buildIsAsked), not reported nor made into something. */
 function wholeGameRequest(prose: string): Request | undefined {
-  return strongestRequest(prose, WHOLE_GAME_BUILDS_RE);
+  return strongestRequest(prose, WHOLE_GAME_BUILDS_RE, (m) => {
+    // Read in a window, as before a document (BEFORE_WINDOW): past a longer name the build counts as it is.
+    const after = prose.slice(m.index + m[0].length, m.index + m[0].length + 2 * BEFORE_WINDOW);
+    return !BUILD_REPORTED_RE.test(after) && !(/^make/iu.test(m[0]) && GAME_MADE_INTO_RE.test(after));
+  });
 }
 
 /**

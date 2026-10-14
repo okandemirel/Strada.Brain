@@ -10481,8 +10481,8 @@ describe("CampaignManager", () => {
         reopened.close();
       });
 
-      // A tentative caption, or a bug report, with the GDD attached started nothing at all (main built it at once).
-      it.each(["Can we build the game from this?", "When I build the game from this GDD, Unity crashes"])(
+      // A tentative caption with the GDD attached started nothing at all (main built it at once).
+      it.each(["Can we build the game from this?", "I tried to build the game from this GDD"])(
         "holds an attached design whose caption does not plainly ask for the build at the gate: %s",
         async (text) => {
           const incoming = {
@@ -10647,15 +10647,35 @@ describe("CampaignManager", () => {
       });
 
       // A bug report that names the design answered "Building from `docs/Bramble_GDD.md`", and the planner ran.
+      it("holds the design a report with no other reading names at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-report", "I tried to build the game in docs/Bramble_GDD.md but the editor freezes")).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        atTheGate("chat-report", "docs/Bramble_GDD.md");
+      });
+
+      // …but held at the gate, a bug report or a feature request on the design took the message over: the user's own task never ran.
       it.each([
         "When I build the game in docs/Bramble_GDD.md, Unity crashes.",
         "Unity crashes when I build the game from docs/Bramble_GDD.md",
-        "I tried to build the game in docs/Bramble_GDD.md but the editor freezes",
-      ])("holds the design a bug report names at the gate: %s", async (text) => {
+        "Build the game in docs/Bramble_GDD.md fails on Android",
+        "Make the game in docs/Bramble_GDD.md faster",
+        "Can you make the game in docs/Bramble_GDD.md faster?",
+      ])("leaves a bug report or a feature request on the design to the agent: %s", async (text) => {
         writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
-        expect(await say("chat-report", text)).toBe(true);
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        atTheGate("chat-report", "docs/Bramble_GDD.md");
+        expect(await say("chat-report-task", text)).toBe(false);
+        expect(told("chat-report-task")).toBe("");
+        expect(storage.hasActiveForChat("chat-report-task")).toBe(false);
+      });
+
+      it("leaves a bug report with the design attached to the agent", async () => {
+        const incoming = {
+          channelType: "cli", chatId: "chat-attached-report", userId: "u1", text: "When I build the game from this GDD, Unity crashes", timestamp: new Date(),
+          attachments: [{ type: "document", name: "Bramble_GDD.md", data: Buffer.from(DESIGN, "utf8") }],
+        } as unknown as IncomingMessage;
+        expect(await manager.tryHandleIncoming(incoming)).toBe(false);
+        expect(told("chat-attached-report")).toBe("");
+        expect(storage.hasActiveForChat("chat-attached-report")).toBe(false);
       });
 
       // A feature request beside a document the message only calls the design answered "Building from `docs/menu.md`" and the planner ran.
