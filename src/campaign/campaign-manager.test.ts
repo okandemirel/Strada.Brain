@@ -10674,8 +10674,12 @@ describe("CampaignManager", () => {
     });
 
     // "I don't have a GDD, but build…" built docs/Game_GDD.md, the design the message said did not exist.
-    it("an idea beside a GDD the message says it does not have is drafted from the idea, not from docs/", async () => {
-      const idea = "I don't have a GDD, but build a game where the beekeeper moves her hives between meadows as the seasons turn";
+    // …and "The GDD doesn't exist yet; build…" held docs/Game_GDD.md at the gate instead of drafting the idea.
+    it.each([
+      "I don't have a GDD, but build a game where the beekeeper moves her hives between meadows as the seasons turn",
+      "The GDD doesn't exist yet; build a game where the beekeeper moves her hives between meadows as the seasons turn",
+      "GDD henüz yazılmadı, şöyle bir oyun yap: arıcı kovanlarını mevsim döndükçe çayırdan çayıra taşır",
+    ])("an idea beside a GDD the message says it does not have is drafted from the idea, not from docs/: %s", async (idea) => {
       expect(await say("chat-no-gdd", idea)).toBe(true);
       const campaign = storage.listActive().find((c) => c.chatId === "chat-no-gdd");
       expect(campaign?.ideaText).toBe(idea);

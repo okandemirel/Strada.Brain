@@ -94,7 +94,7 @@ const GDD_REFERENCES_RES = [GDD_ACRONYM_RE, GDD_SPELLED_RE].map((re) => new RegE
  */
 function speaksOfTheGdd(text: string): boolean {
   const words = withoutCodeFiles(text);
-  return GDD_REFERENCES_RES.some((re) => [...words.matchAll(re)].some((m) => !turnedAway(words, { at: m.index, end: m.index + m[0].length })));
+  return GDD_REFERENCES_RES.some((re) => [...words.matchAll(re)].some((m) => !turnedAway(words, { at: m.index, end: m.index + m[0].length }, true)));
 }
 
 /**
@@ -837,11 +837,20 @@ const DESIGN_NAMES_NEXT_RE =
 /** "P and Q", "P, Q", "P ve Q": named together, aimed at together. */
 const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?|\s+(?:and|or|ve|veya|&|\+)\s+)["'`“‘(]?$/iu;
 
-/** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P", "no GDD". */
-const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without|no)(?![\p{L}])/giu;
-/** …and after it: "P is outdated", "P'yi kullanma", "P değil", "P yerine", "GDD yok". */
+/** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P", "no GDD", "forget the GDD". */
+const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without|no|forget|disregard)(?![\p{L}])/giu;
+/** …and after it: "P is outdated", "P'yi kullanma", "P değil", "P yerine", "GDD yok", "GDD olmadan", "GDD'yi unut", "GDD'siz". */
 const TURNS_AWAY_AFTER_RE =
-  /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden|yok)(?![\p{L}])/giu;
+  /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden|yok|olmadan|unut\p{L}*|(?<=['’])s[ıiuü]z)(?![\p{L}])/giu;
+/**
+ * …and, after "the GDD" itself, a verb that says it is not there: "the GDD
+ * doesn't exist yet", "has not been written", "was never written", "henüz
+ * yazılmadı", "hazırlanmamış". Each was offered at the gate as the newest
+ * GDD in docs/, and the idea beside it was not drafted. A named document is
+ * not held to these: "P that isn't done" is a caveat, confirmed at the gate.
+ */
+const NOT_THERE_AFTER_RE =
+  /(?<![\p{L}])(?:\p{L}+n['’]t|(?:is|are|was|were|has|have|had|does|do|did)\s+not|never|\p{L}+m[ae](?:d[ıi]|m[ıi]ş)\p{L}*)(?![\p{L}])/giu;
 
 /** Only quotes, brackets and spaces between a name and the colon beside it. */
 const BESIDE_A_COLON_RE = /^[\s"'\x60“”‘’(<>]*$/u;
@@ -849,9 +858,10 @@ const BESIDE_A_COLON_RE = /^[\s"'\x60“”‘’(<>]*$/u;
 /**
  * A colon introduces what follows it, so a name on either side of one is read
  * with the clause on the other side too: in "no GDD: P" the "no" is P's, and
- * in "the GDD: P is outdated" the "outdated" is the GDD's.
+ * in "the GDD: P is outdated" the "outdated" is the GDD's. `theGdd` holds a
+ * reference to "the GDD" to NOT_THERE_AFTER_RE too.
  */
-function turnedAway(prose: string, doc: Pick<NamedDocument, "at" | "end">): boolean {
+function turnedAway(prose: string, doc: Pick<NamedDocument, "at" | "end">, theGdd = false): boolean {
   const besideColon = (from: number, to: number): boolean => to - from <= 8 && BESIDE_A_COLON_RE.test(prose.slice(from, to));
   let start = clauseStart(prose, doc.at);
   if (prose[start - 1] === ":" && besideColon(start, doc.at)) start = clauseStart(prose, start - 1);
@@ -860,7 +870,7 @@ function turnedAway(prose: string, doc: Pick<NamedDocument, "at" | "end">): bool
   const next = countBelow(breaks, doc.end);
   let clauseEnd = breaks[next] ?? prose.length;
   if (prose[clauseEnd] === ":" && besideColon(doc.end, clauseEnd)) clauseEnd = breaks[next + 1] ?? prose.length;
-  return matchesInside(prose, TURNS_AWAY_AFTER_RE, doc.end, clauseEnd);
+  return matchesInside(prose, TURNS_AWAY_AFTER_RE, doc.end, clauseEnd) || (theGdd && matchesInside(prose, NOT_THERE_AFTER_RE, doc.end, clauseEnd));
 }
 
 /**

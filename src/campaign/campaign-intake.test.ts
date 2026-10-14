@@ -641,6 +641,33 @@ describe("a bare reference to the GDD needs a whole-game build", () => {
     expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
+  // …nor one it says is not written yet, or to forget: each was offered at the gate as the newest GDD in docs/, and the idea was not drafted.
+  const GARDEN = "a gardener plants one new bed each season and every harvest buys a bigger greenhouse";
+  it.each([
+    `The GDD doesn't exist yet; build a game where ${GARDEN}`,
+    `The GDD isn't written yet, build the game where ${GARDEN}`,
+    `The GDD has not been written, so build a game where ${GARDEN}`,
+    `The game design document was never written, so build a game where ${GARDEN}`,
+    `Forget the GDD and build a game where ${GARDEN}`,
+    `Disregard the GDD and build a game where ${GARDEN}`,
+    `GDD henüz yazılmadı, şöyle bir oyun yap: bir bahçıvan her mevsim yeni bir tarh eker, her hasat daha büyük bir sera getirir`,
+    `GDD hazırlanmamış; şöyle bir oyun yap: bir bahçıvan her mevsim yeni bir tarh eker, her hasat daha büyük bir sera getirir`,
+    `GDD olmadan şöyle bir oyun yap: bir bahçıvan her mevsim yeni bir tarh eker, her hasat daha büyük bir sera getirir`,
+    `GDD'yi unut, şöyle bir oyun yap: bir bahçıvan her mevsim yeni bir tarh eker, her hasat daha büyük bir sera getirir`,
+    `GDD'siz bir oyun yap: bir bahçıvan her mevsim yeni bir tarh eker, her hasat daha büyük bir sera getirir`,
+  ])("%s → the idea, not a GDD discovered in docs/", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  it.each(["GDD isn't written, build the game", "GDD henüz yazılmadı, oyunu yap"])("%s → no campaign (nothing to build from)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  // A document's own clause is held to the narrower list: a caveat after its name is no ruling-out, so it is still confirmed first.
+  it("Build the game from docs/Bramble_GDD.md that isn't done → confirmed first", () => {
+    expect(detectCampaignIntent(msg("Build the game from docs/Bramble_GDD.md that isn't done"))).toEqual(confirm("docs/Bramble_GDD.md"));
+  });
+
   it.each(["I don't have a GDD, build the game", "GDD yok, oyunu yap"])("%s → no campaign (nothing to build from)", (text) => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
