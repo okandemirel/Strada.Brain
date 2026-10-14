@@ -41,7 +41,7 @@ describe("coverage audit malformed JSON", () => {
         testVerdictUnfiltered: true,
         commitNote: "3 commit(s): Assets/Scripts/DecompressionStop.cs, Assets/Prefabs/AscentLine.prefab",
         structureFindings: ["the shipped scenes reference 37 of 38 authored prefabs"],
-        gddClaims: ["wreck site count = 29 measured 29"],
+        gddClaims: ["wreck site count = 33 measured 33"],
         resultExcerpt: "the decompression stop is implemented",
       },
       { title: "Sprint B — Nothing measured yet" },
@@ -53,7 +53,7 @@ describe("coverage audit malformed JSON", () => {
     expect(sent).toContain("(unfiltered)");
     expect(sent).toContain("landed: 3 commit(s)");
     expect(sent).toContain("shipped tree: the shipped scenes reference 37 of 38");
-    expect(sent).toContain("document numbers: wreck site count = 29");
+    expect(sent).toContain("document numbers: wreck site count = 33");
     // A sprint with nothing measured says so, instead of passing as covered.
     expect(sent).toContain("(no evidence recorded)");
     // …and the instruction is evidence, not plausibility.

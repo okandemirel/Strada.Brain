@@ -6,8 +6,8 @@ import { extractCoreLoop, readUnityVersion, renderHowToRun, suiteCommand, testPl
 import { assessSceneHygiene } from "./scene-hygiene.js";
 
 /**
- * The person who opened the delivered test-game tree (2026-09-03) had 20
- * scenes, no README, and no idea what the game's verb was. Everything this
+ * The person who opened the delivered test-game tree (2026-09-03) had a long
+ * list of scenes, no README, and no idea what the game's verb was. Everything this
  * file writes must be MEASURED — the Unity version off ProjectVersion.txt,
  * the entry scene off Build Settings, the suite off the milestone's own
  * verdict, the verb off the GDD — and anything unmeasured must say so.

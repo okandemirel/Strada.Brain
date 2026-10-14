@@ -307,20 +307,20 @@ describe("lintAcceptanceBody", () => {
     expect(lintAcceptanceBody(row(), goodRuleCheck)).toEqual({ ok: true, problems: [] });
   });
 
-  it("rejects the exact P1 guardrail shape: an assertion on reflection alone", () => {
-    const result = lint("Assert.That(typeof(IX).GetMethods().Length, Is.EqualTo(1));");
+  it("rejects a reflection-only guardrail: an assertion on a type's shape alone", () => {
+    const result = lint("Assert.That(typeof(IHull).GetProperties().Length, Is.GreaterThan(2));");
     expect(result.ok).toBe(false);
     expect(result.problems.join("\n")).toMatch(/reflection/);
   });
 
   it("rejects reflection laundered through a local, a type-name comparison, and a literal-only assertion", () => {
-    refusedOnlyFor(lint(`var n = typeof(global::Game.IX).GetInterfaces().Length;\n${NUNIT}.Assert.That(n, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
+    refusedOnlyFor(lint(`var n = typeof(global::Game.Diving.Hull).GetInterfaces().Length;\n${NUNIT}.Assert.That(n, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
     refusedOnlyFor(lint(`${NUNIT}.Assert.AreEqual("Mover", Service<global::Game.IMover>().GetType().Name);`), /reflection/);
     refusedOnlyFor(lint(`${NUNIT}.Assert.IsTrue(typeof(global::Game.IMover).IsAssignableFrom(Service<global::Game.IMover>().GetType()));`), /reflection/);
     refusedOnlyFor(lint(`${NUNIT}.Assert.That(2 + 2, ${NUNIT}.Is.EqualTo(4));`), /literal/);
     // Spelled from the root, as a check must be, the same shapes are read the same way.
-    refusedOnlyFor(lint(`global::System.Int32 n = typeof(global::Game.IX).GetInterfaces().Length;\n${NUNIT}.Assert.That(n, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
-    refusedOnlyFor(lint(`var m = typeof(global::Game.IX).GetMethods().Length;\n${NUNIT}.Assert.That((global::System.Int64)m, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
+    refusedOnlyFor(lint(`global::System.Int32 n = typeof(global::Game.Diving.Hull).GetInterfaces().Length;\n${NUNIT}.Assert.That(n, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
+    refusedOnlyFor(lint(`var m = typeof(global::Game.Diving.Hull).GetFields().Length;\n${NUNIT}.Assert.That((global::System.Int64)m, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
     refusedOnlyFor(lint(`${NUNIT}.Assert.That(global::System.Type.GetType("Game.Mover").GetMethods().Length, ${NUNIT}.Is.GreaterThan(0));`), /reflection/);
     refusedOnlyFor(lint(`${NUNIT}.Assert.That(global::System.Int32.MaxValue - global::UnityEngine.Mathf.PI, ${NUNIT}.Is.GreaterThan(0));`), /literal/);
   });

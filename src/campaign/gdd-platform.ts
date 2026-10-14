@@ -86,23 +86,23 @@ function isExcluded(text: string, at: number): boolean {
 /**
  * A "PC" that names a DISTRIBUTION, not a build target.
  *
- * "Linux; a compatibility layer on PC, too" asked for a Linux product that a
- * third-party layer also runs on a Windows desktop — and the reader added a
- * native Windows target for it. Nobody builds that target, so
- * the delivery gate then reported a platform the document never asked for as
- * an unbuilt one, and no run could ever close it (Codex 2026-09-12 U#F3).
+ * A document that asked for one native build, and said in passing that an
+ * emulator also runs that build on a PC, got a native Windows target added for
+ * the PC. Nobody builds that target, so the delivery gate then reported a
+ * platform the document never asked for as an unbuilt one, and no run could
+ * ever close it (Codex 2026-09-12 U#F3).
  */
 // A STOREFRONT IS NOT A COMPATIBILITY LAYER: "Release on the App Store for
 // Mac" names a native Mac product, and listing the store here dropped the
 // target entirely (Codex 2026-09-12 V, a regression in my own U#F3 fix).
 const PC_VIA_STORE_RE =
   /\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b[^.\n]{0,24}$/i;
-/** "compatible with PC", "PC-compatible via an emulator" — a compatibility statement. */
+/** "The same build is PC-compatible", "compatible with PC owners" — a compatibility statement. */
 const PC_COMPATIBLE_AFTER_RE = /^\s*[-–—]?\s*compatib\w*/i;
 const PC_COMPATIBLE_BEFORE_RE = /\bcompatib\w*\s+(?:with\s+)?$/i;
-/** "Windows PCs through a compatibility layer" — the layer named just after. */
+/** "Windows machines run it through a compatibility layer" — the layer named just after. */
 const PC_LAYER_RE = /\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b/gi;
-/** …and the same layer named in parentheses right after it: "Windows or PC owners (via an emulator)". */
+/** …and the same layer named in parentheses right after it: "Windows desktops (once the owner adds an emulator)". */
 const PC_LAYER_PAREN_RE =
   /^[^.\n)]{0,24}?\([^)\n]{0,40}?\b(?:google play\s+games|play games|bluestacks|emulator|emulation|compatibility layer)\b/i;
 
@@ -113,9 +113,9 @@ function pcNamesDistributionOnly(text: string, at: number, length: number): bool
     return true;
   }
   // A LAYER NAMED AFTER THE OS QUALIFIES IT ONLY WITHOUT A COORDINATOR
-  // between them, the same rule storefronts already follow: "Windows PCs
-  // through a compatibility layer" is one distribution, while "Release on Windows
-  // and Google Play" is two platforms (Codex 2026-09-11 K#14).
+  // between them, the same rule storefronts already follow: "Windows machines
+  // run it through a compatibility layer" is one distribution, while "Release
+  // on Windows and Google Play" is two platforms (Codex 2026-09-11 K#14).
   if (PC_LAYER_PAREN_RE.test(text.slice(at + length, at + length + 72))) return true;
   const clause = clauseAfter(text.slice(at + length, at + length + 48));
   for (const m of clause.matchAll(PC_LAYER_RE)) {
@@ -269,8 +269,8 @@ export function gddPlatform(gddText: string | undefined): GddPlatform {
     }
   };
   // A DESKTOP OS NAMED AS A COMPATIBILITY LAYER is not a build target either:
-  // "Windows (through a compatibility layer) runs the Linux build" is a
-  // sentence about where another platform's build also runs, and it put a
+  // a desktop OS mentioned only as somewhere an emulator also runs another
+  // platform's build was read as a request of its own, and it put a
   // Windows build on the delivery gate's list of platforms nobody had built
   // (Codex 2026-09-12 U#F3). Every occurrence is still examined, so a native
   // mention elsewhere in the document still names the target.
