@@ -215,6 +215,7 @@ import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import {
   assessFrameworkBypass,
   assessSceneWiring,
+  assessUnregisteredServices,
   assessViewLayer,
   SCENE_WALK_BUDGET,
   SCENE_WALK_VISIT_CAP,
@@ -1517,6 +1518,25 @@ export class StradaConformanceGuard {
         "subsystems Strada.Core provides.";
   }
 
+  /**
+   * Services this project declares that nothing registers with the container.
+   *
+   * Same preconditions as assessBypass: the agent must have written project
+   * code, and a project without Assets is not judged.
+   */
+  private assessUnregistered(): ReturnType<typeof assessUnregisteredServices> {
+    if (this.opts?.enabled === false) return [];
+    if (!this.wroteProjectCode) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    if (!existsSync(joinPath(projectPath, "Assets"))) return [];
+    try {
+      return assessUnregisteredServices(projectPath, this.sceneIo(), (file) => this.wrote(file));
+    } catch {
+      return [];
+    }
+  }
+
   private assessBypass(): ReturnType<typeof assessFrameworkBypass> {
     if (this.opts?.enabled === false) return [];
     if (!this.wroteProjectCode) return [];
@@ -1862,6 +1882,31 @@ export class StradaConformanceGuard {
     // take SystemBase, [Inject] and ModuleConfig and still hand-roll the events
     // and logging the framework provides, and no shape rule asks what the
     // framework was for.
+    // A service that exists and that the container has never heard of. Before
+    // the broad "built its own version" complaint, because this one names the
+    // file and the line that fixes it: measured 2026-10-14, 8 of a live run's
+    // 9 services were registered nowhere, and every shape gate was satisfied.
+    const unregistered = this.cached("unregistered-services", () => this.assessUnregistered());
+    const unregisteredAsk = unregistered.length > 0 ? this.ask("service-unregistered", GATE_ASK_LIMIT) : null;
+    if (unregisteredAsk) {
+      const named = unregistered.slice(0, 6).map((u) => `${u.name} (${u.file})`).join("; ");
+      const more = unregistered.length > 6 ? `, and ${unregistered.length - 6} more` : "";
+      const first = unregistered[0]!.name;
+      return (
+        `[STRADA SERVICE UNREGISTERED] ${unregistered.length === 1 ? "This service is" : "These services are"} ` +
+        `declared and registered nowhere: ${named}${more}. Strada.Core resolves a service from its ` +
+        "container, so one that is never registered can only be reached with `new` or a hunt " +
+        "through the scene — the controllers, systems and views that should take it as a " +
+        "dependency cannot get it, and a green suite proves nothing here because a test " +
+        "constructs it directly. Register each one in the owning module's ModuleConfig.Configure: " +
+        `builder.RegisterService<I${first}, ${first}>() when it has an interface, ` +
+        `builder.RegisterService<${first}>() when it does not. A service that genuinely belongs ` +
+        "to no module belongs nowhere — give it a module." +
+        this.alsoOpen() +
+        lastAskNote(unregisteredAsk)
+      );
+    }
+
     const bypasses = this.cached("bypass", () => this.assessBypass());
     const bypassAsk = bypasses.length > 0 ? this.ask("reimplemented", GATE_ASK_LIMIT) : null;
     if (bypassAsk) {

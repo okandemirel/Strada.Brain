@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, relative } from "node:path";
 import { isVendorPath, stripCsComments } from "./csharp-source.js";
 
 /**
@@ -420,6 +420,87 @@ const BYPASS_RULES: ReadonlyArray<{
     floor: 10,
   },
 ];
+
+/** A service the project declares and nothing registers with the container. */
+export interface UnregisteredService {
+  /** The class's name, as declared. */
+  readonly name: string;
+  /** Its path, relative to the project. */
+  readonly file: string;
+}
+
+/**
+ * A non-abstract `…Service` class the project declares, which no file
+ * registers with Strada.Core's container.
+ *
+ * Measured 2026-10-14 on a live proof run: 8 of the game's 9 services were
+ * never registered. Every one compiled, the suite was green, and the gates
+ * that read module shape saw a complete module — because a service is
+ * registered in a ModuleConfig's Configure, and no rule asked whether the
+ * service that was just written appears there. An unregistered service is
+ * reachable only by `new` or by a hunt through the scene, which is the drift
+ * the framework exists to prevent.
+ *
+ * What counts as registered: a `RegisterService<…>` (or
+ * `RegisterController<…>`) type argument naming it anywhere in the project's
+ * own code, or an `[AutoRegister…]` attribute on the declaration — the two
+ * routes Strada.Core actually resolves. Nothing is inferred from a name.
+ *
+ * Only files the agent authored are judged (`authored`), so an imported
+ * package's services are not the project's problem, and test code is skipped.
+ */
+export function assessUnregisteredServices(
+  projectPath: string,
+  io: SceneWiringIo = defaultIo,
+  authored?: (file: string) => boolean,
+): UnregisteredService[] {
+  const assets = join(projectPath, "Assets");
+  if (!io.exists(assets)) return [];
+  const scripts = io.listFiles(assets, isSourceFile).filter((f) => isSourceFile(f));
+  if (scripts.length === 0) return [];
+
+  const declared: Array<{ name: string; file: string }> = [];
+  const registered = new Set<string>();
+  for (const script of scripts) {
+    let text: string;
+    try {
+      text = stripCsComments(io.readFile(script), { blankStrings: true });
+    } catch {
+      // Unreadable file: absence of evidence. It may hold the registration.
+      return [];
+    }
+    for (const m of text.matchAll(REGISTERED_TYPE_ARG_RE)) {
+      for (const arg of m[1]!.split(",")) {
+        const last = arg.trim().replace(/^global::/u, "").split(".").pop();
+        if (last !== undefined && last !== "") registered.add(last);
+      }
+    }
+    // A test may hold a registration (a fixture bootstrapper), so tests are
+    // read for registrations and only skipped as DECLARATION sites.
+    if (/[/\\]Tests?[/\\]/u.test(script)) continue;
+    if (authored !== undefined && !authored(script)) continue;
+    for (const m of text.matchAll(SERVICE_DECL_RE)) {
+      if (/\babstract\b/u.test(m[1] ?? "")) continue;
+      if (AUTO_REGISTER_RE.test(m[1] ?? "")) continue;
+      declared.push({ name: m[2]!, file: relative(projectPath, script) || script });
+    }
+  }
+  return declared.filter((d) => !registered.has(d.name));
+}
+
+/**
+ * A class whose name ends in `Service`, with whatever modifiers and
+ * attributes precede it on the same declaration — the prefix is what says
+ * `abstract` or `[AutoRegister]`, and both decide whether the class needs a
+ * registration at all.
+ */
+const SERVICE_DECL_RE = /((?:\[[^\]]*\]\s*|(?:public|internal|private|protected|sealed|abstract|static|partial)\s+)*)class\s+(\w*Service)\b/gu;
+
+/** The type arguments of a registration call: `RegisterService<IFoo, Foo>()`. */
+const REGISTERED_TYPE_ARG_RE = /\bRegister(?:Service|Controller)\s*<([^>]+)>/gu;
+
+/** The attribute that registers a service without a Configure line. */
+const AUTO_REGISTER_RE = /\[\s*(?:[\w.]+\.)?AutoRegister\w*/u;
 
 /**
  * Where the project wrote its own version of something the framework ships.
