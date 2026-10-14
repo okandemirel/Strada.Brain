@@ -498,7 +498,7 @@ export function isTerminalFailureReport(
      * predicate, and the English task_stuck notice ("I'll share what I
      * tried…") reads as a run that keeps working, so turning it on everywhere
      * would flip settled sprints before the scope gate decides how to use it
-     * (GDD-drift W01 changes no decision; W09 opts in).
+     *.
      */
     systemStamps?: boolean;
   },

@@ -145,8 +145,8 @@ export interface AgentManagerOptions {
    *
    * A sub-agent's message is the sub-goal, not the user's request, and goal
    * decomposition drops absolute paths from it — measured, "read
-   * /Users/okan/Downloads/SampleGame_GDD.docx" became "read
-   * SampleGame_GDD.docx", leaving the sub-agent unable to derive the
+   * /Users/okan/Downloads/WidgetShop_GDD.docx" became "read
+   * WidgetShop_GDD.docx", leaving the sub-agent unable to derive the
    * authorization and refusing the document its task was about.
    */
   readonly authorizedPathsStore?: Map<string, readonly string[]>;

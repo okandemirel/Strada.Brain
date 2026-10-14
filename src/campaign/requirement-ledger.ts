@@ -1,5 +1,5 @@
 /**
- * A campaign's requirement ledger over its life (GDD-drift plan W11): read
+ * A campaign's requirement ledger over its life: read
  * once from the APPROVED text, completed by the add-only model pass once per
  * revision, and read again when a person amends the GDD.
  *

@@ -17,7 +17,7 @@ import { InstinctRetriever } from "../../agents/instinct-retriever.js";
 import type { Instinct, InstinctId } from "../types.js";
 import type { TimestampMs } from "../../types/index.js";
 
-const PROJECT = "/projects/samplegame";
+const PROJECT = "/projects/widget-shop";
 
 function makeInstinct(over: Partial<Instinct> = {}): Instinct {
   const now = Date.now() as TimestampMs;

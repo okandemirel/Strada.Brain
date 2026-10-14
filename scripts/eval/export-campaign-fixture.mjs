@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * export-campaign-fixture.mjs — write one campaign as a replay fixture
- * (GDD-drift plan W16a).
+ *.
  *
  * The scope gate's replay tests judge a finished campaign again from what its
  * databases hold. In a measured campaign, milestones went green while their

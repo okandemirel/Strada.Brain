@@ -383,7 +383,7 @@ describe("instance access model — privileged chat commands (round 13 #11)", ()
     expect(isOpen("campaign", [])).toBe(true);
   });
 
-  // GDD-drift W14: waiving a GDD row or section is a person's decision, and
+  // waiving a GDD row or section is a person's decision, and
   // only the instance owner's here; listing rows and replaying the judge are reads.
   it("classifies a campaign waiver, in either language, as instance control and its reads as open", () => {
     for (const sub of ["waive", "WAIVE", "muaf", "feragat"]) {

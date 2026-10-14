@@ -1,6 +1,6 @@
 /**
  * What a person sees of the scope gate, and the decisions only a person may
- * make (GDD-drift plan W14): the delivery report and the status name each
+ * make: the delivery report and the status name each
  * milestone's GDD rows, park reasons, basis and writer; `/campaign rows`
  * lists them; `/campaign waive` takes a row or a section out of judgement for
  * the campaign's owner only; `/campaign rejudge` replays the judge without

@@ -1,5 +1,5 @@
 /**
- * The scope gate's pure judge (GDD-drift plan W08).
+ * The scope gate's pure judge.
  *
  * In a measured campaign every milestone went green on prose. The judge is
  * the replacement's one decision: green only when the milestone's own GDD

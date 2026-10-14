@@ -303,7 +303,7 @@ describe("ResultAggregator", () => {
       expect(skipped[0]!.output).not.toContain("NOT VERIFIED");
     });
 
-    it("a review nobody performed is counted not verified and named in the output (GDD-drift W02)", async () => {
+    it("a review nobody performed is counted not verified and named in the output", async () => {
       // The verifier found no healthy reviewer, its reviewer threw, or the
       // reply held no verdict. Those came back as flags, and a flag counts as
       // "verified": the report said flagged 1, notVerified 0 over a node no

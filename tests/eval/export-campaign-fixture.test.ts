@@ -1,5 +1,5 @@
 /**
- * The campaign replay fixture's exporter (GDD-drift plan W16a).
+ * The campaign replay fixture's exporter.
  *
  * The replay tests judge a finished campaign again from what its databases
  * hold, so the fixture has to carry every system stamp the milestone tips

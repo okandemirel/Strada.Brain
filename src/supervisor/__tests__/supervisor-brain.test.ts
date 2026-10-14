@@ -358,7 +358,7 @@ describe("SupervisorBrain", () => {
     expect((done![1] as { verdict: string }).verdict).toBe("flag_issues");
   });
 
-  // GDD-drift W02: a run in which no verifier was healthy came back as one
+  // a run in which no verifier was healthy came back as one
   // flag, so the report read flagged 1, notVerified 0 over a node nobody had
   // reviewed, and the report itself was dropped at synthesis.
   it("reports a review nobody performed as not verified, and returns the report with the result", async () => {

@@ -1,5 +1,5 @@
 /**
- * The scope gate's judge (GDD-drift plan W08, M2 + M3).
+ * The scope gate's judge.
  *
  * In a measured campaign milestones went green on prose: a worker's report,
  * the verifier's flags, its own tests, even when their tips carried the

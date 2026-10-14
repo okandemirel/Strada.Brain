@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 /**
  * A quoted span that starts like a path is one path, spaces and all. Without
  * this the pattern below stopped at the first space even inside quotes:
- * "/Users/o/Desktop/Match 3 GDD.docx" authorized "/Users/o/Desktop/Match" and
+ * "/srv/briefs/Orchard Survey Brief.docx" authorized "/srv/briefs/Orchard" and
  * never the document (audit 2026-10, security-config#3).
  */
 const QUOTED_PATH_PATTERN = /(["'`])((?:\/|~\/|[A-Za-z]:[\\/]|file:\/\/)(?:(?!\1)[^\n])*)\1/gu;

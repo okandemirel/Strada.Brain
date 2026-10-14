@@ -1,5 +1,5 @@
 /**
- * Closure by the ledger (GDD-drift plan W12, M3).
+ * Closure by the ledger.
  *
  * A coverage requirement used to be closed by a model's quote of a measured
  * line plus a word match (`resolveCoverageGaps` → `quoteIsAbout`): a commit

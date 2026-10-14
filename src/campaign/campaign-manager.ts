@@ -332,7 +332,7 @@ export interface CampaignManagerOptions {
   styleAnalysis?: import("../agents/style/style-analysis.js").StyleAnalysis;
   /**
    * Writes the acceptance checks for a milestone's GDD rows, on a model that
-   * did not work on it when one is healthy (GDD-drift plan M3). Absent or
+   * did not work on it when one is healthy. Absent or
    * null: no check is written, and the rows stay unmeasured.
    */
   acceptanceAuthor?: AcceptanceAuthorLike | null;
@@ -566,7 +566,7 @@ export function proofsSpanTwoRevisions(before: string, after: string): boolean {
  * names itself ("no test verifier is configured") and still counts.
  */
 export const UNMEASURABLE_PROOF_RE =
-  // The scope gate's two (GDD-drift W09): a system check its writer could not
+  // The scope gate's two: a system check its writer could not
   // make work after its repair budget is for a person, and a final acceptance
   // run the system could not admit is missing tooling, not a broken game.
   /(?:the built player was never run on a machine that can run it|the GDD coverage audit did not run|no tool for it in this run|the compile check did not run|the player build did not run|no compile verifier is configured|no player builder is configured|no player runner is configured|unity_build_player is not registered|no test verifier is configured|unity_playmode_verify is not registered|the built player was never played to a verdict|system-written acceptance checks could not be made to work|the acceptance run was not admitted)/i;
@@ -582,7 +582,7 @@ export function hasUnmeasurableProof(missingProofs: readonly string[]): boolean 
 /** Self-revivals spent on a proof this machine cannot produce before asking a person. */
 const MAX_UNMEASURABLE_REVIVES = 2;
 
-/** Writer calls one milestone may spend repairing, rebinding or rewriting its system checks (GDD-drift W09). */
+/** Writer calls one milestone may spend repairing, rebinding or rewriting its system checks. */
 const MAX_CHECK_REPAIRS_PER_MILESTONE = 2;
 /** Worker disputes one milestone may send to its checks' writer. */
 const MAX_DISPUTES_PER_MILESTONE = 3;
@@ -1062,7 +1062,7 @@ export function repairsForRequirement(
   requirement: string,
 ): number {
   const key = gapKey(requirement);
-  // A LEDGER ROW IS REPAIRED BY EVERY SPRINT THAT CARRIES IT (GDD-drift W12),
+  // A LEDGER ROW IS REPAIRED BY EVERY SPRINT THAT CARRIES IT,
   // not only by the one named after it: a sprint carries rows by id, and its
   // `coverageGap` names just the first of them.
   const rid = decodeRequirement(requirement).identity?.id;
@@ -1073,7 +1073,7 @@ export function repairsForRequirement(
 
 /**
  * The requirement ledger that decides closure, or undefined when the closure
- * resolver still does (GDD-drift W12).
+ * resolver still does.
  *
  * A word match closed GDD rows: a commit naming `GraftSystem.cs` closed "a
  * graft takes only on a branch pruned that season" whatever the graft did. With a
@@ -2755,7 +2755,7 @@ export class CampaignManager {
         textForPlanning,
         campaign.gddPath,
         styleSummary.trim() || undefined,
-        // The gate's own mode, so the prompts it plans name only checks that exist (GDD-drift W10).
+        // The gate's own mode, so the prompts it plans name only checks that exist.
         { scopeGate: this.scopeGateMode },
       );
       campaign.milestones = ladder.milestones.map((m, i) => ({
@@ -2804,8 +2804,7 @@ export class CampaignManager {
         syncRequirementIds(campaign.milestones, campaign.requirements.rows);
       }
       this.persist(campaign);
-      // THE GDD'S ROWS, owned by the ladder just planned (GDD-drift plan
-      // W11). After the ladder is saved, so a restart during the model pass
+      // THE GDD'S ROWS, owned by the ladder just planned. After the ladder is saved, so a restart during the model pass
       // resumes this ladder instead of planning a second one; the rows are
       // then built at the next settle or revive.
       const ledger = await this.ensureLedger(campaign);
@@ -3162,7 +3161,7 @@ export class CampaignManager {
     // milestone.prompt, so it cannot accumulate.
     const prevTaskId = milestone.taskId as TaskId | undefined;
     const priorProgress = prevTaskId ? this.taskManager.priorProgressSummary?.(prevTaskId) ?? "" : "";
-    // THE GDD ROWS THIS SPRINT IS JUDGED ON (GDD-drift W10), rebuilt from the
+    // THE GDD ROWS THIS SPRINT IS JUDGED ON, rebuilt from the
     // ledger on every submit and, like the progress block, never persisted:
     // a stored copy would go stale between settles, and its verbatim GDD text
     // (cross-references included) would sit in the prompt that section-
@@ -4020,7 +4019,7 @@ export class CampaignManager {
     // lineage task's last observed test run was RED, "completed" is not
     // green whatever the report's prose says. Audited 2026-08-29: the
     // campaign judged green from wording alone.
-    // THE LEDGER BEFORE THE VERDICT (GDD-drift W09). Built lazily — here, at
+    // THE LEDGER BEFORE THE VERDICT. Built lazily — here, at
     // the settle, and never at boot — and with it the add-only model pass a
     // revive leaves owed. Off mode reads nothing.
     if (this.scopeGateMode !== "off") {
@@ -4430,7 +4429,7 @@ export class CampaignManager {
       const playthrough = this.measurePlaythrough(milestone);
       milestone.playthroughVerdict = playthrough;
       const playthroughMissing = isLast && (playthrough === undefined || !playthrough.found || playthrough.ok !== true);
-      // THE SCOPE VERDICT (GDD-drift W09): the milestone's own GDD rows and
+      // THE SCOPE VERDICT: the milestone's own GDD rows and
       // every row that passed before, run in one admitted acceptance run on
       // the committed revision, judged with how the run ended. Shadow records
       // the verdict and decides nothing; on, it decides green here.
@@ -5741,7 +5740,7 @@ export class CampaignManager {
   }
 
   // ===========================================================================
-  // THE SCOPE GATE'S SETTLE PATH (GDD-drift plan W09)
+  // THE SCOPE GATE'S SETTLE PATH
   // ===========================================================================
 
   /** The ledger the scope gate reads: the gate not off, and the ledger readable (an unreadable one is not an empty one). */
@@ -5876,7 +5875,7 @@ export class CampaignManager {
 
   /**
    * The system's checks of a milestone's rows, written where a row has none
-   * (GDD-drift W09 step 5). The writer sees the rows' own words, the harness
+   *. The writer sees the rows' own words, the harness
    * and the public surface — never the workers' code, tests or reports — and
    * is a model that did not work on the milestone when one is healthy. On,
    * the files are committed as the system's own commit; in shadow nothing is
@@ -6218,7 +6217,7 @@ export class CampaignManager {
   }
 
   /**
-   * Measure and judge (GDD-drift W09 step 6): the milestone's rows and the
+   * Measure and judge: the milestone's rows and the
    * rows that passed before, in one acceptance run on the committed revision,
    * results bound to `treeForClosure().forClosure` — the revision the delivery
    * gate's closure reads — and the judge's input stored whole with its
@@ -6429,7 +6428,7 @@ export class CampaignManager {
 
   /**
    * The system's checks repaired by their writer, never charged to the worker
-   * (GDD-drift W09): a file that never compiled is repaired, a check that
+   *: a file that never compiled is repaired, a check that
    * compiled before and broke on a refactor is rebound once to the public
    * surface as it is now, a check that bound to the wrong thing or passed only
    * on its re-run is written again, and a check the worker disputed is
@@ -6593,7 +6592,7 @@ export class CampaignManager {
   }
 
   /**
-   * A milestone whose budget ran out (GDD-drift W09 step 13): `failed` with a
+   * A milestone whose budget ran out: `failed` with a
    * park record and its attempts spent, so the ladder's own walk skips it;
    * its open rows queued for later sprints, and rows whose system check could
    * not be made to work left for a person. The ladder moves on; the last
@@ -6646,7 +6645,7 @@ export class CampaignManager {
   /**
    * A milestone over its time box keeps half of its open rows, in GDD order,
    * and the rest move to a sprint split off from it, inserted right after it
-   * (GDD-drift W09 step 12). The last planned milestone is not split: a
+   *. The last planned milestone is not split: a
    * sprint after it would become the delivery sprint, and it would settle as
    * an ordinary one with no delivery gate. Its other open rows stay, after
    * the kept ones. Undefined when the milestone owns no open row.
@@ -6704,7 +6703,7 @@ export class CampaignManager {
   }
 
   /**
-   * The independent review as a gate (GDD-drift W13, on): asked before the
+   * The independent review as a gate: asked before the
    * delivery decision, it reopens rows whose check it found weak (the check
    * retired) and adds GDD rules no row held. No check has passed those rows,
    * so they hold delivery as one missing proof that names them; the ones
@@ -8078,7 +8077,7 @@ export class CampaignManager {
 
   /**
    * The campaign's requirement ledger, read from the APPROVED `gddText` and
-   * kept in step with it (GDD-drift plan W11). Runs lazily — at plan time,
+   * kept in step with it. Runs lazily — at plan time,
    * at a revive and at a settle — and never at boot. With the scope gate off
    * it does nothing at all.
    *
@@ -8498,7 +8497,7 @@ export class CampaignManager {
             campaign.gddText !== undefined ? quoteGddFor(campaign.gddText, shown) : "(the campaign carries no GDD text — the item above is all there is)",
             "</gdd>",
           ];
-    // A LEDGER ROW TRAVELS AS ITSELF (GDD-drift W12): its id, so the closure
+    // A LEDGER ROW TRAVELS AS ITSELF: its id, so the closure
     // and the repair budget read the row and not a wording of it, and its
     // check and last result, because that check is what decides it.
     const rows = campaign.requirementsUnreadable === true || !campaign.requirements ? [] : rowsCarriedBy(campaign.requirements, { coverageGap: item });
@@ -8661,7 +8660,7 @@ export class CampaignManager {
    * to measure the shipped tree alone and set `done` with the requirement its
    * own exhausted sprint had named still missing (V#5).
    *
-   * WITH A LEDGER THAT DECIDES (GDD-drift W12), a GDD row is closed only by
+   * WITH A LEDGER THAT DECIDES, a GDD row is closed only by
    * its own check passing on this revision, and no model is asked about it:
    * the resolver's quote-and-word-match closed a row whose check had just
    * failed, because a commit named a file that shared a word with it. Every
@@ -8950,8 +8949,8 @@ export class CampaignManager {
     ).size;
     // KNOWN GAPS FIRST, and the round budget does not apply to them: they are
     // already identified, so no audit is needed and none of them may be
-    // dropped. Nine gaps used to become eight sprints and a `done` campaign
-    // (Codex 2026-09-11 F#9).
+    // dropped: a queue of gaps used to come back one sprint short and the
+    // campaign still reported `done` (Codex 2026-09-11 F#9).
     const queued = campaign.pendingCoverageGaps ?? [];
     if (queued.length > 0) {
       const round = priorRounds + 1;
@@ -9215,8 +9214,7 @@ export class CampaignManager {
       // It never reached the work it had correctly identified.
       // …BUT THE MEASUREMENT REPLACES AN AUDIT OF THE TREE, NOT THE DESIGN.
       // "Do not re-read the whole GDD" was read as "do not consult it", and the
-      // delivered game drifted from rules no sprint looked up (GDD-drift
-      // trace M4, 2026-10-11).
+      // delivered game drifted from rules no sprint looked up.
       "DO NOT AUDIT. Counting or listing what exists is not the task, and an inventory will be " +
       "rejected. Do not re-audit the landed modules before acting: this measurement is that audit, " +
       `already done. ${design}Spend the sprint on the change itself — open the ` +
@@ -9545,7 +9543,7 @@ export class CampaignManager {
    * report carries the same opinion; a reviewer that cannot run is recorded
    * as unavailable — the report must never read as reviewed when it was not.
    *
-   * THE REVIEW IS A GATE where a requirement ledger exists (GDD-drift W13).
+   * THE REVIEW IS A GATE where a requirement ledger exists.
    * Its BLOCKERS were prose: a reviewer that read a check asserting a literal,
    * or found a GDD rule no row states, changed nothing, and the weak check
    * went on closing its row. It is now handed the rows and the checks the
@@ -9709,7 +9707,7 @@ export class CampaignManager {
       `GDD: \`${campaign.gddPath ?? "n/a"}\``,
       ``,
     ];
-    // WHAT EACH MILESTONE WAS JUDGED ON (GDD-drift W14). A measured campaign went green sprint
+    // WHAT EACH MILESTONE WAS JUDGED ON. A measured campaign went green sprint
     // after sprint on prose and no line here said which GDD rows any sprint had been
     // held to. A campaign the scope gate never saw reads exactly as before.
     const scopeMode = this.scopeGateMode ?? DEFAULT_SCOPE_GATE_MODE;

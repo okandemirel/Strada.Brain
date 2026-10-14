@@ -625,7 +625,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
   });
 });
 
-describe("the node bridge carries how the worker's run ended (GDD-drift W01)", () => {
+describe("the node bridge carries how the worker's run ended", () => {
   // In a measured campaign a node whose run stopped on "loop detected" came back as
   // a plain `status: "ok"`: the ok return carried no reason, so the only trace
   // of the stop was the localized sentence in its output.

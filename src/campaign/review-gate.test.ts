@@ -1,5 +1,5 @@
 /**
- * The independent review as a gate (GDD-drift plan W13).
+ * The independent review as a gate.
  *
  * The delivery review was advisory prose: its BLOCKERS never reached the
  * requirement ledger, so a reviewer who read a system check that asserts a

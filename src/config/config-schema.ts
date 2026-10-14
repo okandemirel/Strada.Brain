@@ -479,7 +479,7 @@ export const configSchema = z
     // third-party server never silently hands it every key the agent holds.
     mcpServers: z.array(mcpServerEntrySchema).default([]),
 
-    // Campaign scope gate (GDD-drift plan M2/M3). The mode is read leniently in
+    // Campaign scope gate. The mode is read leniently in
     // validateConfig (parseScopeGateMode): an unreadable value is off with a
     // warning, never a boot failure and never enforcement.
     campaignScopeGate: z.string().optional(),

@@ -228,7 +228,7 @@ function reviewGddLines(gddPath: string | undefined, gddText: string | undefined
 
 /**
  * The most of the GDD rows and their system-written checks the review prompt
- * carries (GDD-drift W13), counted in UTF-8 bytes on every platform: a GDD in
+ * carries, counted in UTF-8 bytes on every platform: a GDD in
  * a non-Latin script is three bytes a character. The whole argument has its
  * own cap per OS below, and the rows give way to it too.
  */
@@ -278,7 +278,7 @@ export interface ReviewCheckFile {
   readonly source: string;
 }
 
-/** What the scope gate did with a review's findings tail (GDD-drift W13), in a person's words. */
+/** What the scope gate did with a review's findings tail, in a person's words. */
 export interface ReviewGateSummary {
   readonly reopened: readonly string[];
   readonly added: readonly string[];
@@ -338,7 +338,7 @@ function reviewRowLines(rows: readonly ReviewRow[], checks: readonly ReviewCheck
  * The delivery question, with the campaign's own measurements handed over so
  * the reviewer argues against evidence, not prose.
  *
- * With `rows` (a requirement ledger decides, GDD-drift W13) it also carries the
+ * With `rows` (a requirement ledger decides,) it also carries the
  * GDD rows and the checks the system wrote for them, and asks for a findings
  * tail the gate reads: a weak check reopens its row, a verbatim GDD quote
  * adds one. Without `rows` it is the advisory question it always was.

@@ -25,7 +25,7 @@ beforeAll(() => {
   createLogger("error", "test.log");
 });
 
-const PROJECT = "/tmp/samplegame";
+const PROJECT = "/tmp/widget-shop";
 const LEASE = "/tmp/strada-workspaces/task-abc";
 
 /** A vault that reports which query it was asked, and owns `root`. */

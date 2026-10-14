@@ -1,5 +1,5 @@
 /**
- * The scope gate's shared contracts (GDD-drift plan W00).
+ * The scope gate's shared contracts.
  *
  * Every later item reads these: the flag that decides whether the gate acts,
  * the names the system gives its own acceptance tests, and the closed sets a

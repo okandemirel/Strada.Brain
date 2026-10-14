@@ -41,7 +41,7 @@ describe("parseSupervisorVerificationVerdict", () => {
     const leaked = "<reasoning>\nHere's a thinking process:\n\n1.  **Analyze User Input:**\n   - User is a verification agent";
     const verdict = parseSupervisorVerificationVerdict(leaked, "opencode");
     // Nobody reviewed the node, so it is not a flag: a flag counts as
-    // "verified" in the report (GDD-drift W02).
+    // "verified" in the report.
     expect(verdict.verdict).toBe("skipped");
     expect(verdict.unanswered).toBe("reasoning-only");
     expect(verdict.issues?.[0]).toContain("Verifier produced no verdict");
@@ -49,7 +49,7 @@ describe("parseSupervisorVerificationVerdict", () => {
     expect(verdict.issues?.[0]).not.toContain("thinking process");
   });
 
-  it("an empty reply is not a review: skipped, with the reason kept (GDD-drift W02)", () => {
+  it("an empty reply is not a review: skipped, with the reason kept", () => {
     for (const reply of [undefined, "", "   \n"]) {
       const verdict = parseSupervisorVerificationVerdict(reply, "opencode");
       expect(verdict.verdict).toBe("skipped");
@@ -159,7 +159,7 @@ describe("createSupervisorNodeVerifier", () => {
         getProviderByName: () => null,
       });
       const verdict = await verifyNode(makeNodeResult({ provider: "opencode" }), { chatId: "chat-1" } as any);
-      // No reviewer ran at all: reported as not verified, never as a flag (GDD-drift W02).
+      // No reviewer ran at all: reported as not verified, never as a flag.
       expect(verdict.verdict).toBe("skipped");
       expect(verdict.unanswered).toBe("no-healthy-verifier");
       expect(verdict.issues?.[0]).toContain("verification_skipped");
@@ -168,7 +168,7 @@ describe("createSupervisorNodeVerifier", () => {
     }
   });
 
-  it("a reviewer that threw reviewed nothing: skipped, with its error kept (GDD-drift W02)", async () => {
+  it("a reviewer that threw reviewed nothing: skipped, with its error kept", async () => {
     const reviewer = {
       name: "kimi",
       capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true },

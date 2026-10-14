@@ -1,6 +1,6 @@
 /**
  * A lease never writes or deletes the campaign's acceptance checks
- * (GDD-drift plan W07).
+ *.
  *
  * The checks under Assets/StradaAcceptance are what a milestone is judged by.
  * A worker that could publish an edited check — `Assert.Pass()` in place of

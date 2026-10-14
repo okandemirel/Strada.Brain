@@ -1,5 +1,5 @@
 /**
- * The independent review's findings tail, read and applied (GDD-drift plan W13).
+ * The independent review's findings tail, read and applied.
  * Pure: the ledger, the approved text and the clock come in as arguments.
  *
  * The GDD wording here is invented.

@@ -1,5 +1,5 @@
 /**
- * GDD-drift W15: the scope gate's parts reach the CampaignManager the daemon
+ * the scope gate's parts reach the CampaignManager the daemon
  * actually builds. The writer (W06), the filtered acceptance run (W08), the
  * stored checks and verdicts (W03) and the CAMPAIGN_SCOPE_GATE mode were each
  * tested on their own while the one construction site production runs passed
@@ -141,7 +141,7 @@ function streamingFlags(manager: CampaignManager) {
   };
 }
 
-describe("production construction wires the scope gate (GDD-drift W15)", () => {
+describe("production construction wires the scope gate", () => {
   it("passes CAMPAIGN_SCOPE_GATE's mode, the writer, the acceptance run and the row cap", async () => {
     const registry = toolRegistry();
     const { manager } = await boot(

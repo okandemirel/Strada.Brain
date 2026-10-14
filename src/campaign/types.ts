@@ -337,7 +337,7 @@ export interface CampaignMilestone {
   timeBoxEscalations?: number;
   /**
    * The requirement rows this milestone owns (`RequirementRow.rid`), in GDD
-   * order. Its green has to come from these passing (GDD-drift plan M3).
+   * order. Its green has to come from these passing.
    */
   requirementIds?: string[];
   /**
@@ -494,8 +494,7 @@ export interface Campaign {
    * The independent reviewer's verdict text for the last delivery report
    * (Codex / gpt-6-astra, read-only), or the reason it could not run.
    * Rendered verbatim in the report; never folded into the campaign's own verdict.
-   * `gate` is what its findings tail did to the requirement ledger (GDD-drift
-   * W13): rows reopened or added, and what was only disclosed.
+   * `gate` is what its findings tail did to the requirement ledger: rows reopened or added, and what was only disclosed.
    */
   independentReview?: {
     ok: boolean;

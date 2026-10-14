@@ -1,5 +1,5 @@
 /**
- * What the scope gate runs with (GDD-drift plan W00).
+ * What the scope gate runs with.
  *
  * The three dependencies are optional, so a manager built without them must
  * behave exactly as before: gate off, no writer, no runner. And a dependency

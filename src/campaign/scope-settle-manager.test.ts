@@ -1,5 +1,5 @@
 /**
- * The settle path under the scope gate (GDD-drift plan W09, M2 + M3).
+ * The settle path under the scope gate.
  *
  * In a measured campaign six of six milestones went green on prose: a worker's
  * report, the verifier's flags, its own tests — while five of their tips

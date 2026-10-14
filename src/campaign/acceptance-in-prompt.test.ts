@@ -1,5 +1,5 @@
 /**
- * The prompts the worker sees (GDD-drift plan W10, M3).
+ * The prompts the worker sees.
  *
  * Before W10 no sprint prompt carried the GDD sentences its milestone is judged
  * on: the planner said a sprint's "deliverables" were what it "can be measured

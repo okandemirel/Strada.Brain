@@ -23,7 +23,7 @@
  *   this harness could not run are reported on their own and are NEVER folded
  *   into either rate or into a pass.
  *
- * THE LEDGER ARM (GDD-drift plan W12/W16). With a requirement ledger, a GDD
+ * THE LEDGER ARM. With a requirement ledger, a GDD
  * row is closed only by its own check passing on the revision being judged —
  * `closesByLedger` in src/campaign/scope-verdict.ts, again production code. The
  * dataset's `ledgerRows` carry each row's ledger state and that revision, and

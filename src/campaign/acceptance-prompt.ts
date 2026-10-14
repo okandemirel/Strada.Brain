@@ -1,6 +1,6 @@
 /**
  * The GDD rows a sprint is judged on, in the prompt it is submitted with
- * (GDD-drift plan W10, M3).
+ *.
  *
  * Before this block, no sprint prompt carried the GDD sentences its milestone
  * is judged on. The planner called a sprint's "deliverables" what it would be

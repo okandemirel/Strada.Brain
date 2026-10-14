@@ -1,5 +1,5 @@
 /**
- * The system's acceptance files (GDD-drift plan W05): the C# a Unity project
+ * The system's acceptance files: the C# a Unity project
  * carries so a milestone's own GDD rows are judged by checks the system owns.
  *
  * In the measured campaign six of six milestones went green on prose. The checks

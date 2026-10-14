@@ -86,7 +86,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("unity_place_prefab");
   });
 
-  it("sends the final sprint to the sections of its own GDD file (GDD-drift trace M4)", () => {
+  it("sends the final sprint to the sections of its own GDD file", () => {
     // "Do not re-read the whole GDD" was read as "do not consult it": a final
     // sprint built against rules it had been told not to look up. The
     // measurement replaces an audit of the tree, not the design.

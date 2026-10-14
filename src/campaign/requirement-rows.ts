@@ -1,6 +1,6 @@
 /**
  * Requirement rows: the approved GDD read into the rows a milestone is judged
- * on, and each row given to the milestone that owns it (GDD-drift plan W04, M3).
+ * on, and each row given to the milestone that owns it.
  *
  * In a measured campaign no GDD rule was ever a row the system owned: a
  * labelled rule was "closed" by a worker's prose, a section of tuning

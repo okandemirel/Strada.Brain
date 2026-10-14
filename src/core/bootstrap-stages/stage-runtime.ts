@@ -499,7 +499,7 @@ export async function initializeTaskRuntimeStage(
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider(""), {
         streamingEnabled: params.config.streamingEnabled,
       }),
-      // The scope gate (GDD-drift W15). Built whatever the mode: construction
+      // The scope gate. Built whatever the mode: construction
       // calls no provider and no tool, and the manager decides nothing with
       // them while CAMPAIGN_SCOPE_GATE is off, so off stays today's behaviour.
       // Each part was tested alone while this site passed none, and the gate
@@ -1195,7 +1195,7 @@ export const PLAYMODE_SUITE_CONTENT_CAP = 20_000;
  * producer stamps a receipt for it. A red suite is an answer, not a failure of
  * the dispatch: the record it wrote is the verdict, so nothing is thrown.
  *
- * The scope gate's acceptance batch (GDD-drift W08) is the same call narrowed
+ * The scope gate's acceptance batch is the same call narrowed
  * to the exact test names it owns: the filter is forwarded, and the output
  * comes back whole, because acceptance compile errors and failure messages
  * appear only there. A blank filter is no filter, so a caller that passes none

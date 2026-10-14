@@ -1,6 +1,6 @@
 /**
  * What the scope gate's ledger and verdicts say, in words a person reads, and
- * the decisions only a person may make about them (GDD-drift plan W14).
+ * the decisions only a person may make about them.
  *
  * In a measured campaign six of six milestones went green on prose, and nothing a
  * person read — the delivery report, `/campaign` — said which GDD rows any of

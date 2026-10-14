@@ -1,7 +1,7 @@
 /**
  * One acceptance measurement: the system's own checks of a milestone's GDD
  * rows, and every row that passed before, run in one filtered batch on the
- * committed revision (GDD-drift plan W08's run, wired by W09).
+ * committed revision.
  *
  * A worker writes the records the other gates read, so nothing here is taken
  * on trust: the checks are restored from the stored bytes first (what differed

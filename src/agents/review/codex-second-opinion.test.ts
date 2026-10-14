@@ -115,7 +115,7 @@ describe("codex second opinion", () => {
     expect(onDisk).not.toContain("Three asteroid fields.");
   });
 
-  describe("the review as a gate (GDD-drift W13)", () => {
+  describe("the review as a gate", () => {
     const base = { gddPath: "docs/G.md", measurements: ["0 renderers"], ladder: ["m1 Sprint: green"] };
     const rows = [
       { rid: "req-1-aa", label: "PP-01", where: "§3", text: "A pelican gains one metre per second in an updraft.", test: "Strada.Acceptance.M1.Acceptance_M1.R1_aa" },

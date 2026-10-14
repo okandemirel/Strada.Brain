@@ -27,7 +27,7 @@
     "  closing is therefore budgeted at zero.",
     "minRowsPerRate keeps a shrunken dataset from reading as a pass: below it the rate is",
     "  reported NOT MEASURED and the exit code is 3.",
-    "THE LEDGER ARM (GDD-drift plan W12/W16): ledgerRows are judged by closesByLedger",
+    "THE LEDGER ARM: ledgerRows are judged by closesByLedger",
     "  (src/campaign/scope-verdict.ts), the rule that closes a requirement row only when its own",
     "  check passed on the revision being judged. Each row carries the row's ledger state and that",
     "  revision. They are kept OUT of `rows`, so the word-matcher arm above and its oracles are",
@@ -536,7 +536,7 @@
       },
       "expected": "not_proven",
       "rationale": "The rule's own check failed on this revision. The commit names files that share the rule's words, which is the whole of what the word match saw: a file exists, not that it obeys the rule.",
-      "source": "GDD-drift plan W12/W16, ledger probe 1 (a labelled rule held against a file name that shares its words); invented"
+      "source": " ledger probe 1 (a labelled rule held against a file name that shares its words); invented"
     },
     {
       "id": "probe-feature-by-service-file",
@@ -549,7 +549,7 @@
       },
       "expected": "not_proven",
       "rationale": "The check written for the feature never ran, so nothing measured when the fog arrives or what it hides. A service named after the feature is not the feature's behaviour.",
-      "source": "GDD-drift plan W12/W16, ledger probe 2 (a feature held against a service file's name); invented"
+      "source": " ledger probe 2 (a feature held against a service file's name); invented"
     },
     {
       "id": "probe-input-by-input-service",
@@ -564,7 +564,7 @@
       },
       "expected": "not_proven",
       "rationale": "The harness held the shrine and it stayed unlit. An input service existing says nothing about whether a player's hold reaches the shrine.",
-      "source": "GDD-drift plan W12/W16, ledger probe 3 (a player input held against an input service that shares no word with it); invented"
+      "source": " ledger probe 3 (a player input held against an input service that shares no word with it); invented"
     },
     {
       "id": "probe-guardrail-by-interface-file",
@@ -578,7 +578,7 @@
       },
       "expected": "not_proven",
       "rationale": "The only check passed, and the independent review called it weak: building the table proves the type works, not that gameplay reads tides only through the interface.",
-      "source": "GDD-drift plan W12/W16, ledger probe 4 (an architecture constraint held against its interface file); invented"
+      "source": " ledger probe 4 (an architecture constraint held against its interface file); invented"
     },
     {
       "id": "ledger-pass-on-an-older-revision",
@@ -636,7 +636,7 @@
       },
       "expected": "not_proven",
       "rationale": "Nothing could run the check on this machine. Unmeasured is never a pass, whatever the commit names.",
-      "source": "GDD-drift plan section 1 (unmeasured is never a pass)"
+      "source": " section 1 (unmeasured is never a pass)"
     },
     {
       "id": "ledger-pass-now",
@@ -669,7 +669,7 @@
       },
       "expected": "proven",
       "rationale": "A refactor broke the first check and it was rebound once; the current check passed on this revision, and the superseded one is history, not a reason to stay open.",
-      "source": "GDD-drift plan section 1 (a check a legitimate refactor broke gets one rebind)"
+      "source": " section 1 (a check a legitimate refactor broke gets one rebind)"
     },
     {
       "id": "ledger-pass-now-by-scenario",
