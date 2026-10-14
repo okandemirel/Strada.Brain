@@ -131,9 +131,14 @@ export class MetricsRecorder {
    * the CHECK constraint rejected it on every call and the bare catch hid it,
    * so zero retrieval rows ever landed. Retrieval now has its own table with
    * columns for all four fields (audited 2026-09-02).
+   *
+   * `candidatesLoaded` is the number the store returned for this scope before
+   * anything was scored: without it a row of zeros cannot say whether the
+   * scope held no learning or whether none of it matched.
    */
   recordRetrievalMetrics(data: {
     retrievalTimeMs: number;
+    candidatesLoaded: number;
     instinctsScanned: number;
     scopeFiltered: number;
     insightsReturned: number;
@@ -142,6 +147,7 @@ export class MetricsRecorder {
       this.storage.recordRetrievalMetric({
         id: `retrieval_${randomUUID()}`,
         retrievalTimeMs: data.retrievalTimeMs,
+        candidatesLoaded: data.candidatesLoaded,
         instinctsScanned: data.instinctsScanned,
         scopeFiltered: data.scopeFiltered,
         insightsReturned: data.insightsReturned,

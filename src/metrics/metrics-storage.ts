@@ -49,6 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_task_metrics_completed ON task_metrics(completed_
 CREATE TABLE IF NOT EXISTS retrieval_metrics (
   id TEXT PRIMARY KEY,
   retrieval_time_ms INTEGER NOT NULL,
+  candidates_loaded INTEGER NOT NULL DEFAULT 0,
   instincts_scanned INTEGER NOT NULL DEFAULT 0,
   scope_filtered INTEGER NOT NULL DEFAULT 0,
   insights_returned INTEGER NOT NULL DEFAULT 0,
@@ -83,6 +84,7 @@ CREATE TABLE IF NOT EXISTS retrieval_metrics_rollup (
   day_start INTEGER PRIMARY KEY,
   retrievals INTEGER NOT NULL,
   retrieval_time_sum INTEGER NOT NULL,
+  candidates_loaded_sum INTEGER NOT NULL DEFAULT 0,
   instincts_scanned_sum INTEGER NOT NULL,
   insights_returned_sum INTEGER NOT NULL
 );
@@ -162,6 +164,10 @@ export class MetricsStorage {
     this.db = new Database(this.dbPath);
     configureSqlitePragmas(this.db, "learning");
     this.db.exec(METRICS_SCHEMA_SQL);
+    // A store written before a column existed keeps its rows: CREATE TABLE IF
+    // NOT EXISTS leaves an older shape alone, so each added column is applied
+    // here or every insert against that store fails.
+    this.addMissingColumns();
 
     // Cache prepared statements
     this.stmts.insert = this.db.prepare(`
@@ -173,8 +179,8 @@ export class MetricsStorage {
     `);
     this.stmts.insertRetrieval = this.db.prepare(`
       INSERT OR REPLACE INTO retrieval_metrics
-      (id, retrieval_time_ms, instincts_scanned, scope_filtered, insights_returned, recorded_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      (id, retrieval_time_ms, candidates_loaded, instincts_scanned, scope_filtered, insights_returned, recorded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     this.stmts.instinctLeaderboard = this.db.prepare(`
       SELECT
@@ -240,14 +246,15 @@ export class MetricsStorage {
 
       db.prepare(`
         INSERT INTO retrieval_metrics_rollup
-          (day_start, retrievals, retrieval_time_sum, instincts_scanned_sum, insights_returned_sum)
+          (day_start, retrievals, retrieval_time_sum, candidates_loaded_sum, instincts_scanned_sum, insights_returned_sum)
         SELECT (CAST(recorded_at AS INTEGER) / ${DAY_MS}) * ${DAY_MS}, COUNT(*), SUM(retrieval_time_ms),
-          SUM(instincts_scanned), SUM(insights_returned)
+          SUM(candidates_loaded), SUM(instincts_scanned), SUM(insights_returned)
         FROM retrieval_metrics WHERE recorded_at < ?
         GROUP BY 1
         ON CONFLICT(day_start) DO UPDATE SET
           retrievals = retrievals + excluded.retrievals,
           retrieval_time_sum = retrieval_time_sum + excluded.retrieval_time_sum,
+          candidates_loaded_sum = candidates_loaded_sum + excluded.candidates_loaded_sum,
           instincts_scanned_sum = instincts_scanned_sum + excluded.instincts_scanned_sum,
           insights_returned_sum = insights_returned_sum + excluded.insights_returned_sum
       `).run(cutoff);
@@ -289,6 +296,35 @@ export class MetricsStorage {
   }
 
   /**
+   * Columns added after a store was first written. `CREATE TABLE IF NOT EXISTS`
+   * leaves an existing table exactly as it is, so a column added to the schema
+   * above reaches an older database only here — and without it every insert
+   * against that database fails on the column it has never heard of.
+   */
+  private addMissingColumns(): void {
+    const added: Array<{ table: string; column: string; type: string }> = [
+      { table: "retrieval_metrics", column: "candidates_loaded", type: "INTEGER NOT NULL DEFAULT 0" },
+      { table: "retrieval_metrics_rollup", column: "candidates_loaded_sum", type: "INTEGER NOT NULL DEFAULT 0" },
+    ];
+    for (const { table, column, type } of added) {
+      const present = (this.db!.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+        .some((c) => c.name === column);
+      if (present) continue;
+      try {
+        this.db!.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+      } catch (error) {
+        // A read-only or concurrently-migrated store: the insert below will say
+        // so with the real cause rather than failing here at boot.
+        getLoggerSafe().warn("Metrics column could not be added", {
+          table,
+          column,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /**
    * Record one instinct retrieval. Lives in its own table — a retrieval is not
    * a task, and the task_metrics CHECK rejected the old "simple" task_type so
    * this telemetry had never landed once (audited 2026-09-02).
@@ -299,6 +335,7 @@ export class MetricsStorage {
     this.stmts.insertRetrieval!.run(
       metric.id,
       metric.retrievalTimeMs,
+      metric.candidatesLoaded,
       metric.instinctsScanned,
       metric.scopeFiltered,
       metric.insightsReturned,
@@ -314,6 +351,7 @@ export class MetricsStorage {
       .all(limit) as Array<{
         id: string;
         retrieval_time_ms: number;
+        candidates_loaded: number;
         instincts_scanned: number;
         scope_filtered: number;
         insights_returned: number;
@@ -322,6 +360,7 @@ export class MetricsStorage {
     return rows.map((r) => ({
       id: r.id,
       retrievalTimeMs: r.retrieval_time_ms,
+      candidatesLoaded: r.candidates_loaded,
       instinctsScanned: r.instincts_scanned,
       scopeFiltered: r.scope_filtered,
       insightsReturned: r.insights_returned,
@@ -339,20 +378,23 @@ export class MetricsStorage {
     const rollWhere = since !== undefined ? "WHERE day_start >= ?" : "";
     const params = since !== undefined ? [since, dayStart(since)] : [];
     const row = this.db!
-      .prepare(`SELECT SUM(n) as total, SUM(time_sum) as time_sum, SUM(scanned_sum) as scanned_sum,
-        SUM(returned_sum) as returned_sum FROM (
-          SELECT COUNT(*) as n, SUM(retrieval_time_ms) as time_sum, SUM(instincts_scanned) as scanned_sum,
-            SUM(insights_returned) as returned_sum FROM retrieval_metrics ${rawWhere}
+      .prepare(`SELECT SUM(n) as total, SUM(time_sum) as time_sum, SUM(loaded_sum) as loaded_sum,
+        SUM(scanned_sum) as scanned_sum, SUM(returned_sum) as returned_sum FROM (
+          SELECT COUNT(*) as n, SUM(retrieval_time_ms) as time_sum, SUM(candidates_loaded) as loaded_sum,
+            SUM(instincts_scanned) as scanned_sum, SUM(insights_returned) as returned_sum
+            FROM retrieval_metrics ${rawWhere}
           UNION ALL
-          SELECT SUM(retrievals), SUM(retrieval_time_sum), SUM(instincts_scanned_sum), SUM(insights_returned_sum)
+          SELECT SUM(retrievals), SUM(retrieval_time_sum), SUM(candidates_loaded_sum),
+            SUM(instincts_scanned_sum), SUM(insights_returned_sum)
             FROM retrieval_metrics_rollup ${rollWhere}
         )`)
-      .get(...params) as { total: number | null; time_sum: number | null; scanned_sum: number | null; returned_sum: number | null };
+      .get(...params) as { total: number | null; time_sum: number | null; loaded_sum: number | null; scanned_sum: number | null; returned_sum: number | null };
     const total = row.total ?? 0;
     const avg = (sum: number | null): number => (total > 0 ? (sum ?? 0) / total : 0);
     return {
       retrievals: total,
       avgRetrievalTimeMs: avg(row.time_sum),
+      avgCandidatesLoaded: avg(row.loaded_sum),
       avgInstinctsScanned: avg(row.scanned_sum),
       avgInsightsReturned: avg(row.returned_sum),
     };

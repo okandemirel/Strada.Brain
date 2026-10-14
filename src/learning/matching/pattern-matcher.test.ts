@@ -557,3 +557,37 @@ describe("dedup merges only true duplicates, and supersession is soft (D43 / aud
     storage.close();
   });
 });
+
+/**
+ * What the caller's telemetry needs from a retrieval that found nothing: how
+ * much learning the store actually handed over. Without it a row of zeros
+ * cannot say whether the scope held nothing or whether nothing matched.
+ */
+describe("findSimilarInstincts reports the candidates it was given", () => {
+  it("reports the store's count whether or not anything matches", async () => {
+    const matcher = new PatternMatcher(createMockStorage());
+
+    const noMatch: number[] = [];
+    const none = await matcher.findSimilarInstincts("an unrelated sentence about orchard irrigation", {
+      minSimilarity: 0.9,
+      onCandidates: (n) => noMatch.push(n),
+    });
+    expect(none).toEqual([]);
+    expect(noMatch).toEqual([2]);
+
+    const matched: number[] = [];
+    const hit = await matcher.findSimilarInstincts("CS0246: The type or namespace name 'MyType' could not be found", {
+      minSimilarity: 0.5,
+      onCandidates: (n) => matched.push(n),
+    });
+    expect(hit.length).toBeGreaterThan(0);
+    expect(matched).toEqual([2]);
+  });
+
+  it("reports what is left after a type filter, which is what was scored", async () => {
+    const matcher = new PatternMatcher(createMockStorage());
+    const seen: number[] = [];
+    await matcher.findSimilarInstincts("CS0246", { typeFilter: "workflow_pattern", onCandidates: (n) => seen.push(n) });
+    expect(seen).toEqual([0]);
+  });
+});

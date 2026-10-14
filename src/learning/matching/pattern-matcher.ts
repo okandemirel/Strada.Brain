@@ -348,6 +348,12 @@ export class PatternMatcher {
        * check) leaves this off and stays symmetric.
        */
       queryIsRequest?: boolean;
+      /**
+       * How many candidates the store returned for this scope, before any of
+       * them was scored. The caller's telemetry needs it to tell "the scope
+       * holds no learning" from "its learning did not match".
+       */
+      onCandidates?: (loaded: number) => void;
     } = {}
   ): Promise<PatternMatch[]> {
     const {
@@ -356,6 +362,7 @@ export class PatternMatcher {
       typeFilter,
       scope,
       queryIsRequest = false,
+      onCandidates,
     } = options;
 
     // Choose retrieval path based on scope context. The vectors are read only
@@ -380,6 +387,7 @@ export class PatternMatcher {
     if (typeFilter) {
       candidates = candidates.filter(i => i.type === typeFilter);
     }
+    onCandidates?.(candidates.length);
 
     const matches: PatternMatch[] = [];
 

@@ -51,6 +51,8 @@ interface RankedMatches {
   /** The matches that survived ranking, capped at maxResults. */
   readonly matches: PatternMatch[];
   /** Candidates the matcher handed to ranking, before any of it dropped them. */
+  /** Candidates the store returned for this scope, before any scoring. */
+  readonly candidatesLoaded: number;
   readonly candidatesScanned: number;
   /** Candidates dropped because a higher-or-equal-scope duplicate of the same trigger pattern won. */
   readonly scopeFiltered: number;
@@ -143,6 +145,7 @@ export class InstinctRetriever {
         // higher-or-equal scope priority won.
         this.metricsRecorder.recordRetrievalMetrics({
           retrievalTimeMs: Date.now() - retrievalStart,
+          candidatesLoaded: ranked.candidatesLoaded,
           instinctsScanned: ranked.candidatesScanned,
           scopeFiltered: ranked.scopeFiltered,
           insightsReturned: insights.length,
@@ -191,16 +194,19 @@ export class InstinctRetriever {
     maxResults: number,
     userId?: string,
   ): Promise<RankedMatches> {
+    let candidatesLoaded = 0;
     const findOptions: {
       minSimilarity: number;
       maxResults: number;
       queryIsRequest: boolean;
       scope?: ScopeContext;
+      onCandidates: (loaded: number) => void;
     } = {
       minSimilarity: 0.4,
       maxResults: maxResults + 10,
       // A prompt or a tool call, never another trigger: a trigger it names counts.
       queryIsRequest: true,
+      onCandidates: (loaded) => { candidatesLoaded = loaded; },
     };
 
     if (this.scopeContext) {
@@ -210,10 +216,10 @@ export class InstinctRetriever {
     }
 
     const matches = await this.matcher.findSimilarInstincts(taskDescription, findOptions);
-    return this.filterDedupAndBoost(matches, maxResults);
+    return { ...this.filterDedupAndBoost(matches, maxResults), candidatesLoaded };
   }
 
-  private filterDedupAndBoost(matches: PatternMatch[], maxResults: number): RankedMatches {
+  private filterDedupAndBoost(matches: PatternMatch[], maxResults: number): Omit<RankedMatches, "candidatesLoaded"> {
     // 'quarantined' too (improvement on audit 04.6): a permanent teaching that
     // kept being wrong is held out of use, so it is not suggested either.
     const filtered = matches.filter(

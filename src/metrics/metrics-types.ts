@@ -59,7 +59,14 @@ export interface RetrievalMetric {
   readonly id: string;
   /** Wall-clock time the retrieval took */
   readonly retrievalTimeMs: number;
-  /** Candidate instincts examined */
+  /**
+  * Candidates the store returned for this scope, before any of them was
+  * scored. Zero means the scope held no learning at all — which is a
+  * different fact from "learning was there and nothing matched", and the two
+  * were indistinguishable while only the matches were counted.
+  */
+  readonly candidatesLoaded: number;
+  /** Of those candidates, the ones that scored above the floor and were ranked */
   readonly instinctsScanned: number;
   /** Candidates dropped by project-scope filtering */
   readonly scopeFiltered: number;
@@ -73,6 +80,8 @@ export interface RetrievalMetric {
 export interface RetrievalAggregation {
   readonly retrievals: number;
   readonly avgRetrievalTimeMs: number;
+  /** Candidates the store returned per retrieval, before anything was scored */
+  readonly avgCandidatesLoaded: number;
   readonly avgInstinctsScanned: number;
   readonly avgInsightsReturned: number;
 }

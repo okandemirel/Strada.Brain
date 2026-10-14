@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import Database from "better-sqlite3";
 import { MetricsStorage } from "./metrics-storage.js";
 import type { TaskMetric } from "./metrics-types.js";
 
@@ -272,8 +273,8 @@ describe("MetricsStorage", () => {
       storage.recordTaskMetric(createMetric({ id: "old1", sessionId: "chat_old", completionStatus: "success", paorIterations: 2, toolCallCount: 4, instinctIds: ["inst_a"], instinctCount: 1, startedAt: old - 10, completedAt: old }));
       storage.recordTaskMetric(createMetric({ id: "old2", sessionId: "chat_old", completionStatus: "failure", paorIterations: 4, toolCallCount: 6, instinctIds: ["inst_a", "inst_b"], instinctCount: 2, startedAt: old - 10, completedAt: old + 1000 }));
       storage.recordTaskMetric(createMetric({ id: "new1", sessionId: "chat_new", completionStatus: "success", paorIterations: 6, toolCallCount: 2, instinctIds: ["inst_a"], instinctCount: 3, completedAt: now - DAY }));
-      storage.recordRetrievalMetric({ id: "r_old", retrievalTimeMs: 10, instinctsScanned: 4, scopeFiltered: 0, insightsReturned: 2, recordedAt: old });
-      storage.recordRetrievalMetric({ id: "r_new", retrievalTimeMs: 30, instinctsScanned: 8, scopeFiltered: 0, insightsReturned: 4, recordedAt: now - DAY });
+      storage.recordRetrievalMetric({ id: "r_old", retrievalTimeMs: 10, candidatesLoaded: 12, instinctsScanned: 4, scopeFiltered: 0, insightsReturned: 2, recordedAt: old });
+      storage.recordRetrievalMetric({ id: "r_new", retrievalTimeMs: 30, candidatesLoaded: 20, instinctsScanned: 8, scopeFiltered: 0, insightsReturned: 4, recordedAt: now - DAY });
       storage.close();
 
       const reopened = new MetricsStorage(join(tempDir, "learning.db"));
@@ -324,5 +325,79 @@ describe("MetricsStorage", () => {
       expect(s.getAggregation({}).totalTasks).toBe(3);
       expect(s.getRetrievalAggregation().retrievals).toBe(2);
     });
+  });
+});
+
+/**
+ * A retrieval that returned nothing has two possible reasons, and a row of
+ * zeros could not tell them apart: the scope held no learning at all, or it
+ * held some and none of it matched. The candidate count is recorded beside the
+ * matches so the difference is readable afterwards — in the raw rows and in
+ * the all-time rollup the retention pass folds them into.
+ */
+describe("a retrieval row says how much learning it had to work with", () => {
+  const DAY = 86_400_000;
+  let dir: string;
+  let store: MetricsStorage;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "metrics-candidates-"));
+    store = new MetricsStorage(join(dir, "learning.db"));
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the candidates and the matches apart, in the row and after retention", () => {
+    const now = Date.now();
+    // Learning was there and none of it matched…
+    store.recordRetrievalMetric({ id: "r_nomatch", retrievalTimeMs: 7, candidatesLoaded: 31, instinctsScanned: 0, scopeFiltered: 0, insightsReturned: 0, recordedAt: now - DAY });
+    // …and a scope that held nothing at all.
+    store.recordRetrievalMetric({ id: "r_empty", retrievalTimeMs: 3, candidatesLoaded: 0, instinctsScanned: 0, scopeFiltered: 0, insightsReturned: 0, recordedAt: now - 2 * DAY });
+    const rows = store.getRetrievalMetrics();
+    expect(rows.map((r) => [r.id, r.candidatesLoaded, r.instinctsScanned, r.insightsReturned])).toEqual([
+      ["r_nomatch", 31, 0, 0],
+      ["r_empty", 0, 0, 0],
+    ]);
+
+    // The rollup the retention pass writes carries the candidate sum too, or
+    // the distinction is lost as soon as the raw rows are pruned.
+    store.recordRetrievalMetric({ id: "r_old", retrievalTimeMs: 5, candidatesLoaded: 11, instinctsScanned: 2, scopeFiltered: 0, insightsReturned: 1, recordedAt: now - 100 * DAY });
+    store.close();
+    const reopened = new MetricsStorage(join(dir, "learning.db"));
+    reopened.initialize();
+    store = reopened;
+    expect(reopened.getRetrievalMetrics().map((r) => r.id)).toEqual(["r_nomatch", "r_empty"]);
+    // Read through the public aggregation, which covers raw rows and the
+    // rollup together: 3 retrievals, 31 + 0 + 11 candidates between them.
+    const all = reopened.getRetrievalAggregation();
+    expect(all.retrievals).toBe(3);
+    expect(all.avgCandidatesLoaded).toBeCloseTo(42 / 3, 10);
+    expect(all.avgInsightsReturned).toBeCloseTo(1 / 3, 10);
+  });
+
+  it("adds the column to a store written before it existed, instead of failing every insert", () => {
+    // A database from an older build: the table exists without the column, and
+    // `CREATE TABLE IF NOT EXISTS` leaves it exactly as it is.
+    store.close();
+    rmSync(join(dir, "learning.db"), { force: true });
+    const legacy = new Database(join(dir, "learning.db"));
+    legacy.exec(`CREATE TABLE retrieval_metrics (
+      id TEXT PRIMARY KEY, retrieval_time_ms INTEGER NOT NULL, instincts_scanned INTEGER NOT NULL DEFAULT 0,
+      scope_filtered INTEGER NOT NULL DEFAULT 0, insights_returned INTEGER NOT NULL DEFAULT 0, recorded_at INTEGER NOT NULL)`);
+    // Recent, or the retention pass folds it away before this test can read it.
+    legacy.prepare("INSERT INTO retrieval_metrics VALUES ('r_legacy', 9, 3, 0, 1, ?)").run(Date.now() - 60_000);
+    legacy.close();
+
+    store = new MetricsStorage(join(dir, "learning.db"));
+    store.initialize();
+    store.recordRetrievalMetric({ id: "r_after", retrievalTimeMs: 4, candidatesLoaded: 17, instinctsScanned: 1, scopeFiltered: 0, insightsReturned: 1, recordedAt: Date.now() });
+    const byId = new Map(store.getRetrievalMetrics().map((r) => [r.id, r]));
+    expect(byId.get("r_after")?.candidatesLoaded).toBe(17);
+    // The row written before the column keeps its other numbers and reads 0.
+    expect(byId.get("r_legacy")).toMatchObject({ candidatesLoaded: 0, instinctsScanned: 3, insightsReturned: 1 });
   });
 });

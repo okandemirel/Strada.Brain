@@ -350,9 +350,16 @@ function readLearning(src) {
     "retrievals",
     () =>
       has("retrieval_metrics")
-        ? db.prepare("SELECT count(*) AS n, COALESCE(sum(insights_returned > 0), 0) AS anything, min(recorded_at) AS first, max(recorded_at) AS last FROM retrieval_metrics").get()
-        : { n: 0, anything: 0, first: null, last: null },
-    { n: 0, anything: 0, first: null, last: null },
+        ? db
+            .prepare(
+              `SELECT count(*) AS n, COALESCE(sum(insights_returned > 0), 0) AS anything,
+                 ${columnsOf(db, "retrieval_metrics").has("candidates_loaded") ? "COALESCE(sum(candidates_loaded), 0)" : "NULL"} AS loaded,
+                 min(recorded_at) AS first, max(recorded_at) AS last
+               FROM retrieval_metrics`,
+            )
+            .get()
+        : { n: 0, anything: 0, loaded: 0, first: null, last: null },
+    { n: 0, anything: 0, loaded: null, first: null, last: null },
   );
   out.rollup = part(
     "retrievals",
@@ -1351,7 +1358,18 @@ function rung8(ctx) {
 function retrievalLine(l) {
   const raw = `${l.retrievals.anything} of ${l.retrievals.n} retrievals returned anything`;
   const rolled = l.rollup.n > 0 ? `; ${l.rollup.n} older retrievals rolled up with ${l.rollup.insights} insights returned in total` : "";
-  return `${raw}${rolled}`;
+  // WHICH HALF WAS EMPTY. "0 returned" is two different facts — the scope held
+  // no learning, or it held learning that did not match — and the rows carried
+  // only the matches until the candidate count was recorded beside them.
+  const loaded =
+    l.retrievals.n === 0
+      ? ""
+      : l.retrievals.loaded === null
+        ? "; the rows predate the candidate count, so an empty scope cannot be told from an unmatched one"
+        : l.retrievals.loaded === 0
+          ? "; no candidate was ever loaded (the scope held no learning to match against)"
+          : `; ${l.retrievals.loaded} candidates were loaded across them`;
+  return `${raw}${rolled}${loaded}`;
 }
 
 function rung9(ctx) {

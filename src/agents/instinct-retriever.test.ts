@@ -125,7 +125,7 @@ describe("InstinctRetriever", () => {
     // maxResults is maxInsights + 10 to account for post-filtering of deprecated instincts
     expect(mockMatcher.findSimilarInstincts).toHaveBeenCalledWith(
       "some task",
-      { minSimilarity: 0.4, maxResults: 13, queryIsRequest: true },
+      { minSimilarity: 0.4, maxResults: 13, queryIsRequest: true, onCandidates: expect.any(Function) },
     );
   });
 
@@ -866,12 +866,17 @@ describe("InstinctRetriever", () => {
 // a literal 0 by its only caller, so every row claimed "nothing was dropped by
 // scope" no matter how many same-pattern candidates the scope filter discarded.
 describe("InstinctRetriever retrieval metrics", () => {
-  function withRecorder(matches: PatternMatch[]) {
+  function withRecorder(matches: PatternMatch[], candidatesLoaded?: number) {
     const tempDir = mkdtempSync(join(tmpdir(), "instinct-retrieval-metrics-"));
     const storage = new MetricsStorage(join(tempDir, "metrics.db"));
     storage.initialize();
     const matcher = {
-      findSimilarInstincts: vi.fn().mockReturnValue(matches),
+      // The real matcher reports how many candidates the store gave it before
+      // scoring; the stub does the same so the metric row is the real shape.
+      findSimilarInstincts: vi.fn((_query: string, options?: { onCandidates?: (n: number) => void }) => {
+        options?.onCandidates?.(candidatesLoaded ?? matches.length);
+        return matches;
+      }),
     } as unknown as PatternMatcher;
     const retriever = new InstinctRetriever(matcher, {
       metricsRecorder: new MetricsRecorder(storage),
@@ -969,6 +974,78 @@ describe("InstinctRetriever retrieval metrics", () => {
         instinctsScanned: 0,
         scopeFiltered: 0,
         insightsReturned: 0,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/**
+ * A retrieval that returned nothing has two possible reasons, and the row used
+ * to carry only the matches: 0 scanned, 0 returned, whether the scope held no
+ * learning at all or held plenty and none of it matched. The measured
+ * consequence (north-star rung 9, read 2026-10-14) was thousands of rows of
+ * zeros that could not say which.
+ */
+describe("InstinctRetriever retrieval metrics name what they measured", () => {
+  function withRecorder(matches: PatternMatch[], candidatesLoaded: number) {
+    const tempDir = mkdtempSync(join(tmpdir(), "instinct-retrieval-candidates-"));
+    const storage = new MetricsStorage(join(tempDir, "metrics.db"));
+    storage.initialize();
+    const matcher = {
+      findSimilarInstincts: vi.fn((_query: string, options?: { onCandidates?: (n: number) => void }) => {
+        options?.onCandidates?.(candidatesLoaded);
+        return matches;
+      }),
+    } as unknown as PatternMatcher;
+    const retriever = new InstinctRetriever(matcher, { metricsRecorder: new MetricsRecorder(storage) });
+    return {
+      retriever,
+      storage,
+      cleanup: () => {
+        storage.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it("separates learning that was there and did not match from a scope that held none", async () => {
+    const hadLearning = withRecorder([], 31);
+    try {
+      await hadLearning.retriever.getInsightsForTask("wire the irrigation schedule");
+      expect(hadLearning.storage.getRetrievalMetrics()[0]).toMatchObject({
+        candidatesLoaded: 31,
+        instinctsScanned: 0,
+        insightsReturned: 0,
+      });
+    } finally {
+      hadLearning.cleanup();
+    }
+
+    const hadNone = withRecorder([], 0);
+    try {
+      await hadNone.retriever.getInsightsForTask("wire the irrigation schedule");
+      expect(hadNone.storage.getRetrievalMetrics()[0]).toMatchObject({
+        candidatesLoaded: 0,
+        instinctsScanned: 0,
+        insightsReturned: 0,
+      });
+    } finally {
+      hadNone.cleanup();
+    }
+  });
+
+  it("counts the candidates the store returned, not the matches that survived", async () => {
+    const instinct = createMockInstinct({ id: "instinct_one_match" as Instinct["id"], triggerPattern: "irrigation" });
+    const { retriever, storage, cleanup } = withRecorder([createMockMatch(instinct, 0.9)], 12);
+    try {
+      const result = await retriever.getInsightsForTask("irrigation");
+      expect(result.insights).toHaveLength(1);
+      expect(storage.getRetrievalMetrics()[0]).toMatchObject({
+        candidatesLoaded: 12,
+        instinctsScanned: 1,
+        insightsReturned: 1,
       });
     } finally {
       cleanup();

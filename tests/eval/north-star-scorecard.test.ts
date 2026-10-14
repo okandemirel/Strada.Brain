@@ -402,7 +402,7 @@ function seedProof(memory: string, opts: ProofOptions = {}): void {
   metrics.close();
   const db = new Database(learningPath);
   try {
-    db.prepare("INSERT INTO retrieval_metrics (id, retrieval_time_ms, instincts_scanned, scope_filtered, insights_returned, recorded_at) VALUES ('r1', 3, 9, 1, 2, ?)").run(now - HOUR);
+    db.prepare("INSERT INTO retrieval_metrics (id, retrieval_time_ms, candidates_loaded, instincts_scanned, scope_filtered, insights_returned, recorded_at) VALUES ('r1', 3, 24, 9, 1, 2, ?)").run(now - HOUR);
     const obs = db.prepare("INSERT INTO observations (id, type, session_id, tool_name, success, timestamp) VALUES (?, 'success', 'run-2', ?, 1, ?)");
     obs.run("o1", "unity_build_player", now - HOUR);
     obs.run("o2", "unity_run_player", now - HOUR);
@@ -448,7 +448,7 @@ function seedToday(memory: string): void {
   const db = new Database(learningPath);
   try {
     const now = Date.now();
-    const insert = db.prepare("INSERT INTO retrieval_metrics (id, retrieval_time_ms, instincts_scanned, scope_filtered, insights_returned, recorded_at) VALUES (?, 2, 40, 0, 0, ?)");
+    const insert = db.prepare("INSERT INTO retrieval_metrics (id, retrieval_time_ms, candidates_loaded, instincts_scanned, scope_filtered, insights_returned, recorded_at) VALUES (?, 2, 40, 40, 0, 0, ?)");
     for (const id of ["r1", "r2", "r3"]) insert.run(id, now - HOUR);
     db.prepare("INSERT INTO observations (id, type, session_id, tool_name, success, timestamp) VALUES ('o1', 'success', 's', 'unity_playmode_verify', 1, ?)").run(now);
   } finally {
@@ -566,7 +566,7 @@ describe("north-star scorecard: a run that did everything", () => {
     expect(rung(card, 3).checks[1]!.text).toBe(`${PROOF_ID}: 2 of 2 in-scope rows owned by a milestone of its plan`);
     expect(rung(card, 5).checks[0]!.text).toContain("2 of 2 green milestones in 1 campaign since the scope gate first decided were judged green on a proven basis by the scope gate in mode on");
     expect(rung(card, 9).checks.map((c) => c.text)).toEqual([
-      "1 of 1 retrievals returned anything",
+      "1 of 1 retrievals returned anything; 24 candidates were loaded across them",
       "1 of 1 exposures showed a lesson to a later run than the one that learned it",
     ]);
     expect(rung(card, 10).checks[1]!.text).toMatch(/^0 owner messages in the campaign's chat between its start and .* \(2 tasks linked to it\)$/);
@@ -786,6 +786,70 @@ describe("north-star scorecard: a run that did everything", () => {
     expect(res.status).toBe(EXIT.USAGE);
     expect(res.stderr).toContain("campaign campaign_none is not in");
   });
+
+  /**
+   * "0 returned" is two different facts. A retrieval that loaded candidates and
+   * matched none is a scoring problem; one that loaded none is an empty scope —
+   * and 4854 rows of zeros could not say which, because only the matches were
+   * ever counted (measured 2026-10-14).
+   */
+  describe("rung 9 says which half of a retrieval was empty", () => {
+    function cardWithRetrievals(rows: Array<{ id: string; loaded: number }>, legacy = false): Card {
+      const { home, project, upstream } = proofHome();
+      const learningPath = join(home, ".strada-memory", "learning.db");
+      const db = new Database(learningPath);
+      try {
+        db.exec("DROP TABLE retrieval_metrics");
+        if (legacy) {
+          // A store written before the column existed keeps its older shape.
+          db.exec(
+            `CREATE TABLE retrieval_metrics (id TEXT PRIMARY KEY, retrieval_time_ms INTEGER NOT NULL,
+               instincts_scanned INTEGER NOT NULL DEFAULT 0, scope_filtered INTEGER NOT NULL DEFAULT 0,
+               insights_returned INTEGER NOT NULL DEFAULT 0, recorded_at INTEGER NOT NULL)`,
+          );
+          const old = db.prepare(
+            "INSERT INTO retrieval_metrics (id, retrieval_time_ms, instincts_scanned, scope_filtered, insights_returned, recorded_at) VALUES (?, 2, 0, 0, 0, ?)",
+          );
+          for (const r of rows) old.run(r.id, Date.now() - 1000);
+        } else {
+          db.exec(
+            `CREATE TABLE retrieval_metrics (id TEXT PRIMARY KEY, retrieval_time_ms INTEGER NOT NULL,
+               candidates_loaded INTEGER NOT NULL DEFAULT 0, instincts_scanned INTEGER NOT NULL DEFAULT 0,
+               scope_filtered INTEGER NOT NULL DEFAULT 0, insights_returned INTEGER NOT NULL DEFAULT 0,
+               recorded_at INTEGER NOT NULL)`,
+          );
+          const insert = db.prepare(
+            "INSERT INTO retrieval_metrics (id, retrieval_time_ms, candidates_loaded, instincts_scanned, scope_filtered, insights_returned, recorded_at) VALUES (?, 2, ?, 0, 0, 0, ?)",
+          );
+          for (const r of rows) insert.run(r.id, r.loaded, Date.now() - 1000);
+        }
+      } finally {
+        db.close();
+      }
+      return scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
+    }
+
+    it("names learning that was loaded and did not match", () => {
+      const card = cardWithRetrievals([{ id: "a", loaded: 31 }, { id: "b", loaded: 11 }]);
+      expect(rung(card, 9).checks[0]!.text).toBe(
+        "0 of 2 retrievals returned anything; 42 candidates were loaded across them",
+      );
+    });
+
+    it("names a scope that held no learning at all", () => {
+      const card = cardWithRetrievals([{ id: "a", loaded: 0 }, { id: "b", loaded: 0 }]);
+      expect(rung(card, 9).checks[0]!.text).toBe(
+        "0 of 2 retrievals returned anything; no candidate was ever loaded (the scope held no learning to match against)",
+      );
+    });
+
+    it("says so when the rows predate the candidate count", () => {
+      const card = cardWithRetrievals([{ id: "a", loaded: 0 }], true);
+      expect(rung(card, 9).checks[0]!.text).toBe(
+        "0 of 1 retrievals returned anything; the rows predate the candidate count, so an empty scope cannot be told from an unmatched one",
+      );
+    });
+  });
 });
 
 describe("north-star scorecard: rung 1 judges the newest boot", () => {
@@ -923,7 +987,10 @@ describe("north-star scorecard: the measured state", () => {
     expect(rung(card, 5).checks[0]!.text).toBe(
       "no campaign ran under the scope gate in mode on (scope_gate_since is unset on all 2 campaigns); 0 of 2 green milestones were judged green on a proven basis by the scope gate in mode on (judgements: off 0, shadow 2, on 0)",
     );
-    expect(rung(card, 9).checks[0]!.text).toBe("0 of 3 retrievals returned anything");
+    // Which half was empty: here the learning was loaded and none of it matched.
+    expect(rung(card, 9).checks[0]!.text).toBe(
+      "0 of 3 retrievals returned anything; 120 candidates were loaded across them",
+    );
     expect(rung(card, 10).checks[0]!.text).toBe("2 campaigns, 1 done; 0 delivered with every milestone judged green on a proven basis by the scope gate in mode on");
   });
 
@@ -1006,6 +1073,7 @@ describe("north-star scorecard: what it cannot read", () => {
     const card = scoreNorthStar({ home: join(work, "nohome"), learningDb: path }) as Card;
     expect(rung(card, 9).checks[0]).toEqual({ ok: true, text: "0 of 0 retrievals returned anything; 40 older retrievals rolled up with 3 insights returned in total" });
   });
+
 });
 
 describe("defaultPaths", () => {
