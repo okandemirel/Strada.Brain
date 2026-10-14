@@ -1286,6 +1286,66 @@ export function fileBasedAlternative(toolName: string): string {
   return hint === undefined ? "" : ` ${hint}`;
 }
 
+/**
+ * A VALUE THE MODEL SENT AS TEXT, FOR A FIELD THAT IS NOT TEXT.
+ *
+ * Measured in a live run (2026-10-14): a worker called unity_scene_build with
+ * its whole `spec` object JSON-ENCODED as a string, and `emitBootTest` as
+ * `"true"`. The tool answered "pass either `spec` (an object) or `specPath`",
+ * the worker tried the same shape twice more, and the sprint spent three turns
+ * without building its scene. Sending an object as text is one of the common
+ * ways a model gets a tool call almost right.
+ *
+ * Only what the schema DECLARES is converted, and only when the text really is
+ * that value: a declared object or array must parse into that kind, a boolean
+ * must be exactly true/false, a number must be a finite literal. A declared
+ * string is never touched, no key is invented, and anything that does not
+ * convert is passed through unchanged so the tool still answers for it.
+ */
+export function coerceDeclaredTypes(
+  input: Record<string, unknown>,
+  inputSchema: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = (inputSchema as { properties?: Record<string, unknown> }).properties;
+  if (properties === undefined || properties === null || typeof properties !== "object") return input;
+  let changed = false;
+  const out: Record<string, unknown> = { ...input };
+  for (const [key, value] of Object.entries(input)) {
+    if (typeof value !== "string") continue;
+    const declared = (properties as Record<string, unknown>)[key];
+    const type = declared !== null && typeof declared === "object" ? (declared as { type?: unknown }).type : undefined;
+    const kinds = Array.isArray(type) ? type : [type];
+    const text = value.trim();
+    const wants = (kind: string): boolean => kinds.includes(kind);
+    if (wants("object") || wants("array")) {
+      if (!/^[[{]/.test(text)) continue;
+      try {
+        const parsed: unknown = JSON.parse(text);
+        const isArray = Array.isArray(parsed);
+        if ((isArray && wants("array")) || (!isArray && parsed !== null && typeof parsed === "object" && wants("object"))) {
+          out[key] = parsed;
+          changed = true;
+        }
+      } catch {
+        // Not JSON after all: the tool sees what the model sent.
+      }
+      continue;
+    }
+    if (wants("boolean") && (text === "true" || text === "false")) {
+      out[key] = text === "true";
+      changed = true;
+      continue;
+    }
+    if ((wants("number") || wants("integer")) && text !== "" && Number.isFinite(Number(text))) {
+      const parsed = Number(text);
+      if (!wants("number") && !Number.isInteger(parsed)) continue;
+      out[key] = parsed;
+      changed = true;
+    }
+  }
+  return changed ? out : input;
+}
+
 class StradaMcpToolAdapter implements ITool {
   readonly name: string;
   readonly description: string;
@@ -1411,7 +1471,7 @@ class StradaMcpToolAdapter implements ITool {
 
     try {
       const exec = this.tool.execute(
-        input,
+        coerceDeclaredTypes(input, this.inputSchema),
         this.runtime?.createToolExecutionContext(context) ?? {
           projectPath: context.projectPath,
           workingDirectory: context.workingDirectory,
