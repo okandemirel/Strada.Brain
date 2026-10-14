@@ -10507,6 +10507,18 @@ describe("CampaignManager", () => {
         expect(told("chat-predicate")).not.toContain("Building from");
       });
 
+      // A bug report that names the design answered "Building from `docs/Bramble_GDD.md`", and the planner ran.
+      it.each([
+        "When I build the game in docs/Bramble_GDD.md, Unity crashes.",
+        "Unity crashes when I build the game from docs/Bramble_GDD.md",
+        "I tried to build the game in docs/Bramble_GDD.md but the editor freezes",
+      ])("holds the design a bug report names at the gate: %s", async (text) => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-report", text)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        atTheGate("chat-report", "docs/Bramble_GDD.md");
+      });
+
       it("still builds at once from a design the build is plainly aimed at", async () => {
         writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
         expect(await say("chat-plain", "Build the game in docs/Quillmoor_GDD.md and send me the APK")).toBe(true);

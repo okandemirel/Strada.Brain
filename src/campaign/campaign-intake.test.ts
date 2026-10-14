@@ -1020,6 +1020,83 @@ describe("a document the build names, read to the end of its clause", () => {
 });
 
 /**
+ * A build that starts at once is an order: its verb opens its clause. "When I
+ * build the game in docs/Bramble_GDD.md, Unity crashes." and "I tried to
+ * build the game in … but the editor freezes" each answered "Building from …"
+ * and the planner ran — bug reports, read as orders because nothing before
+ * the verb was a "not", an "if" or a question word. Any other opening asks
+ * the user at the gate. Turkish orders by the verb's own form ("yap"); a
+ * report there is another form ("yaparken", "yaptığımda") or words after the
+ * verb ("yap dedim").
+ */
+describe("a build the message reports, not orders", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+  const P = "docs/Bramble_GDD.md";
+
+  it.each([
+    `When I build the game in ${P}, Unity crashes.`,
+    `Unity crashes when I build the game from ${P}`,
+    `I tried to build the game in ${P} but the editor freezes`,
+    `The CI fails every time we build the game in ${P}.`,
+    `It took me two weeks to build the game in ${P}`,
+    `My friend will build the game in ${P}`,
+    `Once you build the game in ${P}, tell me the size.`,
+    `I tried to build this game: ${P}`,
+    `We want to build the game in ${P}`,
+    `When I make the game in ${P}, the build is 2 GB`,
+    `I tried to develop the game in ${P}`,
+    `${P}'deki oyunu yap dedim ama Unity çöktü`,
+  ])("%s → confirmed first, never built at once", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm(P));
+  });
+
+  it.each(["When I build the game in the GDD, Unity crashes", "The editor freezes when I implement the GDD"])(
+    "%s → the repository's GDD, confirmed first",
+    (text) => {
+      expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-to-confirm" });
+    },
+  );
+
+  // A Turkish report is a verb form no build pattern reads: no campaign.
+  it.each([`${P}'deki oyunu yaparken Unity çöktü`, `${P}'deki oyunu yaptığımda editör donuyor`])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  // An order, after a greeting, a "please", a "can you", an "I want you to", a "let's" or a "help me".
+  it.each([
+    `Build the game in ${P}`,
+    `Please build the game in ${P}`,
+    `Now build the game from ${P}`,
+    `OK so build the game in ${P}`,
+    `Hey, just build the game in ${P}`,
+    `Can you build the game in ${P}`,
+    `Could you please build the game in ${P}`,
+    `I want you to build the game in ${P}`,
+    `I'd like you to build the game in ${P}`,
+    `Let's build the game in ${P}`,
+    `Help me build the game in ${P}`,
+    `Go build the game in ${P}`,
+    `- Build the game in ${P}`,
+    `Hi pls build the game in ${P}`,
+    `Also kindly build the game in ${P}`,
+    `Would you build the game in ${P}`,
+    `I need you to build the game in ${P}`,
+    `I would like you to build the game in ${P}`,
+    `Let us build the game in ${P}`,
+    `Lütfen bu oyunu yap: ${P}`,
+    `Şimdi ${P}'deki oyunu yap`,
+    `Unity'de ${P}'deki oyunu yap`,
+  ])("%s → that design, at once", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now(P));
+  });
+
+  it.each(["Please build the game in the GDD", "Let's implement the GDD"])("%s → the repository's GDD, at once", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
+  });
+});
+
+/**
  * Intake runs synchronously on every incoming message, and its cost grew with
  * the square of the message's length: each pattern anchored at a document was
  * run against the whole text before it, each span blanked by copying the

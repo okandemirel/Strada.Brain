@@ -680,12 +680,34 @@ function sentenceBefore(prose: string, at: number): string {
 const TENTATIVE_REQUEST_RE =
   /^\s*(?:(?:hey|hi|hello|so|ok(?:ay)?|well|also|now)[\s,!]+)*(?:i(?:\s+was|\s+am|['’]m)?\s+wonder(?:ing)?\s+(?:if|whether)\s+(?:you|u|we)\s+(?:could|can|would|might)|(?:is|would)\s+it\s+(?:be\s+)?possible\s+(?:for\s+(?:you|us|me)\s+)?to|what\s+i(?:['’]d|\s+would)?\s+(?:want|like)\s+is\s+(?:for\s+(?:you|us)\s+)?to|(?:can|could)\s+we)(?:\s+(?:please|maybe|perhaps))?\s*$/iu;
 
-/** How firmly a build is asked for: plainly, or tentatively (see TENTATIVE_REQUEST_RE). */
+/**
+ * What may stand before an English build verb that is an order: a greeting, a
+ * "now" or a "please", then at most a "can you", an "I want you to", a "let's"
+ * or a "help me". A subject or a time clause there makes the sentence a
+ * report about a build: "When I build the game in P, Unity crashes", "I tried
+ * to build the game in P but the editor freezes" and "My friend will build
+ * the game in P" each started a campaign at once. Turkish orders by the
+ * verb's own form ("yap"); its reports are other forms ("yaparken") or words
+ * after the verb ("yap dedim"), which the patterns and clause ends refuse.
+ */
+const ORDER_OPENER_RE = new RegExp(
+  String.raw`^[^\p{L}\p{N}]*(?:(?:hey|hi|hello|ok(?:ay)?|so|now|alright|also|well|just|then|go|please|pls|plz|kindly)[^\p{L}\p{N}]+)*` +
+    String.raw`(?:(?:(?:can|could|would|will)\s+(?:you|u|ya)|i(?:\s+(?:want|need|would\s+like)|['’]d\s+like)\s+you\s+to|let['’]?s|let\s+us|help\s+me(?:\s+to)?)\s+(?:(?:please|pls|plz|kindly|just|now)\s+)*)?$`,
+  "iu",
+);
+const ORDER_OPENER_MAX = 80;
+const ENGLISH_BUILD_VERB_RE = /^(?:build|develop|make|implement)(?![\p{L}])/iu;
+
+/** How firmly a build is asked for: plainly, or tentatively (see TENTATIVE_REQUEST_RE and ORDER_OPENER_RE). */
 type Request = "firm" | "tentative";
 
 function requestAt(prose: string, at: number, end: number): Request | undefined {
   if (TENTATIVE_REQUEST_RE.test(sentenceBefore(prose, at))) return "tentative";
-  return buildIsAsked(prose, at, end) ? "firm" : undefined;
+  if (!buildIsAsked(prose, at, end)) return undefined;
+  if (!ENGLISH_BUILD_VERB_RE.test(prose.slice(at, at + 12))) return "firm";
+  // An opener is a few words: a longer run before the verb is read no further.
+  const clause = clauseStart(prose, at);
+  return at - clause <= ORDER_OPENER_MAX && ORDER_OPENER_RE.test(prose.slice(clause, at)) ? "firm" : "tentative";
 }
 
 const WHOLE_GAME_BUILDS_RE = new RegExp(WHOLE_GAME_BUILD_RE.source, "giu");
