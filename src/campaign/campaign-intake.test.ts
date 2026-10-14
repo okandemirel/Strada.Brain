@@ -730,6 +730,45 @@ describe("a build aimed only at a document that sits beside the design", () => {
     expect(detectCampaignIntent(msg("Build the game in docs/art-style.md and docs/README.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/README.md" });
   });
 
+  /**
+   * A design named without GDD in its name counted only for the connectives
+   * the patterns listed: "Build the game using P", "P: build this game",
+   * "P ile oyunu yap" and the plain Turkish order "Oyunu P'ye göre yap" were
+   * ordinary tasks, while the same sentences with docs/Quillmoor_GDD.md built.
+   */
+  it.each([
+    ["Build the game using docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game following docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build this game with the design in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game (docs/quillmoor.md)", "docs/quillmoor.md"],
+    ["docs/quillmoor.md: build this game end to end", "docs/quillmoor.md"],
+    ["docs/quillmoor.md — build the game from it", "docs/quillmoor.md"],
+    ["docs/quillmoor.md ile oyunu yap", "docs/quillmoor.md"],
+    ["docs/quillmoor.md'yi kullanarak oyunu yap", "docs/quillmoor.md"],
+    ["docs/quillmoor.md dosyasına göre oyunu yap", "docs/quillmoor.md"],
+    ["Oyunu docs/quillmoor.md'ye göre yap", "docs/quillmoor.md"],
+    ["Oyunu docs/quillmoor.md'den yap", "docs/quillmoor.md"],
+    ["Bu oyunu docs/quillmoor.md dosyasına göre baştan sona geliştir", "docs/quillmoor.md"],
+    ["Şu oyunu yapar mısın: docs/quillmoor.md", "docs/quillmoor.md"],
+    ["docs/quillmoor.md'deki oyunu yapar mısın?", "docs/quillmoor.md"],
+  ])("%s → %s (the build is aimed at it)", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
+  it.each([
+    // "With P" is how the build goes, not what it builds, unless P is called the design.
+    "Build the game with docs/ui-notes.md in mind",
+    "Build the game following docs/art-style.md",
+    // A path before "build the game" is the subject of a bug report unless the build is all that follows.
+    "docs/quillmoor.md: build the game fails on Android",
+    // A feature request in the Turkish order, and a build the verb turns down.
+    "Oyunu docs/geri-bildirim.md'deki notlara göre geliştir",
+    "Oyunu docs/quillmoor.md'ye göre yapma",
+    "Oyunu Ayşe'ye göre yap",
+  ])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
   it("an idea written beside the style sheet the build is aimed at is the design", () => {
     const text = "Build this game from scratch per docs/art-style.md: a beekeeper moves her hives between meadows as the seasons turn.";
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });

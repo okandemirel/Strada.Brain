@@ -43,9 +43,18 @@ const TR_WOULD_YOU_WRITE = String.raw`yazar\s+mısın(?:ız)?`;
 const TR_DEVELOP = String.raw`geliştir(?:in(?:iz)?)?`;
 const TR_CONSTRUCT = String.raw`inşa\s+(?:et|edin(?:iz)?)`;
 const TR_CODE = String.raw`kodla(?:yın(?:ız)?)?`;
+/** "Şu oyunu yapar mısın: P" asks for the build; only the definite object takes it, as "oyun yapar mısın" asks what you do. */
+const TR_WOULD_YOU_MAKE = String.raw`yapar\s+mısın(?:ız)?|yapabilir\s+misin(?:iz)?`;
+/**
+ * The plain Turkish order, the document between the object and the verb:
+ * "Oyunu P'ye göre yap", "Oyunu P'den yap", "Bu oyunu P dosyasına göre
+ * geliştir". It is read with the document's name blanked (proseOf), so what
+ * stands between "oyunu" and its suffix is only the space the name took.
+ */
+const TR_GAME_BY_DOCUMENT = String.raw`oyun(?:u|unu)\s+["'\x60“‘”’]*(?:['’](?:y?[ae]\s+göre|[dt][ae]n)|(?:dosya|belge|doküman|döküman)s[ıi]n(?:[ae]\s+göre|[dt][ae]n))(?:\s+(?:baştan\s+sona|sıfırdan))?\s+(?:${TR_MAKE}|${TR_WOULD_YOU_MAKE}|${TR_WOULD_YOU_WRITE}|${TR_DEVELOP}|${TR_CONSTRUCT}|${TR_CODE})`;
 const BUILD_INTENT_RE = new RegExp(
   String.raw`(?<![\wçğıöşüÇĞİÖŞÜ])(baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan|build\s+(this|the|a|my)\s+game|make\s+(this|the|a|my)\s+game|develop\s+(this|the|a|my)\s+game|` +
-    String.raw`oyunu?n?u?\s+(${TR_MAKE}|${TR_WOULD_YOU_WRITE}|${TR_DEVELOP}|${TR_CONSTRUCT}|${TR_CODE})|oyun\s+(${TR_MAKE}|${TR_DEVELOP}|${TR_WRITE}|${TR_CODE}))(?![\wçğıöşüÇĞİÖŞÜ])`,
+    String.raw`oyunu?n?u?\s+(${TR_MAKE}|${TR_WOULD_YOU_WRITE}|${TR_DEVELOP}|${TR_CONSTRUCT}|${TR_CODE})|oyun(?:u|unu)\s+(?:${TR_WOULD_YOU_MAKE})|${TR_GAME_BY_DOCUMENT}|oyun\s+(${TR_MAKE}|${TR_DEVELOP}|${TR_WRITE}|${TR_CODE}))(?![\wçğıöşüÇĞİÖŞÜ])`,
   "i",
 );
 
@@ -375,10 +384,13 @@ function withoutDocuments(text: string, named: readonly NamedDocument[]): string
 /** How a build runs — never, on its own, a request for one. */
 const BUILD_ADVERB = String.raw`(?:baştan\s+sona|end[- ]?to[- ]?end|from\s+scratch|sıfırdan)`;
 const TR_BUILD_VERB = `(?:${TR_MAKE}|${TR_WRITE}|${TR_WOULD_YOU_WRITE}|${TR_DEVELOP}|${TR_CONSTRUCT}|${TR_CODE})`;
+/** …with the polite question beside them, where the object is definite ("şu oyunu yapar mısın"). */
+const TR_BUILD_THE_GAME_VERB = `(?:${TR_BUILD_VERB}|${TR_WOULD_YOU_MAKE})`;
 const BUILD_GAME_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|develop|make)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])`;
 const BUILD_GDD_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|implement)\s+(?:the|this|my|our)\s+(?:GDD|game\s+design\s+doc(?:ument)?)(?![\p{L}\p{N}_'’])`;
 const BUILD_GDD_TR = String.raw`(?<![\p{L}\p{N}_])GDD['’]y[iı](?:\s+${BUILD_ADVERB})?\s+(?:uygula|hayata\s+geçir|kodla)(?![\p{L}\p{N}_])`;
-const BUILD_GAME_TR = String.raw`(?<![\p{L}\p{N}_])oyun(?:u|unu)?(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_VERB}(?![\p{L}\p{N}_])`;
+const BUILD_GAME_TR =
+  String.raw`(?<![\p{L}\p{N}_])(?:oyun(?:u|unu)?(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_VERB}|oyun(?:u|unu)(?:\s+${BUILD_ADVERB})?\s+(?:${TR_WOULD_YOU_MAKE})|${TR_GAME_BY_DOCUMENT})(?![\p{L}\p{N}_])`;
 
 /**
  * Whole-game build intent, which BUILD_INTENT_RE alone is not: it also takes
@@ -465,12 +477,14 @@ function asksToBuild(prose: string): boolean {
 
 /**
  * The build is aimed at the document written right after it: "Build this
- * game: P", "build the game in / from / per P", "build the game from the GDD
- * at P", "Bu oyunu yap: P".
+ * game: P", "build the game in / from / per / using / following P", "build
+ * the game (P)", "build the game from the GDD at P", "Bu oyunu yap: P".
+ * "With P" is how a build goes ("with docs/ui-notes.md in mind") unless P is
+ * called the design: "with the design in P".
  */
 const BUILDS_FROM_NEXT_RE = new RegExp(
   `(?:${BUILD_GAME_EN}|${BUILD_GDD_EN}|${BUILD_GDD_TR}|${BUILD_GAME_TR})(?:\\s+${BUILD_ADVERB})*` +
-    String.raw`(?:\s*:|\s+(?:in|from|at|per|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)\s+in))` +
+    String.raw`(?:\s*[:(]|\s+(?:in|from|at|per|using|following|with(?=\s+(?:the|this|that|my|our)\s+(?:GDD|game\s+design|design))|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)\s+in))` +
     String.raw`(?:\s+(?:the|this|that|my|our))?` +
     String.raw`(?:\s+(?:GDD|game\s+design\s+doc(?:ument)?|design(?:\s+doc(?:ument)?)?|document|doc|spec(?:ification)?|file)(?:\s+(?:at|in)|\s*:)?)?` +
     String.raw`\s*["'\x60“‘(]?$`,
@@ -478,14 +492,33 @@ const BUILDS_FROM_NEXT_RE = new RegExp(
 );
 
 /**
+ * …or written right before it, the build the whole of the next clause: "P:
+ * build this game", "P — build the game from it". Only that: "P: build the
+ * game fails on Android" is a bug report about P.
+ */
+const BUILDS_FROM_PREVIOUS_RE = new RegExp(
+  String.raw`^["'\x60”’)]*\s*(?:[:—–]|\s-)\s*(?:(?:now|please|so|ok(?:ay)?|then)[\s,]+)*(${BUILD_GAME_EN}|${BUILD_GDD_EN})` +
+    String.raw`(?:\s+(?:${BUILD_ADVERB}|from\s+(?:it|this|that)|now|please))*\s*(?:[.!]|$)`,
+  "iu",
+);
+
+/**
  * The game the build is aimed at is the one IN the document just written:
  * "P'deki oyunu yap", "P dosyasındaki oyunu geliştir", "P oyununu baştan sona
- * yap", "P'ye göre oyunu yap". "P'deki notlara göre oyunu geliştir" (improve
- * the game by the notes in P) is not.
+ * yap", "P'ye göre oyunu yap", "P ile oyunu yap", "P'yi kullanarak oyunu
+ * yap". "P'deki notlara göre oyunu geliştir" (improve the game by the notes
+ * in P) is not.
  */
 const GAME_IN_PREVIOUS_RE = new RegExp(
-  String.raw`^(?:['’](?:[dt][ae]ki|[dt][ae]n|y?[ae]\s+göre)|\s+(?:dosya|belge|doküman|döküman)s[ıi]n(?:[dt][ae]ki|[dt][ae]n)|\s+içindeki)?` +
-    String.raw`\s+(?:bu\s+|şu\s+)?oyun(?:u|unu)(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_VERB}(?![\p{L}\p{N}_])`,
+  String.raw`^(?:['’](?:[dt][ae]ki|[dt][ae]n|y?[ae]\s+göre|y?[ıiuü]\s+kullanarak)|\s+(?:dosya|belge|doküman|döküman)s[ıi]n(?:[dt][ae]ki|[dt][ae]n|[ae]\s+göre|[ıi]\s+kullanarak)|\s+içindeki|\s+ile)?` +
+    String.raw`\s+(?:bu\s+|şu\s+)?oyun(?:u|unu)(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_THE_GAME_VERB}(?![\p{L}\p{N}_])`,
+  "iu",
+);
+
+/** "Oyunu P'ye göre yap": the object before the document, its verb after (see TR_GAME_BY_DOCUMENT). */
+const GAME_BEFORE_RE = /(?<![\p{L}\p{N}_])(?:bu\s+|şu\s+)?oyun(?:u|unu)\s+["'\x60“‘]?$/iu;
+const BY_DOCUMENT_AFTER_RE = new RegExp(
+  String.raw`^["'\x60”’]?(?:['’](?:y?[ae]\s+göre|[dt][ae]n)|\s+(?:dosya|belge|doküman|döküman)s[ıi]n(?:[ae]\s+göre|[dt][ae]n))(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_THE_GAME_VERB}(?![\p{L}\p{N}_])`,
   "iu",
 );
 
@@ -555,6 +588,11 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | nu
     if (before && buildIsAsked(prose, before.index, doc.at)) return true;
     const after = GAME_IN_PREVIOUS_RE.exec(text.slice(doc.end));
     if (after && buildIsAsked(prose, doc.at, doc.end + after[0].length)) return true;
+    const next = BUILDS_FROM_PREVIOUS_RE.exec(text.slice(doc.end));
+    if (next && buildIsAsked(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length)) return true;
+    const object = GAME_BEFORE_RE.exec(text.slice(0, doc.at));
+    const verb = object && BY_DOCUMENT_AFTER_RE.exec(text.slice(doc.end));
+    if (object && verb && buildIsAsked(prose, object.index, doc.end + verb[0].length)) return true;
     return wholeGame && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => re.test(text.slice(0, doc.at)));
   });
   for (let spread = true; spread; ) {
