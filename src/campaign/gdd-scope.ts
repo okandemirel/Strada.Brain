@@ -174,14 +174,49 @@ export function normalizeHeading(h: string): string {
     .trim();
 }
 
+/**
+ * A heading that carries its own section marker — a number, a §, a roman
+ * numeral — is a section of the document, never its title.
+ */
+const SECTION_MARKER_RE = /^\s*(?:§|\d|[IVXLC]+[.)]\s)/u;
+
+/**
+ * THE DOCUMENT'S OWN TITLE IS NOT A SECTION TO PLAN. Measured live
+ * 2026-10-14: every plan of a document that opens with its title came back one
+ * section short ("Harbor Light — Game Design Document" was reported UNPLANNED),
+ * which spent the planner's second round on a heading no milestone can ever
+ * cover — and when that round answered with a thinking block instead of JSON,
+ * the campaign kept a plan it had itself declared incomplete.
+ *
+ * The first heading is the title when it opens the document at its shallowest
+ * level, deeper headings follow it, and it carries no section marker of its
+ * own. A document whose headings are all one level keeps every one of them,
+ * and a title whose own body asks for work is work (sectionAsksForWork).
+ */
+function isDocumentTitle(
+  found: ReadonlyArray<{ title: string; level: number; index: number; line: string }>,
+  at: number,
+): boolean {
+  if (at !== 0) return false;
+  const head = found[0]!;
+  // The LINE, not the captured title: a converted document's "1. Core Loop"
+  // yields the title without its number, and that number is exactly what says
+  // the heading is a section.
+  if (SECTION_MARKER_RE.test(head.line)) return false;
+  return found.some((h) => h.level > head.level);
+}
+
 export function extractHeadings(gddText: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
   const lines = gddText.split(/\r?\n/);
+  const found: Array<{ title: string; level: number; index: number; line: string }> = [];
+  const seen = new Set<string>();
   for (const [index, raw] of lines.entries()) {
     const m = HEADING_RE.exec(raw) ?? NUMBERED_HEADING_RE.exec(raw);
     if (!m) continue;
+    // The heading AS WRITTEN, number and all: that spelling is what a plan's
+    // coveredSections are matched against. The level comes from the parse.
     const title = (m.length > 2 ? m[2] : m[1])!.trim();
+    const level = parseHeadingLine(raw)?.level ?? 1;
     if (title.length < 3 || title.length > 90) continue;
     // AN APPARATUS NAME OVER A SECTION THAT ASKS FOR WORK IS WORK. The
     // denylist dropped "## Credits\nBuild an interactive credits screen." and
@@ -191,10 +226,13 @@ export function extractHeadings(gddText: string): string[] {
     const key = normalizeHeading(title);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    out.push(title);
-    if (out.length >= 80) break;
+    found.push({ title, level, index, line: raw.trim().replace(/^#+\s*/, "") });
+    if (found.length >= 81) break;
   }
-  return out;
+  return found
+    .filter((_, at) => !(isDocumentTitle(found, at) && !sectionAsksForWork(lines, found[at]!.index)))
+    .slice(0, 80)
+    .map((h) => h.title);
 }
 
 const SCREEN_RE = /\b(?:main menu|title screen|home screen|level select|pause menu|settings screen|shop screen|results? screen|win screen|lose screen|game over screen|hud|inventory screen|map screen|leaderboard)\b/gi;

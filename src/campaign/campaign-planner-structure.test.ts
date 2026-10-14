@@ -47,17 +47,20 @@ describe("plannerSystem", () => {
 describe("CampaignPlanner.planMilestones", () => {
   it("returns the structure and asks once more for a section nobody claimed", async () => {
     const first = JSON.stringify({ milestones: [sprint("Sprint A — Foundations", ["1. Core Loop"]), sprint("Sprint B — Levels", ["2. Levels"]), sprint("Sprint C — Delivery", ["2. Levels"])], excluded: [] });
-    const second = JSON.stringify({ milestones: [sprint("Sprint A — Foundations", ["1. Core Loop"]), sprint("Sprint B — Levels + audio", ["2. Levels", "3. Audio"]), sprint("Sprint C — Delivery", ["Kiln Yard"])], excluded: ["leaderboards: the GDD says none in v1"] });
+    const second = JSON.stringify({ milestones: [sprint("Sprint A — Foundations", ["1. Core Loop"]), sprint("Sprint B — Levels + audio", ["2. Levels", "3. Audio"]), sprint("Sprint C — Delivery", [])], excluded: ["leaderboards: the GDD says none in v1"] });
     const fake = fakeProvider([first, second]);
     const planner = new CampaignPlanner(fake.provider as never);
     const ladder = await planner.planMilestones(GDD, "docs/GDD.md");
     expect(fake.calls).toHaveLength(2);
-    expect(fake.calls[1]).toContain('claimed no milestone for these GDD sections: "Kiln Yard", "3. Audio"');
+    // The document's TITLE is not among them: no milestone can cover a
+    // document's name, and asking for it spent the second round for nothing
+    // (measured live 2026-10-14).
+    expect(fake.calls[1]).toContain('claimed no milestone for these GDD sections: "3. Audio"');
     expect(ladder.milestones[1]!.coveredSections).toEqual(["2. Levels", "3. Audio"]);
     expect(ladder.milestones[1]!.deliverables).toEqual(["Sprint B — Levels + audio scene"]);
     expect(ladder.excluded).toEqual(["leaderboards: the GDD says none in v1"]);
     expect(ladder.uncoveredSections).toEqual([]);
-    expect(ladder.totalSections).toBe(4);
+    expect(ladder.totalSections).toBe(3);
     expect([ladder.minMilestones, ladder.maxMilestones]).toEqual([3, 7]);
   });
 
@@ -91,7 +94,7 @@ describe("CampaignPlanner.planMilestones", () => {
     const fake = fakeProvider([first, worse]);
     const ladder = await new CampaignPlanner(fake.provider as never).planMilestones(GDD, "docs/GDD.md");
     expect(ladder.milestones.map((m) => m.title)).toEqual(["A", "B", "C"]);
-    expect(ladder.uncoveredSections).toEqual(["Kiln Yard", "3. Audio"]);
+    expect(ladder.uncoveredSections).toEqual(["3. Audio"]);
   });
 
   it("a ladder without the new fields still validates (defaults), so an older model reply is not a failed campaign", async () => {
@@ -100,7 +103,7 @@ describe("CampaignPlanner.planMilestones", () => {
     const ladder = await new CampaignPlanner(fake.provider as never).planMilestones(GDD, "docs/GDD.md");
     expect(ladder.milestones[0]!.coveredSections).toEqual([]);
     expect(ladder.excluded).toEqual([]);
-    expect(ladder.uncoveredSections).toHaveLength(4);
+    expect(ladder.uncoveredSections).toHaveLength(3);
   });
 });
 

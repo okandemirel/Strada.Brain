@@ -47,7 +47,11 @@ An orchard map screen, an inventory screen, a leaderboard and a pause menu.
 describe("extractHeadings", () => {
   it("keeps section headings in order and drops document apparatus", () => {
     const h = extractHeadings(BIG);
-    expect(h[0]).toBe("Orchard Seasons");
+    // THE DOCUMENT'S OWN TITLE IS NOT A SECTION. Measured live 2026-10-14:
+    // every plan came back one section short, because no milestone can cover
+    // the document's name — and the planner's second round was spent on it.
+    expect(h).not.toContain("Orchard Seasons");
+    expect(h[0]).toBe("1. Planning Phase");
     expect(h).toContain("1. Planning Phase");
     expect(h).toContain("1.1 Pruning Orders");
     expect(h).toContain("5. Load Times and Stores");
@@ -252,5 +256,41 @@ describe("entryScreenInDocument — the screen the document opens on", () => {
     expect(entryScreenInDocument("The crane starts at dawn on the pier.")).toBeUndefined();
     expect(entryScreenInDocument("A parade lap lasts four minutes.")).toBeUndefined();
     expect(entryScreenInDocument(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * THE DOCUMENT'S OWN TITLE IS NOT A SECTION TO PLAN. Measured live 2026-10-14:
+ * a plan of a document that opens with its title came back one section short
+ * ("Harbor Light — Game Design Document" reported UNPLANNED), which spent the
+ * planner's second round on a heading no milestone can ever cover — and when
+ * that round answered with a thinking block instead of JSON, the campaign kept
+ * a plan it had itself declared incomplete.
+ */
+describe("a document's title", () => {
+  it("is dropped when sections follow it deeper, and the sections are kept whole", () => {
+    const h = extractHeadings("# Lantern Drift\n\nA quiet game.\n\n## §1 Rules\nA rule.\n\n## §2 Levels\nSix of them.\n");
+    expect(h).toEqual(["§1 Rules", "§2 Levels"]);
+  });
+
+  it("is kept when the headings are all one level, because then none of them is a title", () => {
+    expect(extractHeadings("# Rules\nA rule.\n\n# Levels\nSix of them.\n")).toEqual(["Rules", "Levels"]);
+  });
+
+  it("is kept when it carries a section marker of its own", () => {
+    expect(extractHeadings("# 1. Overview\nWhat this is.\n\n## 1.1 Rules\nA rule.\n")).toEqual(["1. Overview", "1.1 Rules"]);
+    expect(extractHeadings("# §0 Preface\nWhy.\n\n## §1 Rules\nA rule.\n")).toEqual(["§0 Preface", "§1 Rules"]);
+  });
+
+  it("is kept when its own body asks for work", () => {
+    const h = extractHeadings("# Lantern Drift\nBuild the game end to end.\n\n## §1 Rules\nA rule.\n");
+    expect(h).toEqual(["Lantern Drift", "§1 Rules"]);
+  });
+
+  it("is kept in a converted document whose first line is a numbered section", () => {
+    expect(extractHeadings("1. Core Loop\nDrag to rotate.\n\n1.1 Scoring\nOne point per ship.\n")).toEqual([
+      "Core Loop",
+      "Scoring",
+    ]);
   });
 });
