@@ -633,8 +633,11 @@ describe("north-star scorecard: a run that did everything", () => {
       // The proof fixture's spec states no orientation, frame rate or render
       // pipeline, and a value the spec does not state is not measured.
       G: VERDICT.NOT_MEASURED,
-      // No store holds assumption records: a missing mechanism fails, it is not "not measured".
-      H: VERDICT.FAIL,
+      // The store exists since 02904ec8 (campaign_assumptions, append-only),
+      // and this scorecard does not read its rows yet — so the mechanism is
+      // no longer missing and the criterion is honestly unmeasured, not
+      // failed. It goes back to FAIL if the table disappears.
+      H: VERDICT.NOT_MEASURED,
       I: VERDICT.NOT_MEASURED,
       J: VERDICT.PASS,
       K: VERDICT.PASS,
