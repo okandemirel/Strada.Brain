@@ -30,7 +30,7 @@ You receive the art-direction sections of a game design document (or the whole d
 }
 
 Rules:
-- The document is the only truth. Never import a style from another game: "stubby cartoon robots drawn with inked outlines" means toon-casual with plump>1 and outline>0; "gritty realistic military shooter" means realistic with plump=1 and outline=0.
+- The document is the only truth. Never import a style from another game: "big-headed comic-book heroes" means toon-casual with headScale>1; "gritty realistic military shooter" means realistic with plump=1 and outline=0.
 - "sprite sheets baked offline from 3D models" → pipeline prerendered-frames; realtime 3D gameplay → realtime-3d; pure sprite/pixel games → sprite-native.
 - Palette comes from the doc's named colors or its described mood (fluorescent → saturated hexes; sepia/monochrome → low-chroma hexes). Never fewer than 3.
 - Respond ONLY with the JSON object.`;

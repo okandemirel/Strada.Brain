@@ -223,7 +223,7 @@ describe("a ledger row is closed only by its own check passing on this revision 
         waiver: { userId: "owner", atMs: 1, reason: "deferred" },
       }),
       row("req-006-excluded", "Multiplayer shrines are shared.", { status: "excluded", excludedBecause: "excluded by the plan" }),
-      row("req-007-kpi", "Day-1 retention must exceed 40%.", { kind: "aspiration" }),
+      row("req-007-kpi", "Week-5 returners must exceed 38% of installs.", { kind: "aspiration" }),
       row("req-008-look", "The lantern glow should feel warm.", { kind: "judgement" }),
     ];
     const campaign = campaignWith({ requirements: ledgerOf(rows) });

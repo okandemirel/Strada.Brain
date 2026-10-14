@@ -86,30 +86,30 @@ describe("quoteIsAbout", () => {
   it("holds each kind of line to the requirement", () => {
     expect(quoteIsAbout("Save progress across restarts: absent", "landed: Added Assets/Scripts/SaveSystem.cs")).toBe(true);
     expect(quoteIsAbout("Save progress across restarts: absent", "landed: Added Assets/Art/Hero.png")).toBe(false);
-    expect(quoteIsAbout("Save progress across restarts: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("The full test suite runs green: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
-    expect(quoteIsAbout("Storm boss: absent", "shipped tree: Assets/Prefabs/StormBoss.prefab present")).toBe(true);
-    expect(quoteIsAbout("Level count: 13 levels", "document numbers: 13 levels claimed; 13 played to an outcome")).toBe(true);
-    expect(quoteIsAbout("Level count: 13 levels", "document numbers: boots in 2.1 s (claimed under 3 s)")).toBe(false);
+    expect(quoteIsAbout("Save progress across restarts: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("The full test suite runs green: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Weather vane: absent", "shipped tree: Assets/Prefabs/WeatherVane.prefab present")).toBe(true);
+    expect(quoteIsAbout("Level count: 39 levels", "document numbers: 39 levels claimed; 39 played to an outcome")).toBe(true);
+    expect(quoteIsAbout("Level count: 39 levels", "document numbers: boots in 2.1 s (claimed under 3 s)")).toBe(false);
     // A requirement made only of stopwords cannot be closed by relevance.
     expect(quoteIsAbout("The game: absent", "landed: Added Assets/Game.cs")).toBe(false);
     // Whole stems, not substrings: a screensaver is not the save system, and
     // "saving" is (round 6 #1, #2).
     expect(quoteIsAbout("Save progress across restarts: absent", "landed: Added Assets/Art/ScreenSaver.png")).toBe(false);
     expect(quoteIsAbout("Saving progress: absent", "landed: Added Assets/Scripts/SaveSystem.cs")).toBe(true);
-    expect(quoteIsAbout("Level count: 13 levels", "landed: Added Assets/Scripts/Leverage.cs")).toBe(false);
+    expect(quoteIsAbout("Level count: 39 levels", "landed: Added Assets/Scripts/Leverage.cs")).toBe(false);
     // A suite total closes the suite requirement, not a requirement that merely mentions a test.
-    expect(quoteIsAbout("Test saving progress: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("All tests pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Test saving progress: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("All tests pass: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
     // Round 7 #1-#3: canonical stems, generic actions dropped, suite-only rule.
     expect(quoteIsAbout("Progress bar: absent", "landed: Added Assets/UI/Progresses.cs")).toBe(true);
     expect(quoteIsAbout("Mouse input: absent", "landed: Added Assets/Input/Mice.cs")).toBe(true);
     expect(quoteIsAbout("Run offline: absent", "landed: Added Assets/Scripts/RunAnalytics.cs")).toBe(false);
     expect(quoteIsAbout("Set resolution: absent", "landed: Added Assets/Scripts/SetVolume.cs")).toBe(false);
     expect(quoteIsAbout("Set resolution: absent", "landed: Added Assets/Settings/ResolutionMenu.cs")).toBe(true);
-    expect(quoteIsAbout("All unit tests cover saving: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("Tests for saving pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("The whole PlayMode suite runs clean: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("All unit tests cover saving: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Tests for saving pass: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("The whole PlayMode suite runs clean: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
     // Round 8 #14: a word ending in a double s, -is or -es keeps its identity.
     expect(requirementTokens("Analysis view: absent")).toContain("analysis");
     expect(requirementTokens("Analyses view: absent")).toContain("analysis");
@@ -134,28 +134,28 @@ describe("quoteIsAbout", () => {
     // Round 9 #34: ordinary formulations, not a phrase list. Each of these
     // returned false because a word ("başarılı", "réussir", "pasar") was not
     // in the whitelist, so a green suite could not close the requirement.
-    expect(quoteIsAbout("Tüm testler başarılı olmalı: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
-    expect(quoteIsAbout("Tous les tests doivent réussir: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
-    expect(quoteIsAbout("Todas las pruebas deben pasar: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
-    expect(quoteIsAbout("Alle Tests müssen bestehen: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
-    expect(quoteIsAbout("The entire suite must succeed: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Tüm testler başarılı olmalı: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Tous les tests doivent réussir: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Todas las pruebas deben pasar: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Alle Tests müssen bestehen: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("The entire suite must succeed: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
     // …and a requirement that names a FEATURE is still not closed by a total,
     // in any of those languages (the guard the round 7 rule exists for).
-    expect(quoteIsAbout("Tüm testler kaydetmeyi kapsamalı: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("Les tests de sauvegarde doivent réussir: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("Todas las pruebas de guardado deben pasar: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Tüm testler kaydetmeyi kapsamalı: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Les tests de sauvegarde doivent réussir: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Todas las pruebas de guardado deben pasar: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
 
     // Round 10 #17: a FEATURE name that merely starts like a suite word is not
     // a suite predicate. "password" starts with "pass" and "allocation" with
     // "all", so an unrelated green total closed both requirements.
-    expect(quoteIsAbout("Test passwords: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("All allocation tests pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
-    expect(quoteIsAbout("Tests for the passenger list pass: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Test passwords: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("All allocation tests pass: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Tests for the passenger list pass: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
 
     // Round 8 #15: a suite requirement in another language closes on a suite total.
-    expect(quoteIsAbout("Tüm testler geçmeli: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
-    expect(quoteIsAbout("Alle Tests bestehen: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Tüm testler geçmeli: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
+    expect(quoteIsAbout("Alle Tests bestehen: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(true);
     // …and a feature requirement in another language still does not.
-    expect(quoteIsAbout("Kayıt sistemi testleri: absent", "suite: 179/179 tests passed (unfiltered)")).toBe(false);
+    expect(quoteIsAbout("Kayıt sistemi testleri: absent", "suite: 67/67 tests passed (unfiltered)")).toBe(false);
   });
 });

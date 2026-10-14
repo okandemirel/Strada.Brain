@@ -2,10 +2,10 @@
  * unity_generate_audio — procedural SFX and music loops written straight into
  * Assets/ as WAV + AudioImporter .meta, no Editor needed.
  *
- * Measured 2026-09-07 on the test game's project: the GDD asks for music and
- * a full SFX cue list; the toolchain had no audio tool at all, and the
- * project held only short blips, several of them byte-identical to another
- * clip. This is the audio counterpart of the procedural sprite: deterministic
+ * Measured 2026-09-07 on the test game's project: its design asked for music
+ * and named sound cues; the toolchain had no audio tool at all, and the
+ * project held only short blips, some of them byte-identical to each other.
+ * This is the audio counterpart of the procedural sprite: deterministic
  * (seeded), honest about what it is (synthesis, not composition), and enough
  * for a cue list to be bound and heard.
  */

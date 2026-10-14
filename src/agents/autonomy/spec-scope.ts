@@ -76,7 +76,7 @@ const ELEMENT_HEADER_RE = /^(?:element|elements|name|mechanic|blocker|feature|it
  *
  * Documents converted out of Google Docs, Notion or PDF arrive as one cell per
  * LINE: a header block ("Stage", "Feature", "Effect") and then rows of
- * that many lines. The pipe-table reader found nothing in the real vehicle
+ * that many lines. The pipe-table reader found nothing in one real design
  * document, so its whole schedule read as ZERO scheduled elements,
  * and zero suppresses the coverage check entirely (Codex 2026-09-12 W#12).
  */
@@ -377,8 +377,8 @@ export function assessSpecScopeOfText(
   // A long token anywhere in the code is a signal; a short one ("Moss",
   // "Vent", "Seam") only as a whole identifier word — as a substring it would
   // match "eventually" or "seamless", but ignoring it outright reported every
-  // short-named element as missing (measured 2026-09-10: a 4-letter element
-  // with its own `public class` in the tree).
+  // short-named element as missing (measured 2026-09-10: a short-named
+  // element with its own `public class` in the tree).
   // A TOKEN TWO ELEMENTS SHARE PROVES NEITHER. "Gate (one-way)" and "Gate
   // (two-way)" both strip to "Gate", so one `class Gate` covered both
   // scheduled variants (Codex 2026-09-12 Z#8). A shared candidate is dropped

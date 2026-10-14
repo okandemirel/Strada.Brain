@@ -169,7 +169,7 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     // Listed by the milestone, owner not stamped yet: still this sprint's.
     const listed = row({ rid: "req-2-bbbbbbbb", text: "The crossing ends when the last cargo is landed.", line: 220 });
     const elsewhere = row({ rid: "req-3-cccccccc", text: "OTHER MILESTONE ROW", owner: "m2" });
-    const aspiration = row({ rid: "req-4-dddddddd", text: "Nine in ten captains finish the first crossing.", owner: "m1", kind: "aspiration" });
+    const aspiration = row({ rid: "req-4-dddddddd", text: "Captains should call the river calm.", owner: "m1", kind: "aspiration" });
     const excluded = row({ rid: "req-5-eeeeeeee", text: "EXCLUDED BY THE PLAN", owner: "m1", status: "excluded" });
     const campaign = campaignWith(h.storage, h.dir, {
       gddPath: "docs/FerryDesign.md",
@@ -197,7 +197,7 @@ describe("the ACCEPTANCE block in the submitted prompt", () => {
     expect(block).toContain("not measured yet");
     // Rows the sprint is not judged on stay out.
     expect(block).not.toContain("OTHER MILESTONE ROW");
-    expect(block).not.toContain("Nine in ten captains");
+    expect(block).not.toContain("call the river calm");
     expect(block).not.toContain("EXCLUDED BY THE PLAN");
     // The rules of the folder and of the verdict.
     expect(block).toContain("Assets/StradaAcceptance");

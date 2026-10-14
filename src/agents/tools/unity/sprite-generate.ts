@@ -706,11 +706,12 @@ export class SpriteGenerateTool implements ITool {
     }
     // A KNOWING placeholder while real art is one flag away. Measured
     // 2026-09-07 12:21 (campaign mcov1, attempt 4): the sprint regenerated
-    // a batch of sprites with provider "procedural" — 335 → 170 bytes each —
-    // while the installed model draws a real one in ~45 s. The tool's own
-    // description had called itself "placeholder-grade" and the procedural
-    // branch "always works"; the delivery gate then counts every one of
-    // those files as placeholder art. Say so before drawing, not after.
+    // a batch of sprites with provider "procedural" — each file measured
+    // smaller than the one it replaced — while the installed model draws a
+    // real one in ~45 s. The tool's own description had called itself
+    // "placeholder-grade" and the procedural branch "always works"; the
+    // delivery gate then counts every one of those files as placeholder art.
+    // Say so before drawing, not after.
     if (explicit === "procedural" && input["acceptPlaceholder"] !== true && this.opts.localAvailable("text-to-image")) {
       return {
         content:
@@ -862,7 +863,7 @@ export class SpriteGenerateTool implements ITool {
       }
       // The model can return a blank (a filtered or empty draw; after
       // background removal, a field of specks). Measured 2026-09-07 15:02: a
-      // 512² draw came back as 19 KB of alpha noise and the tool said
+      // 512² draw came back as a file of alpha noise and the tool said
       // ✓. The draw is measured (pixels: flat shape, or nearly all
       // transparent), with one differently-seeded retry before giving up.
       // A RUNNER THAT EXITED 0 WITHOUT WRITING leaves the previous image in

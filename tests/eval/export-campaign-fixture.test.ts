@@ -4,7 +4,7 @@
  * The replay tests judge a finished campaign again from what its databases
  * hold, so the fixture has to carry every system stamp the milestone tips
  * hold — not only the 500-character excerpt the campaign kept (a measured
- * campaign's m4 stamp was visible only in its tip) — while carrying nothing that must not be
+ * campaign had a stamp visible only in its tip) — while carrying nothing that must not be
  * committed: identities, home paths, keys, and the approved GDD's own text.
  * The live databases are read and never written.
  */
@@ -75,7 +75,7 @@ function task(id: string, createdAt: number, fields: Partial<Task> = {}): Task {
 
 /** m1's newest retry: two back-to-back stamps, a cut one, a Turkish one and an outage stamp. */
 const M1_TIP_RESULT = [
-  // A result that starts mid-stamp, the way a measured m1 excerpt did.
+  // A result that starts mid-stamp, the way a measured excerpt did.
   STUCK.slice(STUCK.indexOf("fter multiple")),
   "",
   "**Stop reflecting and edit Assets/Observatory/Shutter/ShutterMotor.cs.**",
@@ -100,7 +100,7 @@ const M1_TIP_RESULT = [
 
 /**
  * m2's tip: one stamp at the top, then more worker prose than the excerpt
- * keeps, stored cut by the sanitizer the way a measured campaign's m2 and m7 tips were.
+ * keeps, stored cut by the sanitizer the way a measured campaign's tips were.
  */
 const M2_FILLER = Array.from({ length: 30 }, (_, i) => `filler line ${i} — the worker restated its plan`);
 const M2_TIP_RESULT = `${[STUCK, "", "**Change the shutter timer, then rerun the dome checks.**", "", ...M2_FILLER].join("\n")}\n... (truncated)`;
@@ -128,7 +128,7 @@ function seedCampaign(path: string): void {
           id: "m1",
           prompt: "Read docs/GDD.md, then build §2 and §2.7–§2.9 before §3.14. PROMPT-SENTINEL",
           taskId: "task_m1_root",
-          timeBoxEscalations: 2,
+          timeBoxEscalations: 3,
           resultExcerpt: M1_TIP_RESULT.slice(-500),
         }),
         milestone({
@@ -137,7 +137,7 @@ function seedCampaign(path: string): void {
           taskId: "task_m2",
           visualEvidenceBounced: true,
           resultExcerpt: M2_TIP_RESULT.slice(-500),
-          // The runtime writes the project root home-relative; a measured m7 did.
+          // The runtime writes the project root home-relative; a measured campaign did.
           visualConformance: "Judged from `~/Games/SentinelGame/Recordings/frame_00342.png` by openai.",
         }),
         milestone({ id: "m3", prompt: "Implement §6.12: the shutter.", taskId: "task_never_written" }),
@@ -238,7 +238,7 @@ describe("export-campaign-fixture", () => {
     expect(fixture.milestones[0].tip.resultSha256).toBe(sha256(M1_TIP_RESULT));
   });
 
-  it("keeps a stamp the 500-character excerpt lost (as a measured m4's was), and drops the prose around it", async () => {
+  it("keeps a stamp the 500-character excerpt lost (as a measured one was), and drops the prose around it", async () => {
     const fixture = await exportSynthetic();
     const m2 = fixture.milestones[1];
     expect(m2.resultExcerpt).not.toContain("I got stuck");
@@ -280,7 +280,7 @@ describe("export-campaign-fixture", () => {
     expect(m1.promptSha256).toBe(
       sha256("Read docs/GDD.md, then build §2 and §2.7–§2.9 before §3.14. PROMPT-SENTINEL"),
     );
-    expect(m1.timeBoxEscalations).toBe(2);
+    expect(m1.timeBoxEscalations).toBe(3);
     expect(m1.status).toBe("green");
     expect(fixture.milestones[1].visualEvidenceBounced).toBe(true);
     expect(fixture.milestones[2].sectionRefs).toEqual(["§6.12"]);
@@ -412,28 +412,34 @@ describe("the committed synthetic fixture", () => {
   });
 
   it("holds the stamps each milestone's tip carries", () => {
+    const ids = fixtureOf().milestones.map((m) => m.id);
     expect(fixtureOf().campaign.id).toBe(SYNTHETIC_CAMPAIGN_ID);
-    expect(byId("m1").tip.stamps).toEqual({ task_stuck: 3 });
-    expect(byId("m2").tip.stamps).toEqual({ task_stuck: 6 });
-    expect(byId("m3").tip.stamps).toEqual({});
-    expect(byId("m4").tip.stamps).toEqual({ task_stuck: 1 });
-    expect(byId("m5").tip.stamps).toEqual({ task_stuck: 1 });
-    expect(byId("m6").tip.stamps).toEqual({ task_stuck: 10, provider_abort: 1 });
-    expect(byId("m7").tip.stamps).toEqual({ task_stuck: 1, provider_abort: 1 });
-    // m4's stamp is in its tip only: the stored excerpt never showed it.
-    expect(byId("m4").resultExcerpt).not.toContain("I got stuck");
-    for (const id of ["m1", "m2", "m3", "m4", "m5", "m6", "m7"]) expect(byId(id).status, id).toBe("green");
-    expect(byId("mcov1").status).toBe("failed");
-    expect(byId("mcov1").tip.status).toBe("cancelled");
-    expect(byId("m6").timeBoxEscalations).toBe(2);
-    expect(byId("m2").sectionRefs).toContain("§5.1–§5.3");
-    // m3's newest task is a retry, not the task the milestone recorded.
-    expect(byId("m3").tip.id).not.toBe(byId("m3").taskId);
-    // m2's six are what tasks.db kept: its result, like m7's, was stored cut.
-    expect(byId("m2").tip.resultCutInStorage).toBe(true);
-    expect(byId("m7").tip.resultCutInStorage).toBe(true);
-    // Only m7's tip carries verification_json; the others say so instead of being absent.
-    for (const id of ["m1", "m2", "m3", "m4", "m5", "m6"]) expect(byId(id).tip.verification, id).toBeNull();
+    expect(byId("m1").tip.stamps).toEqual({ task_stuck: 2 });
+    expect(byId("m2").tip.stamps).toEqual({ task_stuck: 1 });
+    expect(byId("m3").tip.stamps).toEqual({ task_stuck: 4 });
+    expect(byId("m4").tip.stamps).toEqual({});
+    expect(byId("m5").tip.stamps).toEqual({ task_stuck: 3, max_steps_reached: 1 });
+    // A Spanish outage stamp: the counter reads every locale, not only the run's.
+    expect(byId("m6").tip.stamps).toEqual({ task_stuck: 1, provider_abort: 1 });
+    expect(byId("m7").tip.stamps).toEqual({ max_steps_reached: 1 });
+    expect(byId("mcov1").tip.stamps).toEqual({ task_stuck: 2 });
+    expect(byId("mcov1-2").tip.stamps).toEqual({});
+    // m2's stamp is in its tip only: the stored excerpt never showed it.
+    expect(byId("m2").resultExcerpt).not.toContain("I got stuck");
+    for (const id of ids.filter((x) => x !== "mcov1-2")) expect(byId(id).status, id).toBe("green");
+    expect(byId("mcov1-2").status).toBe("failed");
+    expect(byId("mcov1-2").tip).toMatchObject({ status: "cancelled", cancelReason: "user" });
+    expect(byId("m5").timeBoxEscalations).toBe(1);
+    expect(byId("m3").sectionRefs).toContain("§5.1–§5.3");
+    // A retry's newest task is not the task the milestone recorded, however many retries deep it sits.
+    expect(byId("m2").tip.id).not.toBe(byId("m2").taskId);
+    expect(byId("m5").tip.id).toBe("task_0000a025");
+    // m3's four are what tasks.db kept: its result was stored cut, and only its.
+    expect(byId("m3").tip.resultCutInStorage).toBe(true);
+    for (const id of ids.filter((x) => x !== "m3")) expect(byId(id).tip, id).not.toHaveProperty("resultCutInStorage");
+    // m6's and m7's tips carry verification_json, one red and one green; the others say so instead of being absent.
+    for (const id of ids.filter((x) => x !== "m6" && x !== "m7")) expect(byId(id).tip.verification, id).toBeNull();
+    expect(byId("m6").tip.verification).toMatchObject({ testsGreen: false });
     expect(byId("m7").tip.verification).toMatchObject({ testsGreen: true });
   });
 
@@ -451,9 +457,12 @@ describe("the committed synthetic fixture", () => {
     expect(fixture.gdd.text).toBeUndefined();
     expect(fixture.gdd.chars).toBe(SYNTHETIC_GDD.length);
     expect(fixture.redaction.gddText).toBe("omitted");
-    // m7 and mcov1 each quote the GDD in a structure finding.
-    expect(fixture.redaction.gddPassages).toBe(2);
+    // m7 and mcov1-2 each quote the GDD in a structure finding, and mcov1-2's
+    // title, which the campaign's lastError repeats, starts with a GDD sentence.
+    expect(fixture.redaction.gddPassages).toBe(4);
     expect(JSON.stringify(fixture)).toContain("GDD says: …<GDD passage omitted>…");
+    expect(byId("mcov1-2").title).toMatch(/^Coverage completion 1\.2 —\s?<GDD passage omitted>$/);
+    expect(fixture.campaign.lastError).toContain("<GDD passage omitted>");
     // The plan's rows need W04's extractor; the fixture says they are absent rather than look complete.
     expect(fixture.redaction.requirementRows).toMatch(/not exported/);
     for (const m of fixture.milestones) expect(m).not.toHaveProperty("prompt");

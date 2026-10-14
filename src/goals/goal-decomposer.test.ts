@@ -198,33 +198,33 @@ describe("GoalDecomposer", () => {
         JSON.stringify({
           nodes: [
             { id: "s1", task: "Call unity_delivery_measure once. Record the count and list the placeholder paths.", dependsOn: [] },
-            { id: "s2", task: "Regenerate the first 24 placeholders in place, re-measure, verify and commit", dependsOn: ["s1"] },
-            { id: "s3", task: "Regenerate the next 24 placeholders in place, re-measure, verify and commit", dependsOn: ["s2"] },
+            { id: "s2", task: "Regenerate the first batch of placeholders in place, re-measure, verify and commit", dependsOn: ["s1"] },
+            { id: "s3", task: "Regenerate the next batch of placeholders in place, re-measure, verify and commit", dependsOn: ["s2"] },
           ],
         }),
       ]);
       const decomposer = new GoalDecomposer(provider, 3);
-      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until the measured count is below 300");
+      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until none is measured");
       const children = Array.from(tree.nodes.values()).filter((n) => n.depth === 1);
       expect(children).toHaveLength(2);
-      expect(children.some((n) => /^Call unity_delivery_measure once\. Record the count and list the placeholder paths\. Then, in this same step: Regenerate the first 24/.test(n.task))).toBe(true);
+      expect(children.some((n) => /^Call unity_delivery_measure once\. Record the count and list the placeholder paths\. Then, in this same step: Regenerate the first batch/.test(n.task))).toBe(true);
       expect(children.every((n) => !/^Call unity_delivery_measure once\. Record[^]*$/.test(n.task) || n.task.includes("Then, in this same step"))).toBe(true);
     });
 
     it("hands the reasoning of a plan-less reply back on the retry, so the model only has to write the JSON (archived 2026-09-09 21:07: reasoning, </reasoning>, nothing)", async () => {
-      const reasoning = "<reasoning>Batches of 24: first the LiveOps status icons, then notifications, verify and commit each.</reasoning>\n\n";
+      const reasoning = "<reasoning>Two batches: first the beacon glyphs, then the tide charts, verify and commit each.</reasoning>\n\n";
       const provider = createMockProvider([
         reasoning,
-        JSON.stringify({ nodes: [{ id: "s1", task: "Regenerate 24 status icons in place, verify, commit", dependsOn: [] }, { id: "s2", task: "Regenerate 24 notifications in place, verify, commit", dependsOn: ["s1"] }] }),
+        JSON.stringify({ nodes: [{ id: "s1", task: "Regenerate the beacon glyphs in place, verify, commit", dependsOn: [] }, { id: "s2", task: "Regenerate the tide charts in place, verify, commit", dependsOn: ["s1"] }] }),
       ]);
       const decomposer = new GoalDecomposer(provider, 3);
-      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until the measured count is below 300");
+      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until none is measured");
       expect(Array.from(tree.nodes.values()).filter((n) => n.depth === 1)).toHaveLength(2);
       const chat = provider.chat as unknown as { mock: { calls: unknown[][] } };
       expect(chat.mock.calls).toHaveLength(2);
       const retry = JSON.stringify(chat.mock.calls[1]);
       expect(retry).toContain("your_previous_reasoning");
-      expect(retry).toContain("first the LiveOps status icons");
+      expect(retry).toContain("first the beacon glyphs");
       expect(retry).toContain("Do not reason again");
     });
 
@@ -305,20 +305,20 @@ describe("GoalDecomposer", () => {
         }),
         JSON.stringify({
           nodes: [
-            { id: "s1", task: "Generate the area background sprites with unity_generate_sprite", dependsOn: [] },
-            { id: "s2", task: "Bind the generated sprites into the entry scene prefabs", dependsOn: ["s1"] },
+            { id: "s1", task: "Generate the almanac icon sprites with unity_generate_sprite", dependsOn: [] },
+            { id: "s2", task: "Bind the generated sprites into the almanac panel prefabs", dependsOn: ["s1"] },
           ],
         }),
       ]);
 
       const decomposer = new GoalDecomposer(provider, 3);
-      const tree = await decomposer.decomposeProactive("test-session", "Deliver the art the GDD schedules for every area");
+      const tree = await decomposer.decomposeProactive("test-session", "Deliver the almanac icons the GDD asks for");
 
       expect(provider.chat).toHaveBeenCalledTimes(2);
       const retryMessages = provider.chat.mock.calls[1]![1] as Array<{ content: string }>;
       expect(retryMessages[0]!.content).toContain("ONLY exploration");
       const tasks = Array.from(tree.nodes.values()).map((n) => n.task);
-      expect(tasks.some((t) => t.includes("Generate the area background sprites"))).toBe(true);
+      expect(tasks.some((t) => t.includes("Generate the almanac icon sprites"))).toBe(true);
       expect(tasks.some((t) => t.includes("vault_search for GDD files"))).toBe(false);
     });
 
@@ -326,7 +326,7 @@ describe("GoalDecomposer", () => {
       const provider = createMockProvider([
         JSON.stringify({
           nodes: [
-            { id: "s1", task: "Read every AudioCue asset and list clips shorter than 0.3 s", dependsOn: [] },
+            { id: "s1", task: "Read every chime asset and list clips shorter than half a second", dependsOn: [] },
             { id: "s2", task: "Review duplicate clips by content hash and summarize findings", dependsOn: ["s1"] },
           ],
         }),
@@ -335,7 +335,7 @@ describe("GoalDecomposer", () => {
       const tree = await decomposer.decomposeProactive("s", "Review the audio module and report what is short or duplicated");
       expect(provider.chat).toHaveBeenCalledTimes(1);
       const tasks = Array.from(tree.nodes.values()).map((n) => n.task);
-      expect(tasks.some((t) => t.includes("Read every AudioCue asset"))).toBe(true);
+      expect(tasks.some((t) => t.includes("Read every chime asset"))).toBe(true);
     });
 
     it("a depth-2 expansion is not judged for exploration — one node's sub-plan is legitimately narrow", async () => {
@@ -344,19 +344,19 @@ describe("GoalDecomposer", () => {
       const provider = createMockProvider([
         JSON.stringify({
           nodes: [
-            { id: "s1", task: "Generate and bind the area backgrounds", dependsOn: [], needsFurtherDecomposition: true },
-            { id: "s2", task: "Verify the entry scene renders them", dependsOn: ["s1"] },
+            { id: "s1", task: "Generate and bind the almanac icons", dependsOn: [], needsFurtherDecomposition: true },
+            { id: "s2", task: "Verify the almanac panel shows them", dependsOn: ["s1"] },
           ],
         }),
         JSON.stringify({
           nodes: [
-            { id: "s1a", task: "Read the GDD's area list", dependsOn: [] },
-            { id: "s1b", task: "vault_search for the existing background prefabs", dependsOn: ["s1a"] },
+            { id: "s1a", task: "Read the GDD's almanac section", dependsOn: [] },
+            { id: "s1b", task: "vault_search for the existing icon prefabs", dependsOn: ["s1a"] },
           ],
         }),
       ]);
       const decomposer = new GoalDecomposer(provider, 3);
-      const tree = await decomposer.decomposeProactive("s", "Deliver the art the GDD schedules for every area");
+      const tree = await decomposer.decomposeProactive("s", "Deliver the almanac icons the GDD asks for");
       expect(provider.chat).toHaveBeenCalledTimes(2);
       expect(tree.nodes.size).toBe(5); // root + s1/s2 + s1a/s1b — the narrow sub-plan was kept
     });

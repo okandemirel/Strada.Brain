@@ -256,7 +256,7 @@ describe("SupervisorDispatcher", () => {
     const emit = vi.fn();
     const executeNode = vi.fn().mockResolvedValue({
       ...makeOkResult("A"),
-      output: "Generated 3 sprites under Assets/Art/Frogs (provider local).",
+      output: "Generated 23 sprites under Assets/Art/Kites (provider local).",
     });
     const dispatcher = new SupervisorDispatcher({
       executeNode,
@@ -270,7 +270,7 @@ describe("SupervisorDispatcher", () => {
     expect(emit).toHaveBeenCalledWith("monitor:task_update", expect.objectContaining({
       nodeId: "A",
       status: "completed",
-      output: "Generated 3 sprites under Assets/Art/Frogs (provider local).",
+      output: "Generated 23 sprites under Assets/Art/Kites (provider local).",
     }));
   });
 
@@ -549,7 +549,7 @@ describe("SupervisorDispatcher", () => {
   });
 });
 
-describe("a node that ran out of time with work in hand (measured 2026-09-10: 139 sprites replaced, then 'failed', dependents skipped)", () => {
+describe("a node that ran out of time with work in hand (measured 2026-09-10: sprites replaced in committed batches, then 'failed', dependents skipped)", () => {
   it("is reported ok-with-timeout when the aborted run hands back its artifacts, and its dependents run", async () => {
     const executed: string[] = [];
     const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode, signal?: AbortSignal) => {

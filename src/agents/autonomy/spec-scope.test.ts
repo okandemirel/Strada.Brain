@@ -98,8 +98,8 @@ describe("findDesignDoc runs in this ESM module", () => {
   });
 });
 
-describe("short element names count as whole words (measured 2026-09-10: a 4-letter element with its own class reported missing)", () => {
-  it("finds a 4-letter element as an identifier and not inside another word", async () => {
+describe("short element names count as whole words (measured 2026-09-10: a short-named element with its own class reported missing)", () => {
+  it("finds a short element name as an identifier and not inside another word", async () => {
     const { assessSpecScope } = await import("./spec-scope.js");
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
     const { join } = await import("node:path");
@@ -121,7 +121,7 @@ describe("short element names count as whole words (measured 2026-09-10: a 4-let
 
 /**
  * A schedule table that lost its pipes. Measured by Codex 2026-09-12 (W#12)
- * on the real vehicle document: its whole schedule read as ZERO
+ * on a real design document: its whole schedule read as ZERO
  * scheduled elements, because a document converted out of Google Docs
  * arrives as one cell per LINE. Zero suppresses the coverage check entirely,
  * so none of that content was ever compared to the code.

@@ -146,27 +146,29 @@ describe("the platform the GDD asks for (Codex 2026-09-11 B#11)", () => {
 
 /**
  * A compatibility layer is not a build target. Measured by Codex 2026-09-12
- * (U#F3): a document that mentioned a layer through which a desktop also runs
- * the game was read as asking for a Windows build nobody would ever make, and
- * the delivery gate then reported a platform the document never asked for as
- * an unbuilt one — a proof no run could close.
+ * (U#F3): a desktop that a layer or an emulator qualified was read as asking
+ * for a Windows build nobody would ever make, and the delivery gate then
+ * reported a platform the document never asked for as an unbuilt one — a
+ * proof no run could close.
  */
 describe("a PC that names a distribution, not a target (Codex 2026-09-12 U#F3)", () => {
   it("reads only the native target when a layer is named for another desktop", () => {
-    const platform = gddPlatform("Built for macOS. Windows machines run it through a compatibility layer.");
+    const platform = gddPlatform("Built for macOS. Windows testers use a compatibility layer.");
     expect(platform.targets).toEqual(["macos"]);
     expect(platform.handheld).toBe(false);
   });
 
-  it("ignores a desktop OS named as the layer, wherever the layer sits", () => {
-    expect(gddPlatform("Released for Linux. Through an emulator, a PC can run it as well.").targets).toEqual(["linux"]);
-    expect(gddPlatform("Built for macOS. The same build is PC-compatible.").targets).toEqual(["macos"]);
+  it("ignores a PC or desktop OS that a layer or a compatibility word qualifies, wherever it sits", () => {
+    // The layer BEFORE the PC.
+    expect(gddPlatform("Released for Linux. Testers use an emulator on a PC to check it.").targets).toEqual(["linux"]);
+    // A compatibility word straight AFTER the PC.
+    expect(gddPlatform("Released on Linux. Its save files are PC-compatible.").targets).toEqual(["linux"]);
     // The OS word itself, qualified by the layer in parentheses after it —
     // named past the reach of the plain after-the-word reading.
     expect(
-      gddPlatform("Linux release. Windows desktops (once the owner adds a compatibility layer) can run it.").targets,
+      gddPlatform("Linux release. Windows laptops at the studio (where the testers rely on an emulator) are not a target.").targets,
     ).toEqual(["linux"]);
-    expect(gddPlatform("Linux release. A spare PC (given an emulator) can run it.").targets).toEqual(["linux"]);
+    expect(gddPlatform("Linux release. A test PC (with an emulator installed) runs the nightly checks.").targets).toEqual(["linux"]);
   });
 
   it("still reads a native desktop request", () => {
@@ -176,7 +178,7 @@ describe("a PC that names a distribution, not a target (Codex 2026-09-12 U#F3)",
     expect(gddPlatform("Ships on PC, compatible with gamepads.").targets).toEqual(["windows"]);
     // …and a native mention elsewhere still names it.
     expect(
-      gddPlatform("Linux comes first. An emulator brings it to PC meanwhile. A native Windows port follows.").targets,
+      gddPlatform("Linux comes first. Testers check it on a PC through an emulator. A native Windows port follows.").targets,
     ).toEqual(["linux", "windows"]);
   });
 });
@@ -188,7 +190,7 @@ describe("a storefront is not a compatibility layer (Codex 2026-09-12 V)", () =>
     expect(gddPlatform("Release on the App Store for Mac.").targets).toEqual(["macos"]);
     expect(gddPlatform("On the App Store for iPhone and iPad.").targets).toEqual(["ios"]);
     // …and the layer itself is still not a target.
-    expect(gddPlatform("Built for Linux. A compatibility layer lets a PC run it.").targets).toEqual(["linux"]);
+    expect(gddPlatform("Built for Linux. A compatibility layer on a spare PC renders the screenshots.").targets).toEqual(["linux"]);
   });
 });
 

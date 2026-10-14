@@ -213,10 +213,9 @@ export function headingClaimedBy(heading: string, claims: readonly string[]): bo
  * The system told every final sprint to "wire the GDD's entry flow so a person
  * who opens the entry scene is playing, not staring at an idle screen", and
  * the delivery report called an idle first screen a defect. That is one game
- * shape imposed on all of them: a document may specify a home, menu or lobby
- * as its first screen, and real documents do — they say which screen the game
- * opens on (Codex 2026-09-12 V, Job 3.9). What must be proven then is not auto-start
- * but the ROUTE from that screen into play.
+ * shape imposed on all of them: a document may name a menu, a lobby or a hub
+ * as the screen the game opens on (Codex 2026-09-12 V, Job 3.9). What must be
+ * proven then is not auto-start but the ROUTE from that screen into play.
  */
 const BOOTS_TO_SCREEN_RE =
   /\b(?:cold\s+)?(?:boots?|booting|launch(?:es|ing)?|starts?|opens?|resumes?)\b[^.\n;]{0,30}?\b(?:to|into|at|on)\s+(?:the\s+)?(home|main\s+menu|menu|title(?:\s+screen)?|start\s+screen|lobby|hub|dashboard|map)\b/i;

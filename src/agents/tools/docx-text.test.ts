@@ -1,8 +1,8 @@
 /**
  * Reading a Word document, because that is the form a design document arrives in.
  *
- * Measured: the user's own GDD is a 1.3 MB .docx. UTF-8 decoding turns it into
- * binary noise, so the run reads gibberish and plans from nothing.
+ * Measured: UTF-8 decoding turns a .docx into binary noise, so the run reads
+ * gibberish and plans from nothing.
  */
 
 import { describe, it, expect } from "vitest";
@@ -54,22 +54,22 @@ describe("recognising the container", () => {
 
 describe("reading the body out of a Word file", () => {
   it("returns the words a person wrote", () => {
-    const text = docxToText(doc("<w:p><w:r><w:t>GRID QUEST</w:t></w:r></w:p>"));
+    const text = docxToText(doc("<w:p><w:r><w:t>Lanterns light the harbour</w:t></w:r></w:p>"));
 
-    expect(text).toBe("GRID QUEST");
+    expect(text).toBe("Lanterns light the harbour");
   });
 
   it("keeps paragraphs on separate lines", () => {
     const text = docxToText(
-      doc("<w:p><w:t>First rule</w:t></w:p><w:p><w:t>Second rule</w:t></w:p>"),
+      doc("<w:p><w:t>First paragraph</w:t></w:p><w:p><w:t>Second paragraph</w:t></w:p>"),
     );
 
-    expect(text).toBe("First rule\nSecond rule");
+    expect(text).toBe("First paragraph\nSecond paragraph");
   });
 
   it("turns a tab into a tab, not into nothing", () => {
-    // Tables and indented rules lose their shape otherwise.
-    expect(docxToText(doc("<w:p><w:t>R-01</w:t><w:tab/><w:t>Swap</w:t></w:p>"))).toBe("R-01\tSwap");
+    // Columns laid out with tabs lose their shape otherwise.
+    expect(docxToText(doc("<w:p><w:t>Lantern</w:t><w:tab/><w:t>Brass</w:t></w:p>"))).toBe("Lantern\tBrass");
   });
 
   it("decodes entities without letting an ampersand re-form one", () => {

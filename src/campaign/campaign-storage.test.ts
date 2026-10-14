@@ -81,9 +81,9 @@ describe("CampaignStorage", () => {
     // One run plays a batch, so a game bigger than one batch is only fully
     // played across several — and nothing remembered which ones had been
     // played, so the last sessions were never played at all.
-    const campaign = { ...makeCampaign(), verifiedSessions: { artifact: "a".repeat(64), indices: [1, 2, 13] } };
+    const campaign = { ...makeCampaign(), verifiedSessions: { artifact: "a".repeat(64), indices: [1, 3, 6] } };
     storage.save(campaign);
-    expect(storage.get(campaign.id)!.verifiedSessions).toEqual({ artifact: "a".repeat(64), indices: [1, 2, 13] });
+    expect(storage.get(campaign.id)!.verifiedSessions).toEqual({ artifact: "a".repeat(64), indices: [1, 3, 6] });
 
     // A campaign that has played nothing carries nothing.
     storage.save(makeCampaign({ id: "c_none" }));

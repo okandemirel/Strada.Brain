@@ -209,9 +209,9 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
   });
 
   it("a FULL supervisor failure replans instead of replaying the same tree (Codex 2026-09-12 R#2)", async () => {
-    // Measured live 2026-09-12: eight successive tasks carried the identical
-    // 4 933-byte prompt and goal root over five hours, because a full failure
-    // went straight to the keep-alive, which replays the same tree.
+    // Measured live 2026-09-12: successive tasks carried the identical prompt
+    // and goal root for hours, because a full failure went straight to the
+    // keep-alive, which replays the same tree.
     const goalTree = buildTestGoalTree();
     const failure = {
       path: "supervisor",
@@ -315,7 +315,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
 
   it("integrates milestone branches only AFTER the lease has been written back", async () => {
     // Measured 2026-09-07 21:32: the merge attempt ran one second before the
-    // lease commit, rewrote 169 project files, and the commit quarantined the
+    // lease commit, rewrote project files, and the commit quarantined the
     // sprint's scene placements as "the user changed it".
     const order: string[] = [];
     const goalTree = buildTestGoalTree();
@@ -1599,9 +1599,9 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       // The measured shape: files added, nothing conflicting, and deletions the
       // commit declined. "files: 1, conflicts: 0" alone reads as a clean success.
       commit: vi.fn().mockResolvedValue({
-        written: ["Assets/Modules/InputModule/Scripts/Services/IInputService.cs"],
+        written: ["Assets/Modules/Greenhouse/Scripts/Watering/ISprinklerClock.cs"],
         conflicts: [],
-        removed: ["Assets/Modules/InputModule/Scripts/Interfaces/IInputService.cs"],
+        removed: ["Assets/Modules/Greenhouse/Scripts/Legacy/ISprinklerClock.cs"],
       }),
     };
     const runWorkerTask = vi.fn().mockResolvedValue({
@@ -1645,7 +1645,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect.stringContaining("deletions were not applied"),
       expect.objectContaining({
         count: 1,
-        removed: ["Assets/Modules/InputModule/Scripts/Interfaces/IInputService.cs"],
+        removed: ["Assets/Modules/Greenhouse/Scripts/Legacy/ISprinklerClock.cs"],
       }),
     );
   });
@@ -1749,7 +1749,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
   });
 
   it("a worker learns its deletions were DECLINED, so it stops repeating them (measured live 2026-09-12)", async () => {
-    // The same eight .meta deletions were declined sprint after sprint: the
+    // The same .meta deletions were declined sprint after sprint: the
     // commit logged it and the worker was never told.
     const worker = {
       status: "completed", finalSummary: "Done", visibleResponse: "Done", provider: "mock",
@@ -1767,7 +1767,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
             written: ["Assets/A.cs"],
             conflicts: [],
             failed: [],
-            removed: ["Assets/Art/Generated/Tile_Blue.png.meta", "Assets/Scenes/ContentAssetAssembly.unity"],
+            removed: ["Assets/Art/Generated/lantern_frame.png.meta", "Assets/Scenes/Greenhouse.unity"],
           }),
         }),
       } as any,
@@ -1780,7 +1780,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     });
 
     expect(result.output).toContain("PUBLICATION NOTE");
-    expect(result.output).toContain("Tile_Blue.png.meta");
+    expect(result.output).toContain("lantern_frame.png.meta");
     expect(result.output).toContain("instead of deleting them again");
     // A declined deletion is by design — the run still succeeded.
     expect(result.workerResult?.status).toBe("completed");
@@ -3006,7 +3006,7 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
   it("re-arm keeps ONE keep-alive per mission prompt across duplicate lineages", async () => {
     // Measured 2026-08-29 20:11:33: every campaign revive had minted a fresh
     // lineage for the same sprint; re-arming all of them with one cooldown
-    // floor fired three duplicate missions in the same tick.
+    // floor fired duplicate missions in the same tick.
     const executor = new BackgroundExecutor({
       orchestrator: createMockOrchestrator() as any,
       decomposer: createMockDecomposer() as any,
@@ -3020,7 +3020,7 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
         id: id as any,
         status: TaskStatus.blocked,
         origin: "user",
-        prompt: "Sprint 3 — build the blockers and boosters per the GDD",
+        prompt: "Sprint 3 — wire the greenhouse sprinkler timetable",
         updatedAt,
         result: "Transient failure — All providers are in cooldown. Auto-retry 1/10 in ~600s.",
       });
@@ -3876,8 +3876,8 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
 });
 
 describe("BackgroundExecutor - settle carries how the run ended (GDD-drift W01)", () => {
-  // In a measured campaign five of six milestone tips ended on the system's own
-  // "task_stuck" notice and all six went green. The only record of how a run
+  // In a measured campaign most milestone tips ended on the system's own
+  // "task_stuck" notice and every one of them went green. The only record of how a run
   // ended was that sentence; the task row carried nothing a gate could read.
   function makeVerdictTaskManager() {
     return {

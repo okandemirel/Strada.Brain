@@ -377,21 +377,21 @@ const FLATTENED = [
   "",
   "5. SEASON PLAY",
   "5.6 Grafting rules",
-  "Five rules are settled; the full list runs from G-01 to G-09.",
-  "G-01",
+  "Every grafter keeps to the rules below.",
+  "GR-1",
   "A scion must come from a tree of the same family as its rootstock.",
-  "G-02",
+  "GR-2",
   "Each graft's healing animation must finish within 0.7 s.",
-  "G-03",
+  "GR-3",
   "A grafted branch bears no fruit until the following season.",
-  "G-04",
+  "GR-4",
   "Two grafts may never share one cut.",
-  "G-05",
+  "GR-5",
   "A failed graft returns its scion to the store.",
   "",
   "7. THE STORE",
   "7.5 Crate Labels",
-  "Every crate is labelled before it leaves the orchard.",
+  "Labels run from C1 to C6; only the first three crates are packed this season.",
   "Crate",
   "Holds",
   "Kept in",
@@ -411,7 +411,7 @@ const FLATTENED = [
   "Rule",
   "Bark split after frost",
   "North row",
-  "G-03",
+  "GR-3",
   "",
 ].join("\n");
 
@@ -419,11 +419,11 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
   const { rows, numberingGaps } = extractRequirementRows(FLATTENED, GDD);
 
   it("reads every labelled row of a run with the cells after its label, verbatim, under its own heading", () => {
-    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["T4", "T9", "G-01", "G-02", "G-03", "G-04", "G-05", "C1", "C2", "C3"]);
+    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["T4", "T9", "GR-1", "GR-2", "GR-3", "GR-4", "GR-5", "C1", "C2", "C3"]);
 
-    const g1 = byLabel(rows, "G-01");
-    expect(g1.text).toBe("G-01 A scion must come from a tree of the same family as its rootstock.");
-    expect(FLATTENED.slice(g1.span.start, g1.span.end)).toBe("G-01\nA scion must come from a tree of the same family as its rootstock.");
+    const g1 = byLabel(rows, "GR-1");
+    expect(g1.text).toBe("GR-1 A scion must come from a tree of the same family as its rootstock.");
+    expect(FLATTENED.slice(g1.span.start, g1.span.end)).toBe("GR-1\nA scion must come from a tree of the same family as its rootstock.");
     expect(g1.section).toBe("Grafting rules");
     expect(g1.sectionNumber).toBe("5.6");
     expect(g1.status).toBe("open");
@@ -435,7 +435,7 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
     expect(c1.sectionNumber).toBe("7.5");
 
     // The one quantity of a labelled rule is its bounds, and the sentence is not read a second time.
-    expect(byLabel(rows, "G-02").bounds).toEqual({ kind: "range", hi: 0.7, unit: "s" });
+    expect(byLabel(rows, "GR-2").bounds).toEqual({ kind: "range", hi: 0.7, unit: "s" });
     expect(rows.filter((r) => r.text.includes("must finish within 0.7 s"))).toHaveLength(1);
 
     // The header row is no row.
@@ -448,16 +448,16 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
   });
 
   it("a lone label in another table refers to a rule; it defines none", () => {
-    expect(rows.filter((r) => r.label === "G-03")).toHaveLength(1);
+    expect(rows.filter((r) => r.label === "GR-3")).toHaveLength(1);
     expect(rows.some((r) => r.section === "Field Notes")).toBe(false);
   });
 
   it("reports the span the document states and the table stops short of, and invents none of it", () => {
     expect(numberingGaps).toEqual([
-      expect.objectContaining({ series: "G-", missing: ["G-06", "G-07", "G-08", "G-09"] }),
+      expect.objectContaining({ series: "C", missing: ["C4", "C5", "C6"] }),
     ]);
-    expect(numberingGaps[0]!.detail).toContain("G-01 to G-09");
-    expect(rows.some((r) => r.label === "G-06")).toBe(false);
+    expect(numberingGaps[0]!.detail).toContain("C1 to C6");
+    expect(rows.some((r) => r.label === "C4")).toBe(false);
   });
 });
 

@@ -6,7 +6,7 @@
  * the campaign's owner only; `/campaign rejudge` replays the judge without
  * changing anything.
  *
- * In a measured campaign six of six milestones went green on prose, and the report
+ * In a measured campaign every milestone went green on prose, and the report
  * a person read said so in no line at all.
  */
 
@@ -574,7 +574,7 @@ function rejudgeExport(path: string) {
 describe("/campaign rejudge replays the judge and changes nothing (W14)", () => {
   it("on a campaign that went green on prose, none of the stored greens stands, and the record is untouched", () => {
     const replay = rejudgeExport(SYNTHETIC_FIXTURE);
-    expect(replay.text).toContain("0 of 7 stored greens would be green");
+    expect(replay.text).toContain("0 of 8 stored greens would be green");
     for (const id of ["m1", "m2", "m3", "m4", "m5", "m6"]) {
       expect(replay.lineOf(id), id).toContain("stored green → NOT green");
     }

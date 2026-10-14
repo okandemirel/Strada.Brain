@@ -200,7 +200,7 @@ describe("the checklist and the gaps", () => {
     const pkg = assembleDeliveryPackage({
       campaign: campaign({
         milestones: [
-          milestone({ id: "m1", title: "Sprint A", compileVerdict: { ok: true, ran: true }, testVerdict: "173 passed", testVerdictUnfiltered: true }),
+          milestone({ id: "m1", title: "Sprint A", compileVerdict: { ok: true, ran: true }, testVerdict: "94 passed", testVerdictUnfiltered: true }),
           milestone({ id: "m2", title: "Sprint B" }),
         ],
       }),
@@ -226,7 +226,7 @@ describe("the checklist and the gaps", () => {
           milestone({
             id: "mf", title: "Sprint F", status: "green",
             compileVerdict: { ran: true, ok: false, errors: 3 } as never,
-            testVerdict: "173 passed (PlayMode)", testVerdictUnfiltered: true,
+            testVerdict: "94 passed (PlayMode)", testVerdictUnfiltered: true,
           }),
         ],
       }),
@@ -295,8 +295,8 @@ describe("the checklist and the gaps", () => {
         milestones: [
           milestone({
             gddClaims: [
-              "at least 60 fps: MET — 61.2 fps measured in the player",
-              "20 levels: NOT MET — the catalogue reports 7",
+              "at least 42 fps: MET — 43.8 fps measured in the player",
+              "31 rooms: NOT MET — the catalogue reports 7",
               "load under 2 s: NOT MEASURED — no boot timing was recorded",
             ],
           }),
@@ -322,7 +322,7 @@ describe("the checklist and the gaps", () => {
     const gaps = pieceOf(
       assembleDeliveryPackage({
         campaign: campaign({
-          milestones: [milestone({ compileVerdict: { ok: true, ran: true }, testVerdict: "173 passed", testVerdictUnfiltered: true })],
+          milestones: [milestone({ compileVerdict: { ok: true, ran: true }, testVerdict: "94 passed", testVerdictUnfiltered: true })],
         }),
       }),
       "gaps",
@@ -463,7 +463,7 @@ describe("gathering the facts", () => {
             taskId: "task_7",
             startedAtMs: 500,
             buildVerdict: { ran: true, ok: true, artifactPath: "/tmp/Game/Build/Game.app", target: "StandaloneOSX" },
-            testVerdict: "173 passed (PlayMode)",
+            testVerdict: "94 passed (PlayMode)",
           }),
         ],
       }),
@@ -554,7 +554,7 @@ describe("DeliveryPackageStore — it survives the process that wrote it", () =>
     // A real change is a new revision, and the FIRST is still readable: the
     // root cause a reviewer is chasing may only exist in the older package.
     const second = assembleDeliveryPackage({
-      campaign: campaign({ milestones: [milestone({ testVerdict: "173 passed", testVerdictUnfiltered: true })] }),
+      campaign: campaign({ milestones: [milestone({ testVerdict: "94 passed", testVerdictUnfiltered: true })] }),
       now: 30,
     });
     expect(store.put(second, 30).revision).toBe(2);

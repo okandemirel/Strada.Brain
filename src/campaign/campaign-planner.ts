@@ -88,7 +88,7 @@ Rules:
 - The whole shipping list is planned unless the GDD explicitly excludes an item — then it goes in "excluded" with the GDD's own reason. This GDD asks for: ${asks.length > 0 ? asks.join("; ") : "no non-code areas beyond the core game (verify against the document)"}.
 - Each milestone's "prompt" is the COMPLETE kick prompt an agent will execute without you in the room. It must name: its scope (the GDD sections/elements it covers), the architecture pattern to follow (the project's existing module pattern — reference it by name once foundations exist), the verification bar (headless compile green, the relevant PlayMode tests green and UNFILTERED, ${acceptanceBar}a captured frame proving something renders), commit discipline (commit per logical unit), and what to produce at the end of the sprint.
 - The FINAL milestone is always integration + delivery: full PlayMode suite green with no filter, the assembled scene actually running the game, and a DELIVERY REPORT summarizing what was built against the GDD.
-- The FINAL milestone also owns BUILD HYGIENE: the FIRST enabled scene in Build Settings must be the entry scene a person opens to play the game, and every scene enabled after it must be one the game itself loads (menu, levels, results) — a game that spans several scenes keeps them. Every verification/scaffolding scene the campaign created (InitTestScene*, *Verification, *Verified, *Showcase, *Boundary, Assembled*) must be DISABLED in Build Settings — not deleted: the write-back carries only deletions of files the system itself wrote — and its report must name the entry scene and list what it disabled.
+- The FINAL milestone also owns BUILD HYGIENE: the FIRST enabled scene in Build Settings must be the entry scene a person opens to play the game, and every scene enabled after it must be one the game itself loads (menu, levels, results) — a game that spans several scenes keeps them. Every verification/scaffolding scene the campaign created (InitTestScene*, and any scene made only to check, demo or exercise one part on its own) must be DISABLED in Build Settings — not deleted: the write-back carries only deletions of files the system itself wrote — and its report must name the entry scene and list what it disabled.
 - Every element the GDD schedules must end its milestone with a real, BOUND visual: source it with unity_my_assets (local cache) or unity_my_assets_cloud (the account's full purchased library) first, generate it when nothing fits — unity_generate_sprite for what the GDD calls 2D, unity_generate_mesh for what it calls 3D — both use the machine's installed open-weights model automatically and SAY when they fell back to a procedural placeholder; a placeholder is not the element's visual, unity_prerender_frames to turn a 3D prefab into 2D angle frames in the project's own style when the GDD wants 2D rendered from 3D — and bind it into the element's prefab. Code for an element without its visual is a milestone that is not done.
 - Never plan a milestone whose output is a question for the user, and never re-plan what the GDD already specifies — the design document is the complete instruction.
 - A sprint prompt must be self-contained: it cannot assume a previous sprint's conversation is remembered, only that its commits landed in the repo. ${gddRule}
@@ -446,9 +446,9 @@ export class CampaignPlanner {
         continue;
       }
       // THE VISUAL GATE IS ARMED BY THE SPRINT'S OWN INSTRUCTION, and a model
-      // writing one instruction at a time forgets to ask for the frame: the
-      // live 14-sprint ladder left four sprints ungated (measured 2026-09-12
-      // 02:56). Asked for above, and added here when it is still missing — so
+      // writing one instruction at a time forgets to ask for the frame: a live
+      // ladder left sprints ungated (measured 2026-09-12 02:56). Asked for
+      // above, and added here when it is still missing — so
       // the sprint genuinely demands the frame rather than the gate arming on
       // boilerplate nobody asked for (the 2026-09-04 audit).
       // …and the demand must be a demand for VISUAL PROOF, not the substring
@@ -793,7 +793,7 @@ Your previous reply was not valid JSON. Reply with the JSON object ALONE — no 
       verdictsById.set(v.id, [...(verdictsById.get(v.id) ?? []), { delivered: v.delivered, evidence: v.evidence }]);
     }
     // …AND ABOUT THIS REQUIREMENT. A verbatim quote of a measured line is
-    // necessary, not sufficient: "179/179 tests passed (unfiltered)" is a
+    // necessary, not sufficient: an unfiltered all-green suite total is a
     // measured line and closed "Save progress across restarts", and a commit
     // note naming a hero sprite closed the shop (audit 06.5 / D10 / AK#14,
     // Codex plan review #7; plan 0-B.3). A blacklist of line kinds cannot

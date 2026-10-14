@@ -1,7 +1,7 @@
 /**
  * The scope gate's pure judge (GDD-drift plan W08).
  *
- * In a measured campaign six of six milestones went green on prose. The judge is
+ * In a measured campaign every milestone went green on prose. The judge is
  * the replacement's one decision: green only when the milestone's own GDD
  * rows and every row that passed before pass the system's checks, in one run
  * the system admitted, on the committed revision — and the run ended `done`
@@ -61,8 +61,8 @@ function row(rid: string, over: Partial<RequirementRow> = {}): RequirementRow {
     rid,
     encoded: `The rule ${rid} must hold. ⟦${rid}⟧`,
     text: `The rule ${rid} must hold.`,
-    section: "Core loop",
-    sectionNumber: "3.3",
+    section: "Kiln rules",
+    sectionNumber: "21.4",
     line: 42,
     span: { start: 0, end: 10 },
     kind: "rule",
@@ -243,7 +243,7 @@ describe("judgeMilestone — section 1's rule", () => {
   });
 
   it("a real red stays red: a failing row is red whatever else is unmeasured, faulted or outaged", () => {
-    const failing = { r1: result("fail", { detail: "Expected 12 but was 9" }), r2: result("unmeasured") };
+    const failing = { r1: result("fail", { detail: "Expected 57 but was 38" }), r2: result("unmeasured") };
     const variants: Array<[string, Partial<GreenInput>]> = [
       ["alone", {}],
       ["with an unmeasured compile", { compile: { ran: false, ok: false } }],
@@ -260,7 +260,7 @@ describe("judgeMilestone — section 1's rule", () => {
       const red = j.reasons.find((r) => r.code === "row-failing");
       expect(red?.rid, name).toBe("r1");
       expect(red?.testName, name).toBe(testName("r1"));
-      expect(red?.detail, name).toContain("Expected 12 but was 9");
+      expect(red?.detail, name).toContain("Expected 57 but was 38");
     }
   });
 
@@ -274,18 +274,18 @@ describe("judgeMilestone — section 1's rule", () => {
   });
 
   it("a regression row that fails is red and names the row", () => {
-    const g1 = row("g1", { label: "R-07", text: "Enemies must never pass through walls.", sectionNumber: "3.4" });
+    const g1 = row("g1", { label: "Q-28", text: "Kilns must never fire above their rated heat.", sectionNumber: "21.6" });
     const j = notGreen(judgeMilestone(input({
       regression: [g1],
-      results: { r1: result("pass"), r2: result("pass"), g1: result("fail", { detail: "an enemy crossed the wall at x=4" }) },
+      results: { r1: result("pass"), r2: result("pass"), g1: result("fail", { detail: "kiln B fired 23 degrees over its rating" }) },
     })));
     expect(j.state).toBe("red");
     const reason = j.reasons.find((r) => r.code === "regression");
     expect(reason?.rid).toBe("g1");
     expect(reason?.testName).toBe(testName("g1"));
-    expect(reason?.detail).toContain("R-07");
-    expect(reason?.detail).toContain("Enemies must never pass through walls.");
-    expect(reason?.detail).toContain("an enemy crossed the wall at x=4");
+    expect(reason?.detail).toContain("Q-28");
+    expect(reason?.detail).toContain("Kilns must never fire above their rated heat.");
+    expect(reason?.detail).toContain("kiln B fired 23 degrees over its rating");
     // An earlier milestone's file need not be among the sources: the row's own current test names it.
     const elsewhere = row("g2", { checks: [
       { kind: "test", testName: "Strada.Acceptance.M0.Acceptance_M0.R_old", path: OTHER_FILE, bodySha: "b0", supersededAtMs: 3 },
@@ -633,10 +633,10 @@ describe("attributeRun — which expected test passed, failed, faulted or was no
     const a = attributeRun(run({
       failedNames: [testName("r1"), testName("r2")],
       flaky: [testName("r2")],
-      failures: [{ name: testName("r1"), message: "Expected 12 but was 9" }],
+      failures: [{ name: testName("r1"), message: "Expected 57 but was 38" }],
     }), expected, none);
     expect(a.tests[testName("r1")]).toMatchObject({ outcome: "fail" });
-    expect(a.tests[testName("r1")]!.detail).toContain("Expected 12 but was 9");
+    expect(a.tests[testName("r1")]!.detail).toContain("Expected 57 but was 38");
     expect(a.tests[testName("r2")]?.outcome).toBe("flaky");
     expect(a.tests[testName("r3")]?.outcome).toBe("pass");
   });
@@ -793,14 +793,14 @@ describe("legacyRunIntegrity — a run settled before the key was carried, decod
     expect(legacyRunIntegrity(tip, decode).worst).toBe("task_stuck");
   });
 
-  it("red outranks the quota stamp beside it (A measured m6: ten stuck stamps and a quota stop)", () => {
+  it("red outranks the quota stamp beside it (measured: a tip of repeated stuck stamps ending in a quota stop)", () => {
     const tip = [
-      ...Array.from({ length: 10 }, () => getResilienceMessage("task_stuck", "en")),
+      ...Array.from({ length: 23 }, () => getResilienceMessage("task_stuck", "en")),
       getResilienceMessage("provider_quota", "en", { provider: "opencode", detail: "limit reached." }),
     ].join("\n\n");
     const i = legacyRunIntegrity(tip, decode);
     expect(i.worst).toBe("task_stuck");
-    expect(i.terminalKeys.filter((k) => k === "task_stuck")).toHaveLength(10);
+    expect(i.terminalKeys.filter((k) => k === "task_stuck")).toHaveLength(23);
     expect(i.source).toBe("legacy-stamp");
     // A quota stop alone is an outage, not a red.
     expect(legacyRunIntegrity(getResilienceMessage("provider_quota", "en", { provider: "x", detail: "y" }), decode).worst).toBe("provider_quota");

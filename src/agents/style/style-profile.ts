@@ -2,8 +2,8 @@
  * Style Profile — the game's visual identity, as a versioned project config.
  *
  * Product decision (2026-08-27, user's call): there is NO universal style.
- * A casual puzzle today is a Call of Duty tomorrow, so nothing about the look
- * may be hardcoded — the profile is DERIVED from each project's own GDD
+ * A hand-drawn fable today is a gritty war game tomorrow, so nothing about the
+ * look may be hardcoded — the profile is DERIVED from each project's own GDD
  * (see style-analysis.ts), written to <project>/style.json, and read by
  * every generation/render tool as its default. Consistency inside one game
  * comes from everything flowing through ONE profile; adaptability across
@@ -95,10 +95,10 @@ export function saveStyleProfile(projectRoot: string, profile: StyleProfile): vo
 /**
  * The project's own art direction, as words a generator can use.
  *
- * Generators used to fall back to one game's look — "casual mobile game
- * character, soft glossy 3d-look" — whatever the document said and whatever
- * the asset was (Codex 2026-09-12 T#13). This says what THIS project's
- * profile says, and nothing when there is no profile.
+ * Generators used to fall back to one fixed look written into the tool,
+ * whatever the document said and whatever the asset was (Codex 2026-09-12
+ * T#13). This says what THIS project's profile says, and nothing when there
+ * is no profile.
  */
 export function describeStyleForPrompt(profile: StyleProfile): string {
   const parts: string[] = [];

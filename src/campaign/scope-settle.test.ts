@@ -38,7 +38,7 @@ function row(label: string, start: number, last?: RequirementRow["last"]): Requi
     encoded: label,
     label,
     text: `${label}: the lantern must glow when the ferry docks.`,
-    section: "Core Rules",
+    section: "Ferry Rules",
     line: start,
     span: { start, end: start + 10 },
     kind: "rule",

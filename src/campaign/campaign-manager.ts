@@ -3056,8 +3056,8 @@ export class CampaignManager {
           "than for the game) must be DISABLED in Build " +
           "Settings. Do NOT delete scene files that existed before this sprint: " +
           "the write-back carries only deletions of files the system itself wrote, so deleting a " +
-          "pre-existing scene costs a turn and changes nothing (measured 2026-09-08: twelve such deletes, " +
-          "none applied). Your report must name the entry scene and list every scene you disabled.";
+          "pre-existing scene costs a turn and changes nothing (measured 2026-09-08: every such delete was " +
+          "declined). Your report must name the entry scene and list every scene you disabled.";
       }
       // THE FINAL SPRINT PLAYS THE GAME. Measured 2026-09-10: the campaign
       // delivered green on compile + tests + art counts while the entry scene
@@ -3111,7 +3111,7 @@ export class CampaignManager {
       this.attachStructureMeasurement(campaign, milestone);
     }
     // NO PROVIDER, NO TASK. Measured 2026-09-08 01:08: a boot resubmitted the
-    // milestone while every provider was cooling; the task seeded a 2000-file
+    // milestone while every provider was cooling; the task seeded a full
     // lease and blocked 38 s later on "All providers are in cooldown". The
     // executor's keep-alive already waits out the horizon; the campaign's own
     // submits (boot, bounce, revive) now park the same way instead.
@@ -4724,7 +4724,7 @@ export class CampaignManager {
         // structural check runs only after this gate passes, so a sprint stuck
         // here never learns its scenes render nothing — measured live
         // 2026-09-04 04:05: while bounced for a missing verdict, the sprint
-        // ADDED two more CreatePrimitive scripts (5 → 7), moving away from the
+        // ADDED further CreatePrimitive scripts, moving away from the
         // requirement it had not been told about.
         const structureNow = this.measureDeliveryStructure(campaign);
         // Lead with the compiler when the compiler is the problem: a tree that
@@ -4743,7 +4743,7 @@ export class CampaignManager {
         // 05:25: a gate block from a verification bounce days earlier still
         // said "ALSO, ALREADY MEASURED: the shipped scenes render NOTHING …
         // bind them in the scene", while <<MEASURED NOW>> — refreshed at every
-        // submit — said the art was placeholder-grade with six world renderers
+        // submit — said the art was placeholder-grade with world renderers
         // in place. The sprint followed the older sentence: nineteen
         // unity_bind_sprite calls, no sprite drawn, the count unchanged. One
         // measurement, in one place, current at submit: <<MEASURED NOW>>
@@ -4787,8 +4787,8 @@ export class CampaignManager {
         // shipped "game build complete" with an entry scene holding zero
         // renderer components, runtime scripts drawing the world with
         // GameObject.CreatePrimitive, and the project's prefabs, sprites and
-        // models bound by nothing — the user opened it and found flat squares and four
-        // spheres. This measures the enabled build scenes and the prefabs they
+        // models bound by nothing — the user opened it and found nothing but engine
+        // primitives. This measures the enabled build scenes and the prefabs they
         // place, and refuses ONLY the strong case; everything else is recorded
         // for the report. Delivery-only by construction (inside `isLast`), and
         // it shares the delivery bounce budget so it cannot loop.
@@ -4872,7 +4872,7 @@ export class CampaignManager {
         // DOES IT LOOK LIKE THE GDD? Disclosure only: the structural gate
         // above already refuses the hard case, and a stylised look is a
         // judgement a model can get wrong. What must never happen is silence
-        // (audited 2026-09-03: 11351 frames of a flat coloured grid satisfied
+        // (audited 2026-09-03: a whole recording of placeholder frames satisfied
         // a check that only asks for size and a distinct hash).
         try {
           const gddForLook =
@@ -9163,7 +9163,7 @@ export class CampaignManager {
     // A bounce's "DELIVERY REFUSED … <refusal>" paragraph must say what is
     // refused NOW: rewritten to the fresh refusal while the gate still
     // refuses, dropped once it passes. Left alone, a revive carried "OLD:
-    // render NOTHING" beside "NOW: six renderers" (Codex review 2026-09-08).
+    // render NOTHING" beside "NOW: renderers in place" (Codex review 2026-09-08).
     stripped = stripped.replace(CampaignManager.STALE_REFUSAL_PARAGRAPH_RE, (paragraph) =>
       structure.refusal
         ? paragraph.replace(/(THE GAME IS NOT BUILT AS THE GDD SPECIFIES:)[^\n]*/, `$1 ${structure.refusal}`)
@@ -9229,7 +9229,7 @@ export class CampaignManager {
       "SFX presets and music loops. A result marked PLACEHOLDER or ✗ is not the element's visual.\n" +
       // Measured 2026-09-06 23:14: 45 minutes into a sprint told DO NOT AUDIT,
       // discovery was file_read/list_directory/code_search_rag — and zero
-      // vault_search, against an indexed 84 MB project vault. The tool's own
+      // vault_search, against an indexed project vault. The tool's own
       // description says "PRIMARY … use BEFORE file_read"; a description is
       // not enough, so the sprint is told here too.
       "DISCOVERY: the project is indexed — query vault_search (project vault, hybrid) first for any " +
@@ -9912,8 +9912,9 @@ export class CampaignManager {
       lines.push("", entry, howToRun.line);
     }
     // What the shipped scenes actually contain — measured, not inferred from
-    // the ladder. Audited 2026-09-03: 7/7 green and 11351 frames said nothing
-    // about a delivery whose scenes held no renderer at all.
+    // the ladder. Audited 2026-09-03: an all-green ladder and a full
+    // recording said nothing about a delivery whose scenes held no renderer
+    // at all.
     lines.push("", ...renderSecondOpinion(campaign.independentReview));
     const structural = [...campaign.milestones].reverse().find((m) => m.structureFindings?.length);
     if (structural?.structureFindings) {
@@ -10333,9 +10334,9 @@ export class CampaignManager {
       }
     }
     // THE DESIGN DOCUMENT, not the newest report about it. Taking the newest
-    // "gdd" name started a campaign from a traceability checklist, and then
-    // from an "Implementation Baseline" under docs/run-notes — both files the
-    // system itself had written ABOUT the design (measured live 2026-09-12).
+    // "gdd" name started a campaign from a coverage table, and then from a
+    // progress digest filed in a subfolder — both files the system itself
+    // had written ABOUT the design (measured live 2026-09-12).
     // The closest name to a bare GDD wins; mtime only breaks ties.
     // …AMONG THE FILES THE DRAFT WROTE, when the caller knows when it began
     // (CMP-5): a fresh docs/design/Foo_GDD.md used to lose to an older
@@ -10965,7 +10966,7 @@ function coverageGapItems(milestone: CampaignMilestone): string[] {
  * summaries the system writes as it works, whose names all contain "GDD"
  * (Codex-style live measurement 2026-09-12).
  */
-// NOT `\b`: an underscore is a word character, so "_Traceability_" has no
+// NOT `\b`: an underscore is a word character, so "_Backlog_" has no
 // word boundary in it and every one of these names slipped through.
 /** Directories that hold what a project has FINISHED with. */
 const ARCHIVED_DIR_RE = /(?:^|\/)(?:archive[ds]?|old|deprecated|backup|attic|superseded|history|previous|_archive)(?:\/)/i;
@@ -10976,19 +10977,19 @@ const DERIVATIVE_DOC_RE =
 /**
  * How far a file's NAME is from being the design document itself.
  *
- * A word list alone kept losing: the picker took a traceability checklist,
- * then an "Implementation Baseline" under docs/run-notes (measured live
- * 2026-09-12). The structure is the stable signal — the design document is
- * the one whose name is a GDD and nothing else, sitting where documents live
- * rather than inside a folder of the system's own output.
+ * A word list alone kept losing: the picker took a coverage table, then a
+ * progress digest filed in a subfolder (measured live 2026-09-12). The
+ * structure is the stable signal — the design document is the one whose name
+ * is a GDD and nothing else, sitting where documents live rather than inside
+ * a folder of the system's own output.
  */
 export function gddNameDistance(rel: string): number {
   const file = rel.split("/").pop() ?? rel;
   const stem = file.replace(/\.md$/i, "");
   const marker = /gdd|game[ _-]?design[ _-]?doc(?:ument)?/i.exec(stem);
   if (!marker) return 99;
-  // Whatever follows the marker: "SampleGame_GDD" has nothing, an audit has
-  // "Audit_2026-09-02".
+  // Whatever follows the marker: "Kestrel_GDD" has nothing, a backlog has
+  // "Backlog_v4".
   const after = stem.slice(marker.index + marker[0].length).replace(/^[ _-]+/, "");
   const extraTokens = after.length === 0 ? 0 : after.split(/[ _-]+/).filter(Boolean).length;
   const inSubfolder = rel.split("/").length - 1 > 1 ? 2 : 0;

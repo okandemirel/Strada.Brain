@@ -89,7 +89,7 @@ describe("StyleAnalysis keyword fallback", () => {
   it("reads pixel-art docs as pixel, cartoon docs as toon, military as realistic", async () => {
     const analysis = new StyleAnalysis(undefined);
     expect((await analysis.analyze("An 8-bit pixel-art dungeon crawler, sprites everywhere.")).profile.family).toBe("pixel");
-    expect((await analysis.analyze("Stubby cartoon robots with inked outlines.")).profile.family).toBe("toon-casual");
+    expect((await analysis.analyze("Chibi knights duel on paper castles in a cartoon world.")).profile.family).toBe("toon-casual");
     expect((await analysis.analyze("A realistic military shooter with PBR materials.")).profile.family).toBe("realistic");
   });
 

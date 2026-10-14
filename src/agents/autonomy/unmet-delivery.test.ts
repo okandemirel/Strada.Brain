@@ -5,10 +5,10 @@
  * refusals and [STRADA NOTHING DRAWN] goes quiet, because a rule that cannot be
  * cleared stops being a rule and becomes a loop.
  *
- * Going quiet was then read as satisfied. Measured on run 52: the gate fired
+ * Going quiet was then read as satisfied. Measured on one run: the gate fired
  * three times, fell silent on the fourth, and the run finished `failed: false`
- * with a 123-character success message for a game whose sixty captured frames
- * were identical. The gate's own last words are "say the game does not render
+ * with a one-line success message for a game whose captured frames were all
+ * identical. The gate's own last words are "say the game does not render
  * rather than reporting it as delivered" — advice with nothing behind it.
  *
  * So the ask budget governs how often the agent is asked; this governs what may
@@ -139,8 +139,9 @@ describe("what blocks delivery", () => {
   });
 
   it("still objects when frame variety is HUD-level", () => {
-    // Measured 2026-08-24: variation confined to the HUD (13% distinct)
-    // satisfied the old differing-frames rule while nothing was drawn.
+    // Measured 2026-08-24: variation confined to the HUD (well under a quarter
+    // of the frames distinct) satisfied the old differing-frames rule while
+    // nothing was drawn.
     const root = assembled(0);
     // 2 distinct of 10 = 20% — below the 25% substantive-variety bar.
     framesOf(root, ["same", "same", "same", "same", "same", "same", "same", "same", "same", "diff"]);

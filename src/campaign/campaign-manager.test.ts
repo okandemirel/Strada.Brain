@@ -240,7 +240,7 @@ class FakeTaskManager extends EventEmitter {
 const LADDER = {
   milestones: [
     { title: "Sprint A — Foundations", prompt: "build the foundations, verify compile" },
-    { title: "Sprint B — Elements", prompt: "build the elements, PlayMode green" },
+    { title: "Sprint B — Orchards", prompt: "build the orchards, PlayMode green" },
     { title: "Sprint C — Delivery", prompt: "integrate, full suite, DELIVERY REPORT" },
   ],
 };
@@ -482,7 +482,7 @@ describe("CampaignManager", () => {
 
     settleMilestone("sprint A done, committed");
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
-    expect(tasks.submitted[1]!.prompt).toContain("elements");
+    expect(tasks.submitted[1]!.prompt).toContain("orchards");
 
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
@@ -786,7 +786,7 @@ describe("CampaignManager", () => {
     const preamble =
       "You are continuing the campaign for the game described in the design document docs/Game_GDD.md. Work only inside the project root and ";
     stored.milestones[0]!.prompt = `${preamble}build the foundations, verify compile.`;
-    stored.milestones[1]!.prompt = `${preamble}build the elements, PlayMode green.`;
+    stored.milestones[1]!.prompt = `${preamble}build the orchards, PlayMode green.`;
     expect(preamble.length).toBeGreaterThanOrEqual(120);
 
     // A mission that shares the first 120 characters of a PRE-UPGRADE
@@ -1693,7 +1693,7 @@ describe("CampaignManager", () => {
     const structured = {
       milestones: [
         { title: "Sprint A — Foundations", prompt: "build the foundations, verify compile", coveredSections: ["1. Core Loop"], deliverables: ["Main scene"] },
-        { title: "Sprint B — Elements", prompt: "build the elements, PlayMode green", coveredSections: ["3. Varieties by year"], deliverables: [] },
+        { title: "Sprint B — Orchards", prompt: "build the orchards, PlayMode green", coveredSections: ["3. Varieties by year"], deliverables: [] },
         { title: "Sprint C — Delivery", prompt: "integrate, full suite, DELIVERY REPORT", coveredSections: [], deliverables: ["player build"] },
       ],
       excluded: ["leaderboards: the GDD says none in v1"],
@@ -2244,8 +2244,8 @@ describe("CampaignManager", () => {
   });
 
   // ── Structural delivery gate (audited 2026-09-03) ────────────────────────
-  // 7/7 sprints green and 11351 captured frames said nothing about a delivery
-  // whose entry scene held zero renderer components.
+  // Every sprint green and a measured pile of captured frames said nothing
+  // about a delivery whose entry scene held zero renderer components.
 
   /** Writes a file plus the .meta sidecar Unity uses to address it by guid. */
   const putAsset = (rel: string, body: string, guid?: string): void => {
@@ -2944,8 +2944,8 @@ describe("CampaignManager", () => {
 
   it("an outage-caused settle parks the campaign WITHOUT charging an attempt, and recovery resubmits", async () => {
     // Measured 2026-09-01 16:16: attempts 1→2 during a four-account quota
-    // wall. And 2026-09-08 01:08: a resubmit into the wall seeded a 2000-file
-    // lease and blocked 38 s later — so the park happens BEFORE any submit.
+    // wall. And 2026-09-08 01:08: a resubmit into the wall seeded a whole
+    // lease and blocked seconds later — so the park happens BEFORE any submit.
     const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
     const { setLiveChainMemberNames } = await import("../agents/providers/provider-outage.js");
     const registry = ProviderHealthRegistry.getInstance();
@@ -3240,8 +3240,8 @@ describe("CampaignManager", () => {
   });
 
   it("keeps Recordings/ and .strada out of the envelope, and untracks what an earlier envelope swept in", async () => {
-    // Measured 2026-09-07 21:33: one envelope commit added 2 300 capture
-    // frames from eight runs to the user's history.
+    // Measured 2026-09-07 21:33: one envelope commit added the capture frames
+    // of several runs to the user's history.
     const { execFileSync } = await import("node:child_process");
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", projectRoot, ...args], { encoding: "utf8" });
@@ -3624,7 +3624,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     // Each settle ADVANCED the ladder — a bounced sprint fails here, by name,
     // instead of as a timeout on a final gate that was never reached.
-    expect(tasks.submitted[1]!.prompt).toContain("build the elements");
+    expect(tasks.submitted[1]!.prompt).toContain("build the orchards");
     await didWork(2);
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));

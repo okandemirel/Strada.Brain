@@ -34,14 +34,14 @@ describe("project-scoped shell allowlist — canonical build/test/run pre-approv
 
   it("does NOT approve dotnet builds of /tmp side projects (the /tmp escape)", () => {
     expect(
-      matchProjectScopedAllowlist("dotnet build /tmp/simcheck/simcheck.csproj -v q --nologo", root),
+      matchProjectScopedAllowlist("dotnet build /tmp/scratchcalc/ScratchCalc.csproj -v q --nologo", root),
     ).toBeNull();
   });
 
   it("pre-approves a read-only inspection pipeline, and refuses one that can write", () => {
-    // Measured 2026-09-08 00:25: `ls | grep -i super` was "inconclusive" twice.
-    expect(matchProjectScopedAllowlist("ls Assets/Art/Generated/ | grep -i super", root)?.rule).toContain("read-only inspection");
-    expect(matchProjectScopedAllowlist("cat Assets/Art/Generated/FrogSkin1.png.meta", root)).not.toBeNull();
+    // Measured 2026-09-08 00:25: an `ls | grep` listing was "inconclusive" twice.
+    expect(matchProjectScopedAllowlist("ls Assets/Art/Generated/ | grep -i kiln", root)?.rule).toContain("read-only inspection");
+    expect(matchProjectScopedAllowlist("cat Assets/Art/Generated/Weathervane.png.meta", root)).not.toBeNull();
     expect(matchProjectScopedAllowlist("find Assets -name '*.prefab' | head -20 | sort", root)).not.toBeNull();
     expect(matchProjectScopedAllowlist("grep -rn m_Sprite Assets/Prefabs | wc -l", root)).not.toBeNull();
     expect(matchProjectScopedAllowlist("ls Assets > listing.txt", root)).toBeNull();
@@ -59,13 +59,13 @@ describe("project-scoped shell allowlist — canonical build/test/run pre-approv
 
   it("pre-approves in-project git merge/checkout integration, one invocation at a time", () => {
     expect(matchProjectScopedAllowlist("git checkout main", root)?.rule).toContain("integration");
-    expect(matchProjectScopedAllowlist("git merge --no-ff milestone/core-sim-green", root)?.rule).toContain("integration");
+    expect(matchProjectScopedAllowlist("git merge --no-ff milestone/orchard-pass", root)?.rule).toContain("integration");
     // A match overrides the reviewer, so it covers exactly one invocation: the
     // chained form goes to the reviewer like any other list.
     expect(
-      matchProjectScopedAllowlist("git checkout main && git merge --no-ff milestone/core-sim-green", root),
+      matchProjectScopedAllowlist("git checkout main && git merge --no-ff milestone/orchard-pass", root),
     ).toBeNull();
-    expect(matchProjectScopedAllowlist("git branch -f main b9abc94", root)).toBeNull(); // -f main blocked
+    expect(matchProjectScopedAllowlist("git branch -f main 4c0d7e2", root)).toBeNull(); // -f main blocked
   });
 
   it("still refuses push/pull/clean/reset --hard even with benign suffixes", () => {

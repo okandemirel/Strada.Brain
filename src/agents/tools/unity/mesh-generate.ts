@@ -924,9 +924,9 @@ export class MeshGenerateTool implements ITool {
       }
     }
 
-    // The project's style profile scales the silhouette: its `plump` factor
-    // widens X/Z and shortens Y by the same amount. An explicit `plump` input
-    // wins; no profile = the shape as built.
+    // The project's style profile scales the silhouette: its body-width
+    // factor widens X/Z and shortens Y by the same amount. An explicit input
+    // of that factor wins; no profile = the shape as built.
     try {
       const { loadStyleProfile } = await import("../../style/style-profile.js");
       const plumpInput = Number(input["plump"]);
@@ -941,7 +941,7 @@ export class MeshGenerateTool implements ITool {
         }
         // Non-uniform scale transforms normals by the INVERSE-TRANSPOSE —
         // dividing each axis by its scale factor, then renormalizing. The old
-        // loop only renormalized already-unit normals (a no-op), so plumped
+        // loop only renormalized already-unit normals (a no-op), so widened
         // meshes lit as though unsquashed.
         for (let i = 0; i < mesh!.normals.length; i++) {
           const n = mesh!.normals[i]!;

@@ -4,13 +4,13 @@
  * (GDD-drift plan W16a).
  *
  * The scope gate's replay tests judge a finished campaign again from what its
- * databases hold. In a measured campaign six milestones went green while their
- * lineage tips carried the system's own "task_stuck" stamp, and m4's stamp sat
- * only in the tip: the 500-character excerpt the campaign kept never showed
- * it. So the fixture keeps, per milestone, the stored record (status,
- * attempts, time-box escalations, bounce flags, excerpt) AND what the newest
- * task of its lineage said: its stamps counted over the WHOLE result, the
- * lines carrying a stamp or a system marker with one non-blank line of
+ * databases hold. In a measured campaign, milestones went green while their
+ * lineage tips carried the system's own "task_stuck" stamp, and for one of
+ * them the stamp sat only in the tip: the 500-character excerpt the campaign
+ * kept never showed it. So the fixture keeps, per milestone, the stored record
+ * (status, attempts, time-box escalations, bounce flags, excerpt) AND what the
+ * newest task of its lineage said: its stamps counted over the WHOLE result,
+ * the lines carrying a stamp or a system marker with one non-blank line of
  * context on each side, and its verification_json as data.
  *
  * What it leaves out, because the fixture is committed to a public repository:
@@ -266,9 +266,9 @@ const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{
 const spellingsOf = (path) =>
   [path, ...(path ? [safeRealpath(path)] : [])].filter((p, i, all) => p && p.length > 1 && all.indexOf(p) === i);
 
-// The runtime also writes the project root home-relative ("Judged from
-// `~/Documents/…/<game>/Recordings/…`" in a measured campaign's m7), where neither the
-// absolute spelling nor the home rule sees it: the owner's folders survived.
+// The runtime also writes the project root home-relative (a "Judged from
+// `~/…/<project>/Recordings/…`" line, measured), where neither the absolute
+// spelling nor the home rule sees it: the owner's folders survived.
 function projectSpellingsOf(projectRoot, home) {
   const spellings = spellingsOf(projectRoot);
   for (const p of [...spellings]) {
@@ -441,8 +441,8 @@ function tipOf(tasksDb, taskId, countPieces, selectPieces) {
     ...(row.cancel_reason ? { cancelReason: row.cancel_reason } : {}),
     resultChars: result.length,
     resultSha256: sha256(result),
-    // tasks.db holds results cut at 8192 characters (a measured m2 and m7): a
-    // stamp past the cut was never stored, so these counts are a lower bound.
+    // tasks.db holds results cut at 8192 characters (measured): a stamp past
+    // the cut was never stored, so these counts are a lower bound.
     ...(result.endsWith(STORED_CUT_MARK) ? { resultCutInStorage: true } : {}),
     stamps: countStamps(result, countPieces),
     evidenceLines: reduceToEvidenceLines(result, selectPieces),

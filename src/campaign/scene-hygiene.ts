@@ -4,11 +4,10 @@ import { basename, join } from "node:path";
 /**
  * Which scene is the game, and what else the delivery left in the build.
  *
- * Measured on the first real delivery (the test game, 2026-09-03): 20 scenes on
- * disk, 14 of them ENABLED in Build Settings — InitTestScene<guid>,
- * TargetedLevel42Verification, CometShowcase, ModuleBoundary, Assembled*,
- * LiveOps* — and the report said only "game build complete". The person who
- * opened it could not find the game.
+ * Measured on the first real delivery (2026-09-03): a long list of scenes was
+ * ENABLED in Build Settings — the test runner's generated scene beside one-off
+ * check and demo scenes — and the report said only "game build complete". The
+ * person who opened it could not find the game.
  *
  * This measures three separable things and keeps them separable, because
  * conflating them is what makes a disclosure useless:
@@ -89,12 +88,12 @@ const defaultIo: SceneHygieneIo = {
 /**
  * The vocabulary a single-purpose verification scene is named with. Matched
  * against the file NAME, never the directory path — a project may perfectly
- * well keep its game under Assets/Assembled/.
+ * well keep its game under Assets/Sandbox/.
  */
 /**
  * Names that say "this scene exists to check something", not "this is the
- * game". Ordinary scaffolding vocabulary, no vehicle's words; the entry pick
- * below prefers build index 0 among the scenes these do not match.
+ * game". The entry pick below prefers build index 0 among the scenes these do
+ * not match.
  */
 const SCAFFOLDING_NAME = /InitTestScene|TestScene|SmokeTest|Sandbox|Verification|Verified|Showcase|Boundary|Assembled/i;
 

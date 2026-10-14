@@ -212,7 +212,7 @@ export function parsePlaythroughScenarios(
 
 /**
  * Conservative mapping of whole, atomic GDD requirements. This vocabulary
- * proves these flows only: e.g. "win with 500 coins" is NOT proved by "win".
+ * proves these flows only: e.g. "win with every beacon lit" is NOT proved by "win".
  * Semicolon-separated requirements require every clause; unknown clauses leave
  * the whole requirement unmapped/open. No keyword overlap or suite total closes
  * a feature. Richer/game-specific requirements need their own evidence contract.

@@ -1,13 +1,11 @@
 /**
  * Which skills' SKILL.md bodies belong in THIS task's system prompt.
  *
- * Measured 2026-09-08 04:42 on a test-game sprint turn: the "Skill Knowledge"
- * layer carried three project skills the agent itself had written with
- * create_skill on Aug 27, Sep 2 and Sep 3 — a plan for one feature, a
- * replan for one compile error, a verification plan — ~7.4k chars on
- * every turn of every task since, none of it about the task at hand. A
- * skill body is injected when the task names the skill (or one of its
- * declared triggers), or the skill says `inject: always`.
+ * Measured 2026-09-08 04:42 on a sprint turn: the "Skill Knowledge" layer
+ * carried project skills the agent itself had written with create_skill for
+ * earlier tasks, on every turn of every task since, none of it about the
+ * task at hand. A skill body is injected when the task names the skill (or
+ * one of its declared triggers), or the skill says `inject: always`.
  */
 
 import type { SkillEntry } from "../skills/types.js";
@@ -47,8 +45,8 @@ export function selectSkillKnowledge<T extends SkillKnowledgeEntry>(
 
 /**
  * How much of one retrieved memory the "Relevant Memory" layer may carry.
- * Measured 2026-09-08 04:42: five entries came to 10 485 chars — ~2.1k each —
- * on every turn, most of it the tail of long task summaries. The first
+ * Measured 2026-09-08 04:42: each retrieved entry ran well past this cap on
+ * every turn, most of it the tail of long task summaries. The first
  * MAX_MEMORY_ENTRY_CHARS say what the memory is about; the rest is the
  * vault's job.
  */

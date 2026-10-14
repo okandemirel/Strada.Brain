@@ -1011,10 +1011,10 @@ export class StradaConformanceGuard {
    * test can reach Presentation, no layer can be tested in isolation, and a
    * change anywhere rebuilds everything.
    *
-   * Measured: a test-game module with five code assemblies — Domain (22 files),
-   * Application (9), Infrastructure (8), Presentation (2), Core (1) — carried
-   * one Tests assembly at the module root that referenced all five. Four of the
-   * five assemblies had no test of their own.
+   * Measured: a module split into layer assemblies (domain, application,
+   * infrastructure, presentation) carried one Tests assembly at the module root
+   * that referenced every one of them, and most of those assemblies had no test
+   * of their own.
    *
    * Pairing is by name, which is what the generator produces and what Unity
    * shows in the Test Runner: assembly `X` is tested by `X.Tests` or
@@ -1081,9 +1081,9 @@ export class StradaConformanceGuard {
    * guid, an .asset points back at it — so that is what this follows rather
    * than the class name, which appears nowhere in the asset.
    *
-   * Measured 2026-08-22: twenty-five prefabs, a config with three GameObject
-   * fields, zero assets pointing at its guid, and a project whose entire
-   * PlayMode suite passed while every captured frame was empty sky.
+   * Measured 2026-08-22: a project full of prefabs, a config declaring
+   * GameObject fields, zero assets pointing at its guid, and a project whose
+   * entire PlayMode suite passed while every captured frame was empty sky.
    */
   /**
    * References in a module's assets that resolve to nothing.
@@ -1091,7 +1091,7 @@ export class StradaConformanceGuard {
    * Measured 2026-08-22: a module's config asset pointed its prefab field at
    * one guid while the prefab config it meant had another. The C# turned the
    * resulting null into an empty ScriptableObject, so the spawner received no
-   * prefabs, nothing was logged, and a suite of 44 passing tests sat over a
+   * prefabs, nothing was logged, and a fully passing test suite sat over a
    * game that drew an empty sky.
    *
    * Unity's built-in guids (the all-zero forms carried by every prefab) and
@@ -1102,9 +1102,9 @@ export class StradaConformanceGuard {
    * Has anything ever been seen on screen?
    *
    * Frames are captured by unity_playmode_verify into <project>/Recordings.
-   * Measured across a full session: 120 of them, every one byte-for-byte
-   * identical and all of them empty sky, while the suite grew from 33 tests to
-   * 54 and reported green throughout. Tests prove the simulation; only a frame
+   * Measured across a full session: every one of them byte-for-byte identical
+   * and all of them empty sky, while the test suite kept growing and reported
+   * green throughout. Tests prove the simulation; only a frame
    * proves the game, and nothing here had ever asked for one.
    */
   /**
@@ -1204,9 +1204,9 @@ export class StradaConformanceGuard {
     // 2s tolerance is for filesystem timestamp granularity, as in
     // prerender-frames.ts.
     //
-    // Measured 2026-09-07 07:49: Recordings/ held 19,864 frames from earlier
-    // runs; the 400-file sample above never reached this run's 180 frames in
-    // Recordings/VerifierFinal, and a run that had just captured a varied
+    // Measured 2026-09-07 07:49: Recordings/ held many thousands of frames from
+    // earlier runs; the 400-file sample above never reached this run's own
+    // frames in a fresh subfolder, and a run that had just captured a varied
     // picture was told "no frame has been captured in this run". A capture
     // is found by WHEN it was written, so the walk starts from the
     // directories written since the run began, not from the oldest files.
@@ -1231,9 +1231,9 @@ export class StradaConformanceGuard {
     if (digests.size === 0) return null;
     if (digests.size === 1) return `all ${frames.length} captured frames are identical`;
 
-    // Two ways a game can fake "drawing", both measured on the test game:
-    //   1. HUD-only variation — sixty frames differed ONLY in one HUD element
-    //      changing over an empty sky (8 distinct of 60 = 13%).
+    // Two ways a game can fake "drawing", both measured:
+    //   1. HUD-only variation — the sampled frames differed ONLY in one HUD
+    //      element changing over an empty sky (well under a quarter distinct).
     //   2. Scene-census gaming — a runtime-construction project keeps the scene
     //      YAML minimal by design (the game world spawns from code), so a bare
     //      renderer census false-flags the architecture itself.
@@ -1520,16 +1520,16 @@ export class StradaConformanceGuard {
    *
    * getPrompt returns one gate, so a run hears about the second problem only
    * after the first closes. Measured 2026-08-21: an agent told to stop
-   * reimplementing spent that time building a fourth service-and-system pair
-   * for rendering — it never heard that nothing in the project could render at
-   * all, because that gate was behind this one.
+   * reimplementing spent that time building yet another service-and-system
+   * pair for rendering — it never heard that nothing in the project could
+   * render at all, because that gate was behind this one.
    */
   private alsoOpen(): string {
     // Only one direction is reachable: the rendering gate is returned first, so
     // a run reaches the reimplementation gate only once views exist and there is
     // nothing left to mention. The reverse — reimplementation still open while
     // nothing renders — is the case measured on 2026-08-21, when an agent told
-    // to stop reimplementing spent that time building a fourth
+    // to stop reimplementing spent that time building yet another
     // service-and-system pair for rendering, never having heard that nothing in
     // the project could render at all.
     return this.cached("bypass", () => this.assessBypass()).length === 0
@@ -1569,10 +1569,10 @@ export class StradaConformanceGuard {
    *
    * Separate from getPrompt() on purpose. A gate is an ASK, and an ask has to be
    * able to give up — three refusals and it goes quiet, or it stops being a rule
-   * and becomes a loop. Going quiet was then read as satisfied: measured on run
-   * 52, [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and
-   * the run finished `failed: false` with a 123-character success message for a
-   * game whose sixty captured frames were identical. The gate's own last words
+   * and becomes a loop. Going quiet was then read as satisfied: measured on one
+   * run, [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and
+   * the run finished `failed: false` with a one-line success message for a
+   * game whose captured frames were all identical. The gate's own last words
    * are "say the game does not render rather than reporting it as delivered",
    * and nothing checked whether that happened.
    *
@@ -1587,12 +1587,12 @@ export class StradaConformanceGuard {
    * written out, a mesh generated — on the theory that the moment to ask "does
    * the user already have one of these" is just before making one.
    *
-   * Run 52 showed that theory is half the problem. The agent originated no art
-   * at all: it wrote fifteen C# files, seven assembly definitions, six
+   * A measured run showed that theory is half the problem. The agent
+   * originated no art at all: it wrote C# files, assembly definitions,
    * ScriptableObjects, a scene, and zero sprites, zero prefabs, zero meshes.
-   * Then it played the game and captured sixty identical frames. The gate never
-   * fired, because nothing triggered it, and both the silence and the empty
-   * scene looked correct.
+   * Then it played the game and captured nothing but identical frames. The
+   * gate never fired, because nothing triggered it, and both the silence and
+   * the empty scene looked correct.
    *
    * So there are two ways to arrive here and only one was covered. The second —
    * a game that has been assembled and run and has nothing in it to draw — is
@@ -1838,24 +1838,24 @@ export class StradaConformanceGuard {
     }
 
     // A run that wrote module code and produced no scene delivered a library.
-    // Measured: nine modules, fifty C# files and their test assemblies, all
-    // compiling, with no .unity, no ScriptableObject asset and no bootstrapper —
+    // Measured: several modules, dozens of C# files and their test assemblies,
+    // all compiling, with no .unity, no ScriptableObject asset and no bootstrapper —
     // and it reported success. Every rule above passed, because they all read
     // the shape of code. This one reads the artifacts.
     //
     // Only when the run actually wrote module code: a question about the project
     // owes nobody a scene.
     // A game that is assembled and renders nothing. Measured 2026-08-21 on a
-    // delivered project: 85 C# files, 25 prefabs, 44 passing play-mode tests,
-    // and zero MonoBehaviours, zero uses of Strada.Core's view layer, one
-    // GameObject in the scene. Every service was correct and a player would
+    // delivered project: plenty of C# files, prefabs and passing play-mode
+    // tests, and zero MonoBehaviours, zero uses of Strada.Core's view layer, a
+    // near-empty scene. Every service was correct and a player would
     // have seen an empty screen. The tests passed because they call services
     // directly and never go through a scene, so nothing above this line could
     // have caught it.
     const views = this.cached("views", () => this.assessViews());
     // Ahead of the view question: a scene with no camera draws nothing at all,
     // so views would not help. Measured 2026-08-21: every prefab carried a
-    // SpriteRenderer and the only scene held one GameObject and no Camera.
+    // SpriteRenderer and the only scene held next to nothing and no Camera.
     const cameraAsk = views && views.camerslessScenes.length > 0 ? this.ask("no-camera", GATE_ASK_LIMIT) : null;
     if (views && cameraAsk) {
       return (
@@ -1889,11 +1889,11 @@ export class StradaConformanceGuard {
     }
 
     // Written its own version of something the framework ships. Measured
-    // 2026-08-21: 22 hand-rolled public events against 0 uses of Communication,
-    // 37 Debug.Log calls against 0 uses of StradaLog — 6 of Strada.Core's 194
-    // public types used at all. The project took SystemBase for a tick,
-    // [Inject] for wiring, a ModuleConfig for registration, and wrote a plain
-    // C# game inside the shell. Every rule here passed, because none of them
+    // 2026-08-21: a crowd of hand-rolled public events against 0 uses of
+    // Communication, dozens of Debug.Log calls against 0 uses of StradaLog —
+    // only a handful of Strada.Core's public types used at all. The project
+    // took SystemBase for a tick, [Inject] for wiring, a ModuleConfig for
+    // registration, and wrote a plain C# game inside the shell. Every rule here passed, because none of them
     // asked what the framework was for.
     const bypasses = this.cached("bypass", () => this.assessBypass());
     const bypassAsk = bypasses.length > 0 ? this.ask("reimplemented", GATE_ASK_LIMIT) : null;
@@ -1926,7 +1926,7 @@ export class StradaConformanceGuard {
         "written as `_field != null ? _field : CreateInstance<...>()` turns that null into an " +
         "empty object silently — no error, no warning, and nothing spawned at run time. Point the " +
         "field at the asset that exists, or create the asset the guid names. Measured: a project " +
-        "with 44 of 44 tests passing drew an empty sky because one reference pointed at a guid " +
+        "whose every test passed drew an empty sky because one reference pointed at a guid " +
         "that had never existed." +
         lastAskNote(danglingAsk)
       );
@@ -1945,8 +1945,8 @@ export class StradaConformanceGuard {
         "unity_scene_build creates it: its spec takes assets as {id, type, path, fields}, and a " +
         "field of kind \"prefab\" resolves to a saved prefab asset rather than a scene instance. " +
         "Create the asset, assign every prefab field, and give the scene something that reads it. " +
-        "Measured: twenty-five prefabs, three GameObject fields, no asset instance, a PlayMode " +
-        "suite of 44 passing tests, and one hundred and twenty captured frames that were all the " +
+        "Measured: a project full of prefabs, a config with GameObject fields, no asset instance, " +
+        "a fully passing PlayMode suite, and captured frames that were all the " +
           "same empty sky." +
           (lastAsk
             ? " This is the last time this is asked. If it is still unbound when you finish, the " +
@@ -2045,8 +2045,8 @@ export class StradaConformanceGuard {
         "Run unity_my_assets_cloud — it searches the Asset Store packages already downloaded on this " +
         "machine, needs no Editor, no login and no network, and reports what is inside each " +
         "package rather than only its name. A model the user bought beats one that has to be " +
-        "made, and measured on this project an owned 3D vehicle package holding two .fbx meshes " +
-        "sat unread on disk while the scene shipped empty." +
+        "made, and it has been measured: an owned 3D model package sat unread on disk while the " +
+        "scene shipped empty." +
         (lastAsk
           ? " This is the last time this is asked. If the tool is not among the ones you have, " +
             "this project's Strada.MCP submodule predates it — say so rather than shipping a " +
@@ -2092,8 +2092,8 @@ export class StradaConformanceGuard {
       return (
         this.cached("spec-scope", () => this.specScopePrompt()) ??
         `[STRADA NOTHING DRAWN] This game has never been observed to render: ${notDrawn}. ` +
-        "A passing suite proves the simulation, not the picture — measured on this project, 54 " +
-        "tests went green while all 120 captured frames were the same empty sky. Run " +
+        "A passing suite proves the simulation, not the picture — measured: a whole suite went " +
+        "green while every captured frame was the same empty sky. Run " +
         "unity_playmode_verify with captureFrames set, then read what came back: frames that are " +
         "all identical, or one flat colour, mean nothing is being drawn however many tests pass. " +
         "Start a level the design describes, capture, and check the frames differ from each other." +

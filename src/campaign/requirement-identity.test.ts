@@ -61,9 +61,9 @@ describe("contentTokens", () => {
     expect(contentTokens("Save progress across restarts: absent")).toEqual(["sav", "progress", "across", "restart"]);
     expect(contentTokens("12 levels")).toEqual(["12", "level"]);
     expect(contentTokens("The boss is not defeated")).toEqual(["boss", "not", "defeat"]);
-    // "3,000 coins" and "3.000 coins" are the same figure.
-    expect(contentTokens("3,000 coins")).toEqual(contentTokens("3.000 coins"));
-    expect(contentTokens("3,000 coins")[0]).toBe("3000");
+    // "6,400 shells" and "6.400 shells" are the same figure.
+    expect(contentTokens("6,400 shells")).toEqual(contentTokens("6.400 shells"));
+    expect(contentTokens("6,400 shells")[0]).toBe("6400");
     // A decimal is a figure, not a separator.
     expect(contentTokens("loads in 2.5 seconds")).toContain("2.5");
   });
@@ -326,7 +326,7 @@ const SAVE_MILESTONE = {
   title: "Sprint A — Save",
   status: "green",
   commitNote: "2 commit(s): Assets/Scripts/SaveSystem.cs",
-  testVerdict: "179/179 tests passed",
+  testVerdict: "83/83 tests passed",
   testVerdictUnfiltered: true,
 };
 
@@ -351,9 +351,9 @@ describe("campaign-planner: the requirement–evidence predicate, exported for t
    */
   it("a measurement of ABSENCE is not evidence of presence", () => {
     const absent: Array<[string, string, Record<string, unknown>]> = [
-      ["Bomb element: absent", "GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code: L3 Bomb, L5 Rocket", { structureFindings: ["GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code: L3 Bomb, L5 Rocket"] }],
+      ["Brass Gull element: absent", "GDD element schedule: 2 of 33 scheduled element(s) have NO trace in code: Ch2 Tide Bell, Ch9 Brass Gull", { structureFindings: ["GDD element schedule: 2 of 33 scheduled element(s) have NO trace in code: Ch2 Tide Bell, Ch9 Brass Gull"] }],
       ["World renderers in the shipped scenes: absent", "0 world renderers", { structureFindings: ["0 world renderers in the shipped scenes"] }],
-      ["Frame rate at least 60 fps: absent", "NOT MET", { gddClaims: ["GDD frame rate ≥ 60 fps: NOT MET — 41 fps average in the editor under -batchmode"] }],
+      ["Frame rate at least 144 fps: absent", "NOT MET", { gddClaims: ["GDD frame rate ≥ 144 fps: NOT MET — 87 fps average in the editor under -batchmode"] }],
       ["Boot time under 3 seconds: absent", "NOT MEASURED", { gddClaims: ["GDD boot time ≤ 3 s: NOT MEASURED — the play-through recorded no frame timing"] }],
       ["Entry scene: absent", "REFUSAL STANDS", { structureFindings: ["REFUSAL STANDS at delivery: no enabled scene holds the game"] }],
       ["Element schedule: absent", "unreadable table", { structureFindings: ["GDD element schedule: the document HOLDS a schedule table and none of its rows could be read — nothing was compared against the code"] }],
@@ -370,13 +370,13 @@ describe("campaign-planner: the requirement–evidence predicate, exported for t
     expect(
       closingFact(
         "Element schedule: absent",
-        quotableFactsOf([{ structureFindings: ["GDD element schedule: all 14 scheduled element(s) have a trace in code"] }]),
+        quotableFactsOf([{ structureFindings: ["GDD element schedule: all 33 scheduled element(s) have a trace in code"] }]),
       ),
-    ).toBe("shipped tree: GDD element schedule: all 14 scheduled element(s) have a trace in code");
+    ).toBe("shipped tree: GDD element schedule: all 33 scheduled element(s) have a trace in code");
     expect(
       closingFact(
-        "Frame rate at least 60 fps: absent",
-        quotableFactsOf([{ gddClaims: ["GDD frame rate ≥ 60 fps: MET — 62 fps average in the editor under -batchmode"] }]),
+        "Frame rate at least 144 fps: absent",
+        quotableFactsOf([{ gddClaims: ["GDD frame rate ≥ 144 fps: MET — 148 fps average in the editor under -batchmode"] }]),
       ),
     ).toContain("MET");
     // A worker's own prose is not one of the system's negative templates.

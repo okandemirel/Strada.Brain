@@ -39,11 +39,11 @@ export interface PrerenderStyle {
   bodyColor?: string;
   /**
    * The profile's shading. It decides the material's gloss and metalness;
-   * every character used to be rendered glossy whatever the document asked
-   * for (Codex 2026-09-11 B#21).
+   * every model used to get one fixed material preset whatever the document
+   * asked for (Codex 2026-09-11 B#21).
    */
   shading?: string;
-  /** Root scale [x, y, z] from the profile's body-width factor (`plump`). */
+  /** Root scale [x, y, z] from the profile's body-width factor. */
   plump?: [number, number, number];
   /** Head-bone scale multiplier. */
   headScale?: number;
@@ -297,7 +297,7 @@ export class PrerenderFramesTool implements ITool {
       outDir: { type: "string", description: "Project-relative output dir under Assets/ (default: Assets/Art/Prerendered)" },
       bodyColor: { type: "string", description: "Body color #rrggbb (default: the project's style.json palette; stock fallback only when no profile exists)" },
       outlineWidth: { type: "number", description: "Outline width factor (default from style.json; 0 disables)" },
-      plumpness: { type: "number", description: "Body squash 0.5–1.5 (default from style.json)" },
+      bodyWidth: { type: "number", description: "Body width factor 0.5–1.5; height shrinks to keep the volume (default from style.json)" },
       headScale: { type: "number", description: "Head-bone scale multiplier (default from style.json)" },
     },
     required: ["prefab"],
@@ -349,7 +349,7 @@ export class PrerenderFramesTool implements ITool {
     // every project got one stock toon preset regardless of its GDD.
     // Absent must stay NaN so the profile (then the stock default) can win.
     const outlineRaw = Number(input["outlineWidth"]);
-    const plumpRaw = Number(input["plumpness"]);
+    const plumpRaw = Number(input["bodyWidth"]);
     const headRaw = Number(input["headScale"]);
     // The project's style.json (derived from ITS OWN GDD by style-analysis —
     // never a universal preset) supplies the defaults; explicit inputs win.

@@ -44,21 +44,21 @@
       "gddText"
     ],
     "secretsFound": 0,
-    "projectPaths": 1,
-    "homePaths": 1,
+    "projectPaths": 3,
+    "homePaths": 5,
     "emails": 0,
-    "gddPassages": 2
+    "gddPassages": 4
   },
   "campaign": {
     "id": "campaign_1700000000000_a1b2c",
     "state": "done",
     "gddPath": "docs/GDD.md",
     "draftAttempts": 0,
-    "currentMilestone": 7,
+    "currentMilestone": 8,
     "createdAt": 1700000000000,
-    "updatedAt": 1700396000000,
-    "lastError": "Coverage completion 1 — close the GDD gaps blocked after 2 attempts: The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.",
-    "coverageAuditNote": "coverage audit could not run: coverage audit returned malformed JSON",
+    "updatedAt": 1700345600000,
+    "lastError": "NOT DELIVERED — Coverage completion 1.2 —<GDD passage omitted> was cancelled",
+    "coverageAuditNote": "coverage audit could not run: coverage audit output failed schema validation",
     "deliveryReported": true,
     "projectName": "SyntheticObservatory"
   },
@@ -77,7 +77,6 @@
       "attempts": 1,
       "taskId": "task_0000a001",
       "resultExcerpt": "dently verified\n\nI got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
-      "reconcileDeferred": false,
       "sectionRefs": [
         "§1",
         "§2.1"
@@ -89,58 +88,46 @@
         "status": "completed",
         "createdAt": 1700036000000,
         "completedAt": 1700043200000,
-        "resultChars": 1445,
-        "resultSha256": "addc0b50c0378c96a1bd0280509c09c0e5f28ab108054bf17c7aa0972af3c159",
+        "resultChars": 1032,
+        "resultSha256": "20033677a156f7aa722c841fa55cbb78a81c02d99f2ecb10745ddce39e8ecc6d",
         "stamps": {
-          "task_stuck": 3
+          "task_stuck": 2
         },
         "evidenceLines": [
           {
             "line": 1,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+            "text": "The dome scene opens; trimming the mirror segments next."
           },
           {
             "line": 3,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
           },
           {
             "line": 5,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
-            "line": 6,
-            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+            "line": 7,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
           },
           {
             "line": 8,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 10,
-            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
-          },
-          {
-            "line": 12,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 13,
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           },
           {
-            "line": 15,
+            "line": 10,
             "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
           },
           {
-            "line": 17,
+            "line": 12,
             "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
           },
           {
-            "line": 19,
+            "line": 14,
             "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
           },
           {
-            "line": 20,
+            "line": 15,
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           }
         ],
@@ -149,27 +136,75 @@
     },
     {
       "id": "m2",
-      "title": "Sprint 2 — the night log",
+      "title": "Sprint 2 — the mount and its slews",
+      "status": "green",
+      "attempts": 2,
+      "taskId": "task_0000a002",
+      "resultExcerpt": " 5: the mount waits for the dome to stop before it moves\n- slew 6: the mount waits for the dome to stop before it moves\n- slew 7: the mount waits for the dome to stop before it moves\n- slew 8: the mount waits for the dome to stop before it moves\n- slew 9: the mount waits for the dome to stop before it moves\n- slew 10: the mount waits for the dome to stop before it moves\n- slew 11: the mount waits for the dome to stop before it moves\n- slew 12: the mount waits for the dome to stop before it moves",
+      "visualEvidenceBounced": true,
+      "noWorkBounced": false,
+      "sectionRefs": [
+        "§2.2"
+      ],
+      "promptChars": 15,
+      "promptSha256": "481bdb2c047b81194274e4f688c296508b6a812dfe5f9e5ca6f92ced8f81ad7c",
+      "tip": {
+        "id": "task_0000a012",
+        "status": "completed",
+        "createdAt": 1700075600000,
+        "completedAt": 1700082800000,
+        "resultChars": 1371,
+        "resultSha256": "4cda5573ec3add403a6091bdf250151a6a19174b6d4d8eb5afb01b365d3a1c15",
+        "stamps": {
+          "task_stuck": 1
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "Retrying from the slew table the first attempt left half-written."
+          },
+          {
+            "line": 3,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 5,
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
+          },
+          {
+            "line": 7,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 8,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "m3",
+      "title": "Sprint 3 — the night log",
       "status": "green",
       "attempts": 1,
-      "taskId": "task_0000a002",
-      "resultExcerpt": "f changing it\nprogress note 45: the worker kept describing the seeing field instead of changing it\nprogress note 46: the worker kept describing the seeing field instead of changing it\nprogress note 47: the worker kept describing the seeing field instead of changing it\nprogress note 48: the worker kept describing the seeing field instead of changing it\nprogress note 49: the worker kept describing the seeing field instead of changing it\nprogress note 50: the worker kept describing \n... (truncated)",
-      "reconcileDeferred": false,
+      "taskId": "task_0000a003",
+      "resultExcerpt": "nging it\nprogress note 60: the worker kept describing the seeing field instead of changing it\nprogress note 61: the worker kept describing the seeing field instead of changing it\nprogress note 62: the worker kept describing the seeing field instead of changing it\nprogress note 63: the worker kept describing the seeing field instead of changing it\nprogress note 64: the worker kept describing the seeing field instead of changing it\nprogress note 65: the worker kept describing the s\n... (truncated)",
       "sectionRefs": [
         "§5.1–§5.3"
       ],
       "promptChars": 57,
       "promptSha256": "7296942c63eb062434351443ea360185b9d28229af2dda4d02ad7423dcc935be",
       "tip": {
-        "id": "task_0000a002",
+        "id": "task_0000a003",
         "status": "completed",
-        "createdAt": 1700072000000,
-        "completedAt": 1700079200000,
+        "createdAt": 1700108000000,
+        "completedAt": 1700115200000,
         "resultChars": 8208,
-        "resultSha256": "9769c38ce887d709d0cdc623bb87d13b3e826560284d33cc2b3f48ac367e2221",
+        "resultSha256": "5b3f4a18e144346012a25e7ba75c1ca38c11947651cbb2eb1e6e966e99a40e57",
         "resultCutInStorage": true,
         "stamps": {
-          "task_stuck": 6
+          "task_stuck": 4
         },
         "evidenceLines": [
           {
@@ -182,7 +217,7 @@
           },
           {
             "line": 11,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 13,
@@ -202,7 +237,7 @@
           },
           {
             "line": 24,
-            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 26,
@@ -222,7 +257,7 @@
           },
           {
             "line": 37,
-            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
           },
           {
             "line": 39,
@@ -242,7 +277,7 @@
           },
           {
             "line": 50,
-            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 52,
@@ -253,92 +288,12 @@
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           },
           {
-            "line": 59,
-            "text": "}"
+            "line": 120,
+            "text": "progress note 65: the worker kept describing the s"
           },
           {
-            "line": 61,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 63,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
-          },
-          {
-            "line": 65,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 66,
-            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
-          },
-          {
-            "line": 72,
-            "text": "}"
-          },
-          {
-            "line": 74,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 76,
-            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
-          },
-          {
-            "line": 78,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 79,
-            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
-          },
-          {
-            "line": 131,
-            "text": "progress note 50: the worker kept describing "
-          },
-          {
-            "line": 132,
+            "line": 121,
             "text": "... (truncated)"
-          }
-        ],
-        "verification": null
-      }
-    },
-    {
-      "id": "m3",
-      "title": "Sprint 3 — the mount and its slews",
-      "status": "green",
-      "attempts": 2,
-      "taskId": "task_0000a003",
-      "resultExcerpt": "Let me take the workspace path the system redirected me to and run the build from there:\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** no file under Assets/ changed in this attempt.",
-      "reconcileDeferred": false,
-      "visualEvidenceBounced": true,
-      "noWorkBounced": false,
-      "sectionRefs": [
-        "§2.2"
-      ],
-      "promptChars": 15,
-      "promptSha256": "481bdb2c047b81194274e4f688c296508b6a812dfe5f9e5ca6f92ced8f81ad7c",
-      "tip": {
-        "id": "task_0000a013",
-        "status": "completed",
-        "createdAt": 1700111600000,
-        "completedAt": 1700115200000,
-        "resultChars": 344,
-        "resultSha256": "e0c209068df4275a5748d5847b5322438225d82e29b5728ceb106b9210f2d515",
-        "stamps": {},
-        "evidenceLines": [
-          {
-            "line": 1,
-            "text": "Let me take the workspace path the system redirected me to and run the build from there:"
-          },
-          {
-            "line": 3,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 4,
-            "text": "- <reasoning>"
           }
         ],
         "verification": null
@@ -350,8 +305,9 @@
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a004",
-      "resultExcerpt": "ard together.\n\n**Make one targeted change to Assets/Observatory/Bookings/NightBooking.cs so the build verifies, then run the verification again**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** the booking table was rewritten but never compiled.\n3. **Check the tests:** none ran; the build failed before them.\n4. **Verdict:** not verified.",
-      "visualEvidenceBounced": true,
+      "resultExcerpt": "The forecast panel draws; the booking table is still read-only.\nCloud cover now closes the window it should, and the dome waits for it to reopen.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** the observing window opens, but no booking it should hand back moved.\n3. **Verdict:** not verified.",
+      "startedAtMs": 1700144000000,
+      "reconcileDeferredSince": 1700140400000,
       "sectionRefs": [
         "§3"
       ],
@@ -362,26 +318,20 @@
         "status": "completed",
         "createdAt": 1700144000000,
         "completedAt": 1700151200000,
-        "resultChars": 619,
-        "resultSha256": "0b47376b0f21f5de2966a6088f67fe2beeb3ef77963dcefa6b54f9f93ac4a581",
-        "stamps": {
-          "task_stuck": 1
-        },
+        "resultChars": 454,
+        "resultSha256": "9728ef2f3381393c5041479c1a8f9fbef8202605a3db8268f4be6a7b6e0a814d",
+        "stamps": {},
         "evidenceLines": [
           {
-            "line": 1,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+            "line": 2,
+            "text": "Cloud cover now closes the window it should, and the dome waits for it to reopen."
           },
           {
-            "line": 3,
-            "text": "**Make one targeted change to Assets/Observatory/Bookings/NightBooking.cs so the build verifies, then run the verification again**"
-          },
-          {
-            "line": 5,
+            "line": 4,
             "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
           },
           {
-            "line": 6,
+            "line": 5,
             "text": "- <reasoning>"
           }
         ],
@@ -392,10 +342,13 @@
       "id": "m5",
       "title": "Sprint 5 — the catalogue",
       "status": "green",
-      "attempts": 1,
+      "attempts": 3,
       "taskId": "task_0000a005",
-      "resultExcerpt": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.",
+      "resultExcerpt": "*\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.\n\nI've reached the maximum number of steps for this request. Please send a follow-up message to continue.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
+      "reconcileDeferred": false,
       "visualEvidenceBounced": true,
+      "noWorkBounced": false,
+      "timeBoxEscalations": 1,
       "sectionRefs": [
         "§4.1",
         "§4.2"
@@ -403,14 +356,15 @@
       "promptChars": 46,
       "promptSha256": "e749c316a2f016741524669ee08c32e3aa557128d3779a6bcb96d7d21b67ca6c",
       "tip": {
-        "id": "task_0000a005",
+        "id": "task_0000a025",
         "status": "completed",
-        "createdAt": 1700180000000,
-        "completedAt": 1700187200000,
-        "resultChars": 318,
-        "resultSha256": "cbfd762ef307d0aaafc7460b8cb929ebb31562905972d8f530afd90f16f65cf3",
+        "createdAt": 1700187200000,
+        "completedAt": 1700194400000,
+        "resultChars": 1664,
+        "resultSha256": "a3e0a9b2386137b86affa89ea4e4a563a736591f055324312aa3888f20b47d4d",
         "stamps": {
-          "task_stuck": 1
+          "task_stuck": 3,
+          "max_steps_reached": 1
         },
         "evidenceLines": [
           {
@@ -419,53 +373,7 @@
           },
           {
             "line": 3,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 4,
-            "text": "- <reasoning>"
-          }
-        ],
-        "verification": null
-      }
-    },
-    {
-      "id": "m6",
-      "title": "Sprint 6 — funding renewals",
-      "status": "green",
-      "attempts": 2,
-      "taskId": "task_0000a006",
-      "resultExcerpt": "RIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.\n\nUnable to complete this task — the AI provider is not responding. Please try again later or switch to a different provider.\n\n**Retry once the provider answers again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.",
-      "visualEvidenceBounced": true,
-      "noWorkBounced": false,
-      "timeBoxEscalations": 2,
-      "startedAtMs": 1700216000000,
-      "reconcileDeferredSince": 1700208800000,
-      "sectionRefs": [
-        "§6",
-        "§5"
-      ],
-      "promptChars": 35,
-      "promptSha256": "0d5c216964d10cf2c6215d80e796961228538ae729f462c3978bee3ad9784286",
-      "tip": {
-        "id": "task_0000a006",
-        "status": "completed",
-        "createdAt": 1700216000000,
-        "completedAt": 1700223200000,
-        "resultChars": 4589,
-        "resultSha256": "d48a0d9f9be0ad639a34ff806be571914c7b6b4ddf465892e8e9ecd076f71904",
-        "stamps": {
-          "task_stuck": 10,
-          "provider_abort": 1
-        },
-        "evidenceLines": [
-          {
-            "line": 1,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 3,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
+            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
           },
           {
             "line": 5,
@@ -473,7 +381,7 @@
           },
           {
             "line": 6,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           },
           {
             "line": 8,
@@ -481,7 +389,7 @@
           },
           {
             "line": 10,
-            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 12,
@@ -497,7 +405,7 @@
           },
           {
             "line": 17,
-            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 19,
@@ -509,157 +417,102 @@
           },
           {
             "line": 22,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+            "text": "I've reached the maximum number of steps for this request. Please send a follow-up message to continue."
           },
           {
             "line": 24,
-            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
-          },
-          {
-            "line": 26,
             "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
           },
           {
-            "line": 27,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          },
-          {
-            "line": 29,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 31,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
-          },
-          {
-            "line": 33,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 34,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          },
-          {
-            "line": 36,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 38,
-            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
-          },
-          {
-            "line": 40,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 41,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          },
-          {
-            "line": 43,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 45,
-            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
-          },
-          {
-            "line": 47,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 48,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          },
-          {
-            "line": 50,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 52,
-            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
-          },
-          {
-            "line": 54,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 55,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          },
-          {
-            "line": 57,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 59,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
-          },
-          {
-            "line": 61,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 62,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          },
-          {
-            "line": 64,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 66,
-            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
-          },
-          {
-            "line": 68,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 69,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          },
-          {
-            "line": 71,
-            "text": "Unable to complete this task — the AI provider is not responding. Please try again later or switch to a different provider."
-          },
-          {
-            "line": 73,
-            "text": "**Retry once the provider answers again.**"
-          },
-          {
-            "line": 75,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 76,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+            "line": 25,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           }
         ],
         "verification": null
       }
     },
     {
+      "id": "m6",
+      "title": "Sprint 6 — funding renewals",
+      "status": "green",
+      "attempts": 1,
+      "taskId": "task_0000a006",
+      "resultExcerpt": "FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified\n\nNo se pudo completar esta tarea — el proveedor de IA no responde. Inténtelo de nuevo más tarde o use otro proveedor.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.",
+      "reconcileDeferred": false,
+      "sectionRefs": [
+        "§6",
+        "§5"
+      ],
+      "promptChars": 35,
+      "promptSha256": "0d5c216964d10cf2c6215d80e796961228538ae729f462c3978bee3ad9784286",
+      "tip": {
+        "id": "task_0000a006",
+        "status": "completed",
+        "createdAt": 1700216000000,
+        "completedAt": 1700223200000,
+        "resultChars": 753,
+        "resultSha256": "e425dc00aa166d6db270cde327b5f128b5649d536e3ec30ea502ee3774fa5a4a",
+        "stamps": {
+          "task_stuck": 1,
+          "provider_abort": 1
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 3,
+            "text": "**Stop reflecting and make the renewal form read the night log, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 5,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 6,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 8,
+            "text": "No se pudo completar esta tarea — el proveedor de IA no responde. Inténtelo de nuevo más tarde o use otro proveedor."
+          },
+          {
+            "line": 10,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 11,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          }
+        ],
+        "verification": {
+          "testsGreen": false,
+          "detail": "PlayMode verification failed: 3 of 31 tests failed (log: ~/Library/Logs/Unity/Editor.log)"
+        }
+      }
+    },
+    {
       "id": "m7",
       "title": "Sprint 7 — the review build",
       "status": "green",
-      "attempts": 2,
+      "attempts": 1,
       "taskId": "task_0000a007",
-      "resultExcerpt": " 77\": \"leave the dome lights and the clock on the scene root\",\n  \"note 78\": \"leave the dome lights and the clock on the scene root\",\n  \"note 79\": \"leave the dome lights and the clock on the scene root\",\n  \"note 80\": \"leave the dome lights and the clock on the scene root\",\n  \"note 81\": \"leave the dome lights and the clock on the scene root\",\n  \"note 82\": \"leave the dome lights and the clock on the scene root\",\n  \"note 83\": \"leave the dome lights and the clock on the scene root\",\n \n... (truncated)",
+      "resultExcerpt": "ier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified (log: ~/Library/Logs/Unity/Editor.log)\n\n{\n  \"step\": 2,\n  \"goal\": \"wire the sky dome into scene 2\",\n  \"actions\": [\"open Assets/Scenes/Observatory.unity\", \"place the dome prefab\", \"save the scene\"]\n}\n\nI've reached the maximum number of steps for this request. Please send a follow-up message to continue.\n\nThe review build is assembled; the dome and the star field load in the entry scene.",
       "visualEvidenceBounced": false,
       "noWorkBounced": false,
       "timeBoxEscalations": 0,
       "deliveryVerificationBounced": false,
-      "deliveryVerificationBounces": 2,
+      "deliveryVerificationBounces": 1,
       "visualEvidence": "observed",
-      "startedAtMs": 1700288000000,
-      "commitNote": "Committed 212 file(s) as `1a2b3c4`.",
-      "testVerdict": "PlayMode verification passed: 41 of 42 tests ran clean.",
+      "startedAtMs": 1700252000000,
+      "commitNote": "Committed 63 file(s) as `9c8b7a6`.",
+      "testVerdict": "PlayMode verification passed: 37 of 39 tests ran clean.",
       "structureRefused": true,
       "structureFindings": [
         "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Observatory.unity and the prefabs it places.",
-        "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
-        "4 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +2 more",
+        "2 scenes enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +1 more",
         "GDD says: …<GDD passage omitted>…"
       ],
       "visualConformance": "**Does it look like the GDD?**\n- Partly: the dome and its star field read, but the coordinate grid over them is missing.\n- Judged from `<project>/Recordings/night-review/frame_00342.png` by openai.",
@@ -674,12 +527,10 @@
         "status": "completed",
         "createdAt": 1700252000000,
         "completedAt": 1700259200000,
-        "resultChars": 8208,
-        "resultSha256": "2859611c8709e3b4b35cc1b4c6c3686071087cd201e71e786aa2f634bb9873de",
-        "resultCutInStorage": true,
+        "resultChars": 823,
+        "resultSha256": "0f10f7ba5fb6b15d2d487c65b54d2338c841cb7ae1783c2860be2b4804e808ba",
         "stamps": {
-          "task_stuck": 1,
-          "provider_abort": 1
+          "max_steps_reached": 1
         },
         "evidenceLines": [
           {
@@ -695,86 +546,113 @@
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified (log: ~/Library/Logs/Unity/Editor.log)"
           },
           {
-            "line": 12,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 14,
-            "text": "**Stop reflecting and inspect the latest unity_verify_change failure, then make one targeted edit.**"
-          },
-          {
             "line": 16,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 17,
-            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
-          },
-          {
-            "line": 23,
             "text": "}"
           },
           {
-            "line": 25,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+            "line": 18,
+            "text": "I've reached the maximum number of steps for this request. Please send a follow-up message to continue."
           },
           {
-            "line": 26,
-            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
-          },
-          {
-            "line": 28,
-            "text": "Bu görev tamamlanamadı — yapay zeka sağlayıcısı yanıt vermiyor. Lütfen daha sonra tekrar deneyin veya farklı bir sağlayıcı kullanın."
-          },
-          {
-            "line": 30,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 31,
-            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
-          },
-          {
-            "line": 140,
-            "text": "  \"note 83\": \"leave the dome lights and the clock on the scene root\","
-          },
-          {
-            "line": 142,
-            "text": "... (truncated)"
+            "line": 20,
+            "text": "The review build is assembled; the dome and the star field load in the entry scene."
           }
         ],
         "verification": {
           "testsGreen": true,
-          "detail": "PlayMode verification passed: 41 of 42 tests ran clean."
+          "detail": "PlayMode verification passed: 37 of 39 tests ran clean."
         }
       }
     },
     {
       "id": "mcov1",
-      "title": "Coverage completion 1 — close the GDD gaps",
-      "status": "failed",
-      "attempts": 2,
-      "startedAtMs": 1700360000000,
+      "title": "Coverage completion 1.1 — confirmed comets carry the observer's name",
+      "status": "green",
+      "attempts": 1,
+      "fromAudit": true,
       "taskId": "task_0000a008",
+      "resultExcerpt": "configured) — this node was NOT independently verified\n\nI got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: the review build under <project>/Builds/Review never finished",
+      "placeholderArtAtStart": {
+        "sprites": 73,
+        "placeholders": 38
+      },
+      "commitNote": "Committed 23 file(s) as `3f4e5d6`.",
+      "visualEvidence": "observed",
+      "sectionRefs": [
+        "§4.1"
+      ],
+      "promptChars": 46,
+      "promptSha256": "3b2ad05efd118ba0054e2f38790c8b53f0f4257dadd6df5079ca0f2b7b48ff25",
+      "tip": {
+        "id": "task_0000a008",
+        "status": "completed",
+        "createdAt": 1700288000000,
+        "completedAt": 1700295200000,
+        "resultChars": 894,
+        "resultSha256": "318bf58c0970ba419da5f6b37988e5c1d2a87994a678f10da94c5bf736107fa0",
+        "stamps": {
+          "task_stuck": 2
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 3,
+            "text": "**Stop reflecting and give each confirmed comet its observer's name, then verify once.**"
+          },
+          {
+            "line": 5,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 6,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 8,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 10,
+            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
+          },
+          {
+            "line": 12,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 13,
+            "text": "- verification_skipped: the review build under <project>/Builds/Review never finished"
+          }
+        ],
+        "verification": null
+      }
+    },
+    {
+      "id": "mcov1-2",
+      "title": "Coverage completion 1.2 —<GDD passage omitted>",
+      "status": "failed",
+      "attempts": 3,
+      "fromAudit": true,
+      "startedAtMs": 1700324000000,
+      "taskId": "task_0000a009",
       "visualEvidenceBounced": false,
       "noWorkBounced": false,
       "deliveryVerificationBounced": false,
       "deliveryVerificationBounces": 0,
-      "sceneHygieneBounces": 0,
+      "sceneHygieneBounces": 1,
       "timeBoxEscalations": 0,
-      "placeholderArtAtStart": {
-        "sprites": 120,
-        "placeholders": 97
-      },
       "structureRefused": false,
       "structureFindings": [
-        "Shipped scenes PLACE 9 renderer components (2 mesh, 7 sprite).",
+        "2 scenes enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "Shipped scenes PLACE 47 renderer components (16 mesh, 31 sprite).",
         "GDD says: …<GDD passage omitted>…"
       ],
       "artBounced": false,
       "prosOnlyBounced": false,
-      "resultExcerpt": "Cancelled: the coverage pass stalled twice without changing a file, so the campaign stopped it before a third try.",
-      "commitNote": "Committed 37 file(s) as `5d6e7f8`.",
+      "resultExcerpt": "Cancelled from the dashboard after the log viewer pass came back a third time without changing a file.",
       "visualEvidence": "observed",
       "compileVerdict": {
         "ok": true,
@@ -782,16 +660,19 @@
         "errors": 0,
         "detail": "Runtime assemblies compile; test assemblies are not built by this check."
       },
-      "sectionRefs": [],
-      "promptChars": 41,
-      "promptSha256": "b5be64760202211531b8ca07e40ccadc9cba524341a177888782617c39da6ec6",
+      "sectionRefs": [
+        "§5.3"
+      ],
+      "promptChars": 46,
+      "promptSha256": "dd1ee94e39a6c7547fb229dd3d2890e9c543ef6a042e46abbaf68fb1193552e7",
       "tip": {
-        "id": "task_0000a008",
+        "id": "task_0000a009",
         "status": "cancelled",
-        "createdAt": 1700288000000,
-        "completedAt": 1700295200000,
-        "resultChars": 114,
-        "resultSha256": "a3c23ecccc099bbd3ac18e73c8490254aea7ff6d162b88a4c9f2190bcd893b23",
+        "createdAt": 1700324000000,
+        "completedAt": 1700331200000,
+        "cancelReason": "user",
+        "resultChars": 102,
+        "resultSha256": "f43a8b98183c39d6d094dc667a517fb7221212a16513052f19a569bdcd45e89a",
         "stamps": {},
         "evidenceLines": [],
         "verification": null

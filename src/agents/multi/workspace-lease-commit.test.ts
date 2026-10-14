@@ -717,8 +717,8 @@ describe("orphaned lease salvage at construction", () => {
 
   it("with the seed maps the lease persisted, salvage COMMITS the crashed owner's work and quarantines only real conflicts", async () => {
     // Measured 2026-09-08 08:19: a restart mid-task quarantined several real
-    // sprites (186 KB each, drawn over 274-byte placeholders) and three
-    // prefab edits; the project kept the placeholders because salvage had no
+    // sprites (finished art drawn over placeholders) and some prefab edits;
+    // the project kept the placeholders because salvage had no
     // seed maps and could only quarantine. The lease now writes its seed maps
     // at acquire; a crashed owner's salvage commits by the live rules.
     const lease = await manager().acquireLease({ label: "crash", forceTempCopy: true });
@@ -726,7 +726,7 @@ describe("orphaned lease salvage at construction", () => {
     expect(existsSync(`${lease.path}.seed.json`)).toBe(true);
     expect(existsSync(join(lease.path, ".strada-lease-seed.json"))).toBe(false);
     // Agent work in the lease: a new file and an edit of a seeded file.
-    writeFileSync(join(lease.path, "Assets", "Scripts", "SpiceJar.png"), "REAL ART 186KB", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "SpiceJar.png"), "FINISHED ART, NOT A PLACEHOLDER", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent edit", "utf8");
     utimesSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
     // The user evolved another seeded file in the PROJECT during the run.
@@ -758,7 +758,7 @@ describe("orphaned lease salvage at construction", () => {
     }, { timeout: 5000 });
 
     // Agent work landed in the project.
-    expect(readFileSync(join(source, "Assets", "Scripts", "SpiceJar.png"), "utf8")).toBe("REAL ART 186KB");
+    expect(readFileSync(join(source, "Assets", "Scripts", "SpiceJar.png"), "utf8")).toBe("FINISHED ART, NOT A PLACEHOLDER");
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("agent edit");
     // The user's concurrent edit was kept; the agent's copy went to quarantine.
     expect(readFileSync(join(source, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("user evolved this");
@@ -1021,7 +1021,7 @@ describe("a loose script with a module twin is the system's own duplicate", () =
   });
 });
 
-describe("lease commit replay (measured 2026-09-10: three worker commits dangling in the game repo, no salvage branch)", () => {
+describe("lease commit replay (measured 2026-09-10: worker commits dangling in the game repo, no salvage branch)", () => {
   const git = (cwd: string, ...args: string[]) =>
     execFileSync("git", ["-c", "user.email=w@x", "-c", "user.name=worker", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -1599,7 +1599,7 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
 
 describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () => {
   it("does not carry, publish or conflict on bin/obj build output", async () => {
-    // Measured live 2026-09-12 11:26 and 12:03: thirteen files in a tool
+    // Measured live 2026-09-12 11:26 and 12:03: the files in a tool
     // project's {bin,obj}/Debug folders under Tools/ differed between the
     // lease and the project — both had built them — so every one came back a CONFLICT,
     // the commit published nothing, and the whole node failed.

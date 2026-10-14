@@ -1,6 +1,6 @@
 /**
- * Measured 2026-09-08 04:42: three agent-written plan skills rode every turn
- * of every task at ~7.4k chars. A body goes in only when the task calls for it.
+ * Measured 2026-09-08 04:42: agent-written plan skills rode every turn of
+ * every task. A body goes in only when the task calls for it.
  */
 import { describe, it, expect } from "vitest";
 import { clampMemoryEntry, MAX_MEMORY_ENTRY_CHARS, selectSkillKnowledge } from "./skill-knowledge-selection.js";
@@ -25,8 +25,8 @@ describe("selectSkillKnowledge", () => {
   });
 
   it("includes a skill when one of its declared triggers appears in the prompt", () => {
-    const plan = skill("hive-inspection-checklist", "steps", { triggers: ["PlayMode verification", "conformance"] });
-    expect(selectSkillKnowledge([plan], "Run the playmode verification suite.").included).toEqual([plan]);
+    const plan = skill("hive-inspection-checklist", "steps", { triggers: ["Brood Census", "frame audit"] });
+    expect(selectSkillKnowledge([plan], "Take the brood census at dusk.").included).toEqual([plan]);
     expect(selectSkillKnowledge([plan], "Draw the bee sprites.").included).toEqual([]);
   });
 

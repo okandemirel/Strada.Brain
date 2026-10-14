@@ -72,7 +72,7 @@ export interface WorkspaceCommitResult {
    * commit should decide — but the divergence is reported so nobody has to
    * discover it later.
    *
-   * Measured: a run repaired four malformed .asmdef files, then removed them
+   * Measured: a run repaired several malformed .asmdef files, then removed them
    * while restructuring. The project kept the original broken copies and nothing
    * said so; the next run started from a project the previous one believed it
    * had fixed.
@@ -160,7 +160,7 @@ export interface WorkspaceLease {
    * Without this a lease was write-only: createTempCopy() seeded it, the agent
    * wrote into it, and release() deleted the directory. Measured — a task that
    * asked for one C# file called file_write successfully against
-   * `<tmp>/strada-workspaces/task-<id>/Assets/Scripts/Board.cs`, read it back,
+   * `<tmp>/strada-workspaces/task-<id>/Assets/Scripts/<File>.cs`, read it back,
    * verified it, reported success, and the user's project never received a
    * byte. The agent was doing the work and throwing it away.
    *
@@ -282,9 +282,9 @@ const DEFAULT_SUBMODULE_TIMEOUT_MS = 300_000;
  * 2026-09-10: the cap used to apply to everything, and a file the lease was
  * not seeded with is one the agent "wrote blind" — its work is quarantined at
  * commit and deleted with the lease. A Unity project routinely carries more
- * than 2000 uncommitted paths under Assets/ (this one: 676 at the seed, 9002
- * in the case the seed-priority comment cites), so the agent's edits to the
- * paths past the cut were being thrown away.
+ * than 2000 uncommitted paths under Assets/ (measured on the test project,
+ * both at the seed and in the case the seed-priority comment cites), so the
+ * agent's edits to the paths past the cut were being thrown away.
  */
 const MAX_UNCOMMITTED_ENTRIES = 2000;
 /** Paths the lease must always be seeded with: the project's own content. */
@@ -391,8 +391,8 @@ const LEASE_SIDECAR_FILES = new Set([".strada-lease-owner.json", ".strada-lease-
  * The seed maps and seed HEAD, written BESIDE the lease at acquire so that a
  * crashed or restarted owner's work can still be committed by the rules the
  * live commit uses. Measured 2026-09-08 08:19: without them, salvage was
- * quarantine-only — five real Rocket sprites (186 KB each, replacing 274-byte
- * placeholders) and three prefab edits went to .strada/lease-conflicts and
+ * quarantine-only — several finished sprites (real art replacing
+ * placeholders) and some prefab edits went to .strada/lease-conflicts and
  * the project kept the placeholders. Review 2026-09-08: a file INSIDE the
  * lease is writable by the agent's own tools — a forged sourceSeed made
  * salvage overwrite a user's concurrent edit, a forged leaseSeed entry made
@@ -1264,7 +1264,7 @@ export class WorkspaceLeaseManager {
       // output grows past its cap, and a Unity project's `git status -uall` runs
       // to hundreds of kilobytes because Library/ is untracked.
       //
-      // Measured: a project with 9002 uncommitted paths had the first ~180
+      // Measured: a project with thousands of uncommitted paths had its first
       // entries cut away — .gitmodules, both submodules and every
       // Assets/Modules file — leaving only Library/. The workspace was seeded
       // with Unity's cache and none of the project's code, git exited 0, and
@@ -1380,8 +1380,8 @@ export class WorkspaceLeaseManager {
    * the framework it is supposed to conform to, while the project it was seeded
    * from has all of it.
    *
-   * Measured on a full test-game build: the project held 295 Strada.Core .cs
-   * files and the workspace held none. `list_directory Packages/Submodules/
+   * Measured on a full test-game build: the project held every Strada.Core
+   * .cs file and the workspace held none. `list_directory Packages/Submodules/
    * Strada.Core` answered "directory not found", the glob for its sources found
    * nothing, and the agent — having looked and found no framework — invented its
    * own: a GameModuleConfig deriving from ScriptableObject and an .asmdef
@@ -1479,7 +1479,7 @@ export class WorkspaceLeaseManager {
    *
    * This used to be `rev-list --count HEAD --not --all`, which always answers
    * 0: `--all` includes HEAD itself, so no commit is ever "not in --all".
-   * Measured 2026-09-10 in the game repo: three worker commits from the day
+   * Measured 2026-09-10 in the game repo: worker commits from the day
    * before dangling in the object store, zero salvage branches, zero
    * "Preserved lease commits" log lines — the salvage had never fired once.
    */
@@ -1526,8 +1526,8 @@ export class WorkspaceLeaseManager {
    * worktree on a detached HEAD, so the project received the content as
    * uncommitted changes and the commits themselves died with the worktree
    * (salvage never fired — see listLeaseCommits). Measured 2026-09-09: a run
-   * committed "final-sprite-delivery: reduce placeholder count to 279" in its
-   * lease; the project got 279 placeholders and no commit.
+   * committed a sprite delivery in its lease; the project got the delivered
+   * files as uncommitted changes and no commit.
    *
    * Each lease commit becomes one project commit with the same author,
    * message and per-path content, built through a TEMPORARY index so the
@@ -2129,8 +2129,8 @@ export class WorkspaceLeaseManager {
           // tree, so every file the user had modified-but-uncommitted differs
           // from the lease. That read as "the agent changed it" and copied HEAD
           // over the user's edit. Reproduced: a task whose agent only created an
-          // unrelated Board.cs reported written:[Board.cs, Player.cs] and
-          // reverted Player.cs to its committed contents.
+          // unrelated <New>.cs reported written:[<New>.cs, <Edited>.cs] and
+          // reverted the user's <Edited>.cs to its committed contents.
           const leaseSeeded = leaseSeed.get(rel);
           // BOTH the mtime and the size: a rewrite that preserved the mtime
           // read as "never written to", and the worker's changed bytes were
@@ -2239,8 +2239,8 @@ export class WorkspaceLeaseManager {
               && targetNow.ctimeMs !== sourceSeeded.c;
             // A moved mtime with the SAME bytes as the seed-time commit is not a
             // user change (review + measurement 2026-09-07): the merge attempt
-            // before this commit rewrote 169 files byte-for-byte and every
-            // agent edit to them was quarantined.
+            // before this commit rewrote a measured batch of files
+            // byte-for-byte and every agent edit to them was quarantined.
             const atSeed = mtimeMoved || ctimeMoved
               ? await this.seedHeadVerdict(sourceRoot, seedHead, rel, target)
               : "same";
@@ -2712,7 +2712,8 @@ export class WorkspaceLeaseManager {
 
     // The copy-back above just added this run's captures to the project;
     // the same step retires the oldest so Recordings/ stays a recent window,
-    // not an archive nobody reads (1.2 GB by 2026-09-07). Only the real
+    // not an archive nobody reads (measured: it had grown without bound by
+    // 2026-09-07). Only the real
     // project: a quarantine-only pass, or a lease derived from another lease,
     // touches nothing here.
     let capturesPruned: WorkspaceCommitResult["capturesPruned"];

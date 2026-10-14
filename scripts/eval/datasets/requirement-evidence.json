@@ -31,9 +31,10 @@
     "  (src/campaign/scope-verdict.ts), the rule that closes a requirement row only when its own",
     "  check passed on the revision being judged. Each row carries the row's ledger state and that",
     "  revision. They are kept OUT of `rows`, so the word-matcher arm above and its oracles are",
-    "  unchanged: the probe-* rows are the drift trace's shapes (a labelled rule, a feature, a player",
-    "  input and an architecture guardrail, each held against a commit that names a file sharing a",
-    "  word with it), in INVENTED wording, and today's word matcher closes three of the four. The",
+    "  unchanged: the probe-* rows are four requirement kinds the ledger owns (a labelled rule, a",
+    "  feature, a player input and an architecture guardrail), each held against a commit that names",
+    "  a file sharing a word with it or, for the input, sharing none. Every row is INVENTED, and",
+    "  today's word matcher closes three of the four. The",
     "  harness reports that count beside the ledger arm's rates; it is disclosure, not a budget.",
     "  ledgerBudgets are pre-registered the same way: a false close is budgeted at zero, and so is",
     "  a false open, because the ledger rule reads recorded results, not wording."
@@ -101,27 +102,27 @@
       "source": "src/campaign/campaign-planner.ts (quotableFacts: suite lines must be unfiltered)"
     },
     {
-      "id": "storm-by-shipped-prefab",
-      "requirement": "Storm boss: absent",
-      "evidence": { "status": "green", "structureFindings": ["Assets/Prefabs/StormBoss.prefab present"] },
+      "id": "ferry-by-shipped-prefab",
+      "requirement": "Ferry crossing: absent",
+      "evidence": { "status": "green", "structureFindings": ["Assets/Prefabs/FerryCrossing.prefab present"] },
       "expected": "proven",
-      "rationale": "The shipped tree holds the boss prefab the requirement names.",
-      "source": "src/campaign/campaign-planner.test.ts:83"
+      "rationale": "The shipped tree holds the ferry-crossing prefab the requirement names.",
+      "source": "src/campaign/campaign-planner.test.ts:83 (the shipped-tree line shape)"
     },
     {
-      "id": "storm-by-status-failed",
-      "requirement": "Storm boss: absent",
+      "id": "ferry-by-status-failed",
+      "requirement": "Ferry crossing: absent",
       "evidence": { "status": "failed" },
       "expected": "not_proven",
-      "rationale": "'status: failed' is fourteen characters of the record and says how the sprint ended, nothing about the storm (Codex 2026-09-12 AD#1).",
+      "rationale": "'status: failed' is fourteen characters of the record and says how the sprint ended, nothing about the ferry (Codex 2026-09-12 AD#1).",
       "source": "src/campaign/campaign-planner.ts (quotableFacts: status lines are never quotable)"
     },
     {
-      "id": "storm-by-multi-file-commit",
-      "requirement": "Storm boss: absent",
-      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Storm.cs, Assets/Prefabs/Storm.prefab" },
+      "id": "ferry-by-multi-file-commit",
+      "requirement": "Ferry crossing: absent",
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/FerryCrossing.cs, Assets/Prefabs/FerryRaft.prefab" },
       "expected": "proven",
-      "rationale": "A note listing several files closes each requirement it names; both files are the storm's.",
+      "rationale": "A note listing several files closes each requirement it names; both files are the ferry's.",
       "source": "src/campaign/coverage-audit-retry.test.ts:44"
     },
     {
@@ -351,7 +352,7 @@
     {
       "id": "bomb-by-no-trace-finding",
       "requirement": "Bomb element: absent",
-      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code: L3 Bomb, L5 Rocket"] },
+      "evidence": { "status": "green", "structureFindings": ["GDD element schedule: 2 of 14 scheduled element(s) have NO trace in code: L3 Bomb, L5 Geyser"] },
       "expected": "not_proven",
       "rationale": "The line NAMES the bomb and says it has no trace in the code — the finding of absence, read back as the evidence of presence.",
       "source": "src/campaign/campaign-manager.ts:6706 (measureDeliveryStructure)"
@@ -446,8 +447,8 @@
     },
     {
       "id": "fps-on-device-by-editor-measurement",
-      "requirement": "At least 60 fps on a mid-range Android device: absent",
-      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 60 fps: MET — 62 fps average in the editor under -batchmode"] },
+      "requirement": "At least 44 fps on the oldest supported handheld console: absent",
+      "evidence": { "status": "green", "gddClaims": ["GDD frame rate ≥ 44 fps: MET — 52 fps average in the editor under -batchmode"] },
       "expected": "not_measured",
       "rationale": "gdd-claims.ts states it outright: a frame rate from the editor under -batchmode is a FLOOR for the player, not the player's number — and this claim names a device nothing here ran on.",
       "source": "src/campaign/gdd-claims.ts:16-23 (the medium names itself)"
@@ -511,7 +512,7 @@
     {
       "id": "fun-by-anything",
       "requirement": "The game is fun: absent",
-      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Storm.cs, Assets/Prefabs/Storm.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/FerryCrossing.cs, Assets/Prefabs/FerryRaft.prefab", "testVerdict": "179/179 tests passed", "testVerdictUnfiltered": true },
       "expected": "not_measured",
       "rationale": "An aspiration, not scheduled content. The coverage system is instructed to be lenient about these, and no evidence kind settles it.",
       "source": "src/campaign/campaign-planner.ts (COVERAGE_SYSTEM: strict about scheduled content, lenient about aspiration)"
@@ -525,64 +526,64 @@
   "ledgerRows": [
     {
       "id": "probe-labelled-rule-by-system-file",
-      "requirement": "LR-02 A lantern refills only at a shrine the player has lit.",
-      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Lantern/LanternSystem.cs, Assets/Scripts/Lantern/LanternView.cs" },
+      "requirement": "K7 A lantern refills only at a shrine the player has lit.",
+      "evidence": { "status": "green", "commitNote": "3 commit(s): Assets/Scripts/Lantern/RefillRules.cs, Assets/Scripts/Lantern/LanternView.cs" },
       "revision": "rev-now",
       "ledger": {
         "status": "failing",
-        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R2_lr02aa", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "a1" }],
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M2.Acceptance_M2.R2_k7refl", "path": "Assets/StradaAcceptance/M2/Acceptance_M2.cs", "bodySha": "a1" }],
         "last": { "revision": "rev-now", "atMs": 1, "outcome": "fail", "detail": "lantern charge after visiting an unlit shrine: Expected 0 But was 3" }
       },
       "expected": "not_proven",
-      "rationale": "The rule's own check failed on this revision. The commit names a system file that shares the rule's noun, which is the whole of what the word match saw: a file exists, not that it obeys the rule.",
-      "source": "GDD-drift plan W12/W16, probe 1 of the drift trace (a labelled rule closed by a system file's name); wording invented"
+      "rationale": "The rule's own check failed on this revision. The commit names files that share the rule's words, which is the whole of what the word match saw: a file exists, not that it obeys the rule.",
+      "source": "GDD-drift plan W12/W16, ledger probe 1 (a labelled rule held against a file name that shares its words); invented"
     },
     {
       "id": "probe-feature-by-service-file",
-      "requirement": "Rewind: after a fall the player may rewind once per run, then the run ends.",
-      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Services/RewindService.cs" },
+      "requirement": "Weather: fog rolls in once the third shrine is lit and hides the far paths while it lasts.",
+      "evidence": { "status": "green", "commitNote": "1 commit(s): Assets/Scripts/Weather/WeatherService.cs" },
       "revision": "rev-now",
       "ledger": {
         "status": "open",
-        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M3.Acceptance_M3.R1_rewind", "path": "Assets/StradaAcceptance/M3/Acceptance_M3.cs", "bodySha": "b1" }]
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M3.Acceptance_M3.R1_fog", "path": "Assets/StradaAcceptance/M3/Acceptance_M3.cs", "bodySha": "b1" }]
       },
       "expected": "not_proven",
-      "rationale": "The check written for the feature never ran, so nothing measured the once-per-run limit or the end of the run. A service named after the feature is not the feature's behaviour.",
-      "source": "GDD-drift plan W12/W16, probe 2 of the drift trace (a feature closed by a service file's name); wording invented"
+      "rationale": "The check written for the feature never ran, so nothing measured when the fog arrives or what it hides. A service named after the feature is not the feature's behaviour.",
+      "source": "GDD-drift plan W12/W16, ledger probe 2 (a feature held against a service file's name); invented"
     },
     {
       "id": "probe-input-by-input-service",
-      "requirement": "The player taps a shrine to light it.",
-      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Input/InputService.cs" },
+      "requirement": "The player holds a finger on a shrine for one second to light it.",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Controls/PointerInputService.cs" },
       "revision": "rev-now",
       "ledger": {
         "kind": "input",
         "status": "failing",
-        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M1.Acceptance_M1.R3_tapsh", "path": "Assets/StradaAcceptance/M1/Acceptance_M1.cs", "bodySha": "c1" }],
-        "last": { "revision": "rev-now", "atMs": 1, "outcome": "fail", "detail": "a tap at the shrine's screen position left it unlit" }
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M1.Acceptance_M1.R3_holdsh", "path": "Assets/StradaAcceptance/M1/Acceptance_M1.cs", "bodySha": "c1" }],
+        "last": { "revision": "rev-now", "atMs": 1, "outcome": "fail", "detail": "a one-second hold at the shrine's screen position left it unlit" }
       },
       "expected": "not_proven",
-      "rationale": "The harness tapped the shrine and it stayed unlit. An input service existing says nothing about whether a player's tap reaches the shrine.",
-      "source": "GDD-drift plan W12/W16, probe 3 of the drift trace (a player input held against an input service); wording invented"
+      "rationale": "The harness held the shrine and it stayed unlit. An input service existing says nothing about whether a player's hold reaches the shrine.",
+      "source": "GDD-drift plan W12/W16, ledger probe 3 (a player input held against an input service that shares no word with it); invented"
     },
     {
       "id": "probe-guardrail-by-interface-file",
-      "requirement": "G2: gameplay systems read the grid only through IGridQuery.",
-      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Grid/IGridQuery.cs, Assets/Scripts/Grid/GridQuery.cs" },
+      "requirement": "Architecture: gameplay code reads the tide table only through ITideTable.",
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Tides/ITideTable.cs, Assets/Scripts/Tides/TideTable.cs" },
       "revision": "rev-now",
       "ledger": {
         "status": "passing",
-        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M1.Acceptance_M1.R4_gridq", "path": "Assets/StradaAcceptance/M1/Acceptance_M1.cs", "bodySha": "d1", "weak": "asserts the interface's method count through reflection; no gameplay system is observed" }],
+        "checks": [{ "kind": "test", "testName": "Strada.Acceptance.M1.Acceptance_M1.R4_tidet", "path": "Assets/StradaAcceptance/M1/Acceptance_M1.cs", "bodySha": "d1", "weak": "only constructs a TideTable and reads one entry back; no gameplay code is observed" }],
         "last": { "revision": "rev-now", "atMs": 1, "outcome": "pass", "detail": "passed in run r7" }
       },
       "expected": "not_proven",
-      "rationale": "The only check passed, and the independent review called it weak: counting an interface's methods proves the interface exists, not that gameplay reads the grid only through it.",
-      "source": "GDD-drift plan W12/W16, probe 4 of the drift trace (an architecture guardrail closed by its interface file); wording invented"
+      "rationale": "The only check passed, and the independent review called it weak: building the table proves the type works, not that gameplay reads tides only through the interface.",
+      "source": "GDD-drift plan W12/W16, ledger probe 4 (an architecture constraint held against its interface file); invented"
     },
     {
       "id": "ledger-pass-on-an-older-revision",
       "requirement": "The lantern drains one charge every 5 seconds.",
-      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Lantern/LanternSystem.cs" },
+      "evidence": { "status": "green", "commitNote": "2 commit(s): Assets/Scripts/Lantern/ChargeTimer.cs" },
       "revision": "rev-now",
       "ledger": {
         "kind": "constant",

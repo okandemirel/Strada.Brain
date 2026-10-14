@@ -49,7 +49,7 @@ const SAVE_MILESTONE = {
   title: "Sprint A — Save",
   status: "green",
   commitNote: "2 commit(s): Assets/Scripts/SaveSystem.cs",
-  testVerdict: "179/179 tests passed",
+  testVerdict: "83/83 tests passed",
   testVerdictUnfiltered: true,
 };
 
@@ -119,7 +119,7 @@ const MUST_DIFFER: Array<[string, string, string]> = [
   ["approximation ≈", "≈60 fps in the built player", "60 fps in the built player"],
   // A DIGIT GLUED TO A WORD is a version, a tier or an index (round 15 #17).
   ["digit after letters", "Support WebGL1", "Support WebGL2"],
-  ["digit after letters", "The L3 Bomb must spawn", "The L5 Bomb must spawn"],
+  ["digit after letters", "The Ch2 Gull must spawn", "The Ch4 Gull must spawn"],
   ["digit after letters", "Use HDRP2 for the render pipeline", "Use HDRP for the render pipeline"],
   // Quantity markers: a percentage is not a count, a price is not a quantity.
   ["percentage", "Drop rate: 5%", "Drop rate: 5"],
@@ -160,7 +160,7 @@ const MUST_MATCH: Array<[string, string, string]> = [
   ["list marker", "- 10 levels", "10 levels"],
   ["numbered list marker", "1. 10 levels", "10 levels"],
   ["camelCase", "SaveSystem must persist", "Save System must persist"],
-  ["thousands separator", "3,000 coins", "3.000 coins"],
+  ["thousands separator", "6,400 shells", "6.400 shells"],
   ["inflection", "The game restarts", "The game restart"],
 ];
 

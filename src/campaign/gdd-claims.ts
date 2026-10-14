@@ -458,8 +458,8 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
     // WITHIN THE CLAUSE THE LABEL INTRODUCES. A label whose line went on,
     // after a semicolon, to a figure about something other than one round
     // gave that figure as the session allowance.
-    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "6–13 min in a calm
-    // season; up to 37 min in a storm season" lost the longer case to the
+    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "33–38 min solo; up
+    // to 53 min when a second player joins" lost the longer case to the
     // first semicolon, so the run cut a legal long round short (Codex
     // 2026-09-13 AF#13). A clause that
     // changes the subject — to a DAY, a WEEK, a SITTING — ends the read.
@@ -640,8 +640,8 @@ export function assessNumericClaims(
     /**
      * How many sessions ONE RUN was able to ask for — bounded by the
      * producer's wall-clock budget, so a game whose document gives each round
-     * five minutes is played five at a time, not twelve. Measured against the
-     * constant, such a run read "not met" and BLOCKING, which refuses a
+     * 23 minutes is played one session at a time, not twelve. Measured against
+     * the constant, such a run read "not met" and BLOCKING, which refuses a
      * correct game for the length of its own rounds (Codex 2026-09-13 AJ#1).
      * Defaults to the producer's cap, which is what every caller had before.
      */
@@ -748,11 +748,11 @@ export function assessNumericClaims(
           };
         }
         if (!perf || perf.avgFps === undefined) return { claim, status: "unmeasured", note: perf ? "the play-through recorded no frame timing" : noRun, blocking: false };
-        // Measured live 2026-09-10: 184 689 frames in 42 s = 4390 "fps" in the
-        // batch editor, which renders only at capture points. That number says
-        // nothing about the player's frame rate in either direction, so the
-        // claim stays NOT MEASURED with the figure disclosed; the worst frame
-        // (a real hitch) is reported beside it.
+        // Measured live: the batch editor renders only at capture points, so
+        // its loop rate came out far above any frame rate a display shows.
+        // That number says nothing about the player's frame rate in either
+        // direction, so the claim stays NOT MEASURED with the figure
+        // disclosed; the worst frame (a real hitch) is reported beside it.
         return {
           claim,
           status: "unmeasured",
@@ -986,8 +986,8 @@ export function assessNumericClaims(
         const mustPlay = catalogMatches ? counted.sessionCount : claim.value;
         // WHAT ONE RUN COULD REACH, from the run itself — not from a
         // constant. The batch a run may play is bounded by its own wall-clock
-        // budget, so a game whose document gives each round five minutes is
-        // played five sessions at a time, not twelve: measured against the
+        // budget, so a game whose document gives each round 23 minutes is
+        // played one session at a time, not twelve: measured against the
         // constant, such a run was "not met" and BLOCKING, which refuses a
         // correct game for the size of its own rounds (Codex 2026-09-13
         // AJ#1). The waiver is for a game bigger than what this run was able

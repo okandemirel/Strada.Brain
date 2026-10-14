@@ -18,10 +18,10 @@ import {
 /**
  * The delivered game measured, not the delivery report re-read.
  *
- * Audited 2026-09-03: the test game shipped as "game build complete" with an entry
- * scene holding zero MeshFilter/MeshRenderer, five runtime scripts calling
- * GameObject.CreatePrimitive, and 100 prefabs / 198 pngs / 62 models nothing
- * bound. Every fixture below is a file shape Unity itself would read.
+ * Audited 2026-09-03 (measured on a delivered project): a game shipped as "game
+ * build complete" with an entry scene that rendered nothing, runtime scripts
+ * calling GameObject.CreatePrimitive, and prefabs, pngs and models nothing
+ * bound. Every fixture below is invented, in a file shape Unity itself would read.
  */
 
 const roots: string[] = [];
@@ -106,40 +106,44 @@ describe("isScaffoldingScene", () => {
 });
 
 describe("assessBuiltAsSpecified — refusal", () => {
-  it("refuses the real delivery shape: nothing placed, primitives in code, art unbound", () => {
+  it("refuses a delivery that places nothing, builds primitives in code and leaves art unbound", () => {
     const root = project();
     buildSettings(root, [
-      { path: "Assets/Scenes/TradeHub.unity" },
-      { path: "Assets/InitTestScene0e93b2d6.unity" },
+      { path: "Assets/Scenes/Orchard.unity" },
+      { path: "Assets/Tests/Runtime/Smoke.unity" },
     ]);
-    // The entry scene: a camera, a bootstrapper pointing at a config asset,
-    // and not one renderer — exactly the measured entry scene's shape.
+    // The entry scene: a camera, a roster component pointing at a config
+    // asset, and not one renderer.
     put(
       root,
-      "Assets/Scenes/TradeHub.unity",
-      `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _config: {fileID: 11400000, guid: c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0, type: 2}\n`,
+      "Assets/Scenes/Orchard.unity",
+      `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _roster: {fileID: 11400000, guid: c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0, type: 2}\n`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/InitTestScene0e93b2d6.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
-    // A config the scene references, pointing at a prefab that IS art — but
-    // the scene never places it.
+    put(root, "Assets/Tests/Runtime/Smoke.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
+    // A config the scene references, pointing at two prefabs that ARE art —
+    // but the scene never places either.
     put(
       root,
-      "Assets/Settings/CampLayout.asset",
-      `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _tentTemplate: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n`,
+      "Assets/Settings/OrchardRoster.asset",
+      `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n` +
+        `  _beehive: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n` +
+        `  _basket: {fileID: 7, guid: 77777777777777777777777777777777, type: 3}\n`,
       "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
     );
-    put(root, "Assets/Prefabs/Tent.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/tent.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Beehive.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/beehive.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Basket.prefab", artPrefab("88888888888888888888888888888888"), "77777777777777777777777777777777");
+    put(root, "Assets/Art/basket.png", "pixels", "88888888888888888888888888888888");
     // Unbound art: a prefab and a model nothing reaches.
-    put(root, "Assets/Prefabs/SpiceJar.prefab", artPrefab("44444444444444444444444444444444"), "33333333333333333333333333333333");
-    put(root, "Assets/Art/Models/Tent.fbx", "binary", "55555555555555555555555555555555");
-    put(root, "Assets/Art/spice_jar.png", "pixels", "44444444444444444444444444444444");
+    put(root, "Assets/Prefabs/Scarecrow.prefab", artPrefab("44444444444444444444444444444444"), "33333333333333333333333333333333");
+    put(root, "Assets/Art/Models/Windmill.fbx", "binary", "55555555555555555555555555555555");
+    put(root, "Assets/Art/scarecrow.png", "pixels", "44444444444444444444444444444444");
     // The geometry the player actually sees.
     put(
       root,
-      "Assets/Scripts/CampBuilder.cs",
-      "public class CampBuilder { void Build() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }",
+      "Assets/Scripts/RowPlanter.cs",
+      "public class RowPlanter { void Plant() { GameObject.CreatePrimitive(PrimitiveType.Capsule); GameObject.CreatePrimitive(PrimitiveType.Cylinder); } }",
       "66666666666666666666666666666666",
     );
 
@@ -148,24 +152,25 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toBeDefined();
     expect(report.refusal).toContain("render NOTHING");
     // Names the scene…
-    expect(report.refusal).toContain("Assets/Scenes/TradeHub.unity");
+    expect(report.refusal).toContain("Assets/Scenes/Orchard.unity");
     // …the counts…
     expect(report.refusal).toContain("0 world renderer components");
     // …and the unbound assets it found.
-    expect(report.refusal).toContain("Assets/Prefabs/SpiceJar.prefab");
-    expect(report.refusal).toContain("Assets/Art/Models/Tent.fbx");
+    expect(report.refusal).toContain("Assets/Prefabs/Scarecrow.prefab");
+    expect(report.refusal).toContain("Assets/Art/Models/Windmill.fbx");
     expect(report.refusal).toContain("GameObject.CreatePrimitive");
     expect(report.refusal).toContain("unity_bind_sprite");
     expect(report.refusal).toContain("unity_place_prefab");
     expect(report.shippedRenderers).toBe(0);
     // The scaffolding scene is measured but not judged as shipped work.
-    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/TradeHub.unity"]);
-    // The prefab the config points at is NOT called unbound…
-    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Tent.prefab");
-    // …but its 1 renderer is reported as referenced-only, never as shipped.
-    expect(report.referencedOnlyRenderers).toBe(1);
-    expect(report.unboundPrefabs).toContain("Assets/Prefabs/SpiceJar.prefab");
-    expect(report.primitiveScripts).toEqual(["Assets/Scripts/CampBuilder.cs"]);
+    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/Orchard.unity"]);
+    // The prefabs the config points at are NOT called unbound…
+    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Beehive.prefab");
+    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Basket.prefab");
+    // …but their renderers are reported as referenced-only, never as shipped.
+    expect(report.referencedOnlyRenderers).toBe(2);
+    expect(report.unboundPrefabs).toContain("Assets/Prefabs/Scarecrow.prefab");
+    expect(report.primitiveScripts).toEqual(["Assets/Scripts/RowPlanter.cs"]);
   });
 
   it("refuses when every placed renderer is a Unity built-in and art sits unbound", () => {
@@ -343,11 +348,10 @@ describe("assessBuiltAsSpecified — what it could not measure", () => {
 
 describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
   /**
-   * Audited 2026-09-04 against the live test-game project: the refusal said
-   * "the shipped scenes render NOTHING ... 100 prefabs unbound" and seven
-   * sprints in a row failed to act on it. The scene it had to fill held a
-   * camera and a GameBootstrapper whose config listed no modules — two
-   * GameObjects, no prefab instance — and nothing the sprint was told said so.
+   * Audited 2026-09-04 (measured on a delivered project): the refusal said the
+   * shipped scenes render NOTHING and listed the unbound prefabs, and sprint
+   * after sprint failed to act on it. The scene it had to fill held almost
+   * nothing, and nothing the sprint was told said how little.
    */
   it("names how empty the entry scene is, in the refusal and the disclosures", () => {
     const root = project();
@@ -356,6 +360,7 @@ describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
       root,
       "Assets/Scenes/Entry.unity",
       `${HEADER}--- !u!1 &100\nGameObject:\n  m_Name: MainCamera\n${CAMERA(0)}` +
+        `--- !u!1 &150\nGameObject:\n  m_Name: Sun\n--- !u!108 &151\nLight:\n  m_Enabled: 1\n  m_Type: 1\n` +
         `--- !u!1 &200\nGameObject:\n  m_Name: Bootstrap\n` +
         `--- !u!114 &201\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: 703ceb5289d5847f5800cd363a983966, type: 3}\n` +
         `  m_EditorClassIdentifier: Strada.Core::Strada.Core.Bootstrap.GameBootstrapper\n`,
@@ -366,14 +371,14 @@ describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
 
     const report = assessBuiltAsSpecified(root);
     const entry = report.scenes[0]!;
-    expect(entry.gameObjects).toBe(2);
+    expect(entry.gameObjects).toBe(3);
     expect(entry.prefabInstances).toBe(0);
     expect(entry.scripts).toEqual(["GameBootstrapper"]);
 
     expect(report.refusal).toBeDefined();
-    expect(report.refusal).toContain("2 GameObjects, 0 placed prefab instances, script GameBootstrapper");
+    expect(report.refusal).toContain("3 GameObjects, 0 placed prefab instances, script GameBootstrapper");
     expect(report.disclosures.join("\n")).toContain(
-      "The entry scene Assets/Scenes/Entry.unity holds 2 GameObjects, 0 placed prefab instances, script GameBootstrapper.",
+      "The entry scene Assets/Scenes/Entry.unity holds 3 GameObjects, 0 placed prefab instances, script GameBootstrapper.",
     );
   });
 
@@ -477,18 +482,18 @@ function boundSpriteProject(root: string, spriteGuid: string): void {
 }
 
 describe("assessBuiltAsSpecified — placeholder-grade art", () => {
-  // Measured 2026-09-06 on the test game's lease: 409 of 428 sprites were
-  // 64×64 PNGs of ~281 bytes — procedural squares — and the gate counted them
-  // as "428 sprite textures". A game whose art is 95% solid squares delivered.
+  // Measured 2026-09-06 on a delivered project: nearly all of its sprites were
+  // tiny procedural squares, and the gate counted them as sprite textures like
+  // any other. A game whose art was almost all solid squares delivered.
   it("refuses when the sprite art is overwhelmingly flat shapes, naming counts, files and the tools", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Generated/Tent.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Tent.png", png(56, 56, "flat"), "a0000000000000000000000000000000");
     // Eleven unbound flat shapes outside Generated/, one per prop, in one folder.
     const flatProps = ["Awning", "Cistern", "Compass", "DateBasket", "Hourglass", "IndigoRug", "Saddlebag", "SaltBlock", "SilkBolt", "SpiceJar", "Waterskin"]
       .map((name) => `Assets/Art/Props/${name}.png`);
-    flatProps.forEach((rel, i) => putBytes(root, rel, png(64, 64, "flat"), `b${String(i + 1).padStart(31, "0")}`));
-    putBytes(root, "Assets/Art/Real/Hero.png", png(64, 64, "noise"), "c0000000000000000000000000000000");
+    flatProps.forEach((rel, i) => putBytes(root, rel, png(56, 56, "flat"), `b${String(i + 1).padStart(31, "0")}`));
+    putBytes(root, "Assets/Art/Real/Hero.png", png(56, 56, "noise"), "c0000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -515,9 +520,9 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     // placeholder PNGs while the refusal's examples were icons nothing bound.
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000"); // Tent.prefab placed, sprite a000… bound
-    putBytes(root, "Assets/Art/tent.png", png(64, 64, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
+    putBytes(root, "Assets/Art/tent.png", png(56, 56, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
     for (let i = 1; i <= 11; i++) {
-      putBytes(root, `Assets/Art/Glyphs/Glyph_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+      putBytes(root, `Assets/Art/Glyphs/Glyph_${i}.png`, png(56, 56, "flat"), `b${String(i).padStart(31, "0")}`);
     }
     const report = assessBuiltAsSpecified(root);
     expect(report.boundPlaceholderSprites).toBe(1);
@@ -530,11 +535,11 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
   it("only discloses when the placeholders are a minority", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Tent.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Tent.png", png(56, 56, "noise"), "a0000000000000000000000000000000");
     for (let i = 1; i <= 8; i++) {
-      putBytes(root, `Assets/Art/Real/Hero_${i}.png`, png(64, 64, "noise"), `c${String(i).padStart(31, "0")}`);
+      putBytes(root, `Assets/Art/Real/Hero_${i}.png`, png(56, 56, "noise"), `c${String(i).padStart(31, "0")}`);
     }
-    putBytes(root, "Assets/Art/Generated/Marker.png", png(64, 64, "flat"), "d0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Marker.png", png(56, 56, "flat"), "d0000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -547,7 +552,7 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
     // Fewer than the minimum, and one is not even a PNG.
-    putBytes(root, "Assets/Art/Generated/Tent.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Tent.png", png(56, 56, "flat"), "a0000000000000000000000000000000");
     put(root, "Assets/Art/junk.png", "pixels", "e0000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
@@ -581,15 +586,15 @@ function wav(seconds: number, fill: number): Buffer {
 }
 
 describe("assessBuiltAsSpecified — audio inventory", () => {
-  // Measured 2026-09-07: 19 WAVs, thirteen of 0.15 s, four byte-identical
-  // to another, counted nowhere.
+  // Measured 2026-09-07 on a delivered project: most clips were sub-second
+  // blips and several were byte-identical to another, counted nowhere.
   it("counts clips, duplicates by content and blips, and says so", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Tent.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Tent.png", png(56, 56, "noise"), "a0000000000000000000000000000000");
     putBytes(root, "Assets/Audio/caravan_bells.wav", wav(3, 7), "d1000000000000000000000000000000");
     putBytes(root, "Assets/Audio/dune_wind.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
-    putBytes(root, "Assets/Audio/ui_select.wav", wav(0.15, 3), "d3000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/ui_select.wav", wav(0.27, 3), "d3000000000000000000000000000000");
     putBytes(root, "Assets/Audio/sale.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
@@ -607,7 +612,7 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
   it("says when there is no audio at all", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Tent.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Tent.png", png(56, 56, "noise"), "a0000000000000000000000000000000");
     expect(assessBuiltAsSpecified(root).disclosures).toContain("Project audio: no audio clips under Assets/ at all.");
   });
 });
@@ -803,9 +808,9 @@ describe("defects the measurement review found (2026-09-07)", () => {
   it("flat artwork the GDD ASKED for is a style, not placeholder art (Codex 2026-09-11 B#17)", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Generated/Card.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Card.png", png(56, 56, "flat"), "a0000000000000000000000000000000");
     for (let i = 1; i <= 11; i++) {
-      putBytes(root, `Assets/Art/Cards/Card_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+      putBytes(root, `Assets/Art/Cards/Card_${i}.png`, png(56, 56, "flat"), `b${String(i).padStart(31, "0")}`);
     }
     // The pixels are identical; only the document differs.
     expect(assessBuiltAsSpecified(root).refusal).toContain("placeholder art");
@@ -947,10 +952,10 @@ describe("defects the measurement review found (2026-09-07)", () => {
 
   it("a file that is not a readable image is neither art nor a placeholder (Codex 2026-09-11 N#5)", () => {
     const root = project();
-    putBytes(root, "Assets/Art/Real/Hero.png", png(64, 64, "noise"), G("1"));
+    putBytes(root, "Assets/Art/Real/Hero.png", png(56, 56, "noise"), G("1"));
     putBytes(root, "Assets/Art/Empty.png", Buffer.alloc(0), G("2"));
     putBytes(root, "Assets/Art/Junk.png", Buffer.from("this is not a png at all"), G("3"));
-    putBytes(root, "Assets/Art/Flat.png", png(64, 64, "flat"), G("4"));
+    putBytes(root, "Assets/Art/Flat.png", png(56, 56, "flat"), G("4"));
 
     expect(classifyPng(join(root, "Assets/Art/Real/Hero.png"))).toBe("art");
     expect(classifyPng(join(root, "Assets/Art/Empty.png"))).toBe("invalid");
@@ -970,10 +975,10 @@ describe("defects the measurement review found (2026-09-07)", () => {
   });
 
   it("a header is not a file: declared chunks must fit in it (Codex 2026-09-11 O#9)", () => {
-    // 41 bytes: the signature, a 64x64 IHDR, and an IDAT declaring 100 000
+    // 45 bytes: the signature, a 56x56 IHDR, and an IDAT declaring 100 000
     // bytes it does not contain. The pixels cannot be decoded, and the
     // bytes-per-pixel fallback then called it art the sprint need not draw.
-    const flat = png(64, 64, "flat");
+    const flat = png(56, 56, "flat");
     const header = Buffer.from(flat.subarray(0, 33)); // signature + IHDR
     const idat = Buffer.alloc(12);
     idat.writeUInt32BE(100_000, 0);
@@ -981,7 +986,7 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(classifyPngBytes(Buffer.concat([header, idat]))).toBe("invalid");
     // …and a whole file still classifies as it did.
     expect(classifyPngBytes(flat)).toBe("placeholder");
-    expect(classifyPngBytes(png(64, 64, "noise"))).toBe("art");
+    expect(classifyPngBytes(png(56, 56, "noise"))).toBe("art");
   });
 
   it("a sprite in a format this decoder does not read is not 'unreadable' (Codex 2026-09-11 O#9)", () => {
@@ -996,11 +1001,11 @@ describe("defects the measurement review found (2026-09-07)", () => {
   it("placeholder grade is what the pixels say, not what the file weighs", () => {
     // Flat shapes: few colours, edges only on outlines — whatever the encoder does.
     const root = project();
-    const flat = png(64, 64, "flat");
+    const flat = png(56, 56, "flat");
     const flatWithText = Buffer.concat([flat.subarray(0, 33), pngChunk("tEXt", Buffer.alloc(3000, 0x41)), flat.subarray(33)]);
     putBytes(root, "Assets/Art/flat.png", flat, G("1"));
     putBytes(root, "Assets/Art/flat_text.png", flatWithText, G("2"));
-    putBytes(root, "Assets/Art/noise.png", png(64, 64, "noise"), G("3"));
+    putBytes(root, "Assets/Art/noise.png", png(56, 56, "noise"), G("3"));
     putBytes(root, "Assets/Art/noise_big.png", png(512, 512, "noise"), G("4"));
     expect(isPlaceholderGradePng(join(root, "Assets/Art/flat.png"))).toBe(true);
     expect(isPlaceholderGradePng(join(root, "Assets/Art/flat_text.png"))).toBe(true); // 3 KB of metadata changes nothing
@@ -1008,7 +1013,7 @@ describe("defects the measurement review found (2026-09-07)", () => {
     expect(isPlaceholderGradePng(join(root, "Assets/Art/noise_big.png"))).toBe(false); // 0.0x bytes/pixel, still art
     const content = measurePngContent(flat)!;
     expect(content.colours).toBeLessThanOrEqual(2);
-    expect(measurePngContent(png(64, 64, "noise"))!.colours).toBeGreaterThan(12);
+    expect(measurePngContent(png(56, 56, "noise"))!.colours).toBeGreaterThan(12);
   });
 });
 

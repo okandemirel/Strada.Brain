@@ -158,12 +158,13 @@ const CONDITIONS: Record<Language, readonly string[]> = {
  *     row the document did not label: a labelled rule about the retention
  *     of seed tokens between seasons is about the economy, and a BUDGET of
  *     seven grafts per season is a game requirement.
- *   • METRIC and PRODUCTION headings (a KPI section, the roadmap, staffing,
- *     the production schedule — not a schedule the game itself runs) decide
- *     for every row under them, at any depth.
+ *   • METRIC and PRODUCTION headings (a metrics section, a release or
+ *     delivery schedule — not a schedule the game itself runs) decide for
+ *     every row under them, at any depth.
  *   • Every other business NOUN decides only as the row's own heading, only
- *     when that heading names nothing else ("Team", "Budget", "Risk
- *     Management" — not "Team Size", "Performance Budget" or "Risk Cards"),
+ *     when that heading names nothing else ("Budget", "Revenue Overview",
+ *     "Team Structure" — not "Team Colours", "Performance Budget" or "Risk
+ *     Dice"),
  *     and only for a row that does not speak of the player.
  */
 const ASPIRATION_TEXT = [
@@ -183,7 +184,7 @@ const ASPIRATION_NOUN = [
   "teams?", "budgets?", "risks?", "zeitplan",
   "ekip", "takım", "bütçe", "riskler", "risiken", "equipo", "presupuesto", "riesgos", "équipe", "risques",
 ];
-/** What may stand beside a business noun in a heading that names only it: "Risk Management", "KPI Hedefleri". */
+/** What may stand beside a business noun in a heading that names only it: "Budget Overview", "Gelir Hedefleri". */
 const ASPIRATION_QUALIFIER = [
   "and", "or", "targets?", "goals?", "objectives?", "plans?", "planning", "estimates?", "mitigations?", "management", "overview", "structure", "schedule", "timeline",
   "ve", "hedef\\p{L}*", "plan(?:ı|lama\\p{L}*)", "önlem\\p{L}*", "yönetim\\p{L}*", "yapı\\p{L}*",
@@ -252,9 +253,9 @@ function languagesOf(text: string): Set<Language> {
 // NUMBERS AND BOUNDS — parsed by code, never written by a model
 // =============================================================================
 
-/** "4,500" and "4.500" are thousands; "0.25" and "0,25" are decimals. */
+/** "4,500" and "4.500" are thousands; "0.37" and "0,37" are decimals. */
 const NUM = String.raw`(?:[1-9]\d{0,2}(?:[.,]\d{3})+(?![.,]?\d)|\d+(?:[.,]\d+)?)`;
-/** A number glued to a letter, a section sign, a label dash or a ratio slash is an identifier ("G-01", "§5.2", "L14", "x/12"). */
+/** A number glued to a letter, a section sign, a label dash or a ratio slash is an identifier ("G-01", "§23.6", "L58", "x/47"). */
 const NOT_AN_IDENTIFIER = String.raw`(?<![\p{L}\p{N}§#_.,\/×\-–—])`;
 /** Units of measure. No bare "m": case-blind, it read "3M installs" as three metres. */
 const UNIT = String.raw`(?:%|°|×|fps|hz|ms|milliseconds?|millisaniye\p{L}*|secs?|seconds?|saniye\p{L}*|sn|sekunden?|segundos?|secondes?|s|mins?|minutes?|minuten?|minutos?|dakika\p{L}*|dk|h|hrs?|hours?|stunden?|horas?|heures?|saat\p{L}*|days?|gün\p{L}*|tage?n?|días?|jours?|weeks?|px|pt|dp|mb|gb|kb|cm|mm|km|x|\p{L}[\p{L}-]*\/(?:s|sec|min|h|day)|\/\s?(?:s|sec|min|h|day))(?![\p{L}\p{N}])`;
@@ -311,7 +312,7 @@ interface Quantity {
   readonly end: number;
 }
 
-/** "Levels 1–5", "row 2", "Stage 3": a number that NAMES something bounds nothing. */
+/** "Worlds 2–7", "chapter 9", "Stage 3": a number that NAMES something bounds nothing. */
 const NAMING_NOUN_BEFORE_RE =
   /(?<![\p{L}])(?:levels?|stages?|worlds?|chapters?|steps?|rows?|columns?|areas?|tiers?|phases?|sections?|versions?|seviye\p{L}*|bölüm\p{L}*|stufen?|nivel(?:es)?|niveaux?)\s*[~≈]?\s*$/iu;
 
@@ -336,7 +337,7 @@ function comparatorBounds(word: string, value: number, unit: string | undefined)
 /**
  * The quantities in a piece of text, left to right: ranges first, then
  * comparisons, then a number with a unit (or a "+"). A bare number is not a
- * quantity: "Level 13" and "G-04" bound nothing.
+ * quantity: "Level 58" and "G-04" bound nothing.
  */
 function quantitiesIn(text: string): Quantity[] {
   const found: Quantity[] = [];
@@ -553,7 +554,7 @@ interface Candidate {
   readonly bounds?: RequirementBounds;
 }
 
-/** "G-01", "P3", "FR-12", "NFR-2.1", "K-4a": a rule's own label. */
+/** "G-01", "W9", "FR-12", "NFR-2.1", "K-4a": a rule's own label. */
 const LABEL_RE = /^([A-Z]{1,4}-?)(\d{1,3})(?:\.(\d{1,2}))?([a-z])?$/;
 const INLINE_LABEL_RE = /^(?:\*\*|__)?([A-Z]{1,4}-?\d{1,3}(?:\.\d{1,2})?[a-z]?)(?:\*\*|__)?\s*(?:[:.)\]—–]|\s-)\s*(?=\S)/u;
 

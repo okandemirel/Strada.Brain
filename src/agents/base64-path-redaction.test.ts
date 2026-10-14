@@ -3,7 +3,7 @@
  *
  * "/" counts as a base64 delimiter, so any run of 60+ path characters with no
  * dot or underscore matched the block rule and was replaced. Measured
- * 2026-08-20: the failure log reported a missing file as "[base64:61ch].cs" —
+ * 2026-08-20: the failure log reported a missing file as "[base64:<n>ch].cs" —
  * the redaction ate the one thing that line exists to say, and the longer the
  * path, the likelier it was eaten.
  */
@@ -13,14 +13,14 @@ import { sanitizePromptInjection } from "./orchestrator-text-utils.js";
 
 describe("redacting base64 without eating paths", () => {
   it("leaves a long project path alone", () => {
-    const path = "Assets/Modules/LevelModule/Scripts/Services/LevelProgressionService.cs";
+    const path = "Assets/Modules/GreenhouseModule/Scripts/Climate/HumidityScheduleService.cs";
 
     expect(path.length).toBeGreaterThan(60);
-    expect(sanitizePromptInjection(path)).toContain("LevelProgressionService.cs");
+    expect(sanitizePromptInjection(path)).toContain("HumidityScheduleService.cs");
   });
 
   it("leaves a deep path with no extension alone", () => {
-    const path = "Assets/Modules/GameFlowModule/Scripts/Services/Internal/Runtime/Handlers";
+    const path = "Assets/Modules/OrchardModule/Scripts/Irrigation/Internal/Runtime/Handlers";
 
     expect(sanitizePromptInjection(path)).toContain("Handlers");
   });
@@ -55,7 +55,7 @@ describe("redacting base64 without eating paths", () => {
 describe("an absolute path is a path", () => {
   it("keeps a lease root under /private/var intact — measured 2026-09-08 05:46, unity_bind_sprite's error lost its path", () => {
     const line =
-      "Error: /private/var/folders/fd/vvqxld2x6k709xn2svhnkwl40000gn/T/strada-workspaces/task-20050354-75713c70/Assets/Modules/BoardModule/Prefabs/Blocker.prefab holds no GameObject";
+      "Error: /private/var/folders/q3/k8m2wz7rj4c1tn9hb5xp0yd6fs30gn/T/strada-workspaces/task-31907442-c4e1a9d2/Assets/Modules/QuarryModule/Prefabs/Pulley.prefab holds no GameObject";
     const out = sanitizePromptInjection(line);
     expect(out).toBe(line);
     expect(out).not.toContain("[base64:");

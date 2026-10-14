@@ -2,9 +2,9 @@
  * Whether a file the agent deleted in its workspace was the system's own.
  *
  * A commit declines every deletion — removing a user's file is not its call.
- * Measured 2026-09-07: four times in one day the declined list was the
- * campaign's own leftovers — Assets/Scripts/BoardBuilder.cs (a duplicate
- * of the module copy, which the conformance gate forbids editing),
+ * Measured 2026-09-07: again and again in one day the declined list was the
+ * campaign's own leftovers — a loose <Name>.cs outside Assets/Modules/ (a
+ * duplicate of its module copy, which the conformance gate forbids editing),
  * InitTestScene*.unity and Assembled*.unity (scaffolding the scene-hygiene
  * gate demands removed). Every attempt deleted them; every commit put them
  * back; the next attempt met the same duplicate definitions and the same
@@ -115,10 +115,10 @@ export async function systemOwnedDeletionReason(
   if (/\.unity$/i.test(bare) && isScaffoldingScene(bare)) return "scaffolding scene by the delivery gate's own rule";
   // A loose script the framework-paths wall itself calls non-canonical,
   // with its module twin in place. Measured 2026-09-07 15:58: after the
-  // "campaign commits only" rule, Assets/Scripts/BoardBuilder.cs — history
-  // "feat: construct BoardBuilder runtime" — came back on every attempt
-  // while Assets/Modules/PresentationModule/Scripts/BoardBuilder.cs held
-  // the real one and the refusal told the agent to delete the loose copy.
+  // "campaign commits only" rule, a loose <Name>.cs whose history held one
+  // ordinary feature commit came back on every attempt while its twin under
+  // Assets/Modules/<Module>/ held the real one and the refusal told the
+  // agent to delete the loose copy.
   const normalized = bare.replace(/\\/g, "/");
   if (/\.cs$/i.test(normalized) && /^Assets\//i.test(normalized) && !/^Assets\/(Modules|Editor|Tests|Plugins)\//i.test(normalized)) {
     const twin = findModuleTwin(sourceRoot, normalized);

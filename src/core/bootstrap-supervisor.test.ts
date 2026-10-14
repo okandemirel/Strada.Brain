@@ -588,7 +588,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
     });
 
     await bridge(
-      { id: "node-1", task: "Fix RocketModuleConfig.cs" } as any,
+      { id: "node-1", task: "Fix TollgateSettings.cs" } as any,
       { chatId: "cli-local", taskRunId: "task_fix", workspacePolicy: "none" } as any,
       new AbortController().signal,
     );

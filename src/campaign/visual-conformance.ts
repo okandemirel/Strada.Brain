@@ -2,8 +2,9 @@
  * Does the delivered game LOOK like the GDD says it should?
  *
  * The capture gate proves a frame exists (size + a distinct hash). It cannot
- * say what is in it: 11351 frames of untextured placeholder shapes satisfied
- * it while the GDD asked for finished, illustrated art (audited 2026-09-03).
+ * say what is in it: every measured frame of a campaign showed untextured
+ * placeholder shapes and still satisfied it while the GDD asked for finished,
+ * illustrated art (audited 2026-09-03).
  *
  * This is DISCLOSURE, not a gate. A stylised look is a judgement call, the
  * model answering is fallible, and the structural check already refuses the

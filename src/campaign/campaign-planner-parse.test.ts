@@ -55,7 +55,7 @@ describe("reading a milestone ladder out of a reply", () => {
     // <reasoning> block listing the GDD's headings — the model never reached
     // the JSON, and the retry asked the same question again.
     const { planner: p, asks } = planner([
-      "<reasoning>\nLet me produce the JSON milestone ladder. Need 16-20 milestones. Let me list headings:\n1. THE CLIMB",
+      "<reasoning>\nLet me produce the JSON milestone ladder. First I should decide how many milestones. Let me list headings:\n1. THE CLIMB",
       JSON.stringify(ladder),
     ]);
 
@@ -79,7 +79,7 @@ describe("reading a milestone ladder out of a reply", () => {
     await new CampaignPlanner(provider as never)
       .planMilestones("# GDD\n\n## 2. ROPE SYSTEM\nRules.\n\n## 9. RELEASE\nShip.\n", "docs/GDD.md");
 
-    // Twenty milestones with their prompts do not fit a provider default.
+    // A whole ladder of milestones with their prompts does not fit a provider default.
     expect(calls[0]?.maxTokens ?? 0).toBeGreaterThanOrEqual(8000);
   });
 
@@ -140,7 +140,7 @@ describe("reading a milestone ladder out of a reply", () => {
     expect(result.milestones[0]!.prompt.length).toBeGreaterThanOrEqual(40);
     expect(result.milestones[0]!.coveredSections).toEqual(["2. ROPE SYSTEM"]);
     // EVERY staged sprint demands a captured frame, or the visual gate never
-    // runs for it: the live 14-sprint ladder left four sprints ungated
+    // runs for it: the live ladder left some of its sprints ungated
     // (measured 2026-09-12 02:56).
     expect(result.milestones.every((m) => /captur/i.test(m.prompt))).toBe(true);
     // Two whole-ladder attempts, then titles, then one ask per milestone.

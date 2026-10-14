@@ -99,7 +99,7 @@ describe("SpriteGenerateTool", () => {
     expect(existsSync(join(dir, "Assets/Art/Generated/Charts/Compass.png"))).toBe(true);
   });
 
-  it("a bare name that names an existing placeholder elsewhere under Assets/ overwrites THAT placeholder (measured 2026-09-09 19:24: 12 new files beside 12 untouched placeholders)", async () => {
+  it("a bare name that names an existing placeholder elsewhere under Assets/ overwrites THAT placeholder (measured 2026-09-09 19:24: new files landed beside the placeholders they were meant to replace, which stayed untouched)", async () => {
     const flat = new Uint8Array(16 * 16 * 4).fill(200);
     const placeholder = join(dir, "Assets/Art/Props/Waystone.png");
     mkdirSync(join(dir, "Assets/Art/Props"), { recursive: true });

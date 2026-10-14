@@ -5,14 +5,15 @@
  * (tests/eval/export-campaign-fixture.test.ts holds the file to that output;
  * `npx vitest run tests/eval/export-campaign-fixture.test.ts -u` rewrites it).
  *
- * The shape is the one a measured campaign showed, whose own export is not
- * committed (a real one may be kept in the gitignored tests/fixtures/local/):
- * seven milestones stored green while every lineage tip but one carried the
- * system's own task_stuck stamp — m4's only in the tip, never in the
- * 500-character excerpt the campaign kept, m6's ten of them with an outage
- * stamp — verifier flags under each attempt, two tips stored cut, a refused
- * structure check that quotes the GDD, and a coverage milestone that failed
- * on a cancelled task. Every name, path and line of prose is made up.
+ * It keeps the kinds of record a measured campaign showed, not its numbers
+ * (that campaign's own export is not committed; a real one may be kept in the
+ * gitignored tests/fixtures/local/): milestones stored green while their
+ * lineage tips carry the system's own stamps — one only in the tip, never in
+ * the 500-character excerpt the campaign kept, others beside an outage or a
+ * step-limit stamp — verifier flags under the attempts, a tip stored cut,
+ * retries that minted newer tasks, a refused structure check that quotes the
+ * GDD, and a last milestone that failed on a cancelled task. Every count,
+ * name, path and line of prose is made up.
  */
 import { CampaignStorage } from "../../../src/campaign/campaign-storage.js";
 import type { Campaign, CampaignMilestone } from "../../../src/campaign/types.js";
@@ -65,8 +66,8 @@ export const SYNTHETIC_GDD = [
 ].join("\n");
 
 const STUCK = getResilienceMessage("task_stuck", "en");
-const ABORT = getResilienceMessage("provider_abort", "en");
-const ABORT_TR = getResilienceMessage("provider_abort", "tr");
+const ABORT_ES = getResilienceMessage("provider_abort", "es");
+const MAX_STEPS = getResilienceMessage("max_steps_reached", "en");
 const FLAGS = "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]";
 const NO_VERIFIER =
   "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified";
@@ -105,79 +106,90 @@ const planStep = (i: number): string[] => [
 ];
 
 const RESULTS: Record<string, string> = {
-  m1: [...attempt(STUCK, NUDGES[0]!), ...attempt(STUCK, NUDGES[1]!), ...attempt(STUCK, NUDGES[2]!)].join("\n").trimEnd(),
-  m2: storedCut(
+  m1: ["The dome scene opens; trimming the mirror segments next.", "", ...attempt(STUCK, NUDGES[0]!), ...attempt(STUCK, NUDGES[2]!)]
+    .join("\n")
+    .trimEnd(),
+  // The stamp sits at the top, followed by more prose than the excerpt keeps.
+  m2: [
+    "Retrying from the slew table the first attempt left half-written.",
+    "",
+    ...attempt(STUCK, NUDGES[1]!),
+    "The slew table now reads the booked targets; here is what each slew does:",
+    "",
+    ...Array.from({ length: 12 }, (_, i) => `- slew ${i + 1}: the mount waits for the dome to stop before it moves`),
+  ].join("\n"),
+  m3: storedCut(
     [
-      "The plate log compiles; wiring the seeing field next.",
+      "The night log compiles; wiring the seeing field next.",
       "",
-      ...Array.from({ length: 6 }, (_, i) => [...planStep(i + 1), ...attempt(STUCK, NUDGES[i % NUDGES.length]!)]).flat(),
+      ...Array.from({ length: 4 }, (_, i) => [...planStep(i + 1), ...attempt(STUCK, NUDGES[(i + 1) % NUDGES.length]!)]).flat(),
     ],
     (i) => `progress note ${i}: the worker kept describing the seeing field instead of changing it`,
   ),
-  m3: [
-    "Let me take the workspace path the system redirected me to and run the build from there:",
-    "",
-    FLAGS,
-    ...REASONING,
-    "2. **Check the diff:** no file under Assets/ changed in this attempt.",
-  ].join("\n"),
   m4: [
-    STUCK,
-    "",
-    "**Make one targeted change to Assets/Observatory/Bookings/NightBooking.cs so the build verifies, then run the verification again**",
+    "The forecast panel draws; the booking table is still read-only.",
+    "Cloud cover now closes the window it should, and the dome waits for it to reopen.",
     "",
     FLAGS,
     ...REASONING,
-    "2. **Check the diff:** the booking table was rewritten but never compiled.",
-    "3. **Check the tests:** none ran; the build failed before them.",
-    "4. **Verdict:** not verified.",
+    "2. **Check the diff:** the observing window opens, but no booking it should hand back moved.",
+    "3. **Verdict:** not verified.",
   ].join("\n"),
-  m5: [STUCK, "", FLAGS, ...REASONING].join("\n"),
+  m5: [
+    ...attempt(STUCK, NUDGES[3]!),
+    ...attempt(STUCK, NUDGES[0]!, QUOTA),
+    ...attempt(STUCK, NUDGES[1]!, QUOTA),
+    MAX_STEPS,
+    "",
+    FLAGS,
+    NO_VERIFIER,
+  ].join("\n"),
   m6: [
-    ...Array.from({ length: 10 }, (_, i) => attempt(STUCK, NUDGES[i % NUDGES.length]!, QUOTA)).flat(),
-    ...attempt(ABORT, "Retry once the provider answers again.", QUOTA),
+    ...attempt(STUCK, "Stop reflecting and make the renewal form read the night log, then run the PlayMode verification again."),
+    ABORT_ES,
+    "",
+    FLAGS,
+    QUOTA,
+  ].join("\n"),
+  m7: [
+    "Integration plan for the review build:",
+    "",
+    ...planStep(1),
+    FLAGS,
+    `${NO_VERIFIER} (log: ${SYNTHETIC_HOME}/Library/Logs/Unity/Editor.log)`,
+    "",
+    ...planStep(2),
+    MAX_STEPS,
+    "",
+    "The review build is assembled; the dome and the star field load in the entry scene.",
+  ].join("\n"),
+  mcov1: [
+    ...attempt(STUCK, "Stop reflecting and give each confirmed comet its observer's name, then verify once."),
+    ...attempt(STUCK, NUDGES[2]!, `- verification_skipped: the review build under ${PROJECT_ROOT}/Builds/Review never finished`),
   ]
     .join("\n")
     .trimEnd(),
-  m7: storedCut(
-    [
-      "Integration plan for the delivery build:",
-      "",
-      ...planStep(1),
-      FLAGS,
-      `${NO_VERIFIER} (log: ${SYNTHETIC_HOME}/Library/Logs/Unity/Editor.log)`,
-      "",
-      ...attempt(STUCK, "Stop reflecting and inspect the latest unity_verify_change failure, then make one targeted edit."),
-      ...planStep(2),
-      FLAGS,
-      NO_VERIFIER,
-      "",
-      ABORT_TR,
-      "",
-      FLAGS,
-      NO_VERIFIER,
-      "",
-      ...Array.from({ length: 4 }, (_, i) => planStep(i + 3)).flat(),
-    ],
-    (i) => `  "note ${i}": "leave the dome lights and the clock on the scene root",`,
-  ),
-  mcov1: "Cancelled: the coverage pass stalled twice without changing a file, so the campaign stopped it before a third try.",
+  "mcov1-2": "Cancelled from the dashboard after the log viewer pass came back a third time without changing a file.",
 };
 
-/** Where each milestone's lineage starts and, when a retry minted a newer task, where it ends. */
-const LINEAGE: Record<string, { root: string; tip?: string }> = {
+/** Where each milestone's lineage starts and, oldest first, the newer tasks its retries minted. */
+const LINEAGE: Record<string, { root: string; retries?: string[] }> = {
   m1: { root: "task_0000a001" },
-  m2: { root: "task_0000a002" },
-  m3: { root: "task_0000a003", tip: "task_0000a013" },
+  m2: { root: "task_0000a002", retries: ["task_0000a012"] },
+  m3: { root: "task_0000a003" },
   m4: { root: "task_0000a004" },
-  m5: { root: "task_0000a005" },
+  m5: { root: "task_0000a005", retries: ["task_0000a015", "task_0000a025"] },
   m6: { root: "task_0000a006" },
   m7: { root: "task_0000a007" },
   mcov1: { root: "task_0000a008" },
+  "mcov1-2": { root: "task_0000a009" },
 };
+const tipOf = (id: string): string => LINEAGE[id]!.retries?.at(-1) ?? LINEAGE[id]!.root;
 
 const excerpt = (id: string): string => RESULTS[id]!.slice(-500);
 const GDD_SAYS = `GDD says: …${GDD_STYLE}…`;
+/** A gap sprint's title carries the start of the requirement it closes, here a GDD sentence word for word. */
+const LAST_GAP_TITLE = `Coverage completion 1.2 — ${"The log opens on the newest night and pages back one night at a time.".slice(0, 60)}`;
 
 function milestones(): CampaignMilestone[] {
   const green = (id: string, n: number, title: string, prompt: string, fields: Partial<CampaignMilestone> = {}) =>
@@ -192,44 +204,40 @@ function milestones(): CampaignMilestone[] {
       ...fields,
     }) as CampaignMilestone;
   return [
-    green("m1", 1, "the dome, the sky and the mirror segments", "Read docs/GDD.md and implement §1 and §2.1.", {
-      reconcileDeferred: false,
-    }),
-    green("m2", 2, "the night log", "Implement §5.1–§5.3 and keep every plate the log records.", {
-      reconcileDeferred: false,
-    }),
-    green("m3", 3, "the mount and its slews", "Implement §2.2.", {
-      attempts: 2,
-      reconcileDeferred: false,
-      visualEvidenceBounced: true,
-      noWorkBounced: false,
-    }),
-    green("m4", 4, "weather windows and bookings", "Implement §3 and the booked hours it returns.", { visualEvidenceBounced: true }),
-    green("m5", 5, "the catalogue", "Implement §4.1, then the confirmation of §4.2.", { visualEvidenceBounced: true }),
-    green("m6", 6, "funding renewals", "Implement §6 against the log of §5.", {
+    green("m1", 1, "the dome, the sky and the mirror segments", "Read docs/GDD.md and implement §1 and §2.1."),
+    green("m2", 2, "the mount and its slews", "Implement §2.2.", {
       attempts: 2,
       visualEvidenceBounced: true,
       noWorkBounced: false,
-      timeBoxEscalations: 2,
-      startedAtMs: T0 + 60 * HOUR,
-      reconcileDeferredSince: T0 + 58 * HOUR,
     }),
+    green("m3", 3, "the night log", "Implement §5.1–§5.3 and keep every plate the log records."),
+    green("m4", 4, "weather windows and bookings", "Implement §3 and the booked hours it returns.", {
+      startedAtMs: T0 + 40 * HOUR,
+      reconcileDeferredSince: T0 + 39 * HOUR,
+    }),
+    green("m5", 5, "the catalogue", "Implement §4.1, then the confirmation of §4.2.", {
+      attempts: 3,
+      reconcileDeferred: false,
+      visualEvidenceBounced: true,
+      noWorkBounced: false,
+      timeBoxEscalations: 1,
+    }),
+    green("m6", 6, "funding renewals", "Implement §6 against the log of §5.", { reconcileDeferred: false }),
     green("m7", 7, "the review build", "Assemble §1 to §6 into one build, then deliver.", {
-      attempts: 2,
       visualEvidenceBounced: false,
       noWorkBounced: false,
       timeBoxEscalations: 0,
       deliveryVerificationBounced: false,
-      deliveryVerificationBounces: 2,
+      deliveryVerificationBounces: 1,
       visualEvidence: "observed",
-      startedAtMs: T0 + 80 * HOUR,
-      commitNote: "Committed 212 file(s) as `1a2b3c4`.",
-      testVerdict: "PlayMode verification passed: 41 of 42 tests ran clean.",
+      startedAtMs: T0 + 70 * HOUR,
+      commitNote: "Committed 63 file(s) as `9c8b7a6`.",
+      testVerdict: "PlayMode verification passed: 37 of 39 tests ran clean.",
       structureRefused: true,
       structureFindings: [
         "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Observatory.unity and the prefabs it places.",
-        "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
-        "4 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +2 more",
+        "2 scenes enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +1 more",
         GDD_SAYS,
       ],
       visualConformance: [
@@ -238,27 +246,44 @@ function milestones(): CampaignMilestone[] {
         "- Judged from `~/Games/SyntheticObservatory/Recordings/night-review/frame_00342.png` by openai.",
       ].join("\n"),
     }),
+    // The coverage audit's round: one sprint per gap, titled with the gap it closes.
     {
       id: "mcov1",
-      title: "Coverage completion 1 — close the GDD gaps",
-      prompt: "Close the gaps the coverage audit listed.",
-      status: "failed",
-      attempts: 2,
-      startedAtMs: T0 + 100 * HOUR,
+      title: "Coverage completion 1.1 — confirmed comets carry the observer's name",
+      prompt: "Close the gap the coverage audit listed: §4.1.",
+      status: "green",
+      attempts: 1,
+      fromAudit: true,
       taskId: LINEAGE["mcov1"]!.root,
+      resultExcerpt: excerpt("mcov1"),
+      placeholderArtAtStart: { sprites: 73, placeholders: 38 },
+      commitNote: "Committed 23 file(s) as `3f4e5d6`.",
+      visualEvidence: "observed",
+    } as CampaignMilestone,
+    {
+      id: "mcov1-2",
+      title: LAST_GAP_TITLE,
+      prompt: "Close the gap the coverage audit listed: §5.3.",
+      status: "failed",
+      attempts: 3,
+      fromAudit: true,
+      startedAtMs: T0 + 90 * HOUR,
+      taskId: LINEAGE["mcov1-2"]!.root,
       visualEvidenceBounced: false,
       noWorkBounced: false,
       deliveryVerificationBounced: false,
       deliveryVerificationBounces: 0,
-      sceneHygieneBounces: 0,
+      sceneHygieneBounces: 1,
       timeBoxEscalations: 0,
-      placeholderArtAtStart: { sprites: 120, placeholders: 97 },
       structureRefused: false,
-      structureFindings: ["Shipped scenes PLACE 9 renderer components (2 mesh, 7 sprite).", GDD_SAYS],
+      structureFindings: [
+        "2 scenes enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "Shipped scenes PLACE 47 renderer components (16 mesh, 31 sprite).",
+        GDD_SAYS,
+      ],
       artBounced: false,
       prosOnlyBounced: false,
-      resultExcerpt: excerpt("mcov1"),
-      commitNote: "Committed 37 file(s) as `5d6e7f8`.",
+      resultExcerpt: excerpt("mcov1-2"),
       visualEvidence: "observed",
       compileVerdict: { ok: true, ran: true, errors: 0, detail: "Runtime assemblies compile; test assemblies are not built by this check." },
     } as CampaignMilestone,
@@ -297,12 +322,12 @@ export function seedSyntheticCampaign(campaignsDb: string, tasksDb: string): voi
       gddText: SYNTHETIC_GDD,
       draftAttempts: 0,
       milestones: milestones(),
-      currentMilestone: 7,
+      currentMilestone: 8,
       createdAt: T0,
-      updatedAt: T0 + 110 * HOUR,
-      lastError:
-        "Coverage completion 1 — close the GDD gaps blocked after 2 attempts: The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.",
-      coverageAuditNote: "coverage audit could not run: coverage audit returned malformed JSON",
+      updatedAt: T0 + 96 * HOUR,
+      lastError: `NOT DELIVERED — ${LAST_GAP_TITLE} was cancelled`,
+      // Round 1's audit ran and listed the gaps above; the audit after it threw.
+      coverageAuditNote: "coverage audit could not run: coverage audit output failed schema validation",
       deliveryReported: true,
     } as Campaign);
   } finally {
@@ -312,20 +337,37 @@ export function seedSyntheticCampaign(campaignsDb: string, tasksDb: string): voi
   const tasks = new TaskStorage(tasksDb);
   tasks.initialize();
   try {
-    Object.entries(LINEAGE).forEach(([id, { root, tip }], i) => {
+    Object.entries(LINEAGE).forEach(([id, { root, retries = [] }], i) => {
       const createdAt = T0 + (i + 1) * 10 * HOUR;
-      const status = id === "mcov1" ? TaskStatus.cancelled : TaskStatus.completed;
-      const last = { status, result: RESULTS[id]!, completedAt: createdAt + 2 * HOUR, updatedAt: createdAt + 2 * HOUR };
-      if (tip) {
-        tasks.save(task(root, createdAt, { result: "The first attempt changed nothing." }));
-        tasks.save(task(tip, createdAt + HOUR, { parentId: root as TaskId, ...last }));
-      } else {
-        tasks.save(task(root, createdAt, last));
-      }
+      const chain = [root, ...retries];
+      const doneAt = createdAt + (chain.length + 1) * HOUR;
+      const cancelled = id === "mcov1-2";
+      const last = {
+        status: cancelled ? TaskStatus.cancelled : TaskStatus.completed,
+        ...(cancelled ? { cancelReason: "user" as const } : {}),
+        result: RESULTS[id]!,
+        completedAt: doneAt,
+        updatedAt: doneAt,
+      };
+      chain.forEach((taskId, n) => {
+        tasks.save(
+          task(taskId, createdAt + n * HOUR, {
+            ...(n > 0 ? { parentId: chain[n - 1] as TaskId } : {}),
+            ...(n === chain.length - 1 ? last : { result: `Attempt ${n + 1} changed nothing.` }),
+          }),
+        );
+      });
     });
     tasks.setVerification(
-      LINEAGE["m7"]!.root as TaskId,
-      JSON.stringify({ testsGreen: true, detail: "PlayMode verification passed: 41 of 42 tests ran clean." }),
+      tipOf("m6") as TaskId,
+      JSON.stringify({
+        testsGreen: false,
+        detail: `PlayMode verification failed: 3 of 31 tests failed (log: ${SYNTHETIC_HOME}/Library/Logs/Unity/Editor.log)`,
+      }),
+    );
+    tasks.setVerification(
+      tipOf("m7") as TaskId,
+      JSON.stringify({ testsGreen: true, detail: "PlayMode verification passed: 37 of 39 tests ran clean." }),
     );
   } finally {
     tasks.close();

@@ -117,10 +117,10 @@ describe("map-reduce planning of a document beyond the window (2026-09-10)", () 
   });
 
   it("cuts at a numbered heading that opens with a non-ASCII capital", () => {
-    // With A-Z only, "3.2 Çekirdek Kurallar" and "5. Écrans" were body text of
+    // With A-Z only, "23.2 Örtü Seçimi" and "33. Étagères" were body text of
     // the section before, and the add-only pass saw their rows under its heading.
-    const gdd = ["3.1 Kurallar", "Oyuncu her turda bir taş oynar.", "3.2 Çekirdek Kurallar", "Bir tohum 2 saniyede filizlenmelidir.", "5. Écrans", "Le menu principal affiche le bouton Jouer."].join("\n");
-    expect(splitGddSections(gdd).map((c) => c.heading)).toEqual(["3.1 Kurallar + 3.2 Çekirdek Kurallar + 5. Écrans"]);
+    const gdd = ["23.1 Hazırlık", "Kapı her sabah açılır.", "23.2 Örtü Seçimi", "Bir somun 47 dakikada pişmelidir.", "33. Étagères", "La vitrine montre trois gâteaux."].join("\n");
+    expect(splitGddSections(gdd).map((c) => c.heading)).toEqual(["23.1 Hazırlık + 23.2 Örtü Seçimi + 33. Étagères"]);
   });
 
   it("briefs every section with the model and plans from the briefs, never from a windowed middle", async () => {

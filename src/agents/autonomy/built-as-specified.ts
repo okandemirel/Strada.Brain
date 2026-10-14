@@ -1,14 +1,13 @@
 /**
  * Built-as-specified — what the SHIPPED scenes actually render.
  *
- * Audited 2026-09-03. A campaign delivered "game build complete" (7/7 sprints
- * green, 11351 captured frames) for a project whose entry scene
- * Assets/Scenes/ProductionMain.unity holds ZERO MeshFilter/MeshRenderer
- * components, whose five runtime scripts build the visible world with
- * GameObject.CreatePrimitive, and which already carried 100 prefabs, 198 pngs
- * and 62 fbx/obj models that nothing binds. What the user opened was a grid of
- * flat coloured squares with four spheres under it. Nothing in the pipeline
- * ever asked what the delivered scenes contain.
+ * Audited 2026-09-03. A campaign delivered "game build complete" (every sprint
+ * green, captured frames as evidence) for a project whose entry scene holds
+ * ZERO MeshFilter/MeshRenderer components, whose runtime scripts build the
+ * visible world with GameObject.CreatePrimitive, and which already carried
+ * prefabs, pngs and fbx/obj models that nothing binds (all measured). What the
+ * user opened was a few engine primitives on an empty background. Nothing in
+ * the pipeline ever asked what the delivered scenes contain.
  *
  * This module MEASURES that, from the files Unity itself reads:
  *   - the enabled scenes in ProjectSettings/EditorBuildSettings.asset,
@@ -265,10 +264,10 @@ export interface SceneStructure {
    *
    * Audited 2026-09-04: the refusal could say "the shipped scenes render
    * NOTHING" and the sprint still had nowhere to start, because the number it
-   * was given was a zero. The test game's one enabled scene held a camera and a
-   * `GameBootstrapper` whose config listed no modules — two GameObjects, no
-   * prefab instance — and naming that is the difference between "something is
-   * wrong" and "this is the scene you have to fill".
+   * was given was a zero. The measured entry scene held a camera and a
+   * `GameBootstrapper` whose config listed no modules, and no prefab instance —
+   * and naming that is the difference between "something is wrong" and "this is
+   * the scene you have to fill".
    */
   readonly gameObjects: number;
   readonly prefabInstances: number;
@@ -294,19 +293,18 @@ export interface ArtInventory {
   readonly sprites: number;
   /**
    * Sprite textures whose PNG compresses below PLACEHOLDER_BYTES_PER_PIXEL —
-   * flat procedural shapes, not drawn art. Measured 2026-09-06 on the test game's
-   * lease: 409 of 428 sprites, median 281 bytes at 64×64, every one produced by
+   * flat procedural shapes, not drawn art. Measured 2026-09-06 on a campaign
+   * lease: nearly every sprite sat under the threshold, every one produced by
    * the procedural generator and every one counted as "a sprite texture" by
-   * the line below. A project whose art is 95% solid squares had passed this
-   * gate as art-complete.
+   * the line below. A project whose art was almost all solid squares had
+   * passed this gate as art-complete.
    */
   readonly placeholderSprites: number;
   /**
    * Audio clips under Assets/, and what their bytes say. Measured 2026-09-07
-   * on the test game's project: 19 WAVs — six 90-second "music" loops and
-   * thirteen 0.15-second SFX blips, four of them byte-identical to another —
-   * counted nowhere, while the GDD scheduled music per area and a full SFX
-   * cue list.
+   * on a campaign project: a handful of WAVs, most of them sub-second blips
+   * and some byte-identical to another — counted nowhere, while the design
+   * document called for sound the project did not have.
    */
   readonly audio: number;
   /** Clips whose bytes equal another clip's — the same sound under two names. */
@@ -1083,7 +1081,7 @@ export function assessBuiltAsSpecified(
 
     // REACHABLE: everything the scene mentions by guid, transitively through
     // prefabs and config assets. Used ONLY to decide what art nothing binds —
-    // a scene holding a PresentationPrefabConfig that points at a prefab HAS
+    // a scene holding a config asset (a ScriptableObject) that points at a prefab HAS
     // referenced that prefab, and calling it unbound would be a false
     // accusation. Its renderers are reported separately, never as shipped.
     const reach = new Set<string>();
@@ -1240,9 +1238,10 @@ export function assessBuiltAsSpecified(
         unreadableSpritePaths.push(rel);
       } else if (grade === "placeholder") {
         // The ones a shipped scene reaches go FIRST: they are what the player
-        // sees, and the one the sprint should replace before any LiveOps icon
-        // (measured 2026-09-07 22:40: a sprint wired six area backgrounds that
-        // were all placeholders while the refusal listed unbound icons).
+        // sees, and the ones the sprint should replace before any art nothing
+        // shows yet (measured 2026-09-07: a sprint wired several scene-bound
+        // sprites that were all placeholders while the refusal listed unbound
+        // ones).
         if (bound) boundPlaceholderPaths.push(rel);
         else placeholderSpritePaths.push(rel);
       } else realSpritePaths.push(rel);
@@ -1349,8 +1348,8 @@ export function assessBuiltAsSpecified(
           `their pixels are a flat shape (${PLACEHOLDER_GRADE_RULE}), not drawn art ` +
           `(e.g. ${[...boundPlaceholderPaths, ...placeholderSpritePaths].slice(0, 3).join(", ")}).` +
           // What is already real, so a sprint does not redraw it. Measured
-          // 2026-09-07 15:30: an attempt spent its first 13 minutes rediscovering
-          // which of the 429 sprites the previous attempt had drawn.
+          // 2026-09-07: an attempt spent its opening minutes rediscovering
+          // which sprites the previous attempt had drawn.
           (realSpritePaths.length > 0
             ? ` ${realSpritePaths.length} are real art already (newest first: ${newestFirst(projectRoot, realSpritePaths).slice(0, 6).join(", ")}${realSpritePaths.length > 6 ? ", …" : ""}).`
             : "")
@@ -1510,10 +1509,10 @@ export async function assessBuiltAsSpecifiedAsync(
  *        nothing by any route; or
  *    A2. runtime scripts build the visible world with GameObject.
  *        CreatePrimitive — what the player sees is engine primitives, not the
- *        project's art. This is the delivered test-game build exactly: 0
- *        renderers placed across 13 non-scaffolding scenes, five scripts
- *        calling CreatePrimitive, and a grid of flat squares with four spheres
- *        on screen.
+ *        project's art. This is the audited delivery exactly (measured): no
+ *        renderer placed in any non-scaffolding scene, several scripts
+ *        calling CreatePrimitive, and nothing but engine primitives on
+ *        screen.
  *    Bare "places nothing" is NOT enough on its own: a game that instantiates
  *    its prefabs from a config at runtime legitimately ships scenes with no
  *    placed renderer, and refusing that would be a false accusation. That case
@@ -1625,7 +1624,7 @@ function structuralRefusal(
         ? ` ${report.referencedOnlyRenderers} renderer(s) do exist in prefabs the scenes reference but never place; ` +
           "bind them in the scene (or prove at runtime that they are what the player sees) instead of drawing primitives."
         : "") +
-      // The way out, by name. Measured 2026-09-07: eight attempts on this
+      // The way out, by name. Measured 2026-09-07: repeated attempts on this
       // refusal with no deterministic tool to act on it.
       " Deterministic path: unity_bind_sprite (a prefab's SpriteRenderer → a real sprite) and unity_place_prefab " +
       "(that prefab into the entry scene) — no Editor, verified on write; then unity_playmode_verify with capture."
@@ -1649,10 +1648,10 @@ function structuralRefusal(
 /**
  * Compressed bytes per pixel below which a PNG is a flat shape rather than art.
  *
- * Measured 2026-09-06 across the 428 sprites of the test game's lease: 409 sat
- * under 0.1 (median 0.07 — 281 bytes for 64×64), the 19 drawn ones between
- * 0.28 and 0.67, and nothing in between. A real 64×64 sprite cannot compress
- * to 400 bytes; a solid square with an outline always does.
+ * Measured 2026-09-06 across a campaign lease's sprites: the procedural ones
+ * all sat under 0.1, the drawn ones well above it, and nothing in between. A
+ * real drawn sprite cannot compress to a tenth of a byte per pixel; a solid
+ * square with an outline always does.
  */
 export const PLACEHOLDER_BYTES_PER_PIXEL = 0.1;
 
@@ -1978,8 +1977,8 @@ function placeholderArtRefusal(
       : "") +
     `A solid square is not a delivered game. Replace them with real art: unity_generate_sprite with provider "local" (the open-weights ` +
     `model on this machine) called with the SAME name and the SAME path as the placeholder file — that overwrites it and keeps ` +
-    `its .meta GUID, so every binding survives and no bind call is needed; a new file beside the placeholder (<Name>_Real.png) ` +
-    `leaves this count unchanged (measured 2026-09-09: 12 such files, 394 placeholders before and after). Or a purchased ` +
+    `its .meta GUID, so every binding survives and no bind call is needed; a new file beside the placeholder (e.g. <Name>_v2.png) ` +
+    `leaves this count unchanged (measured 2026-09-09: the placeholder count was the same before and after). Or a purchased ` +
     `package via unity_my_assets_cloud (search → download) and unity_import_asset_package — then bind the imported ` +
     `sprites where the placeholders are bound.`
   );

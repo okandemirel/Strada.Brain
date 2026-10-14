@@ -376,13 +376,13 @@ DONE`,
     // The end of the chain: StradaConformanceGuard opens the gate, the pipeline
     // has to turn it into an issue rather than let the draft's DONE stand.
     const plan = planVerifierPipeline({
-      prompt: "Build the board module",
-      draft: "Nine modules created and compiling.\nDONE",
+      prompt: "Build the irrigation module",
+      draft: "Every module created and compiling.\nDONE",
       state: createState(),
       task: DEBUG_TASK,
       verificationState: {
         pendingFiles: new Set(),
-        touchedFiles: new Set(["Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs"]),
+        touchedFiles: new Set(["Assets/Modules/IrrigationModule/Scripts/IrrigationModuleConfig.cs"]),
         hasCompilableChanges: false,
         lastBuildOk: true,
         lastVerificationAt: Date.now() - 100,
@@ -416,7 +416,7 @@ DONE`,
       task: IMPLEMENTATION_TASK,
       verificationState: {
         pendingFiles: new Set(),
-        touchedFiles: new Set(["Assets/Modules/GameFlow/LoseCondition.cs"]),
+        touchedFiles: new Set(["Assets/Game/Rules/LoseCondition.cs"]),
         hasCompilableChanges: false,
         lastBuildOk: true,
         lastVerificationAt: Date.now() - 100,
@@ -439,13 +439,13 @@ DONE`,
     // and buildBuildVerifierCheck(null) wrote status "clean" / "No outstanding
     // build/typecheck verification debt remains." over files nobody compiled.
     const plan = planVerifierPipeline({
-      prompt: "Implement the board",
-      draft: "Implemented the board.",
+      prompt: "Implement the greenhouse",
+      draft: "Implemented the greenhouse.",
       state: createState(),
       task: IMPLEMENTATION_TASK,
       verificationState: {
-        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
-        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
+        pendingFiles: new Set(["Assets/Game/Trellis.cs", "Assets/Game/Sprinkler.cs"]),
+        touchedFiles: new Set(["Assets/Game/Trellis.cs", "Assets/Game/Sprinkler.cs"]),
         hasCompilableChanges: true,
         lastBuildOk: null,
         lastVerificationAt: null,
@@ -460,8 +460,8 @@ DONE`,
 
     const build = plan.checks.find((check) => check.name === "build");
     expect(build?.status).toBe("issues");
-    expect(build?.summary).toContain("Board.cs");
-    expect(build?.summary).toContain("Dock.cs");
+    expect(build?.summary).toContain("Trellis.cs");
+    expect(build?.summary).toContain("Sprinkler.cs");
     expect(build?.summary).not.toContain("No outstanding");
   });
 
@@ -469,13 +469,13 @@ DONE`,
     resetNoWorkEvidenceGates();
     const startedAt = Date.now() - 1000;
     const exhausted = (draft: string) => planVerifierPipeline({
-      prompt: "Implement the board",
+      prompt: "Implement the greenhouse",
       draft,
-      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote Board.cs", timestamp: Date.now() - 500 }] }),
+      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote Trellis.cs", timestamp: Date.now() - 500 }] }),
       task: IMPLEMENTATION_TASK,
       verificationState: {
-        pendingFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
-        touchedFiles: new Set(["Assets/Game/Board.cs", "Assets/Game/Dock.cs"]),
+        pendingFiles: new Set(["Assets/Game/Trellis.cs", "Assets/Game/Sprinkler.cs"]),
+        touchedFiles: new Set(["Assets/Game/Trellis.cs", "Assets/Game/Sprinkler.cs"]),
         hasCompilableChanges: true,
         lastBuildOk: null,
         lastVerificationAt: null,
@@ -487,18 +487,18 @@ DONE`,
       chatId: "chat-debt",
       taskStartedAtMs: startedAt,
     });
-    const first = exhausted("Implemented the board. DONE");
+    const first = exhausted("Implemented the greenhouse. DONE");
     expect(first.initialDecision).toBe("continue");
     expect(first.gate).toContain("VERIFICATION DEBT UNPAID");
     // With the tools away the gate was null and the unavailable-tools branch
     // read that as "no debt" (Codex 2026-09-11 #2): the debt still gates.
     const toolsAway = planVerifierPipeline({
-      prompt: "Implement the board",
-      draft: "Implemented the board. DONE",
-      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote Board.cs", timestamp: Date.now() - 500 }] }),
+      prompt: "Implement the greenhouse",
+      draft: "Implemented the greenhouse. DONE",
+      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote Trellis.cs", timestamp: Date.now() - 500 }] }),
       task: IMPLEMENTATION_TASK,
       verificationState: {
-        pendingFiles: new Set(["Assets/Game/Board.cs"]), touchedFiles: new Set(["Assets/Game/Board.cs"]),
+        pendingFiles: new Set(["Assets/Game/Trellis.cs"]), touchedFiles: new Set(["Assets/Game/Trellis.cs"]),
         hasCompilableChanges: true, lastBuildOk: null, lastVerificationAt: null, buildGateExhausted: true,
       },
       buildVerificationGate: null, conformanceGate: null, logEntries: [], chatId: "chat-debt-tools-away", taskStartedAtMs: startedAt,
@@ -506,11 +506,11 @@ DONE`,
     });
     expect(toolsAway.initialDecision).toBe("continue");
     expect(toolsAway.gate).toContain("VERIFICATION DEBT UNPAID");
-    expect(first.gate).toContain("- Assets/Game/Dock.cs");
-    expect(exhausted("Implemented the board. DONE").initialDecision).toBe("continue");
-    expect(exhausted("Implemented the board. DONE").initialDecision).toBe("replan");
+    expect(first.gate).toContain("- Assets/Game/Sprinkler.cs");
+    expect(exhausted("Implemented the greenhouse. DONE").initialDecision).toBe("continue");
+    expect(exhausted("Implemented the greenhouse. DONE").initialDecision).toBe("replan");
     // the honest exit stands, and is not counted as a claim
-    const honest = exhausted("I could not verify Board.cs and Dock.cs: the compile tool failed every time. Stopping, the task is blocked.");
+    const honest = exhausted("I could not verify Trellis.cs and Sprinkler.cs: the compile tool failed every time. Stopping, the task is blocked.");
     expect(honest.initialDecision).toBe("approve");
     expect(honest.summary).toContain("honest terminal failure report");
   });
@@ -519,17 +519,18 @@ DONE`,
    * Audited 2026-09-02: the failure vocabulary included "missing", "requires",
    * "not found", "error" and "failure" — words an ordinary completion report
    * uses about things it FIXED — while "implemented" was not a success word.
-   * "Done. Implemented … The frog prefab was missing, so I generated one." was
-   * therefore approved as an honest terminal failure report (skipping the
-   * deliverables review and, with build tools unavailable, downgrading the
-   * build gate), and campaign-manager recorded the same sprint as failed.
+   * A report such as "Done. Implemented … and recreated the scarecrow
+   * prefab, which had gone missing." was therefore approved as an honest
+   * terminal failure report (skipping the deliverables review and, with
+   * build tools unavailable, downgrading the build gate), and
+   * campaign-manager recorded the same sprint as failed.
    */
   describe("isTerminalFailureReport reads the run's own outcome, not its vocabulary", () => {
     it.each([
-      "Done. Implemented ScoreService, BoardView and the level loader. The frog prefab was missing, so I generated one.",
+      "Done. Implemented WeatherService, TrellisView and the greenhouse loader, and recreated the scarecrow prefab, which had gone missing.",
       "All three systems are implemented and the PlayMode tests pass. I removed a stale reference that caused a compile error.",
       "Wired the HUD. Nothing is missing now.",
-      "The build requires Unity 2022.3, which the project uses. Shipped the level loader.",
+      "The build requires Unity 2022.3, which the project uses. Shipped the greenhouse loader.",
     ])("does not read a completion draft as a failure report: %s", (draft) => {
       expect(isTerminalFailureReport(draft)).toBe(false);
     });
@@ -555,7 +556,7 @@ DONE`,
 
     it.each([
       "I wrote PlayerController.cs but I could not compile it: the Unity bridge is down.",
-      "Added the level loader, but the run is blocked by a missing package.",
+      "Added the greenhouse loader, but the run is blocked by a missing package.",
       "Created the scene; the PlayMode run timed out twice.",
     ])("still reads a run-level failure in a work report as a failure: %s", (draft) => {
       expect(isTerminalFailureReport(draft)).toBe(true);
@@ -563,13 +564,13 @@ DONE`,
 
     it("does not approve a completion draft as an honest failure report", () => {
       const plan = planVerifierPipeline({
-        prompt: "Implement ScoreService, BoardView, the level loader and PowerUps",
-        draft: "Done. Implemented ScoreService, BoardView and the level loader. The frog prefab was missing, so I generated one.",
+        prompt: "Implement WeatherService, TrellisView, the greenhouse loader and Pollinators",
+        draft: "Done. Implemented WeatherService, TrellisView and the greenhouse loader, and recreated the scarecrow prefab, which had gone missing.",
         state: createState(),
         task: IMPLEMENTATION_TASK,
         verificationState: {
           pendingFiles: new Set(),
-          touchedFiles: new Set(["Assets/Scripts/ScoreService.cs"]),
+          touchedFiles: new Set(["Assets/Scripts/WeatherService.cs"]),
           hasCompilableChanges: false,
           lastBuildOk: true,
           lastVerificationAt: Date.now() - 500,
@@ -592,7 +593,7 @@ describe("work evidence (audited 2026-09-10: one read call and no change was app
     prompt: "Implement the PlaythroughDriver adapter and register it",
     draft: "Implemented and registered the adapter.\nDONE",
     state: createState({
-      stepResults: [{ toolName: "file_read", success: true, summary: "Read GameFlowModuleConfig.cs", timestamp: Date.now() - 500 }],
+      stepResults: [{ toolName: "file_read", success: true, summary: "Read IrrigationModuleConfig.cs", timestamp: Date.now() - 500 }],
     }),
     task: IMPLEMENTATION_TASK,
     verificationState: { pendingFiles: new Set(), touchedFiles: new Set(), hasCompilableChanges: false, lastBuildOk: null, lastVerificationAt: null },
@@ -648,7 +649,7 @@ describe("work evidence (audited 2026-09-10: one read call and no change was app
   });
 
   it("an analysis task may end without a change", () => {
-    const plan = planVerifierPipeline(base({ task: { type: "analysis", complexity: "simple", criticality: "low" }, prompt: "Count the placeholder sprites and report", draft: "Counted 116 placeholder sprites." }));
+    const plan = planVerifierPipeline(base({ task: { type: "analysis", complexity: "simple", criticality: "low" }, prompt: "Count the unused materials and report", draft: "Counted the unused materials and listed each one." }));
     expect(plan.gate ?? "").not.toContain("NO WORK EVIDENCE");
   });
 

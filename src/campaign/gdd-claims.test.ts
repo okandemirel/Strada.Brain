@@ -559,7 +559,7 @@ describe("the comparators and boundaries round W found (Codex 2026-09-12 W#7)", 
   });
 
   it("a verb is not a descriptor: a sentence about people is not a catalogue", () => {
-    expect(kinds("Players aged 18 complete levels.")).toEqual([]);
+    expect(kinds("Players aged 62 complete levels.")).toEqual([]);
     expect(kinds("Most players finish 30 levels.")).toEqual([]);
     // …and a real descriptor still reads.
     expect(kinds("Ship 140 reviewed levels.")).toEqual([["level_count", "eq", 140]]);
@@ -773,22 +773,22 @@ describe("how long a run may keep playing one session (Codex 2026-09-12 AB)", ()
   it("reads a label/value duration table, and the prose it already knew", () => {
     expect(
       extractSessionAllowanceSeconds(
-        "Season planning\nRound time\nabout 9 min for an early season, and up to 23 min once the cider press is unlocked\n",
+        "Round time\n38–49 min, depending on the weather\n",
       ),
-    ).toBe(1380);
+    ).toBe(2940);
     expect(extractSessionAllowanceSeconds("Each round lasts 30-60 seconds.")).toBe(60);
     expect(extractSessionAllowanceSeconds("Session length: 7 minutes")).toBe(420);
     expect(extractSessionAllowanceSeconds("A puzzle game with 12 levels.")).toBeUndefined();
   });
 
   it("stops at the clause the label introduces, and never asks for a sitting", () => {
-    // A label whose sentence goes on to a whole evening's sitting gave the
-    // sitting as the session allowance.
+    // A clause about a whole evening's sitting gave the sitting as the
+    // session allowance, wherever on the label's line it stood.
     expect(
       extractSessionAllowanceSeconds(
-        "Round duration\n8–31 minutes for one growing season; an evening sitting can run to 74 minutes",
+        "Round duration\nan evening sitting can run to 94 minutes; 23–51 minutes for the round itself",
       ),
-    ).toBe(1860);
+    ).toBe(3060);
     // …and an explicitly enormous figure is bounded — by what ONE RUN may
     // spend on ONE session, not by a judgement about how long a game may be.
     expect(extractSessionAllowanceSeconds("Round duration\n170 minutes")).toBe(MAX_SESSION_ALLOWANCE_SECONDS);
@@ -802,13 +802,13 @@ describe("how long a run may keep playing one session (Codex 2026-09-12 AB)", ()
     // A converter that leaves two blank lines hid the value entirely, and a
     // semicolon between two cases of one round lost the longer one.
     expect(extractSessionAllowanceSeconds("Round duration\n\n\n5–12 min")).toBe(720);
-    expect(extractSessionAllowanceSeconds("Round duration\n6–13 min in a calm season; up to 37 min in a storm season")).toBe(2220);
+    expect(extractSessionAllowanceSeconds("Round duration\n33–38 min solo; up to 53 min when a second player joins")).toBe(3180);
     // …while a clause that changes the subject is still not a session length.
-    expect(extractSessionAllowanceSeconds("Round length\n7–13 minutes; the retention study counts players past 95 minutes in total")).toBe(780);
+    expect(extractSessionAllowanceSeconds("Round length\nthe retention study counts players past 97 minutes in total; 31–42 minutes a round")).toBe(2520);
   });
 
   it("is not a claim: nothing is judged against it", () => {
-    const doc = "Round time\nabout 9 min for an early season, and up to 23 min once the cider press is unlocked";
+    const doc = "Round time\n38–49 min, depending on the weather";
     expect(extractNumericClaims(doc).claims.filter((c) => c.kind === "session_seconds")).toEqual([]);
   });
 });
@@ -1192,7 +1192,7 @@ describe("the boot claim and what nobody measures", () => {
  * WHAT ONE RUN COULD REACH IS NOT A CONSTANT (Codex 2026-09-13 AJ#1).
  *
  * The batch a run may play is bounded by its own wall-clock budget, so a game
- * whose document gives each round seven minutes is played five sessions at a
+ * whose document gives each round seven minutes is played six sessions at a
  * time, not twelve. Held against the producer's cap, such a run read NOT MET
  * and BLOCKING — refusing a correct game for the length of its own rounds.
  */
@@ -1244,7 +1244,7 @@ describe("sessionsThatFitOneRun mirrors the producer's budget", () => {
     expect(PLAY_RUN_BUDGET_MS).toBe(45 * 60 * 1000);
     expect(sessionsThatFitOneRun(45, 30)).toBe(52);
     expect(sessionsThatFitOneRun(170, 30)).toBe(15);
-    expect(sessionsThatFitOneRun(360, 30)).toBe(7);
+    expect(sessionsThatFitOneRun(345, 30)).toBe(7);
     expect(sessionsThatFitOneRun(405, 30)).toBe(6);
     // A session whose own allowance exceeds the whole budget fits NONE: the
     // batch plan trims the headroom or refuses by name (plan 0-B.5, AK#5) —

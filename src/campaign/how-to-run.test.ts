@@ -111,13 +111,13 @@ describe("HOW_TO_RUN.md rendering", () => {
     projectRoot: "/tmp/SampleGame",
     unityVersion: "6000.0.41f1",
     entryScene: "Assets/Scenes/DiveCampaign.unity",
-    entryObjects: 23,
+    entryObjects: 47,
     scaffolding: ["Assets/Scenes/SonarSandbox.unity", "Assets/Scenes/WinchPrototype.unity"],
     unclassified: ["Assets/Scenes/Drydock.unity"],
-    otherEnabled: 6,
+    otherEnabled: 3,
     coreLoop: "Plot a dive route, then winch salvage aboard before the air runs out.",
     gddPath: "docs/SampleGame_GDD.md",
-    suiteVerdict: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
+    suiteVerdict: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
     suiteUnfiltered: true,
     testPlatform: "PlayMode",
   };
@@ -131,7 +131,7 @@ describe("HOW_TO_RUN.md rendering", () => {
     expect(text).toContain("EditorBuildSettings.asset");
     expect(text).toContain("Plot a dive route, then winch salvage aboard");
     expect(text).toContain("docs/SampleGame_GDD.md");
-    expect(text).toContain("179 of 179");
+    expect(text).toContain("83 of 83");
     expect(text).toContain("-testPlatform PlayMode");
     // The scaffolding list is the "what can be removed" section.
     expect(text).toContain("SonarSandbox.unity");
@@ -226,11 +226,11 @@ describe("HOW_TO_RUN.md rendering", () => {
 it("owns ONE suite command, and reads the platform off the verdict rather than guessing", () => {
     // HOW_TO_RUN.md and the delivery package (plan 6.1) must hand the reviewer
     // the same command; two copies are two commands that can disagree.
-    expect(testPlatformFromVerdict("179 of 179 tests passed (PlayMode)")).toBe("PlayMode");
+    expect(testPlatformFromVerdict("83 of 83 tests passed (PlayMode)")).toBe("PlayMode");
     expect(testPlatformFromVerdict("EditMode suite green")).toBe("EditMode");
     expect(testPlatformFromVerdict("42 of 42 tests passed")).toBeUndefined();
     expect(testPlatformFromVerdict(undefined)).toBeUndefined();
-    const cmd = suiteCommand("/proj/Game", testPlatformFromVerdict("179 passed (PlayMode)"));
+    const cmd = suiteCommand("/proj/Game", testPlatformFromVerdict("83 passed (PlayMode)"));
     expect(cmd).toContain('-projectPath "/proj/Game"');
     expect(cmd).toContain("-testPlatform PlayMode");
     // The Unity executable is measured nowhere, so it stays a placeholder.

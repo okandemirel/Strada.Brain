@@ -121,9 +121,9 @@ describe("the installed model is the default; the placeholder is the fallback", 
   });
 
   it("sprite: a knowing 'procedural' is refused while a local model is installed — unless accepted", async () => {
-    // Measured 2026-09-07 12:21: a batch of sprites regenerated procedurally
-    // (335 → 170 bytes) with sd15 installed; the delivery gate then counted
-    // them as placeholder art.
+    // Measured 2026-09-07 12:21: a batch of sprites was regenerated
+    // procedurally, every file shrinking, with sd15 installed; the delivery
+    // gate then counted them as placeholder art.
     const { ctx } = project();
     const tool = new SpriteGenerateTool({ localAvailable: () => true, runner: refusing });
     const refused = await tool.execute({ name: "SpiceJar", provider: "procedural" }, ctx);
@@ -174,7 +174,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
 
   it("sprite: a blank draw is retried once with another seed, and reported ✗ when still blank", async () => {
     // Measured 2026-09-07 15:02: rembg cut the subject away with its
-    // background — 19 KB of alpha specks reported as ✓.
+    // background — a file of nothing but alpha specks reported as ✓.
     const { root, ctx } = project();
     // A flat square reads as blank; drawn noise is real.
     const blank = (out: string) => writeFileSync(out, pngFixture("flat"));
@@ -454,9 +454,9 @@ describe("defects the generator review found (2026-09-07)", () => {
     expect(mesh.isError).toBe(true);
     expect(existsSync(join(root, "Signpost.obj"))).toBe(false);
     const { AudioGenerateTool } = await import("./audio-generate.js");
-    const audio = await new AudioGenerateTool().execute({ name: "click", path: "Assets/../Library" }, ctx);
+    const audio = await new AudioGenerateTool().execute({ name: "Doorbell", path: "Assets/../Library" }, ctx);
     expect(audio.isError).toBe(true);
-    expect(existsSync(join(root, "Library/click.wav"))).toBe(false);
+    expect(existsSync(join(root, "Library/Doorbell.wav"))).toBe(false);
   });
 
   it("repeated names in a batch are refused up front", async () => {
@@ -467,7 +467,7 @@ describe("defects the generator review found (2026-09-07)", () => {
   });
 });
 
-describe("a batch item's bare name meets the existing placeholder (2026-09-09 19:24: twelve new files beside twelve untouched placeholders)", () => {
+describe("a batch item's bare name meets the existing placeholder (measured 2026-09-09 19:24: new files landed beside the placeholders they were meant to replace, which stayed untouched)", () => {
   it("two subjects may not share ONE image, and a runner that wrote nothing did not draw (Codex 2026-09-11 N#10, N#11)", async () => {
     const { root, ctx } = project();
     mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
