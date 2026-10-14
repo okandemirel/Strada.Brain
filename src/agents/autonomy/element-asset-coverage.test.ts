@@ -35,8 +35,8 @@ const GDD = [
   "",
   "| Stage | Feature | Effect |",
   "| ----- | ------- | ------ |",
-  "| Cave 2 | Gas Vent | pushes the drone upward |",
-  "| Cave 5 | Crystal Seam | reveals the map nearby |",
+  "| Cave 23 | Gas Vent | pushes the drone upward |",
+  "| Cave 38 | Crystal Seam | reveals the map nearby |",
   "",
 ].join("\n");
 
@@ -47,29 +47,29 @@ const GDD = [
  */
 function assembledProject(): { root: string; codePath: string; configGuid: string } {
   const root = mkdtempSync(join(os.tmpdir(), "coverage-gate-"));
-  const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
+  const moduleRoot = join(root, "Assets", "Modules", "SurveyModule");
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
 
-  const codePath = join(scripts, "BoardModuleConfig.cs");
-  writeFileSync(codePath, "public class BoardModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Board.asmdef"), JSON.stringify({ name: "Board" }));
+  const codePath = join(scripts, "SurveyModuleConfig.cs");
+  writeFileSync(codePath, "public class SurveyModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Survey.asmdef"), JSON.stringify({ name: "Survey" }));
   // A view layer, so the NOTHING RENDERS gate (earlier in the chain) is satisfied.
-  writeFileSync(join(scripts, "BoardView.cs"), "public class BoardView : MonoBehaviour {}");
+  writeFileSync(join(scripts, "SurveyView.cs"), "public class SurveyView : MonoBehaviour {}");
 
-  const tests = join(moduleRoot, "Tests", "Runtime", "Board.Tests");
+  const tests = join(moduleRoot, "Tests", "Runtime", "Survey.Tests");
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, "Board.Tests.asmdef"), JSON.stringify({ name: "Board.Tests" }));
-  writeFileSync(join(tests, "BoardTest.cs"), "public class BoardTest { [Test] public void Boots() {} }");
+  writeFileSync(join(tests, "Survey.Tests.asmdef"), JSON.stringify({ name: "Survey.Tests" }));
+  writeFileSync(join(tests, "SurveyTest.cs"), "public class SurveyTest { [Test] public void Boots() {} }");
 
   const configGuid = "0123456789abcdef0123456789abcdef";
-  writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
-  writeFileSync(join(moduleRoot, "BoardModuleConfig.asset.meta"), `guid: ${configGuid}\n`);
+  writeFileSync(join(moduleRoot, "SurveyModuleConfig.asset"), "%YAML 1.1");
+  writeFileSync(join(moduleRoot, "SurveyModuleConfig.asset.meta"), `guid: ${configGuid}\n`);
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
   writeFileSync(
-    join(scenes, "Main.unity"),
+    join(scenes, "Survey.unity"),
     `Camera:\n  m_Component: []\n--- !u!1 &1\nMonoBehaviour:\n  _gameConfig: {fileID: 11400000, guid: ${configGuid}, type: 2}`,
   );
 
@@ -93,7 +93,7 @@ function addPrefab(root: string, guids: string[]): void {
   const prefabs = join(root, "Assets", "Prefabs");
   mkdirSync(prefabs, { recursive: true });
   writeFileSync(
-    join(prefabs, "Board.prefab"),
+    join(prefabs, "Survey.prefab"),
     guids.map((g) => `  m_Sprite: {fileID: 21300000, guid: ${g}, type: 3}`).join("\n"),
   );
 }

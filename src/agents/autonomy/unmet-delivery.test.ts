@@ -35,7 +35,7 @@ const deps = {
 /** A project with module code, so the drawing rules apply at all. */
 function project(): string {
   const root = mkdtempSync(join(os.tmpdir(), "unmet-"));
-  mkdirSync(join(root, "Assets", "Modules", "BoardModule", "Scripts"), { recursive: true });
+  mkdirSync(join(root, "Assets", "Modules", "SurveyModule", "Scripts"), { recursive: true });
   return root;
 }
 
@@ -54,34 +54,34 @@ const RENDERERS = 6;
 function assembled(renderers = 6): string {
   const root = project();
   void RENDERERS;
-  const moduleRoot = join(root, "Assets", "Modules", "BoardModule");
+  const moduleRoot = join(root, "Assets", "Modules", "SurveyModule");
   writeFileSync(
-    join(moduleRoot, "Scripts", "BoardModuleConfig.cs"),
-    "public class BoardModuleConfig : ModuleConfig {}",
+    join(moduleRoot, "Scripts", "SurveyModuleConfig.cs"),
+    "public class SurveyModuleConfig : ModuleConfig {}",
   );
-  writeFileSync(join(moduleRoot, "Scripts", "Board.asmdef"), JSON.stringify({ name: "Board" }));
-  writeFileSync(join(moduleRoot, "BoardModuleConfig.asset"), "%YAML 1.1");
+  writeFileSync(join(moduleRoot, "Scripts", "Survey.asmdef"), JSON.stringify({ name: "Survey" }));
+  writeFileSync(join(moduleRoot, "SurveyModuleConfig.asset"), "%YAML 1.1");
 
   // Its own play-mode and edit-mode test assemblies, each in its own folder —
   // Unity allows one .asmdef per directory. Without these
   // [STRADA MODULE TESTS MISSING] shadows the drawing gate instead.
   for (const [dir, name] of [
-    [join("Tests", "Runtime", "Board"), "Board.Tests"],
-    [join("Tests", "Editor", "Board"), "Board.Editor.Tests"],
+    [join("Tests", "Runtime", "Survey"), "Survey.Tests"],
+    [join("Tests", "Editor", "Survey"), "Survey.Editor.Tests"],
   ] as const) {
     const testDir = join(moduleRoot, dir);
     mkdirSync(testDir, { recursive: true });
     writeFileSync(join(testDir, `${name}.asmdef`), JSON.stringify({ name }));
-    writeFileSync(join(testDir, "BoardTests.cs"), "[Test] public void Passes() {}");
+    writeFileSync(join(testDir, "SurveyTests.cs"), "[Test] public void Passes() {}");
   }
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
   let sceneBody = "  _gameConfig: {fileID: 11400000, guid: abc}";
   for (let i = 0; i < RENDERERS; i++) {
-    sceneBody += `\n--- !u!1 &${i + 10}\nGameObject:\n  m_Name: Cube${i}`;
+    sceneBody += `\n--- !u!1 &${i + 10}\nGameObject:\n  m_Name: Prop${i}`;
     sceneBody += `\n--- !u!212 &${i + 500}\nMeshRenderer:\n  m_GameObject: {fileID: ${i + 10}}`;
   }
-  writeFileSync(join(scenes, "Main.unity"), sceneBody);
+  writeFileSync(join(scenes, "Survey.unity"), sceneBody);
 
   // Art, so [STRADA ASSETS UNSOURCED] — which speaks before the drawing gate —
   // has nothing to say and the drawing gate is the one whose budget gets spent.
@@ -102,7 +102,7 @@ function runThatPlayed(root: string): StradaConformanceGuard {
   const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
   guard.trackToolCall(
     "file_write",
-    { path: join(root, "Assets", "Modules", "BoardModule", "Scripts", "Board.cs") },
+    { path: join(root, "Assets", "Modules", "SurveyModule", "Scripts", "Survey.cs") },
     false,
   );
   guard.trackToolCall("unity_playmode_verify", { captureFrames: 60 }, false);
@@ -139,7 +139,7 @@ describe("what blocks delivery", () => {
   });
 
   it("still objects when frame variety is HUD-level", () => {
-    // Measured 2026-08-24: HUD progress-bar variation alone (13% distinct)
+    // Measured 2026-08-24: variation confined to the HUD (13% distinct)
     // satisfied the old differing-frames rule while nothing was drawn.
     const root = assembled(0);
     // 2 distinct of 10 = 20% — below the 25% substantive-variety bar.
@@ -160,7 +160,7 @@ describe("what does not block delivery", () => {
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
     guard.trackToolCall(
       "file_write",
-      { path: join(root, "Assets", "Modules", "BoardModule", "Scripts", "Board.cs") },
+      { path: join(root, "Assets", "Modules", "SurveyModule", "Scripts", "Survey.cs") },
       false,
     );
 
@@ -207,7 +207,7 @@ describe("the ask budget does not silence it", () => {
  *
  * The acceptance bar for the rejected 2026-09-02 attempt: it mirrored
  * elementAssetCoverageReason() into the delivery claim, and that reason
- * measures the WHOLE GDD element schedule. A sprint asked for the board and
+ * measures the WHOLE GDD element schedule. A sprint asked for one module and
  * nothing else then could not deliver, because elements planned for later
  * sprints had no art yet.
  */
@@ -218,9 +218,9 @@ const GDD_SCHEDULING_MORE = [
   "",
   "| Stage | Feature | Effect |",
   "| ----- | ------- | ------ |",
-  "| Cave 2 | Gas Vent | pushes the drone upward |",
-  "| Cave 5 | Crystal Seam | reveals the map nearby |",
-  "| Cave 9 | Glow Moss | lights a radius |",
+  "| Cave 23 | Gas Vent | pushes the drone upward |",
+  "| Cave 38 | Crystal Seam | reveals the map nearby |",
+  "| Cave 44 | Glow Moss | lights a radius |",
   "",
 ].join("\n");
 
@@ -229,7 +229,7 @@ function runThatNeverPlayed(root: string): StradaConformanceGuard {
   const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
   guard.trackToolCall(
     "file_write",
-    { path: join(root, "Assets", "Modules", "BoardModule", "Scripts", "Board.cs") },
+    { path: join(root, "Assets", "Modules", "SurveyModule", "Scripts", "Survey.cs") },
     false,
   );
   return guard;

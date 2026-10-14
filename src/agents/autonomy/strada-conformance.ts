@@ -292,7 +292,7 @@ const MODULE_PATH_RE = /(^|\/)Modules\/([^/]+)\//i;
  * Without the first the module is never registered with the framework; without
  * the second the code cannot compile against it at all.
  *
- * Measured: a greenfield task produced 19 hand-written files under
+ * Measured: a greenfield task hand-wrote a whole module's files under
  * Assets/Modules/GameModule/Scripts/{Domain,Models,Services} with neither. The
  * directory looked right and the module did not exist as far as Strada was
  * concerned.
@@ -308,7 +308,7 @@ const MODULE_PATH_RE = /(^|\/)Modules\/([^/]+)\//i;
  *
  * It is the `name` field inside the .asmdef, not the file name. Reading the file
  * name meant the duplicate check could not see the duplicates its own message
- * described — two files called Board.asmdef both declaring "Game.Board" is a
+ * described — two files called Survey.asmdef both declaring "Game.Survey" is a
  * project Unity refuses to compile, and it read as two distinct assemblies.
  */
 function assemblyNameOf(asmdefPath: string, fallback: string): string {
@@ -410,7 +410,7 @@ function declaresTest(source: string): boolean {
 
 // The whole module, as strada_create_module searches it: the gate's remedy is
 // that tool, which keeps a *ModuleConfig.cs at any depth and makes no second
-// one. Two levels down, Scripts/Config/Board/BoardModuleConfig.cs was "missing"
+// one. Two levels down, Scripts/Config/Survey/SurveyModuleConfig.cs was "missing"
 // here and kept there, so the advised call could never close the gate.
 function defaultListDir(dir: string): string[] {
   if (!existsSync(dir)) return [];
@@ -1088,12 +1088,11 @@ export class StradaConformanceGuard {
   /**
    * References in a module's assets that resolve to nothing.
    *
-   * Measured 2026-08-22: RenderingModuleConfig.asset carried
-   * `_prefabs: {guid: 6813063e...}` while the prefab config it meant to point
-   * at had a different guid. The C# turned the resulting null into an empty
-   * ScriptableObject — `_prefabs != null ? _prefabs : CreateInstance<...>()` —
-   * so the spawner received no prefabs, nothing was logged, and a suite of 44
-   * passing tests sat over a game that drew an empty sky.
+   * Measured 2026-08-22: a module's config asset pointed its prefab field at
+   * one guid while the prefab config it meant had another. The C# turned the
+   * resulting null into an empty ScriptableObject, so the spawner received no
+   * prefabs, nothing was logged, and a suite of 44 passing tests sat over a
+   * game that drew an empty sky.
    *
    * Unity's built-in guids (the all-zero forms carried by every prefab) and
    * anything a package owns are not dangling. Flagging those would bury the one
@@ -1233,8 +1232,8 @@ export class StradaConformanceGuard {
     if (digests.size === 1) return `all ${frames.length} captured frames are identical`;
 
     // Two ways a game can fake "drawing", both measured on the test game:
-    //   1. HUD-only variation — sixty frames differed ONLY by the progress bar
-    //      filling over an empty sky (8 distinct of 60 = 13%).
+    //   1. HUD-only variation — sixty frames differed ONLY in one HUD element
+    //      changing over an empty sky (8 distinct of 60 = 13%).
     //   2. Scene-census gaming — a runtime-construction project keeps the scene
     //      YAML minimal by design (the playfield spawns from code), so a bare
     //      renderer census false-flags the architecture itself.
@@ -1258,7 +1257,7 @@ export class StradaConformanceGuard {
    *
    * Counts MeshRenderer/SpriteRenderer occurrences and top-level GameObjects
    * in scene YAML. Cheap text census, not a Unity import — enough to tell a
-   * playfield from a skybox with a progress bar on it.
+   * playfield from a skybox with a HUD on it.
    */
 
   private danglingAssetReferences(): string[] {
@@ -1839,7 +1838,7 @@ export class StradaConformanceGuard {
     }
 
     // A run that wrote module code and produced no scene delivered a library.
-    // Measured: nine modules, fifty C# files and sixteen test assemblies, all
+    // Measured: nine modules, fifty C# files and their test assemblies, all
     // compiling, with no .unity, no ScriptableObject asset and no bootstrapper —
     // and it reported success. Every rule above passed, because they all read
     // the shape of code. This one reads the artifacts.
@@ -1980,10 +1979,10 @@ export class StradaConformanceGuard {
 
     // A test assembly that contains no test satisfies every rule above: the
     // .asmdef exists, its name matches its module, and the coverage rule is
-    // looking for exactly that name. Measured on two full runs — sixteen test
-    // assemblies each, and thirty-two of thirty-two directories held zero .cs
-    // files. The headless PlayMode run over one of them executed 0 tests and
-    // Unity still wrote result="Passed", because nothing failed.
+    // looking for exactly that name. Measured on two full runs: thirty-two of
+    // thirty-two test assembly directories held zero .cs files. The headless
+    // PlayMode run over one of them executed 0 tests and Unity still wrote
+    // result="Passed", because nothing failed.
     //
     // Counting the container rather than its contents is the same mistake as
     // counting compile errors without checking that anything compiled.

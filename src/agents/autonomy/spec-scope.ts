@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { stripCsComments } from "./csharp-source.js";
 
 export interface ScheduledElement {
-  /** Unlock tag from the schedule table, e.g. "Cave 5". */
+  /** Unlock tag from the schedule table, e.g. "Cave 38". */
   readonly unlock: string;
   /** Element name as the spec spells it, e.g. "Gas Vent". */
   readonly name: string;
@@ -27,10 +27,11 @@ export interface ScheduledElement {
 /** Strip formatting from a spec element name for code search. */
 export function elementCodeTokens(name: string): string[] {
   const tokens = new Set<string>();
-  // A PARENTHETICAL IS AN ANNOTATION, not part of the name. "Survey (v2)
-  // Beacon" produced only SurveyV2Beacon/surveyv2beacon, so a project whose code
-  // says `SurveyBeacon` was reported as missing the element it had implemented —
-  // a false refusal measured on the test vehicle (Codex 2026-09-12 Y).
+  // A PARENTHETICAL IS AN ANNOTATION, not part of the name. A name carrying a
+  // note in parentheses produced only its annotated spellings, so a project
+  // whose code used the plain name was reported as missing the element it had
+  // implemented — a false refusal measured on the test vehicle (Codex
+  // 2026-09-12 Y).
   // The annotated spelling stays a candidate: some code keeps it.
   const spellings = new Set<string>([name]);
   const withoutNotes = name.replace(/\s*\([^)]*\)\s*/g, " ").trim();
@@ -52,7 +53,7 @@ export function elementCodeTokens(name: string): string[] {
  * Parse an element-introduction schedule out of a design document.
  *
  * Recognizes markdown pipe tables whose rows start with an unlock tag
- * (e.g. `L7` or `Cave 7`) followed by an element name — the shape many GDDs
+ * (e.g. `E3` or `Cave 47`) followed by an element name — the shape many GDDs
  * use for their element schedule.
  */
 // The walker lives in csharp-source.ts, shared by every C# rule; re-exported
@@ -64,7 +65,7 @@ const NOT_AN_ELEMENT_RE = /\((?:producer|designer|artist|engineer|programmer|lea
 
 /** Blank lines a converter may leave between two rows of one table. */
 const MAX_ROW_SEPARATORS = 3;
-/** An unlock id in a schedule's first cell: "L7", "7", "E3", "Cave 7". */
+/** An unlock id in a schedule's first cell: "47", "E3", "W1-3", "Cave 47". */
 const UNLOCK_CELL_RE = /^(?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?$/;
 /** A header cell naming WHEN an element arrives, and one naming the element. */
 const UNLOCK_HEADER_RE = /^(?:unlock(?:s|ed)?(?:\s+at)?|level|levels|introduced(?:\s+at)?|when|from|stage|arrives?)$/i;
@@ -201,9 +202,9 @@ export function extractScheduledElements(docText: string, out?: { partial?: bool
   const found = new Map<string, ScheduledElement>();
   const lines = docText.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    // Any unlock id in the first cell: L7, 7, E3, W1-3, "Cave 7",
-    // "Chapter 1" — one GDD's "L<number>" was the only shape recognized
-    // (Codex 2026-09-11 B#18, C#29).
+    // Any unlock id in the first cell: 47, E3, W1-3, "Cave 47",
+    // "Depth 58" — a single letter-and-number shape was the only one
+    // recognized (Codex 2026-09-11 B#18, C#29).
     const m = /^\s*\|\s*((?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?)\s*\|\s*([^|]+?)\s*\|/.exec(lines[i]!);
     if (!m) continue;
     const name = m[2]!.trim();

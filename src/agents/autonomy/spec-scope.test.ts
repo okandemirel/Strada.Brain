@@ -6,10 +6,11 @@ const GDD_SNIPPET = `
 
 | Stage | Feature | Effect |
 |-------|---------|--------|
-| Cave 2 | Gas Vent | Pushes the drone upward |
-| Cave 5 | Crystal Seam | Reveals the map nearby |
-| Cave 9 | Rockfall | Closes a passage after a delay |
-| Cave 12 | Drill & Anchor | Holds the drone against a draught |
+| Cave 23 | Gas Vent | Pushes the drone upward |
+| Cave 31 | Echo-Shaft | Drops the drone to the next chamber |
+| Cave 38 | Crystal Seam | Reveals the map nearby |
+| Cave 44 | Glow Moss | Lights a radius around the drone |
+| Cave 53 | Rockfall | Closes a passage after a delay |
 `;
 
 describe("spec scope — the design document is the checklist", () => {
@@ -17,8 +18,8 @@ describe("spec scope — the design document is the checklist", () => {
     const gdd = [
       "| Stage | Feature | Notes |",
       "| --- | --- | --- |",
-      "| Cave 7 | Gas Vent | lifts |",
-      "| Chapter 1 | Glow Moss | lights |",
+      "| Cave 51 | Gas Vent | lifts |",
+      "| Depth 58 | Glow Moss | lights |",
     ].join("\n");
     expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Gas Vent", "Glow Moss"]);
     // A staffing table is not a game schedule.
@@ -34,9 +35,9 @@ describe("spec scope — the design document is the checklist", () => {
     const gdd = [
       "| Stage | Feature | Notes |",
       "| --- | --- | --- |",
-      "| 7 | Teleporter | bends the path |",
-      "| E3 | Magnet | pulls items |",
-      "| W1-2 | Springboard | launches |",
+      "| 47 | Teleporter | bends the path |",
+      "| E33 | Magnet | pulls items |",
+      "| W37-39 | Springboard | launches |",
     ].join("\n");
     expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Teleporter", "Magnet", "Springboard"]);
     expect(stripCsComments("// TODO Teleporter Magnet\nclass A { /* Springboard */ int x; }")).not.toContain("Teleporter");
@@ -45,13 +46,13 @@ describe("spec scope — the design document is the checklist", () => {
 
   it("extracts the element schedule from a GDD-style table", () => {
     const els = extractScheduledElements(GDD_SNIPPET);
-    expect(els.map((e) => e.name)).toEqual(["Gas Vent", "Crystal Seam", "Rockfall", "Drill & Anchor"]);
-    expect(els[0]?.unlock).toBe("Cave 2");
+    expect(els.map((e) => e.name)).toEqual(["Gas Vent", "Echo-Shaft", "Crystal Seam", "Glow Moss", "Rockfall"]);
+    expect(els[0]?.unlock).toBe("Cave 23");
   });
 
   it("builds code-token shapes an implementation might use", () => {
     expect(elementCodeTokens("Crystal Seam")).toContain("CrystalSeam");
-    expect(elementCodeTokens("Drill & Anchor")).toContain("DrillAnchor");
+    expect(elementCodeTokens("Echo-Shaft")).toContain("EchoShaft");
   });
 
   it("names scheduled elements missing from Assets code", () => {
@@ -69,8 +70,8 @@ describe("spec scope — the design document is the checklist", () => {
       writeFileSync(join(scripts, "CrystalSeam.cs"), "public class CrystalSeam {}");
 
       const report = assessSpecScope(root);
-      expect(report.scheduled).toBe(4);
-      expect(report.missing.map((m) => m.name)).toEqual(["Gas Vent", "Rockfall", "Drill & Anchor"]);
+      expect(report.scheduled).toBe(5);
+      expect(report.missing.map((m) => m.name)).toEqual(["Gas Vent", "Echo-Shaft", "Glow Moss", "Rockfall"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -107,7 +108,7 @@ describe("short element names count as whole words (measured 2026-09-10: a 4-let
     try {
       mkdirSync(join(root, "docs"));
       mkdirSync(join(root, "Assets"));
-      writeFileSync(join(root, "docs", "GDD.md"), "| L1 | Moss |\n| L2 | Vent |\n| L3 | Seam |\n");
+      writeFileSync(join(root, "docs", "GDD.md"), "| Cave 1 | Moss |\n| Cave 2 | Vent |\n| Cave 3 | Seam |\n");
       writeFileSync(join(root, "Assets", "A.cs"), "public class Moss {} // eventually\nclass Seam {}\n");
       const report = assessSpecScope(root, join(root, "docs", "GDD.md"));
       expect(report.scheduled).toBe(3);
@@ -131,13 +132,16 @@ describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
     "Stage",
     "Feature",
     "Effect",
-    "Cave 2",
+    "Cave 23",
     "Gas Vent",
     "Pushes the drone upward",
-    "Cave 5",
+    "Cave 38",
     "Crystal Seam",
     "Reveals the map nearby",
-    "Cave 9",
+    "Cave 44",
+    "Glow Moss",
+    "Lights a radius around the drone",
+    "Cave 53",
     "Rockfall",
     "Closes a passage after a delay",
     "",
@@ -147,21 +151,23 @@ describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
 
   it("reads the rows a converter flattened, with the right column for each", () => {
     expect(extractScheduledElements(flattened)).toEqual([
-      { unlock: "Cave 2", name: "Gas Vent" },
-      { unlock: "Cave 5", name: "Crystal Seam" },
-      { unlock: "Cave 9", name: "Rockfall" },
+      { unlock: "Cave 23", name: "Gas Vent" },
+      { unlock: "Cave 38", name: "Crystal Seam" },
+      { unlock: "Cave 44", name: "Glow Moss" },
+      { unlock: "Cave 53", name: "Rockfall" },
     ]);
   });
 
   it("stops at the end of the table and does not invent elements from prose", () => {
-    const after = `${flattened}\nCave 99\nnot a table row at all — this is a sentence about Cave 99.`;
+    const after = `${flattened}\nCave 97\nnot a table row at all — this is a sentence about Cave 97.`;
     expect(extractScheduledElements(after).map((e) => e.name)).toEqual([
       "Gas Vent",
       "Crystal Seam",
+      "Glow Moss",
       "Rockfall",
     ]);
     // A document with no schedule still yields none.
-    expect(extractScheduledElements("# GDD\n\nA puzzle game with 12 levels.")).toEqual([]);
+    expect(extractScheduledElements("# GDD\n\nA cave-mapping game with 37 caves.")).toEqual([]);
     // …and a staffing table is still not a schedule.
     expect(
       extractScheduledElements(["Stage", "Feature", "Owner", "Cave 1", "Ada Lovelace (designer)", "art"].join("\n")),
@@ -171,9 +177,10 @@ describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
   it("still reads an ordinary pipe table", () => {
     expect(extractScheduledElements(GDD_SNIPPET).map((e) => e.name)).toEqual([
       "Gas Vent",
+      "Echo-Shaft",
       "Crystal Seam",
+      "Glow Moss",
       "Rockfall",
-      "Drill & Anchor",
     ]);
   });
 });
@@ -186,14 +193,12 @@ describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
  */
 describe("a parenthetical is an annotation, not part of the name (Codex 2026-09-12 Y)", () => {
   it("offers the name without its notes as well as with them", () => {
-    expect(elementCodeTokens("Survey (v2) Beacon")).toEqual(
-      expect.arrayContaining(["SurveyV2Beacon", "SurveyBeacon", "surveybeacon"]),
-    );
-    expect(elementCodeTokens("Rockfall (timed)")).toEqual(expect.arrayContaining(["Rockfall", "rockfall", "RockfallTimed"]));
-    expect(elementCodeTokens("Gas Vent (rare; see notes)")).toEqual(expect.arrayContaining(["GasVent", "gasvent"]));
+    // "glowmoss" comes only from the plain spelling: the annotated one gives
+    // GlowMossLit, glowmosslit and the GlowMoss compound.
+    expect(elementCodeTokens("Glow Moss (lit)")).toEqual(expect.arrayContaining(["GlowMossLit", "GlowMoss", "glowmoss"]));
     // A name with no annotation is unchanged.
     expect(elementCodeTokens("Crystal Seam")).toEqual(["CrystalSeam", "crystalseam"]);
-    expect(elementCodeTokens("Drill & Anchor")).toEqual(["DrillAnchor", "drillanchor"]);
+    expect(elementCodeTokens("Echo-Shaft")).toEqual(["EchoShaft", "echoshaft"]);
   });
 });
 
@@ -296,7 +301,7 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
       expect(report.scheduled).toBe(0);
       expect(report.scheduleUnreadable).toBe(true);
       // …and a document with no schedule at all says nothing of the kind.
-      writeFileSync(join(root, "docs", "GDD.md"), "# GDD\n\nA puzzle game with 12 levels.\n" + "x".repeat(500));
+      writeFileSync(join(root, "docs", "GDD.md"), "# GDD\n\nA cave-mapping game with 37 caves.\n" + "x".repeat(500));
       expect(assessSpecScope(root).scheduleUnreadable).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -309,7 +314,7 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
     const unreadable = "Stage\nFeature\nEffect\nthe rows of this table were lost in conversion.";
     expect(extractScheduledElements(unreadable)).toEqual([]);
     expect(scheduleLooksPresent(unreadable)).toBe(true);
-    expect(scheduleLooksPresent("# GDD\n\nA puzzle game with 12 levels.")).toBe(false);
+    expect(scheduleLooksPresent("# GDD\n\nA cave-mapping game with 37 caves.")).toBe(false);
     expect(scheduleLooksPresent(GDD_SNIPPET)).toBe(true);
   });
 });
@@ -400,7 +405,7 @@ describe("the spec-scope code walk is bounded (AUT-15)", () => {
       symlinkSync(assets, join(assets, "b"), "dir");
 
       const report = assessSpecScope(root);
-      expect(report.scheduled).toBe(4);
+      expect(report.scheduled).toBe(5);
       expect(report.corpusPartial).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
