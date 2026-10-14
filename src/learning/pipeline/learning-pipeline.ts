@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { provenanceTags, runProvenance } from "../run-provenance.js";
 import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, EVIDENCE_WEIGHTS, getVerdictScore } from "../scoring/confidence-scorer.js";
@@ -1567,8 +1568,12 @@ export class LearningPipeline {
       createdAt: Date.now() as TimestampMs,
       updatedAt: Date.now() as TimestampMs,
       sourceTrajectoryIds: [],
-      tags: [],
+      // WHICH RUN LEARNED THIS. Measured 2026-10-14: ten instincts learned in a
+      // live campaign, none recording a run or a campaign — so no later sprint
+      // could be told from the sprint that wrote one down.
+      tags: provenanceTags([]),
       scopeType,
+      ...originOf(),
       ...(params.userId ? { userId: params.userId } : {}),
     };
 
@@ -1636,8 +1641,9 @@ export class LearningPipeline {
       createdAt: Date.now() as TimestampMs,
       updatedAt: Date.now() as TimestampMs,
       sourceTrajectoryIds: [],
-      tags: [],
+      tags: provenanceTags([]),
       scopeType,
+      ...originOf(),
       ...(params.userId ? { userId: params.userId } : {}),
     };
 
@@ -2793,4 +2799,14 @@ export class LearningPipeline {
       content,
     );
   }
+}
+
+/**
+ * The origin fields an instinct created inside a run carries: the run that
+ * learned it. A creation outside a run records nothing rather than a made-up
+ * session (`verdicts-must-name-what-they-measured`).
+ */
+function originOf(): { originSessionId?: string } {
+  const runId = runProvenance()?.runId;
+  return runId === undefined || runId === "" ? {} : { originSessionId: runId };
 }

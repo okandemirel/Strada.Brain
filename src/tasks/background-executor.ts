@@ -30,6 +30,7 @@ import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from ".
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { subscribeTaskLiveness } from "../agents/liveness-hub.js";
 import { withRunDesignDoc, type RunDesignDoc } from "../agents/autonomy/run-design-doc.js";
+import { withRunProvenance } from "../learning/run-provenance.js";
 import {
   deriveTestVerdict,
   runIntegrityOfNodes,
@@ -1405,7 +1406,13 @@ export class BackgroundExecutor {
       // Set for every task, campaign or not: a task submitted from inside
       // another one (a retry, a resumed goal) starts here in that task's
       // context, whose document must not carry over.
-      withRunDesignDoc(this.designDocFor(entry.task), () => this.executeTask(timedEntry))
+      // The run's identity rides with its document: what this task learns must
+      // record which task learned it and, when it serves one, which campaign —
+      // measured 2026-10-14, ten instincts were learned with no origin at all.
+      withRunProvenance(
+        { runId: entry.task.id, ...(entry.task.campaignId === undefined ? {} : { campaignId: entry.task.campaignId }) },
+        () => withRunDesignDoc(this.designDocFor(entry.task), () => this.executeTask(timedEntry)),
+      )
         .catch((err) => {
           // Catch any unhandled rejection that escapes executeTask's own try/catch
           const rawMsg = err instanceof Error ? err.message : String(err);
