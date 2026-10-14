@@ -311,13 +311,13 @@ describe("judgePlanShape", () => {
 describe("a read-only request is not an exploration-only failure (Codex review 2026-09-09)", () => {
   it("names the requests whose plan is legitimately reading", () => {
     for (const t of [
-      "Review the audio module and report what is short or duplicated",
+      "Review the opening-drill module and report what is short or duplicated",
       "Audit the shipped scenes against the GDD",
       "Analyze why the chess-clock module stalls",
       "Please summarize the delivery report",
       "Report on placeholder art coverage",
     ]) expect(isReadOnlyRequest(t), t).toBe(true);
-    for (const t of ["Build the HUD", "Deliver the art the GDD schedules", "Fix the compile error in HintService"]) {
+    for (const t of ["Build the move-list panel", "Deliver the art the GDD schedules", "Fix the compile error in HintService"]) {
       expect(isReadOnlyRequest(t), t).toBe(false);
     }
   });
@@ -393,7 +393,7 @@ describe("folding a measurement never deletes the work (Codex 2026-09-11 M#4)", 
   it("a folded verifier keeps every barrier it waited on", () => {
     const { nodes } = foldMeasurementNodes([
       { id: "a", task: "Build the drill board", dependsOn: [] },
-      { id: "b", task: "Build the HUD", dependsOn: [] },
+      { id: "b", task: "Build the move-list panel", dependsOn: [] },
       { id: "v", task: "Report the measured results", dependsOn: ["a", "b"] },
     ]);
 

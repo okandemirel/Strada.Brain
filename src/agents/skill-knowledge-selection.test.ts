@@ -14,7 +14,7 @@ const skill = (name: string, body: string, extra: Record<string, unknown> = {}, 
 describe("selectSkillKnowledge", () => {
   it("withholds an active skill the prompt never names, and says which and how big", () => {
     const stale = skill("swarm-timer-notes", "## Notes: SwarmTimer retry order …".padEnd(4271, "x"));
-    const { included, withheld } = selectSkillKnowledge([stale], "Paint the meadow tiles the GDD lists.");
+    const { included, withheld } = selectSkillKnowledge([stale], "Paint the apiary signboards the GDD lists.");
     expect(included).toEqual([]);
     expect(withheld).toEqual([{ name: "swarm-timer-notes", chars: 4271 }]);
   });

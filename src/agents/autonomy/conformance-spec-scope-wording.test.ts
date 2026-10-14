@@ -2,11 +2,10 @@
  * The spec-scope gate speaks for any game, not the one it was written on
  * (GDD-drift trace M4, 2026-10-11).
  *
- * It told every run to implement a missing element "in the sim module with
- * its R-rule interactions and a level that showcases it": the test vehicle's
- * own rule labels, its module layout and a level-based structure, sent to a
- * game whose document may have none of them. A worker told to build a
- * showcase level builds content the design never asked for.
+ * Its instruction once carried one project's own vocabulary and structure and
+ * sent them to every game, whose document may say none of it. A worker told to
+ * build content the design never asked for builds it. The prompt is pinned
+ * word for word below, so no such clause can come back unnoticed.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,9 +20,9 @@ const GDD = `
 
 | Opens at | Ware |
 |----------|------|
-| Kiln 5 | Celadon Glaze |
-| Kiln 17 | Raku Tongs |
-| Kiln 33 | Slip Mould |
+| Kiln 23 | Celadon Glaze |
+| Kiln 47 | Raku Tongs |
+| Kiln 71 | Slip Mould |
 `;
 
 const roots: string[] = [];
@@ -45,17 +44,21 @@ function specScopeText(designDoc?: RunDesignDoc): string | null {
 }
 
 describe("the spec-scope prompt", () => {
-  it("names the missing elements without a test vehicle's rule labels or level structure", () => {
-    const text = specScopeText() ?? "";
-    expect(text).toContain("[STRADA SPEC SCOPE]");
-    expect(text).toContain("Celadon Glaze (Kiln 5)");
-    expect(text).not.toMatch(/R-rule|showcases|sim module/i);
-    expect(text).toContain("as the design document specifies it");
+  it("names the missing elements and adds nothing the document did not say", () => {
+    // The whole prompt, so a clause naming one project's layout, labels or
+    // content plan fails here whatever words it uses.
+    expect(specScopeText()).toBe(
+      "[STRADA SPEC SCOPE] The design document schedules 3 elements; 2 have no implementation in this project: " +
+        "Celadon Glaze (Kiln 23), Slip Mould (Kiln 71). " +
+        "The spec is the contract — a delivery that omits scheduled elements is partial, not done. " +
+        "Implement each as the design document specifies it — its rules and its interactions with the other " +
+        "elements — following the project's module pattern, and make it reachable in the shipped game.",
+    );
   });
 
   it("names the campaign's GDD file when one holds the document", () => {
     const text = specScopeText({ text: GDD, path: "docs/PotteryBook.md" }) ?? "";
-    expect(text).toContain("Celadon Glaze (Kiln 5)");
+    expect(text).toContain("Celadon Glaze (Kiln 23)");
     expect(text).toContain("Implement each as docs/PotteryBook.md specifies it");
   });
 
@@ -63,7 +66,7 @@ describe("the spec-scope prompt", () => {
     // The campaign's GDD is in no file; docs/ here holds a document, and it
     // is not that one. "As the design document specifies it" sent the run to it.
     const text = specScopeText({ text: GDD }) ?? "";
-    expect(text).toContain("Celadon Glaze (Kiln 5)");
+    expect(text).toContain("Celadon Glaze (Kiln 23)");
     expect(text).not.toContain("as the design document specifies it");
     expect(text).toContain("campaign's GDD is not saved in the project, so no file holds it");
     expect(text).toContain("do not look for one");
