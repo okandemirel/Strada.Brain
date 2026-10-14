@@ -315,6 +315,40 @@ function isSupportDocument(path: string): boolean {
 const SPLIT_PATH_HEAD_RE =
   /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/]|~[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])+[\p{L}\p{N}_~-]+(?:\s+(?!(?:and|or|ve|veya|ile|in|from|at|the|then|to|of|for)\s)[\p{L}\p{N}_~-]+){0,3})\s+$/iu;
 
+/**
+ * …and with no folder at all: "Build the game in Quill Moor GDD.md" named
+ * "GDD.md", and the manager built docs/GDD.md — another file — with no gate.
+ * Where such a name begins is unknowable in lower case; in a title-cased
+ * name it is the first of the capitalised words before it, up to three, that
+ * are not the sentence's own ("Build The Game In GDD.md" names "GDD.md") —
+ * and only where a connective, a colon or a quote leads into the name, or it
+ * opens a sentence as its Turkish topic ("Quill Moor GDD.md'deki oyunu yap").
+ * A sentence's first word is capitalised too: "Fetch GDD.md and build the
+ * game from it" names "GDD.md".
+ */
+const NAME_WORD_BEFORE_RE = /(?<![^\s"'`(:“‘])(\p{Lu}[\p{L}\p{N}_~+&-]*) $/u;
+const SENTENCE_WORDS = new Set([
+  "build", "make", "develop", "implement", "use", "using", "read", "open", "see", "follow", "following", "please", "game",
+  "the", "this", "that", "my", "our", "a", "an", "in", "from", "at", "per", "of", "for", "to", "and", "or", "with", "it", "is", "now", "then", "so", "ok", "okay", "hey", "hi", "also", "just",
+  "bu", "şu", "oyunu", "oyun", "yap", "ve", "ile", "lütfen", "tasarım",
+]);
+
+const LEADS_INTO_NAME_RE = /(?:(?<![\p{L}])(?:in|from|at|per|using|following|with|of|on|the|my|our|this)\s|[:("'\x60“‘]\s*)$/iu;
+const TOPIC_SUFFIX_RE = /^(?:['’]|\s+(?:oyun|dosya|belge|ile)(?![\p{L}]))/iu;
+
+function titledNameStart(text: string, at: number, end: number): number {
+  let start = at;
+  for (let words = 0; words < 3; words++) {
+    const word = NAME_WORD_BEFORE_RE.exec(text.slice(0, start))?.[1];
+    // Both lower cases: in Turkish "In" is "ın", and in English "İle" keeps its dot.
+    if (word === undefined || SENTENCE_WORDS.has(word.toLowerCase()) || SENTENCE_WORDS.has(word.toLocaleLowerCase("tr"))) break;
+    start -= word.length + 1;
+  }
+  const before = text.slice(0, start);
+  const topic = /(?:^|[.!?\n])\s*$/u.test(before) && TOPIC_SUFFIX_RE.test(text.slice(end));
+  return start < at && (LEADS_INTO_NAME_RE.test(before) || topic) ? start : at;
+}
+
 interface NamedDocument {
   path: string;
   /** Where the path begins and ends in the message. */
@@ -345,6 +379,7 @@ function namedDocumentsIn(text: string): NamedDocument[] {
     let at = end - m[1]!.length;
     const head = /[\\/]/.test(m[1]!) ? null : SPLIT_PATH_HEAD_RE.exec(unread.slice(0, at));
     if (head) at = head.index + head[0].indexOf(head[1]!);
+    else if (!/[\\/]/.test(m[1]!)) at = titledNameStart(unread, at, end);
     paths.push({ path: text.slice(at, end), at, end });
   }
   named.push(...paths);

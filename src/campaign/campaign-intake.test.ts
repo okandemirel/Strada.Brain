@@ -769,6 +769,26 @@ describe("a build aimed only at a document that sits beside the design", () => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
 
+  /**
+   * An unquoted name with spaces and no folder yielded only its last word:
+   * "Build the game in Quill Moor GDD.md" named "GDD.md", and the manager
+   * built docs/GDD.md — another file — with no gate.
+   */
+  it.each([
+    ["Build the game in Quill Moor GDD.md", "Quill Moor GDD.md"],
+    ["Build the game from the Quill Moor GDD.md", "Quill Moor GDD.md"],
+    ["Bu oyunu yap: Quill Moor GDD.md", "Quill Moor GDD.md"],
+    ["Quill Moor GDD.md'deki oyunu yap", "Quill Moor GDD.md"],
+    ["Thanks! Quill Moor GDD.md'deki oyunu yap", "Quill Moor GDD.md"],
+    // The words a sentence builds with are no part of the name, nor is its capitalised first word.
+    ["Fetch GDD.md and build the game from it", "GDD.md"],
+    ["Build The Game In GDD.md", "GDD.md"],
+    ["Build the game in GDD.md", "GDD.md"],
+    ["Build the game in my GDD.md", "GDD.md"],
+  ])("%s → the whole name, %s", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
   it("an idea written beside the style sheet the build is aimed at is the design", () => {
     const text = "Build this game from scratch per docs/art-style.md: a beekeeper moves her hives between meadows as the seasons turn.";
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });

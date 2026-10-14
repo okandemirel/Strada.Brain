@@ -10500,6 +10500,20 @@ describe("CampaignManager", () => {
       });
     });
 
+    // "Quill Moor GDD.md", unquoted and with no folder, was read as "GDD.md" and docs/GDD.md was built.
+    it("reads an unquoted name with spaces whole, and builds no shorter name in its place", async () => {
+      writeFileSync(join(projectRoot, "docs", "GDD.md"), "# Another game\n\n" + "o".repeat(400));
+      expect(await say("chat-spaced", "Build the game in Quill Moor GDD.md")).toBe(true);
+      const said = told("chat-spaced");
+      expect(said).toContain("could not read `Quill Moor GDD.md`");
+      expect(said).not.toContain("Building from");
+      expect(storage.hasActiveForChat("chat-spaced")).toBe(false);
+
+      writeFileSync(join(projectRoot, "docs", "Quill Moor GDD.md"), DESIGN);
+      expect(await say("chat-spaced-there", "Build the game in Quill Moor GDD.md")).toBe(true);
+      expect(storage.listActive().find((c) => c.chatId === "chat-spaced-there")?.gddPath).toBe("docs/Quill Moor GDD.md");
+    });
+
     it("says a named document that is not there could not be read, and builds no other design", async () => {
       expect(await say("chat-missing", "Build this game: docs/Missing_GDD.md")).toBe(true);
       const said = told("chat-missing");
