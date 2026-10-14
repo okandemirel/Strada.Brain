@@ -781,15 +781,16 @@ function buildRequest(prose: string): Request | undefined {
  * game: P", "build the game in / from / per / using / following P", "build
  * the game (P)", "build the game from the GDD at P", "Bu oyunu yap: P".
  * "With P" is how a build goes ("with docs/ui-notes.md in mind") unless P is
- * called the design: "with the design in P". The groups say when it is:
- * `gdd`, the build is of the GDD itself ("implement the GDD at P"); `design`,
- * P is introduced as the design ("from the GDD at P").
+ * called the design: "with the design in P". The groups say when the build's
+ * own clause calls P the GDD: `gdd`, the build is of the GDD itself
+ * ("implement the GDD at P"); `calledGdd`, P is introduced as it ("from the
+ * GDD at P"). "From the design in P" says no more than P's name does.
  */
 const BUILDS_FROM_NEXT_RE = new RegExp(
   `(?:${BUILD_GAME_EN}|(?<gdd>${BUILD_GDD_EN}|${BUILD_GDD_TR})|${BUILD_GAME_TR})(?:\\s+${BUILD_ADVERB})*` +
     String.raw`(?:\s*[:(]|\s+(?:in|from|at|per|using|following|with(?=\s+(?:the|this|that|my|our)\s+(?:GDD|game\s+design|design))|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)\s+in))` +
     String.raw`(?:\s+(?:the|this|that|my|our))?` +
-    String.raw`(?:\s+(?:(?<design>GDD|game\s+design\s+doc(?:ument)?|design(?:\s+doc(?:ument)?)?)|document|doc|spec(?:ification)?|file)(?:\s+(?:at|in)|\s*:)?)?` +
+    String.raw`(?:\s+(?:(?<calledGdd>GDD|game\s+design\s+doc(?:ument)?)|design(?:\s+doc(?:ument)?)?|document|doc|spec(?:ification)?|file)(?:\s+(?:at|in)|\s*:)?)?` +
     String.raw`\s*["'\x60“‘(<]?$`,
   "iu",
 );
@@ -924,8 +925,8 @@ interface Span {
 interface Aim {
   /** How firmly the build aimed at the document is asked for. */
   request: Request;
-  /** The message calls the document the design ("the GDD at P", "design: P"), whatever its name. */
-  called: boolean;
+  /** The build's own clause calls the document the GDD ("build the game from the GDD at P"), whatever its name. */
+  calledGdd: boolean;
 }
 
 /**
@@ -934,27 +935,29 @@ interface Aim {
  * clause. A build aimed at a document counts only when it is asked for:
  * "Don't build the game in docs/Old_GDD.md; build the game in
  * docs/New_GDD.md". `request` is the message's whole-game request, which a
- * document the message calls the design is aimed at by.
+ * document the message calls the design is aimed at by — never at once, as
+ * that call may sit in another clause than the build: "Polish the menu, the
+ * design is in docs/menu.md, then build the game" built the menu's notes.
  */
 function aimAt(text: string, prose: string, doc: Span, request: Request | undefined): Aim | undefined {
   const after = text.slice(doc.end);
   const before = execBefore(BUILDS_FROM_NEXT_RE, text, doc.at);
   const beforeAsked = before && requestAt(prose, before.index, doc.at);
   if (beforeAsked && documentEndsItsClause(text, doc)) {
-    return { request: beforeAsked, called: before.groups?.gdd !== undefined || before.groups?.design !== undefined };
+    return { request: beforeAsked, calledGdd: before.groups?.gdd !== undefined || before.groups?.calledGdd !== undefined };
   }
   const game = GAME_IN_PREVIOUS_RE.exec(after);
   const gameAsked = game && requestAt(prose, doc.at, doc.end + game[0].length);
-  if (gameAsked && endsItsClause(after.slice(game[0].length))) return { request: gameAsked, called: false };
+  if (gameAsked && endsItsClause(after.slice(game[0].length))) return { request: gameAsked, calledGdd: false };
   const next = BUILDS_FROM_PREVIOUS_RE.exec(after);
   const nextAsked = next && requestAt(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length);
-  if (nextAsked) return { request: nextAsked, called: false };
+  if (nextAsked) return { request: nextAsked, calledGdd: false };
   const object = execBefore(GAME_BEFORE_RE, text, doc.at);
   const verb = object && BY_DOCUMENT_AFTER_RE.exec(after);
   const verbAsked = object && verb && requestAt(prose, object.index, doc.end + verb[0].length);
-  if (verbAsked && endsItsClause(after.slice(verb[0].length))) return { request: verbAsked, called: false };
+  if (verbAsked && endsItsClause(after.slice(verb[0].length))) return { request: verbAsked, calledGdd: false };
   const called = request !== undefined && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => testBefore(re, text, doc.at));
-  return called && documentEndsItsClause(text, doc) ? { request, called } : undefined;
+  return called && documentEndsItsClause(text, doc) ? { request, calledGdd: false } : undefined;
 }
 
 /**
@@ -993,7 +996,8 @@ function offered(docs: readonly NamedDocument[], design: NamedDocument, now = fa
  * AT ONCE ONLY IN THE PLAIN FORM: a whole-game build asked for, aimed at one
  * document that could hold the design (no style sheet, changelog, licence,
  * readme or build instructions beside it counts), whose name says it is the
- * design or which the message calls that, and which ends its clause. Every
+ * design or which the build's own clause calls the GDD, and which ends its
+ * clause. Every
  * other document the build points at is offered at the approval gate first:
  * one with any other name ("following docs/android-signing.md"), one of two
  * the build is aimed at together, and one only named beside the documents it
@@ -1028,7 +1032,7 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
   const spread = (from: number, to: number): void => {
     const [left, right] = from < to ? [from, to] : [to, from];
     if (!aims[from] || aims[to] || !NAMED_TOGETHER_RE.test(text.slice(named[left]!.end, named[right]!.at))) return;
-    if (documentEndsItsClause(text, named[to]!)) aims[to] = { request: aims[from]!.request, called: false };
+    if (documentEndsItsClause(text, named[to]!)) aims[to] = { request: aims[from]!.request, calledGdd: false };
   };
   for (let i = 1; i < named.length; i++) spread(i - 1, i);
   for (let i = named.length - 1; i > 0; i--) spread(i, i - 1);
@@ -1037,7 +1041,7 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
   if (designs.length > 0) {
     const design = designs.find((doc) => refersToGdd(doc.path)) ?? designs[0]!;
     const aim = aims[named.indexOf(design)]!;
-    return offered(designs, design, designs.length === 1 && aim.request === "firm" && (aim.called || nameSaysDesign(design.path)));
+    return offered(designs, design, designs.length === 1 && aim.request === "firm" && (aim.calledGdd || nameSaysDesign(design.path)));
   }
   const playerBuild = aimedDocs.length > 0 && aimedDocs.every((doc) => isBuildInstructions(doc.path));
   const rest = withoutDocuments(text, named);

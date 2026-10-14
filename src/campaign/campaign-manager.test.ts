@@ -10658,6 +10658,17 @@ describe("CampaignManager", () => {
         atTheGate("chat-report", "docs/Bramble_GDD.md");
       });
 
+      // A feature request beside a document the message only calls the design answered "Building from `docs/menu.md`" and the planner ran.
+      it.each([
+        ["Polish the menu, the design is in docs/menu.md, then build the game for Android", "docs/menu.md"],
+        ["Fix the HUD. The design is in docs/hud.md. Then build the game.", "docs/hud.md"],
+      ])("holds a document the message only calls the design at the gate: %s", async (text, path) => {
+        writeFileSync(join(projectRoot, path), "# Screen\n\n" + "m".repeat(400));
+        expect(await say("chat-called", text)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        atTheGate("chat-called", path);
+      });
+
       it("still builds at once from a design the build is plainly aimed at", async () => {
         writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
         expect(await say("chat-plain", "Build the game in docs/Quillmoor_GDD.md and send me the APK")).toBe(true);

@@ -229,7 +229,8 @@ describe("a message that names the design document by its path", () => {
     ["Bu oyunu yap: docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
     ["Quillmoor_GDD.odt'deki oyunu baştan sona yap", now("Quillmoor_GDD.odt")],
     ["docs/quillmoor.pdf dosyasındaki oyunu geliştir", confirm("docs/quillmoor.pdf")],
-    ["GDD'li dosya docs/quillmoor.txt, bu oyunu yap", now("docs/quillmoor.txt")],
+    // Called the GDD outside the build's own clause, it is confirmed first.
+    ["GDD'li dosya docs/quillmoor.txt, bu oyunu yap", confirm("docs/quillmoor.txt")],
     ["Bu oyunu yap: docs/Kuşkonmaz_Tasarımı.md", now("docs/Kuşkonmaz_Tasarımı.md")],
     ["Quillmoor_GDD.md’deki oyunu baştan sona yap", now("Quillmoor_GDD.md")],
     // Beside a style sheet or a changelog, the design — wherever it stands.
@@ -521,7 +522,7 @@ describe("a named document is the design only when the build is aimed at it", ()
 
   it("a GDD the message names beside its idea is still the design when it says so", () => {
     expect(detectCampaignIntent(msg("Build the game in the GDD; follow the art direction in docs/art-style.md"))).toEqual({ kind: "gdd-from-docs" });
-    expect(detectCampaignIntent(msg("GDD'li dosya docs/quillmoor.txt, bu oyunu yap"))).toEqual({ kind: "gdd-from-docs", path: "docs/quillmoor.txt" });
+    expect(detectCampaignIntent(msg("GDD'li dosya docs/quillmoor.txt, bu oyunu yap"))).toEqual(confirm("docs/quillmoor.txt"));
   });
 });
 
@@ -851,14 +852,15 @@ describe("a build aimed only at a document that sits beside the design", () => {
   it.each([
     ["Build this game: docs/art-style.md (design: docs/Quillmoor_GDD.md)", now("docs/Quillmoor_GDD.md")],
     ["Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md", confirm("docs/Quillmoor_GDD.md")],
-    ["Build the game in docs/art-style.md; the design is docs/quillmoor.md", now("docs/quillmoor.md")],
-    ["Build the game in CHANGELOG.md; the GDD is in docs/quillmoor.md", now("docs/quillmoor.md")],
+    // Only called the design, outside the build's own clause, it is confirmed first whatever its name.
+    ["Build the game in docs/art-style.md; the design is docs/quillmoor.md", confirm("docs/quillmoor.md")],
+    ["Build the game in CHANGELOG.md; the GDD is in docs/quillmoor.md", confirm("docs/quillmoor.md")],
     ["Build the game per docs/art-style.md, see docs/quillmoor.md", confirm("docs/quillmoor.md")],
-    ["Bu oyunu yap: docs/art-style.md, tasarım docs/quillmoor.md", now("docs/quillmoor.md")],
+    ["Bu oyunu yap: docs/art-style.md, tasarım docs/quillmoor.md", confirm("docs/quillmoor.md")],
     ["docs/art-style.md'deki oyunu yap, docs/Quillmoor_GDD.md'ye de bak", confirm("docs/Quillmoor_GDD.md")],
-    // Named as the design, with no style sheet beside it, it is the design too.
-    ["Please build this game, design is in docs/quillmoor.md", now("docs/quillmoor.md")],
-    ["Bu oyunu yap, tasarım docs/quillmoor.md içinde", now("docs/quillmoor.md")],
+    // Named as the design, with no style sheet beside it, it is the design too — confirmed first.
+    ["Please build this game, design is in docs/quillmoor.md", confirm("docs/quillmoor.md")],
+    ["Bu oyunu yap, tasarım docs/quillmoor.md içinde", confirm("docs/quillmoor.md")],
   ])("%s → the design beside it, %j", (text, intent) => {
     expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
@@ -966,8 +968,8 @@ describe("a build aimed only at a document that sits beside the design", () => {
   it.each(AIMED_FORMS)("%s, P any other name → that document, confirmed first", (form) => {
     expect(detectCampaignIntent(msg(form.replace("P", "docs/quillmoor.md")))).toEqual(confirm("docs/quillmoor.md"));
   });
-  it("…and a document the message calls the design starts at once, whatever its name", () => {
-    expect(detectCampaignIntent(msg("Build this game with the design in docs/quillmoor.md"))).toEqual(now("docs/quillmoor.md"));
+  it("…and a document the message calls the design is confirmed first, whatever its name", () => {
+    expect(detectCampaignIntent(msg("Build this game with the design in docs/quillmoor.md"))).toEqual(confirm("docs/quillmoor.md"));
   });
 
   it.each([
@@ -1103,6 +1105,49 @@ describe("a document the build names, read to the end of its clause", () => {
       expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
     },
   );
+});
+
+/**
+ * A document the message only CALLS the design started at once whatever its
+ * name: "Polish the menu, the design is in docs/menu.md, then build the game
+ * for Android" answered "Building from `docs/menu.md`" — the call was read
+ * anywhere in the message, and the build it was tied to was any whole-game
+ * request anywhere else. Only a name that says design starts at once, or the
+ * build's own clause calling the document the GDD ("build the game from the
+ * GDD at P"); a document called the design in any other way is confirmed at
+ * the gate.
+ */
+describe("a document the message only calls the design", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it.each([
+    ["Polish the menu, the design is in docs/menu.md, then build the game for Android", "docs/menu.md"],
+    ["Fix the HUD. The design is in docs/hud.md. Then build the game.", "docs/hud.md"],
+    ["Rework the inventory screen. Design: docs/inventory.md. Then build the game for iOS.", "docs/inventory.md"],
+    ["Update the shop UI, design is in docs/shop.md, and build the game", "docs/shop.md"],
+    ["Polish the menu (design: docs/menu.md), then build the game for Android", "docs/menu.md"],
+    ["Menüyü düzelt, tasarım docs/menu.md içinde, sonra oyunu yap", "docs/menu.md"],
+    ["Build the game. The design is in docs/levels.md.", "docs/levels.md"],
+    ["Build the game, the GDD is docs/hud.md", "docs/hud.md"],
+    ["Build the game from the design in docs/signing.md", "docs/signing.md"],
+    ["Build the game from the design doc at docs/hud.md", "docs/hud.md"],
+  ])("%s → %s, confirmed first", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm(path));
+  });
+
+  it("…and of two documents the message calls GDDs, neither is built at once", () => {
+    expect(detectCampaignIntent(msg("Build the game. My old GDD is in docs/a.md, the new one is in docs/b.md"))?.kind).toBe("gdd-to-confirm");
+  });
+
+  // The build's own clause calling it the GDD is as plain as a name that says so.
+  it.each([
+    ["Build the game from the GDD at docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game from the game design document in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Implement the GDD at docs/quillmoor.md", "docs/quillmoor.md"],
+  ])("%s → %s, at once", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now(path));
+  });
 });
 
 /**
