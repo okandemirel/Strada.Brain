@@ -1547,3 +1547,28 @@ describe("a design that states what it holds reaches the gate", () => {
     expect(kind === undefined ? intent : intent?.kind).toEqual(kind === undefined ? undefined : kind);
   });
 });
+
+/**
+ * THE SAME TWO IN TURKISH, where the verb comes last. A fix or a qualifier
+ * asked of a game that exists ("… düzelt", "… daha hızlı olsun") is not a
+ * build request, exactly as its English twins are not ("Build the game in P
+ * fails on Android", "Make the game in P faster") — but those guards read
+ * English words only, so the Turkish pair was drafted as a fresh design
+ * instead (reviewed 2026-10-14, P3 #3).
+ */
+describe("a Turkish fix or qualifier is no build request", () => {
+  it.each([
+    ["a qualifier after a parenthesis", "Bu oyunu yap (docs/perf.md kare düşüşlerini anlatıyor) daha hızlı olsun"],
+    ["a fix after the document", "Bu oyunu yap: docs/perf.md kare düşüşlerini anlatıyor, düzelt"],
+    ["a speed-up", "Bu oyunu yap, docs/perf.md'ye bak ve hızlandır"],
+  ])("starts nothing and drafts nothing: %s", (_what, text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each([
+    ["an order", "docs/Quillmoor_GDD.md'deki oyunu baştan sona yap"],
+    ["by the document", "Oyunu docs/Quillmoor_GDD.md'ye göre yap"],
+  ])("still builds the design it names: %s", (_what, text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now("docs/Quillmoor_GDD.md"));
+  });
+});

@@ -794,12 +794,37 @@ const GAME_MADE_INTO_RE = new RegExp(
   "iu",
 );
 
+/**
+ * THE SAME TWO IN TURKISH, where the verb comes last. "Bu oyunu yap:
+ * docs/perf.md kare düşüşlerini anlatıyor, düzelt" and "… daha hızlı olsun"
+ * are a fix and a qualifier asked of a game that exists, exactly like "Build
+ * the game in P fails on Android" and "Make the game in P faster" — but the
+ * guards for those read English prepositions and English words only, so the
+ * Turkish twins were drafted as fresh designs instead (reviewed 2026-10-14).
+ *
+ * Read in the window after the build, as the English pair is.
+ */
+const TR_MADE_INTO_OR_FIXED_RE = new RegExp(
+  String.raw`(?<![\p{L}])(?:` +
+    String.raw`daha\s+\p{L}+\s+(?:olsun|yap|olmalı)` +
+    String.raw`|düzelt(?:\p{L}*)?|onar(?:\p{L}*)?|hızlandır(?:\p{L}*)?|iyileştir(?:\p{L}*)?|optimize\s+et(?:\p{L}*)?` +
+  String.raw`)(?![\p{L}])`,
+  "iu",
+);
+
 /** A whole-game build the message asks for (see buildIsAsked), not reported nor made into something. */
 function wholeGameRequest(prose: string): Request | undefined {
   return strongestRequest(prose, WHOLE_GAME_BUILDS_RE, (m) => {
     // Read in a window, as before a document (BEFORE_WINDOW): past a longer name the build counts as it is.
     const after = prose.slice(m.index + m[0].length, m.index + m[0].length + 2 * BEFORE_WINDOW);
-    return !BUILD_REPORTED_RE.test(after) && !(/^make/iu.test(m[0]) && GAME_MADE_INTO_RE.test(after));
+    return (
+      !BUILD_REPORTED_RE.test(after) &&
+      !(/^make/iu.test(m[0]) && GAME_MADE_INTO_RE.test(after)) &&
+      // Only the made-into/fix twin, never a reported failure: a build whose
+      // sentence reports one is the GATE's case (see aimAt's soften), and
+      // refusing the request here would make it nothing at all.
+      !TR_MADE_INTO_OR_FIXED_RE.test(after)
+    );
   });
 }
 
