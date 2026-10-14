@@ -127,7 +127,7 @@ const LEVEL_COUNT_RE =
 /**
  * The subject of the timing is a LEVEL opening, not the application starting.
  * Read on a window that reaches BEHIND the match, because the boot regex
- * starts at the verb: in "level load ≤ 2.5 s" the noun is not in the match.
+ * starts at the verb: in "map load ≤ 3.5 s" the noun is not in the match.
  */
 const LOADS_A_LEVEL_RE =
   /\b(?:level|stage|scene|round|puzzle|match|map)s?\b[^.\n]{0,12}?\b(?:load|open|enter|ready|transition)|\b(?:load|open|enter)(?:s|ing)?\b[^.\n]{0,12}?\b(?:level|stage|scene|round|puzzle|match|map)s?\b/i;
@@ -167,7 +167,7 @@ function clauseTail(before: string): string {
 const PLAYS_NOT_SHIPS_RE =
   /\b(?:complete[sd]?|completing|finish(?:es|ed|ing)?|play(?:s|ed|ing)?|clear(?:s|ed|ing)?|beat(?:s|en|ing)?|reach(?:es|ed|ing)?|unlock(?:s|ed|ing)?|attempt(?:s|ed|ing)?|replay(?:s|ed|ing)?)\s+$/i;
 
-/** A number written with thousands separators: "3,000" and "3.000" are 3000. */
+/** A number written with thousands separators: "4,500" and "4.500" are 4500. */
 function countValue(digits: string): number {
   return Number(digits.replace(/[.,]/g, ""));
 }
@@ -284,14 +284,14 @@ export function extractNumericClaims(gddText: string): {
     for (const m of text.matchAll(re)) {
       const value = toSeconds(Number(m[1]), m[2] ?? "s");
       if (value <= 0 || value > 600) continue;
-      // A LEVEL LOAD IS NOT A COLD BOOT. "Cold boot ≤ 5 s; level load ≤ 2.5 s"
+      // A LEVEL LOAD IS NOT A COLD BOOT. "Start-up ≤ 9 s; map load ≤ 3.5 s"
       // produced two boot claims, and the stricter one won: the boot gate then
       // demanded that the whole game start in the time one level may take to
       // open (Codex 2026-09-12 U#F3, U#F10). They are separate intervals, and
       // only the producer can separate them.
       const at = m.index ?? 0;
       // WITHIN THE CLAUSE. The lookbehind reached across the sentence before
-      // it, so "Map loads fast; boot under 6 s" read the only boot budget in
+      // it, so "Map loads fast; boot under 9 s" read the only boot budget in
       // the document as a level-load figure and stopped measuring it (Codex
       // 2026-09-12 V, a regression in my own U#F3 fix).
       const subject = clauseTail(text.slice(Math.max(0, at - 20), at)) + m[0];
@@ -420,11 +420,11 @@ export function extractActionBudget(gddText: string): number | undefined {
  * The longest a single session may take, for the RUN'S ALLOWANCE — not for a
  * gate.
  *
- * The vehicle's document states its durations in a label/value table
- * ("Typical round length" / "45–120 s (Easy), 120–240 s (Expert)"), which no
- * prose pattern can see, so `playerRunSpec` derived no deadline and the
- * producer's 45-second default cut a legal two-minute round short as
- * unfinished (Codex 2026-09-12 AB, Job 3.6). A TYPICAL length is not an every-level
+ * A document may state its durations in a label/value table — a round-length
+ * label on one line, a range per mode on the next — which no prose pattern
+ * can see, so `playerRunSpec` derived no deadline and the producer's
+ * 45-second default cut a legal multi-minute round short as unfinished
+ * (Codex 2026-09-12 AB, Job 3.6). A TYPICAL length is not an every-level
  * ceiling, so this is deliberately not a claim: it only tells the run how long
  * it may keep playing.
  */
@@ -454,13 +454,14 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
   const lines = text.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
   for (let i = 0; i < lines.length; i++) {
     if (!DURATION_LABEL_RE.test(lines[i] ?? "")) continue;
-    // WITHIN THE CLAUSE THE LABEL INTRODUCES. "Session length | Rounds of 2–5
-    // minutes; ~40 minutes of play per DAU per day" gave the day's total as
-    // the session allowance, because the sentence goes on to talk about a DAY
-    // (measured on the vehicle's document).
-    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "45–120 s (Easy);
-    // 120–240 s (Expert)" lost Expert mode to the first semicolon, so the run cut
-    // a legal 240-second round short (Codex 2026-09-13 AF#13). A clause that
+    // WITHIN THE CLAUSE THE LABEL INTRODUCES. "Round duration | 9–16
+    // minutes; about 35 minutes of planning per player each week" gave the
+    // week's total as the session allowance, because the sentence goes on to
+    // talk about a WEEK.
+    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "5–12 min (single
+    // plot); 12–20 min (full estate)" lost the longer mode to the first
+    // semicolon, so the run cut a legal 20-minute round short (Codex
+    // 2026-09-13 AF#13). A clause that
     // changes the subject — to a DAY, a WEEK, a SITTING — ends the read.
     const OTHER_SUBJECT_RE = /\b(?:per\s+(?:day|week|month|dau|user|player)|daily|weekly|sitting|session\s+count|retention)\b/i;
     const clauseOf = (line: string): string =>
@@ -667,7 +668,7 @@ export function assessNumericClaims(
   const medium = nameOfMedium(perf?.medium);
   // THE SHIPPED ARTIFACT ANSWERS FIRST. Only the frame rate consumed the
   // built player's evidence, so a player whose boot took 12 s and whose only
-  // level ran 120 s was judged MET against a 6 s boot and a 60 s round —
+  // level ran 120 s was judged MET against a 9 s boot and a 60 s round —
   // measured in the editor, where neither number is the product's (Codex
   // 2026-09-12 Z). When the player ran and carries the measurement, it is the
   // one that counts; otherwise the editor's stands, named as before.
@@ -683,7 +684,7 @@ export function assessNumericClaims(
   // A CLAUSE THAT NAMES ITS OWN PLATFORM is about that platform, whatever it
   // measures. Only the frame rate asked, so an Android player's 4-second boot
   // failed "boot under 2 s on Windows" outright — while the next sentence of
-  // the same document allowed Android 6 s (Codex 2026-09-12 AC J4.2). A
+  // the same document allowed Android 9 s (Codex 2026-09-12 AC J4.2). A
   // measurement taken where the claim is not about answers "unmeasured for
   // this target", never "not met".
   const wrongPlatform = (text: string, fromPlayer: boolean): GddPlatform | undefined => {
@@ -693,7 +694,7 @@ export function assessNumericClaims(
     if (!scope) return undefined;
     // THE EDITOR IS NOT A PLATFORM. A clause that names one is not answered
     // by a measurement taken in the editor: an editor boot of 1.2 s passed
-    // BOTH "under 2 s on Windows" and "under 6 s on Android" while no player
+    // BOTH "under 2 s on Windows" and "under 9 s on Android" while no player
     // had been booted at all (Codex 2026-09-13 AF#7).
     if (!fromPlayer) return named ?? undefined;
     return frameRateAnswersPlatform(scope, opts.builtTarget) ? undefined : scope;
@@ -709,7 +710,7 @@ export function assessNumericClaims(
         // vsync, the frame rate a person sees. Measured, and blocking.
         if (playerPerf?.avgFps !== undefined && playerPerf.medium === "player") {
           // A frame rate measured on the wrong device answers nothing: a
-          // desktop build used to satisfy "60 fps on mid-range phones"
+          // desktop build used to satisfy "50 fps on budget phones"
           // (Codex 2026-09-11 B#11).
           // A CLAUSE THAT NAMES ITS OWN PLATFORM is about that platform: "at
           // least 60 fps on Android" was answered by a Windows player,

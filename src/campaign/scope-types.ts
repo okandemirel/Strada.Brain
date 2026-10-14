@@ -226,7 +226,7 @@ export interface RequirementRow {
   rid: string;
   /** `encodeRequirement(identity)`: the text with its identity tail, as the coverage queue stores it. */
   encoded: string;
-  /** The GDD's own label, when it has one ("R-07", "FR-3"). */
+  /** The GDD's own label, when it has one ("G-04", "FR-3"). */
   label?: string;
   /** The GDD's words, verbatim. */
   text: string;
@@ -257,7 +257,7 @@ export interface RequirementRow {
   gddRevision: number;
 }
 
-/** A numbered series the GDD defines only in part ("R-01…R-22", fifteen defined). Reported, never invented. */
+/** A numbered series the GDD defines only in part ("G-01…G-09", four defined). Reported, never invented. */
 export interface NumberingGap {
   series: string;
   missing: string[];

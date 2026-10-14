@@ -1075,8 +1075,8 @@ export function repairsForRequirement(
  * The requirement ledger that decides closure, or undefined when the closure
  * resolver still does (GDD-drift W12).
  *
- * A word match closed GDD rows: a commit naming `LanternSystem.cs` closed "a
- * lantern refills only at a lit shrine" whatever the lantern did. With a
+ * A word match closed GDD rows: a commit naming `GraftSystem.cs` closed "a
+ * graft takes only on a branch pruned that season" whatever the graft did. With a
  * ledger, a row closes only on its own check passing. Only a READABLE ledger
  * under the scope gate's `on` mode decides: in shadow the gate records what it
  * would do and every decision stays today's, and an unreadable ledger is not
@@ -7406,10 +7406,10 @@ export class CampaignManager {
     // meant "each round must last at least 90 seconds" produced no allowance
     // at all, so the producer's 45-second default cut every round short and
     // the requirement could not be met by any run (Codex 2026-09-12 W#9).
-    // …AND WHAT A LABEL/VALUE TABLE STATES. The vehicle's durations live in
-    // one ("Typical round length" / "45–120 s (Easy), 120–240 s (Expert)"),
+    // …AND WHAT A LABEL/VALUE TABLE STATES. A document may give its
+    // durations as a label on one line and a range per mode on the next,
     // which no prose pattern sees, so the run kept the producer's 45-second
-    // default and cut a legal two-minute round short (Codex 2026-09-12 AB,
+    // default and cut a legal multi-minute round short (Codex 2026-09-12 AB,
     // Job 3.6). An allowance, never a gate: a typical length is not a ceiling.
     const longestSession = Math.max(
       claims.filter((c) => c.kind === "session_seconds").reduce((max, c) => Math.max(max, c.value), 0),
@@ -9450,7 +9450,7 @@ export class CampaignManager {
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
       // The GDD's own dimensionality against the scenes (audited 2026-09-03):
-      // it asked for 3D-feel characters and nothing ever checked.
+      // it asked for 3D art and nothing ever checked.
       // DELIVERY is judged against the whole GDD, so the whole text is read.
       const gddText =
         campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
@@ -9745,7 +9745,7 @@ export class CampaignManager {
         else caveats.push(`${m.title}: ${line}`);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
           // AN IDLE FIRST SCREEN IS A DEFECT ONLY IF THE DOCUMENT DID NOT ASK
-          // FOR ONE. A design can say "cold boot ≤ 4 s to the title screen", and the
+          // FOR ONE. A design can say "start-up ≤ 8 s to the title screen", and the
           // report called its own design a defect (Codex 2026-09-12 V, Job
           // 3.9). What is unproven either way is the route from that screen
           // into play, which no producer measures yet.
@@ -10847,7 +10847,7 @@ export class CampaignManager {
       await this.tell(
         { chatId },
         outcome.untouched.length === 0
-          ? `No GDD row matches ${target.trim()} — name a row id, the GDD's own label (R-07) or a section (§3.3); \`/campaign rows\` lists them.`
+          ? `No GDD row matches ${target.trim()} — name a row id, the GDD's own label (G-04) or a section (§5.2); \`/campaign rows\` lists them.`
           : `Nothing to waive: ${outcome.untouched.map(rowRef).join(", ")} ${outcome.untouched.length === 1 ? "is" : "are"} already waived or excluded.`,
       );
       return false;

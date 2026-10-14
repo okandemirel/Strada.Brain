@@ -13,29 +13,29 @@ import {
   WORK_DEMAND_RE,
 } from "./gdd-scope.js";
 
-const BIG = `# Sky Frogs
+const BIG = `# Orchard Seasons
 ## Table of Contents
 ## 1. Overview
 ## 2. Core Loop
-### 2.1 Merging
-## 3. Element schedule
-| Unlock | Element | Notes |
+### 2.1 Grafting
+## 3. Feature unlocks
+| Unlock | Feature | Notes |
 |---|---|---|
-| L1 | Cube | basic |
-| L2 | Sphere | rolls |
-| L3 | Pyramid | sharp |
-| L4 | Torus | ring |
-| L5 | Prism | light |
-| L6 | Cone | |
-| L7 | Storm Boss | set piece |
-| L8 | Frost Tile | |
-| L9 | Lava | |
+| L1 | Pruning | basic |
+| L2 | Grafting | two trees |
+| L3 | Irrigation | channels |
+| L4 | Beehive | pollination |
+| L5 | Compost | soil |
+| L6 | Cold Frame | |
+| L7 | Frost Night | seasonal event |
+| L8 | Cider Press | |
+| L9 | Hail Storm | |
 ## 4. Levels
-There are 100 levels across four worlds.
+There are 100 levels across four orchards.
 ## 5. Screens
 Main menu, level select, pause menu, results screen and a HUD.
 ## 6. Audio
-Music: one calm loop per pond; SFX for tap, merge and win.
+Music: one calm loop per season; SFX for pruning, grafting and harvest.
 ## 7. Progression and saving
 Progress is saved to the cloud; a tutorial (FTUE) runs on first launch. Settings screen has accessibility toggles.
 ## 8. Performance
@@ -47,9 +47,9 @@ Target 60 fps; loads in under 3 seconds. Android APK and iOS.
 describe("extractHeadings", () => {
   it("keeps section headings in order and drops document apparatus", () => {
     const h = extractHeadings(BIG);
-    expect(h[0]).toBe("Sky Frogs");
+    expect(h[0]).toBe("Orchard Seasons");
     expect(h).toContain("2. Core Loop");
-    expect(h).toContain("2.1 Merging");
+    expect(h).toContain("2.1 Grafting");
     expect(h).toContain("8. Performance");
     expect(h).not.toContain("Table of Contents");
     expect(h).not.toContain("Appendix A");
@@ -99,24 +99,24 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
     // opens with.
     const gdd = [
       "1. Introduction",
-      "1.1 About This Document",
-      "1.2 Summary",
+      "1.1 Summary",
+      "1.2 Competitive Analysis",
       "1.3 Terminology",
-      "1.4 Glossary",
-      "1.5 Competitive Analysis",
-      "2. HOW A ROUND PLAYS",
-      "3. RULES OF THE TIDE",
+      "1.4 About This Document",
+      "1.5 Glossary",
+      "2. HOW A SEASON PLAYS",
+      "3. RULES OF THE ORCHARD",
       "8. RELEASE STEPS",
     ].join("\n");
 
     const headings = extractHeadings(gdd);
 
-    expect(headings).toEqual(["HOW A ROUND PLAYS", "RULES OF THE TIDE", "RELEASE STEPS"].map((h) => expect.stringContaining(h)));
+    expect(headings).toEqual(["HOW A SEASON PLAYS", "RULES OF THE ORCHARD", "RELEASE STEPS"].map((h) => expect.stringContaining(h)));
   });
 
   it("keeps a section whose name only LOOKS like apparatus but names work", () => {
     const headings = extractHeadings([
-      "2. Scope of the Playfield",
+      "2. Scope of the Map Editor",
       "4. Reference Art Pipeline",
       "5. Introduction Cinematic",
     ].join("\n"));
@@ -144,8 +144,8 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
 
     // A section's own body decides, not the NEXT section's: without the
     // boundary, apparatus inherits the work below it.
-    expect(extractHeadings(["## Glossary", "Terms used in this document.", "## Playfield", "Build the board."].join("\n")))
-      .toEqual(["Playfield"]);
+    expect(extractHeadings(["## Glossary", "Terms used in this document.", "## Orchard Map", "Build the grid."].join("\n")))
+      .toEqual(["Orchard Map"]);
 
     // An obligation counts as an ask.
     expect(extractHeadings(["## Scope", "The game must support 500 levels.", "## Core", "Rules."].join("\n")))
@@ -167,7 +167,7 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
 
 describe("headingClaimedBy — one containment rule for coverage and for row ownership (W04)", () => {
   it("claims a heading when either side contains the other, normalized; a short claim claims nothing", () => {
-    expect(headingClaimedBy("3.3 Core Rules (R-01 … R-22)", ["Core Rules"])).toBe(true);
+    expect(headingClaimedBy("4.2 Grafting rules (G-01 … G-09)", ["Grafting rules"])).toBe(true);
     expect(headingClaimedBy("Core Loop", ["2. Core Loop — merging"])).toBe(true);
     expect(headingClaimedBy("Performance", ["Audio", "UI"])).toBe(false);
     expect(headingClaimedBy("UI", ["UI"])).toBe(false);
@@ -178,8 +178,10 @@ describe("headingClaimedBy — one containment rule for coverage and for row own
   });
 
   it("exports the apparatus and work-demand rules the row extractor shares", () => {
-    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("1.1 Executive Summary"))).toBe(true);
-    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("1.4 Design Pillars"))).toBe(false);
+    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("9. Revision History"))).toBe(true);
+    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("2.1 Season Phases"))).toBe(false);
+    // A market heading that names its comparison titles is still front matter.
+    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("1.2 Market Analysis & Comparable Titles"))).toBe(true);
     expect(WORK_DEMAND_RE.test("Build an interactive credits screen.")).toBe(true);
     expect(WORK_DEMAND_RE.test("This document describes the game.")).toBe(false);
   });

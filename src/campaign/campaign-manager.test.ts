@@ -1381,9 +1381,9 @@ describe("CampaignManager", () => {
   it("a document that opens on a menu is not reported as broken for doing so (Codex 2026-09-12 V, Job 3.9)", async () => {
     // The system told every final sprint to make the game start playing by
     // itself and called an idle first screen a defect — one game's shape
-    // imposed on all of them. The vehicle's own document names the screen its
-    // cold boot reaches; the report called that a defect.
-    const gdd = "# GDD\n\nCold boot ≤ 5 s to the lobby on a mid-range phone. Tap PLAY in the lobby to start a level.";
+    // imposed on all of them. A document may name the screen its start-up
+    // reaches; the report called that a defect.
+    const gdd = "# GDD\n\nStart-up ≤ 8 s to the lobby on a budget tablet. Choose an orchard in the lobby to start a season.";
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
@@ -1417,10 +1417,10 @@ describe("CampaignManager", () => {
   it("refuses delivery while a GDD-scheduled element has no trace in code, and delivers once it does (spec-scope wired 2026-09-10)", async () => {
     writeFileSync(
       join(projectRoot, "docs", "Game_GDD.md"),
-      "# GDD\n\n## Element schedule\n\n| Unlock | Element | Notes |\n|---|---|---|\n| L1 | Reed | basic |\n| L7 | Storm Boss | set piece |\n",
+      "# GDD\n\n## Feature unlocks\n\n| Unlock | Feature | Notes |\n|---|---|---|\n| L1 | Pruning | basic |\n| L9 | Frost Night | seasonal event |\n",
     );
     mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
-    writeFileSync(join(projectRoot, "Assets", "Scripts", "Reed.cs"), "public class Reed {}");
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "Pruning.cs"), "public class Pruning {}");
     const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1432,14 +1432,14 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
-    expect(prompt).toContain("L7 Storm Boss");
+    expect(prompt).toContain("L9 Frost Night");
     expect(prompt).toContain("the code never mentions");
     expect(storage.get(campaign.id)!.state).not.toBe("done");
     expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
 
-    writeFileSync(join(projectRoot, "Assets", "Scripts", "StormBoss.cs"), "public class StormBoss {}");
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "FrostNight.cs"), "public class FrostNight {}");
     tasks.verifications.set("task_4", green);
-    tasks.emit("task:completed", "task_4", "storm built, shipping");
+    tasks.emit("task:completed", "task_4", "frost night built, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("all 2 scheduled element(s) have a trace in code");
   });
@@ -1541,7 +1541,7 @@ describe("CampaignManager", () => {
   });
 
   it("plays the built player at delivery: its frame rate answers the GDD, and a failed run bounces (2026-09-10)", async () => {
-    const gdd = "# GDD\n\nTarget 60 fps on mid-range phones. Ships on Android.";
+    const gdd = "# GDD\n\nTarget 60 fps on budget phones. Ships on Android.";
     // The campaign builds for the platform the GDD names, so the frame rate
     // it measures answers the claim (Codex 2026-09-11 B#11).
     buildVerdict = { ran: true, ok: true, target: "Android", artifactPath: "/tmp/Builds/Android/Game.apk", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2 };
@@ -1806,12 +1806,12 @@ describe("CampaignManager", () => {
 
   it("a vision model's explicit NO bounces the final sprint once; a YES delivers with the match in the report (2026-09-10)", async () => {
     const gdd = [
-      "# GDD", "8.  ART DIRECTION", "8.1 Visual Style",
-      "Two-layer look: flat cut-paper lanterns drifting over a painted, softly lit lake, ",
-      "plus round lacquered shrine figures with springy hand-drawn motion that stand out against ",
-      "the dark water, in warm amber light with strong contrast for readability.",
+      "# GDD", "## Look and feel",
+      "Matte papier-mache trees modelled in true 3D, seen from a high top-down camera over a walled ",
+      "orchard grid. Muted autumn colours (rust, ochre, moss and slate) under soft daylight, with no ",
+      "outlines and no gloss; each tree's growth stage reads from its silhouette and leaf density.",
     ].join("\n");
-    const answers = ["The frame shows a flat grey grid and no lanterns.\nMATCH: no", "Lacquered lanterns on a warm lake, as described.\nMATCH: yes"];
+    const answers = ["The frame shows a flat grey grid and no trees.\nMATCH: no", "Matte papier-mache trees on an autumn orchard grid, as described.\nMATCH: yes"];
     let asked = 0;
     visionChat = async () => { asked++; return { text: answers.shift() ?? "MATCH: yes" }; };
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
@@ -1829,7 +1829,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(asked).toBe(1);
     expect(tasks.submitted[3]!.prompt).toContain("LOOK DOES NOT MATCH THE GDD: a vision model judged the newest captured frame");
-    expect(tasks.submitted[3]!.prompt).toContain("flat grey grid and no lanterns");
+    expect(tasks.submitted[3]!.prompt).toContain("flat grey grid and no trees");
     expect(storage.get(campaign.id)!.milestones[2]!.visualMismatchBounces).toBe(1);
 
     // The retry captures its OWN frame: the judgement is of the game as it is
@@ -1842,7 +1842,7 @@ describe("CampaignManager", () => {
     // gathered and sent, so asserting on the state alone races the delivery
     // message (green locally, red in CI).
     await waitFor(
-      () => expect(messages.map((m) => m.text).join("\n")).toContain("MATCH — Lacquered lanterns on a warm lake, as described."),
+      () => expect(messages.map((m) => m.text).join("\n")).toContain("MATCH — Matte papier-mache trees on an autumn orchard grid, as described."),
       { timeout: 15_000 },
     );
   });
@@ -2069,7 +2069,7 @@ describe("CampaignManager", () => {
       join(projectRoot, "ProjectSettings", "ProjectVersion.txt"),
       "m_EditorVersion: 6000.3.22f1\nm_EditorVersionWithRevision: 6000.3.22f1 (1c726e1fb402)\n",
     );
-    const coreLoopGdd = "# GDD\n\nCore mechanic\nTap a shrine to pull the nearest lantern onto the pond.\n";
+    const coreLoopGdd = "# GDD\n\nCore mechanic\nPlan each growing season by pruning, grafting and harvesting on a walled orchard grid, then end the turn.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), coreLoopGdd);
 
     // The document on disk is the approved one (plan 1.9): the intake is given the same text.
@@ -2085,7 +2085,7 @@ describe("CampaignManager", () => {
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
     expect(readme).toContain("6000.3.22f1");
     expect(readme).toContain("Assets/Scenes/ProductionMain.unity");
-    expect(readme).toContain("Tap a shrine to pull the nearest lantern");
+    expect(readme).toContain("Plan each growing season by pruning, grafting and harvesting");
     expect(readme).toContain("179 of 179");
     expect(readme).toContain("-testPlatform PlayMode");
     expect(readme).toContain("TargetedLevel42Verification.unity");
@@ -2103,7 +2103,7 @@ describe("CampaignManager", () => {
     buildSettings(REAL_DELIVERED_BUILD);
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
     writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.3.22f1\n");
-    const gdd = "# GDD\n\nCore mechanic\nTap a shrine to pull the nearest lantern onto the pond.\n";
+    const gdd = "# GDD\n\nCore mechanic\nPlan each growing season by pruning, grafting and harvesting on a walled orchard grid, then end the turn.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
     const campaign = await reachFinalSprint(gdd);
     tasks.verifications.set("task_3", {
@@ -2716,13 +2716,13 @@ describe("CampaignManager", () => {
   });
 
   it("discloses the GDD's own dimensionality against the shipped scenes, without refusing", async () => {
-    // Audited 2026-09-03: the GDD asks for 3D-feel characters and the
-    // delivered scenes had no mesh renderers and bound none of the project's
-    // 62 imported models. A stylised 3D-feel look CAN be built from sprites,
+    // Audited 2026-09-03: the GDD asks for 3D art and the delivered scenes
+    // had no mesh renderers and bound none of the project's 62 imported
+    // models. A stylised 3D look CAN be built from sprites,
     // so this is disclosure with counts — the reader judges.
     writeBuiltProject();
     const campaign = await runLadderToDelivery(
-      "# GDD\n\n8. ART DIRECTION\nround, lacquered 3D-feel lanterns over a softly lit painted lake.",
+      "# GDD\n\n## Look and feel\nMatte papier-mache 3D trees in muted autumn colours, seen from a top-down camera with no outlines.",
     );
 
     settleMilestone("integrated, all 42 tests pass");
@@ -3372,9 +3372,9 @@ describe("CampaignManager", () => {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
       auditCoverage: vi
         .fn()
-        .mockResolvedValueOnce(["Storm boss: no milestone implemented it"])
+        .mockResolvedValueOnce(["Frost night: no milestone implemented it"])
         .mockResolvedValue([]),
-      // The repair landed the boss, and the delivery audit says so: a GREEN
+      // The repair landed the frost night, and the delivery audit says so: a GREEN
       // repair's requirement is judged on the evidence now, not waived by the
       // sprint's own status (Codex 2026-09-12 AD#2).
       resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => ({ closed: [...reqs], open: [] })),
@@ -3404,7 +3404,7 @@ describe("CampaignManager", () => {
 
     settleMilestone("final report"); // last planned milestone → audit fires, finds a gap
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
-    expect(tasks.submitted[3]!.prompt).toContain("Storm boss");
+    expect(tasks.submitted[3]!.prompt).toContain("Frost night");
     expect(storage.get(campaign.id)!.state).toBe("executing");
 
     // The remediation sprint now inherits the visual-evidence gate (its bar
@@ -4955,7 +4955,7 @@ describe("CampaignManager", () => {
           state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
         }) as unknown as Campaign;
       const schedule = (title: string, rows: string): string =>
-        `# ${title}\n\n## Element schedule\n\n| Unlock | Element | Notes |\n|---|---|---|\n${rows}`;
+        `# ${title}\n\n## Feature unlocks\n\n| Unlock | Feature | Notes |\n|---|---|---|\n${rows}`;
       const privateOf = (m: CampaignManager) =>
         m as unknown as {
           measureDeliveryStructure(c: Campaign): { refusal?: string; lines: string[] };
@@ -4966,18 +4966,18 @@ describe("CampaignManager", () => {
 
       it("the delivery's element schedule is the campaign's own, never the largest document in docs/ (P2)", () => {
         // docs/ holds ANOTHER game's GDD whose schedule this game never had:
-        // discovery read it and refused the delivery for its Storm Boss.
-        writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), schedule("Other GDD", "| L7 | Storm Boss | set piece |\n"));
+        // discovery read it and refused the delivery for its Frost Night.
+        writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), schedule("Other GDD", "| L9 | Frost Night | seasonal event |\n"));
         mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
-        writeFileSync(join(projectRoot, "Assets", "Scripts", "Reed.cs"), "public class Reed {}");
-        const own = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Reed GDD", "| L1 | Reed | basic |\n")));
+        writeFileSync(join(projectRoot, "Assets", "Scripts", "Pruning.cs"), "public class Pruning {}");
+        const own = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Pruning GDD", "| L1 | Pruning | basic |\n")));
         const ownText = `${own.refusal ?? ""}\n${own.lines.join("\n")}`;
-        expect(ownText).not.toContain("Storm Boss");
+        expect(ownText).not.toContain("Frost Night");
         expect(own.lines.join("\n")).toContain("all 1 scheduled element(s) have a trace in code");
         // …and the campaign's OWN schedule is still held against the code.
-        const missing = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Rocket GDD", "| L3 | Rocket Launcher | late game |\n")));
-        expect(missing.refusal).toContain("L3 Rocket Launcher");
-        expect(missing.refusal).not.toContain("Storm Boss");
+        const missing = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Press GDD", "| L4 | Cider Press | late game |\n")));
+        expect(missing.refusal).toContain("L4 Cider Press");
+        expect(missing.refusal).not.toContain("Frost Night");
       });
 
       it("a docs/GDD.md that holds another document is never adopted as the campaign's path (P3)", async () => {
@@ -5283,7 +5283,7 @@ describe("CampaignManager", () => {
 
   /**
    * A campaign whose coverage-remediation sprint spends both attempts on
-   * "Storm boss", and whose FINAL PROOF sprint then reports green. The
+   * "Frost night", and whose FINAL PROOF sprint then reports green. The
    * evidence audit for the unclosed requirement answers with `resolve`.
    */
   const runToSpentRemediation = async (
@@ -5295,7 +5295,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, `campaigns-partial-${messages.length}.db`));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Storm boss: no milestone implemented it"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Frost night: no milestone implemented it"]),
       resolveCoverageGaps: vi.fn(async (_gdd: string, reqs: readonly string[]) => resolve(reqs)),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
@@ -5330,16 +5330,16 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
 
     // The remediation sprint burns both its attempts without landing green.
-    tasks.emit("task:failed", "task_4", "the boss scene will not compile");
+    tasks.emit("task:failed", "task_4", "the frost scene will not compile");
     await waitFor(() => expect(tasks.submitted).toHaveLength(5));
-    tasks.emit("task:failed", "task_5", "the boss scene will not compile");
+    tasks.emit("task:failed", "task_5", "the frost scene will not compile");
 
     // Not `done` on that: the game was never re-proven after the remediation
     // touched it. A final proof sprint is the ladder's last milestone now.
     await waitFor(() => expect(tasks.submitted).toHaveLength(6));
     expect(storage.get(campaign.id)!.state).toBe("executing");
     expect(tasks.submitted[5]!.prompt).toContain("FINAL DELIVERY PROOFS");
-    expect(tasks.submitted[5]!.prompt).toContain("Storm boss");
+    expect(tasks.submitted[5]!.prompt).toContain("Frost night");
     expect(storage.get(campaign.id)!.milestones.at(-1)!.id).toMatch(/^mfinal-/);
     // The proof sprint captured a frame of the running game.
     mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
@@ -5357,7 +5357,7 @@ describe("CampaignManager", () => {
     // named either. So the ladder learned to run a final proof sprint and
     // report everything.
     // …and then it DELIVERED on those mechanical proofs with the feature
-    // still missing: "Storm boss" was named in the report under a headline
+    // still missing: "Frost night" was named in the report under a headline
     // that said the game was built (Codex 2026-09-12 U, Job 2.7). Exhaustion
     // stops the repair; it does not waive the requirement.
     const campaign = await runToSpentRemediation();
@@ -5368,13 +5368,13 @@ describe("CampaignManager", () => {
     expect(stopped.milestones.filter((m) => m.status === "green")).toHaveLength(4);
     expect(stopped.milestones.at(-1)!.status).toBe("green");
     expect(stopped.milestones.at(-2)!.status).toBe("failed");
-    expect(stopped.lastError).toContain("Storm boss");
+    expect(stopped.lastError).toContain("Frost night");
     expect(stopped.milestones.at(-1)!.deliveryFailureKinds).toContain("unclosedGaps");
 
     const report = messages.at(-1)!.text;
     expect(report).toContain("NOT DELIVERED");
     expect(report).toContain("Sprint A — Foundations");
-    expect(report).toContain("Storm boss: no milestone implemented it");
+    expect(report).toContain("Frost night: no milestone implemented it");
     expect(report).not.toContain("Campaign stopped");
     // No reviewer wired here: the report says so instead of implying a review.
     expect(report).toContain("Independent review");
@@ -5406,7 +5406,7 @@ describe("CampaignManager", () => {
     // sprint's own history stands, its requirement's closure is stated as
     // what it is (Codex 2026-09-12 V#7).
     expect(report).toContain("the evidence audit then found its requirement delivered");
-    expect(report).not.toMatch(/are NOT delivered: Storm boss/);
+    expect(report).not.toMatch(/are NOT delivered: Frost night/);
   });
 
   it("a stored closure from ANOTHER revision is judged again (Codex 2026-09-12 V#4)", async () => {
@@ -5423,7 +5423,7 @@ describe("CampaignManager", () => {
       (id) => {
         // A closure recorded on a revision this delivery is not.
         const live = storage.get(id)!;
-        const repair = live.milestones.find((m) => m.coverageGap?.includes("Storm boss"))!;
+        const repair = live.milestones.find((m) => m.coverageGap?.includes("Frost night"))!;
         repair.coverageClosed = true;
         repair.coverageClosedRevision = "0".repeat(40);
         storage.save(live);
@@ -5431,14 +5431,14 @@ describe("CampaignManager", () => {
     );
 
     await waitFor(() => expect(asked.length).toBeGreaterThan(0), { timeout: 15_000 });
-    expect(asked[0]![0]).toContain("Storm boss");
+    expect(asked[0]![0]).toContain("Frost night");
     const after = storage.get(campaign.id)!;
     expect(after.state).not.toBe("done");
-    expect(`${after.lastError}`).toContain("Storm boss");
+    expect(`${after.lastError}`).toContain("Frost night");
     // …and the closure the audit has just WITHDRAWN is gone: left standing,
     // the report called the same requirement delivered on the sprint's line
     // and NOT DELIVERED in its headline (Codex 2026-09-12 W#8).
-    const repair = after.milestones.find((m) => m.coverageGap?.includes("Storm boss"))!;
+    const repair = after.milestones.find((m) => m.coverageGap?.includes("Frost night"))!;
     expect(repair.coverageClosed).toBeUndefined();
     expect(repair.coverageClosedRevision).toBeUndefined();
     expect(messages.at(-1)!.text).not.toContain("found delivered by the evidence audit");
@@ -6336,21 +6336,21 @@ describe("CampaignManager", () => {
       runPlayer: async (root, artifact, spec) => { specs.push(spec); writePlayerVerdict(true, {}, root); },
     });
     manager.attachEvents();
-    // The durations in a LABEL/VALUE TABLE, the shape the vehicle's document
-    // uses — no prose pattern sees it, so the run kept the producer's
-    // 45-second default (Codex 2026-09-12 AB, Job 3.6).
+    // The durations in a LABEL/VALUE TABLE, a shape real documents use — no
+    // prose pattern sees it, so the run kept the producer's 45-second default
+    // (Codex 2026-09-12 AB, Job 3.6).
     const gdd = [
       "# GDD",
       "",
       "The game ships 3 levels.",
       "",
-      "3.2 Pacing",
-      "Parameter",
-      "Target",
-      "Why",
-      "Typical round length",
-      "45–120 s (Easy), 120–240 s (Expert)",
-      "Short enough for a bus ride",
+      "6.3 Season rhythm",
+      "Measure",
+      "Goal",
+      "Notes",
+      "Expected round duration",
+      "2–4 min (single plot), 4–7 min (full estate)",
+      "One growing season of planning",
     ].join("\n");
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
@@ -6361,8 +6361,8 @@ describe("CampaignManager", () => {
     settleMilestone("integrated, all 42 tests pass");
 
     await waitFor(() => expect(specs.length).toBeGreaterThan(0), { timeout: 15_000 });
-    // 240 s with the same headroom every allowance gets.
-    expect(specs[0]).toMatchObject({ deadlineSeconds: 375 });
+    // 420 s with the same headroom every allowance gets.
+    expect(specs[0]).toMatchObject({ deadlineSeconds: 645 });
     expect(storage.get(campaign.id)!.id).toBe(campaign.id);
   });
 
@@ -8127,7 +8127,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-cancel.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Storm boss: no milestone implemented it"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Frost night: no milestone implemented it"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage, planner,

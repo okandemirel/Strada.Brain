@@ -371,17 +371,17 @@ function makeRow(rid: string, status: RequirementStatus, overrides: Partial<Requ
   return {
     rid,
     encoded: `Enemies cannot pass walls. [${rid}]`,
-    label: "R-07",
+    label: "G-04",
     text: "Enemies cannot pass walls.",
-    section: "3.9 Movement",
-    sectionPath: ["3 Gameplay", "3.9 Movement"],
-    sectionNumber: "3.9",
+    section: "5.3 Movement",
+    sectionPath: ["5 Season Play", "5.3 Movement"],
+    sectionNumber: "5.3",
     line: 120,
     span: { start: 4000, end: 4026 },
     kind: "rule",
     source: "extracted",
     owner: "m1",
-    ownership: [{ milestoneId: "m1", reason: "covered-section", detail: "3.9 Movement", atMs: 1 }],
+    ownership: [{ milestoneId: "m1", reason: "covered-section", detail: "5.3 Movement", atMs: 1 }],
     status,
     checks: [{ kind: "test", testName: `Strada.Acceptance.M1.Acceptance_M1.R1_${rid}`, path: "Assets/StradaAcceptance/M1/Acceptance_M1.cs", bodySha: "b".repeat(64) }],
     last: { revision: "abc12345", runId: "run-1", atMs: 2, outcome: status === "passing" ? "pass" : "fail", detail: "observed 3" },
@@ -399,7 +399,7 @@ function makeLedger(rows: RequirementRow[]): RequirementLedger {
     extractedAtMs: 1_700_000_000_000,
     rows,
     overflow: { count: 2, sections: ["9 Appendix"] },
-    numberingGaps: [{ series: "R", missing: ["R-22"], detail: "R-01…R-22, 21 defined" }],
+    numberingGaps: [{ series: "G", missing: ["G-09"], detail: "G-01…G-09, 8 defined" }],
     llmAdded: 1,
   };
 }
@@ -442,7 +442,7 @@ function makeInput(milestoneId = "m1"): GreenInput {
 const RED: Judgement = {
   green: false,
   state: "red",
-  reasons: [{ reasonClass: "red", code: "row-failing", detail: "R-07 failed", rid: "r1", testName: "Strada.Acceptance.M1.Acceptance_M1.R1_r1" }],
+  reasons: [{ reasonClass: "red", code: "row-failing", detail: "G-04 failed", rid: "r1", testName: "Strada.Acceptance.M1.Acceptance_M1.R1_r1" }],
 };
 const GREEN: Judgement = { green: true, basis: "proven", caveats: ["terminal key task_stuck overridden: scope proven"] };
 

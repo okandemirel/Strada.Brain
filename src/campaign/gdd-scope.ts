@@ -44,11 +44,12 @@ export interface GddScope {
  * design document OPENS with — so the ladder's first milestone was
  * "INTRODUCTION" and a worker was asked to build one (measured live
  * 2026-09-12). Anchored at both ends: "Introduction Cinematic" and "Scope of
- * the Playfield" are work, and only a heading that is ENTIRELY apparatus is
- * dropped.
+ * the Map Editor" are work, and only a heading that is ENTIRELY apparatus is
+ * dropped. A market heading may name the titles it compares against
+ * ("Market Analysis and Comparable Titles"); that is still apparatus.
  */
 export const TRIVIAL_HEADING_RE =
-  /^(?:table of contents|contents|appendix(?:\s+[a-z0-9])?|glossary|references|bibliography|changelog|change log|revision history|version history|document history|index|acknowledg(?:e)?ments|about this document|overview of this document|introduction|executive summary|summary|purpose|purpose of this document|scope|document conventions|conventions|terminology|credits|legal|confidentiality|disclaimer|market position|market position reference titles|reference titles|competitive analysis|prepared by|document control|sign off|approvals?)$/i;
+  /^(?:about this document|acknowledg(?:e)?ments|appendix(?:\s+[a-z0-9])?|approvals?|bibliography|change ?log|competitive analysis|(?:comparable|competitor|reference) titles|confidentiality|contents|conventions|credits|disclaimer|document (?:control|conventions|history)|executive summary|glossary|index|introduction|legal|market (?:analysis|position(?:ing)?)(?: (?:and )?(?:comparable|competitor|reference) titles)?|overview of this document|prepared by|purpose(?: of this document)?|references|(?:revision|version) history|scope|sign off|summary|table of contents|terminology)$/i;
 
 /**
  * A section ASKING for something, as opposed to describing it: an imperative
@@ -214,7 +215,7 @@ export function headingClaimedBy(heading: string, claims: readonly string[]): bo
  * who opens the entry scene is playing, not staring at an idle screen", and
  * the delivery report called an idle first screen a defect. That is one game
  * shape imposed on all of them: a document may specify a home, menu or lobby
- * as its first screen, and the vehicle's does — its cold-boot budget names
+ * as its first screen, and real documents do — a start-up budget can name
  * the screen it reaches (Codex 2026-09-12 V, Job 3.9). What must be proven then is not auto-start
  * but the ROUTE from that screen into play.
  */

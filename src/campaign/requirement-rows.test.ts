@@ -3,8 +3,8 @@
  * by code, and each row given to the milestone that owns it.
  *
  * In a measured campaign nothing turned a GDD rule into a row the system owned:
- * R-07 was closed by a worker's prose, and the §3.9 constants were
- * never held against anything. These tests pin the deterministic extraction
+ * a labelled rule was closed by a worker's prose, and a section of tuning
+ * constants was never held against anything. These tests pin the deterministic extraction
  * (no model), the add-only pass (a model may only ADD rows that quote the
  * document), and ownership.
  */
@@ -67,7 +67,7 @@ const ENGLISH = [
   "Day-1 retention must be at least 40%.",
   "",
   "## 6. Performance",
-  "The game must run at 60 fps on mid-range phones.",
+  "The game must run at 60 fps on budget phones.",
   "",
   "The FR-1 … FR-5 series defines the core rules.",
   "",
@@ -360,58 +360,59 @@ describe("extractRequirementRows — German, Spanish and French documents", () =
 /**
  * Tables that lost their pipes in a PDF conversion: every cell on a line of
  * its own, the label alone on one. A converted GDD's numbered rules and
- * design pillars reach the extractor in this shape and no other, so nothing
+ * phase tables reach the extractor in this shape and no other, so nothing
  * else in this file reads them.
  */
 const FLATTENED = [
-  "# Tide Pool — Game Design Document",
+  "# Orchard Seasons — Game Design Document",
   "",
-  "1. OVERVIEW",
-  "1.2 Guiding Principles",
-  "The design keeps to these principles throughout.",
-  "#",
-  "Principle",
-  "In short",
-  "P1",
-  "One gesture",
-  "The only input is a swipe; no button ever blocks the board.",
-  "P2",
-  "No luck",
-  "Every level must play out the same way from the same moves.",
-  "P3",
-  "Short rounds",
-  "A round never asks for more than two minutes of attention.",
+  "2. THE ORCHARD",
+  "2.1 Season Phases",
+  "Each season moves through these phases in order.",
+  "Code",
+  "Phase",
+  "What happens",
+  "S1",
+  "Dormancy",
+  "The player marks branches to prune; no tree grows during this phase.",
+  "S2",
+  "Grafting",
+  "Every graft placed this season must be joined to a pruned branch.",
+  "S3",
+  "Harvest",
+  "Each tree's yield is weighed in kilograms and added to the store.",
   "",
-  "3. CORE GAMEPLAY",
-  "3.3 Core Rules (Q-01 … Q-10)",
-  "The rules below hold in every level.",
-  "#",
+  "4. SEASON PLAY",
+  "4.2 Grafting rules (G-01 … G-09)",
+  "The rules below hold in every season.",
+  "Code",
   "Rule",
-  "Q-01",
-  "Matching. Three shells of one colour in a row must clear at once.",
-  "Q-02",
-  "Gravity. Shells above a cleared gap must fall within 0.3 s.",
-  "Q-03",
-  "Refill. Empty cells at the top must refill from the tide.",
-  "Q-04",
-  "Combo. Each further clear in one chain adds 1 to the multiplier.",
+  "G-01",
+  "Pruning. A branch pruned in winter must not fruit that season.",
+  "G-02",
+  "Growth. Each tree's growth animation must finish within 0.4 s.",
+  "G-03",
+  "Walls. A tree beside the orchard wall must yield half its usual weight.",
+  "G-04",
+  "Tokens. Each harvest adds seed tokens to the store by weight.",
   "",
-  "3.4 Boosters",
-  "Booster",
+  "5. ORCHARD TOOLS",
+  "5.1 Orchard Upgrades",
+  "Upgrade",
   "Unlock",
   "Effect",
-  "Crab",
-  "L12",
-  "Clears one shell of the player's choice.",
-  "Wave",
-  "L20",
-  "Reorders every shell on the board.",
+  "Ladder",
+  "L5",
+  "Lets the player prune one extra branch each season.",
+  "Cold frame",
+  "L14",
+  "Shelters every sapling through one frost night.",
   "",
-  "3.5 Triggers",
+  "5.2 Triggers",
   "Event",
   "Rule",
-  "Board settles",
-  "Q-02",
+  "Season ends",
+  "G-02",
   "",
 ].join("\n");
 
@@ -419,45 +420,45 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
   const { rows, numberingGaps } = extractRequirementRows(FLATTENED, GDD);
 
   it("reads every labelled row of a run with the cells after its label, verbatim, under its own heading", () => {
-    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["P1", "P2", "P3", "Q-01", "Q-02", "Q-03", "Q-04", "L12", "L20"]);
+    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["S1", "S2", "S3", "G-01", "G-02", "G-03", "G-04", "L5", "L14"]);
 
-    const q1 = byLabel(rows, "Q-01");
-    expect(q1.text).toBe("Q-01 Matching. Three shells of one colour in a row must clear at once.");
-    expect(FLATTENED.slice(q1.span.start, q1.span.end)).toBe("Q-01\nMatching. Three shells of one colour in a row must clear at once.");
-    expect(q1.section).toBe("Core Rules (Q-01 … Q-10)");
-    expect(q1.sectionNumber).toBe("3.3");
-    expect(q1.status).toBe("open");
+    const g1 = byLabel(rows, "G-01");
+    expect(g1.text).toBe("G-01 Pruning. A branch pruned in winter must not fruit that season.");
+    expect(FLATTENED.slice(g1.span.start, g1.span.end)).toBe("G-01\nPruning. A branch pruned in winter must not fruit that season.");
+    expect(g1.section).toBe("Grafting rules (G-01 … G-09)");
+    expect(g1.sectionNumber).toBe("4.2");
+    expect(g1.status).toBe("open");
 
     // Three cells to a row: the label, a name, what it means.
-    const p1 = byLabel(rows, "P1");
-    expect(p1.text).toBe("P1 One gesture The only input is a swipe; no button ever blocks the board.");
-    expect(p1.section).toBe("Guiding Principles");
-    expect(p1.sectionNumber).toBe("1.2");
+    const s1 = byLabel(rows, "S1");
+    expect(s1.text).toBe("S1 Dormancy The player marks branches to prune; no tree grows during this phase.");
+    expect(s1.section).toBe("Season Phases");
+    expect(s1.sectionNumber).toBe("2.1");
 
     // The one quantity of a labelled rule is its bounds, and the sentence is not read a second time.
-    expect(byLabel(rows, "Q-02").bounds).toEqual({ kind: "range", hi: 0.3, unit: "s" });
-    expect(rows.filter((r) => r.text.includes("must fall within 0.3 s"))).toHaveLength(1);
+    expect(byLabel(rows, "G-02").bounds).toEqual({ kind: "range", hi: 0.4, unit: "s" });
+    expect(rows.filter((r) => r.text.includes("must finish within 0.4 s"))).toHaveLength(1);
 
     // The header row is no row.
-    expect(rows.some((r) => /^(?:#|Principle|In short|Rule\b|Booster|Event)/.test(r.text))).toBe(false);
+    expect(rows.some((r) => /^(?:Code|Phase|What happens|Rule\b|Upgrade|Event)/.test(r.text))).toBe(false);
   });
 
   it("finds the label's column from a header wider than the row: the cell before the label is the row's", () => {
-    expect(byLabel(rows, "L12").text).toBe("Crab L12 Clears one shell of the player's choice.");
-    expect(byLabel(rows, "L20").text).toBe("Wave L20 Reorders every shell on the board.");
+    expect(byLabel(rows, "L5").text).toBe("Ladder L5 Lets the player prune one extra branch each season.");
+    expect(byLabel(rows, "L14").text).toBe("Cold frame L14 Shelters every sapling through one frost night.");
   });
 
   it("a lone label in another table refers to a rule; it defines none", () => {
-    expect(rows.filter((r) => r.label === "Q-02")).toHaveLength(1);
+    expect(rows.filter((r) => r.label === "G-02")).toHaveLength(1);
     expect(rows.some((r) => r.section === "Triggers")).toBe(false);
   });
 
   it("reports the span the document states and the table stops short of, and invents none of it", () => {
     expect(numberingGaps).toEqual([
-      expect.objectContaining({ series: "Q-", missing: ["Q-05", "Q-06", "Q-07", "Q-08", "Q-09", "Q-10"] }),
+      expect.objectContaining({ series: "G-", missing: ["G-05", "G-06", "G-07", "G-08", "G-09"] }),
     ]);
-    expect(numberingGaps[0]!.detail).toContain("Q-01 … Q-10");
-    expect(rows.some((r) => r.label === "Q-05")).toBe(false);
+    expect(numberingGaps[0]!.detail).toContain("G-01 … G-09");
+    expect(rows.some((r) => r.label === "G-05")).toBe(false);
   });
 });
 
@@ -479,21 +480,21 @@ describe("extractRequirementRows — a business word a game uses too excludes no
     "## 7. Performance Budget",
     "Frame time must stay under 16 ms.",
     "## 8. Economy",
-    "### 8.1 Coin Budget (daily model)",
-    "Level clears must pay 25–50 coins each.",
-    "## 9. Production",
-    "### 9.1 Team",
+    "### 8.1 Seed Token Budget (per season)",
+    "Each harvest must pay 3–8 seed tokens.",
+    "## 9. KPI Targets",
+    "### 9.1 First Month",
+    "Day-30 retention must be at least 9%.",
+    "## 10. Roadmap",
+    "### 10.1 Studio Crew",
+    "The studio crew must stay at 5 people.",
+    "## 11. Production",
+    "### 11.1 Team",
     "The studio must hire 2 more artists by March.",
-    "### 9.2 Budget",
+    "### 11.2 Budget",
     "The budget must stay under 50,000 USD.",
-    "## 10. Risks & Mitigations",
+    "## 12. Risk Management",
     "Store review must finish within 7 days.",
-    "## 11. KPI Targets",
-    "### 11.1 Week One",
-    "Day-7 retention must be at least 18%.",
-    "## 12. Production Scope & Roadmap",
-    "### 12.1 Team Shape",
-    "The core pod must stay at 12 people.",
   ].join("\n");
   const { rows } = extractRequirementRows(MIXED, GDD);
 
@@ -505,7 +506,7 @@ describe("extractRequirementRows — a business word a game uses too excludes no
       "Drawing a risk card must cost 2 coins.",
       "Ten gems must convert to exactly 100 coins.",
       "Frame time must stay under 16 ms.",
-      "Level clears must pay 25–50 coins each.",
+      "Each harvest must pay 3–8 seed tokens.",
     ]) {
       const row = byText(rows, rule);
       expect({ rule, kind: row.kind, status: row.status }).toEqual({ rule, kind: expect.not.stringMatching(/aspiration/), status: "open" });
@@ -517,8 +518,8 @@ describe("extractRequirementRows — a business word a game uses too excludes no
       "The studio must hire 2 more artists by March.",
       "The budget must stay under 50,000 USD.",
       "Store review must finish within 7 days.",
-      "Day-7 retention must be at least 18%.",
-      "The core pod must stay at 12 people.",
+      "Day-30 retention must be at least 9%.",
+      "The studio crew must stay at 5 people.",
     ]) {
       const row = byText(rows, goal);
       expect({ goal, kind: row.kind, status: row.status }).toEqual({ goal, kind: "aspiration", status: "excluded" });
@@ -542,7 +543,7 @@ describe("extractRequirementRows — caps are disclosed, never silent", () => {
     const doc = [
       "## 2. KPI Targets",
       "Day-1 retention must be at least 40%.",
-      "Day-7 retention must be at least 18%.",
+      "Day-30 retention must be at least 9%.",
       "## 3. Art Direction",
       "The look must feel calm and warm.",
       "## 4. Rules",

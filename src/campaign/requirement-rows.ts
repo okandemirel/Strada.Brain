@@ -2,10 +2,11 @@
  * Requirement rows: the approved GDD read into the rows a milestone is judged
  * on, and each row given to the milestone that owns it (GDD-drift plan W04, M3).
  *
- * In a measured campaign no GDD rule was ever a row the system owned: R-07 was
- * "closed" by a worker's prose, the §3.9 constants were never held against
- * anything, and nobody noticed that §3.3 promised R-01…R-22 and defined
- * fifteen. Everything here is code, not a model:
+ * In a measured campaign no GDD rule was ever a row the system owned: a
+ * labelled rule was "closed" by a worker's prose, a section of tuning
+ * constants was never held against anything, and nobody noticed that a rules
+ * section announced a longer numbered span than it defined. Everything here
+ * is code, not a model:
  *
  *   • extraction reads labelled rules, normative sentences (closed modal
  *     lists in en, tr, de, es and fr), quantities with bounds parsed by code,
@@ -152,18 +153,18 @@ const CONDITIONS: Record<Language, readonly string[]> = {
  *
  * An excluded row is never checked, so a word that a GAME also uses must not
  * exclude by itself: a team game, a star rating, a frame-time budget, risk
- * cards, currency conversion and a coin budget are all the game.
+ * cards, currency conversion and a token budget are all the game.
  *
  *   • A row's own TEXT decides only with the metric names, and only for a
- *     row the document did not label: a pillar that calls tap feedback a
- *     retention feature is about the taps, and a tap BUDGET of 50 ms is a
- *     game requirement.
+ *     row the document did not label: a principle that calls harvest
+ *     feedback a retention feature is about the harvest, and an input
+ *     response BUDGET of 80 ms is a game requirement.
  *   • METRIC and PRODUCTION headings (a KPI section, the roadmap, staffing,
  *     the production schedule — not an element unlock schedule) decide for
  *     every row under them, at any depth.
  *   • Every other business NOUN decides only as the row's own heading, only
- *     when that heading names nothing else ("Team", "Budget", "Risks &
- *     Mitigations" — not "Team Size", "Performance Budget" or "Risk Cards"),
+ *     when that heading names nothing else ("Team", "Budget", "Risk
+ *     Management" — not "Team Size", "Performance Budget" or "Risk Cards"),
  *     and only for a row that does not speak of the player.
  */
 const ASPIRATION_TEXT = [
@@ -183,7 +184,7 @@ const ASPIRATION_NOUN = [
   "teams?", "budgets?", "risks?", "zeitplan",
   "ekip", "takım", "bütçe", "riskler", "risiken", "equipo", "presupuesto", "riesgos", "équipe", "risques",
 ];
-/** What may stand beside a business noun in a heading that names only it: "Risks & Mitigations", "KPI Hedefleri". */
+/** What may stand beside a business noun in a heading that names only it: "Risk Management", "KPI Hedefleri". */
 const ASPIRATION_QUALIFIER = [
   "and", "or", "targets?", "goals?", "objectives?", "plans?", "planning", "estimates?", "mitigations?", "management", "overview", "structure", "schedule", "timeline",
   "ve", "hedef\\p{L}*", "plan(?:ı|lama\\p{L}*)", "önlem\\p{L}*", "yönetim\\p{L}*", "yapı\\p{L}*",
@@ -252,9 +253,9 @@ function languagesOf(text: string): Set<Language> {
 // NUMBERS AND BOUNDS — parsed by code, never written by a model
 // =============================================================================
 
-/** "3,000" and "3.000" are thousands; "0.25" and "0,25" are decimals. */
+/** "4,500" and "4.500" are thousands; "0.25" and "0,25" are decimals. */
 const NUM = String.raw`(?:[1-9]\d{0,2}(?:[.,]\d{3})+(?![.,]?\d)|\d+(?:[.,]\d+)?)`;
-/** A number glued to a letter, a section sign, a label dash or a ratio slash is an identifier ("R-01", "§3.3", "L101", "x/20"). */
+/** A number glued to a letter, a section sign, a label dash or a ratio slash is an identifier ("G-01", "§5.2", "L14", "x/12"). */
 const NOT_AN_IDENTIFIER = String.raw`(?<![\p{L}\p{N}§#_.,\/×\-–—])`;
 /** Units of measure. No bare "m": case-blind, it read "10M+ players" as ten metres. */
 const UNIT = String.raw`(?:%|°|×|fps|hz|ms|milliseconds?|millisaniye\p{L}*|secs?|seconds?|saniye\p{L}*|sn|sekunden?|segundos?|secondes?|s|mins?|minutes?|minuten?|minutos?|dakika\p{L}*|dk|h|hrs?|hours?|stunden?|horas?|heures?|saat\p{L}*|days?|gün\p{L}*|tage?n?|días?|jours?|weeks?|px|pt|dp|mb|gb|kb|cm|mm|km|x|\p{L}[\p{L}-]*\/(?:s|sec|min|h|day)|\/\s?(?:s|sec|min|h|day))(?![\p{L}\p{N}])`;
@@ -336,7 +337,7 @@ function comparatorBounds(word: string, value: number, unit: string | undefined)
 /**
  * The quantities in a piece of text, left to right: ranges first, then
  * comparisons, then a number with a unit (or a "+"). A bare number is not a
- * quantity: "Level 21" and "R-04" bound nothing.
+ * quantity: "Level 13" and "G-04" bound nothing.
  */
 function quantitiesIn(text: string): Quantity[] {
   const found: Quantity[] = [];
@@ -372,7 +373,7 @@ function quantitiesIn(text: string): Quantity[] {
   for (const m of text.matchAll(EXACT_RE)) {
     const plus = m[3] !== undefined;
     const unit = canonicalUnit(m[4]);
-    // "3+ / Everyone" is an age rating and "2019+" a year: an unmeasured "+" is no bound.
+    // "12+ / Teen" is an age rating and "2021+" a year: an unmeasured "+" is no bound.
     if (unit === undefined || namesSomething(text, m.index!)) continue;
     const start = m.index!;
     const end = start + m[0].length;
@@ -553,7 +554,7 @@ interface Candidate {
   readonly bounds?: RequirementBounds;
 }
 
-/** "R-01", "P3", "FR-12", "NFR-2.1", "K-4a": a rule's own label. */
+/** "G-01", "P3", "FR-12", "NFR-2.1", "K-4a": a rule's own label. */
 const LABEL_RE = /^([A-Z]{1,4}-?)(\d{1,3})(?:\.(\d{1,2}))?([a-z])?$/;
 const INLINE_LABEL_RE = /^(?:\*\*|__)?([A-Z]{1,4}-?\d{1,3}(?:\.\d{1,2})?[a-z]?)(?:\*\*|__)?\s*(?:[:.)\]—–]|\s-)\s*(?=\S)/u;
 
@@ -583,8 +584,8 @@ function isShortCell(line: Line | undefined): line is Line {
  * Which column the label sits in, counted from the row's first cell.
  *
  * The header row is the run of short cells before the first label: when it
- * is wider than a row, the label is not the first column ("Booster | Unlock |
- * Effect…" — the unlock level labels the row, the booster's name comes first).
+ * is wider than a row, the label is not the first column ("Upgrade | Unlock |
+ * Effect…" — the unlock level labels the row, the upgrade's name comes first).
  * A row-index column ("2", "3", …) in front of every label says the same.
  */
 function labelColumn(doc: Document, run: readonly Line[], stride: number): number {
@@ -604,7 +605,7 @@ function labelColumn(doc: Document, run: readonly Line[], stride: number): numbe
  * Labelled rules in a table that lost its pipes: each label alone on a line,
  * its cells on the lines around it (the converter shape spec-scope.ts reads for
  * schedules). A label counts only inside a RUN — two or more labels of one
- * series, in increasing order, at a constant stride — because a lone "R-10"
+ * series, in increasing order, at a constant stride — because a lone "G-10"
  * in another table's Trigger column is a reference, not a definition.
  */
 function labelRuns(doc: Document, consumed: Set<number>): Candidate[] {
@@ -779,7 +780,7 @@ function bareValueBounds(value: string): RequirementBounds {
   return { kind: "exact", value: parseNumber(token), tolerance: toleranceOf(token, approximate) };
 }
 
-/** "45–120 s (Easy), 120–240 s (Expert)": the session lasts between the least and the most any clause allows. */
+/** "5–12 min (single plot), 12–20 min (full estate)": the session lasts between the least and the most any clause allows. */
 function sessionClaimBounds(value: string): RequirementBounds | undefined {
   const clauses = value.split(";").filter((clause) => !OTHER_SUBJECT_RE.test(clause));
   const timed = clauses.flatMap(quantitiesIn).filter((q) => ["s", "ms", "min", "h"].includes(q.bounds.unit ?? ""));
@@ -996,9 +997,9 @@ const LABEL_MENTION_RE = /(?<![\p{L}\p{N}])([A-Z]{1,4}-?)(\d{1,3})(?![\p{N}.])/g
 
 /**
  * A numbered series the document defines only in part. Reported from what
- * the document SAYS — a stated span ("R-01 … R-22") that the definitions
+ * the document SAYS — a stated span ("G-01 … G-12") that the definitions
  * stop short of, or holes in a series that is otherwise complete — and never
- * invented: a sparse series ("L6, L21, L36…") is a schedule, not a list with
+ * invented: a sparse series ("L4, L13, L27…") is a schedule, not a list with
  * gaps.
  */
 function numberingGapsOf(doc: Document, labels: readonly string[]): NumberingGap[] {
@@ -1475,7 +1476,7 @@ export interface OwnershipResult {
 }
 
 /**
- * "§3.3", and a range "§3.3–§3.11" or "§16-18". A range's far end needs its
+ * "§5.2", and a range "§5.2–§5.10" or "§12-14". A range's far end needs its
  * own "§" or a dash with no space around it: "§4 – 3 passes" is §4 and a count.
  */
 const SECTION_REFERENCE_RE =
@@ -1493,7 +1494,7 @@ function sectionNumberParts(number: string): number[] {
   return number.split(".").map(Number);
 }
 
-/** A section number against one end of a reference, compared at that end's depth: §3 comes before §3.3, §3.11.2 is at §3.11. */
+/** A section number against one end of a reference, compared at that end's depth: §5 comes before §5.2, §5.10.2 is at §5.10. */
 function compareToEnd(number: readonly number[], end: readonly number[]): number {
   for (let i = 0; i < end.length; i++) {
     if (i >= number.length) return -1;
@@ -1557,7 +1558,7 @@ export function isPlannedMilestone(id: string): boolean {
  *     decides; the earliest milestone breaks a tie);
  *   • a milestone planned before `coveredSections` existed claims by the `§N.N`
  *     references in its prompt: a reference covers its subsections, a range
- *     ("§3.3–§3.11", as a measured campaign's prompts wrote them) every section between its
+ *     ("§5.2–§5.10", as a planner's prompt may write them) every section between its
  *     ends, and the most specific reference decides;
  *   • a row nobody claims is QUEUED — failing closed.
  *
