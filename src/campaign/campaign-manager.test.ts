@@ -3,7 +3,8 @@ import { SYSTEM_INTERRUPTION_MARKER } from "../tasks/interruption.js";
 import { extractLookDescription } from "./visual-conformance.js";
 import { FILE_MTIME_TOLERANCE_MS } from "./file-freshness.js";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, statSync, symlinkSync, chmodSync } from "node:fs";
+import { deflateSync } from "node:zlib";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, statSync, symlinkSync, chmodSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { hostname } from "node:os";
@@ -10245,6 +10246,745 @@ describe("CampaignManager", () => {
       symlinkSync(join(dir, "outside.md"), join(projectRoot, "docs", "Linked_GDD.md"));
       expect(manager.startFromGddFromDocs(ctx, "docs/Linked_GDD.md")).toBeUndefined();
       expect(tasks.submitted).toHaveLength(0);
+    });
+  });
+
+  /**
+   * The design a message named by its path. An absolute path was not even
+   * extracted, so the campaign built whichever design docs/ held — another
+   * game, announced as if it were the one asked for. Extracted, it was joined
+   * onto the project root as if relative: a document inside the project named
+   * by its full path could not be read, one outside it was "could not read"
+   * rather than outside, and a bare file name that lives in docs/ was looked
+   * for at the root only.
+   */
+  describe("the design a message named by its path (intake-gdd-path)", () => {
+    const say = (chatId: string, text: string): Promise<boolean> =>
+      manager.tryHandleIncoming({ channelType: "cli", chatId, userId: "u1", text, timestamp: new Date() } as unknown as IncomingMessage);
+    const told = (chatId: string): string => messages.filter((m) => m.chatId === chatId).map((m) => m.text).join("\n");
+    const DESIGN = "# Quillmoor\n\nThe game the message asked for.\n" + "q".repeat(400);
+
+    it.each([
+      ["its full path", () => join(projectRoot, "docs", "Quillmoor_GDD.md")],
+      // /var against /private/var on macOS: the root's real spelling is the same project.
+      ["the real spelling of its full path", () => join(realpathSync.native(projectRoot), "docs", "Quillmoor_GDD.md")],
+      ["its bare file name, kept in docs/", () => "Quillmoor_GDD.md"],
+    ])("builds the document named by %s, not the repository's other GDD", async (_how, named) => {
+      writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-named", `Build this game: ${named()}`)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-named");
+      expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.md");
+      expect(campaign?.gddText).toBe(DESIGN);
+      expect(told("chat-named")).toContain("Building from `docs/Quillmoor_GDD.md`");
+    });
+
+    it.each([
+      ["a full path outside the project", () => join(dir, "Quillmoor_GDD.md")],
+      ["a relative path that leaves the project", () => "../Quillmoor_GDD.md"],
+      ["a path from the home directory", () => "~/Desktop/Quillmoor_GDD.md"],
+    ])("refuses %s in so many words, and builds no other design", async (_how, named) => {
+      writeFileSync(join(dir, "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-outside", `Bu oyunu yap: ${named()}`)).toBe(true);
+      const said = told("chat-outside");
+      expect(said).toContain(named());
+      expect(said).toContain("outside this project");
+      expect(said).not.toContain("Building from");
+      expect(storage.hasActiveForChat("chat-outside")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    it("finds a named folder under docs/ when the message left docs/ out", async () => {
+      mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
+      writeFileSync(join(projectRoot, "docs", "design", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-folder", "Bu oyunu yap: design/Quillmoor_GDD.md")).toBe(true);
+      expect(storage.listActive().find((c) => c.chatId === "chat-folder")?.gddPath).toBe("docs/design/Quillmoor_GDD.md");
+    });
+
+    /**
+     * A path and anything BUILD_INTENT_RE matched — an adverb included — was
+     * an immediate build: "README.md'yi baştan sona oku" (read the README end
+     * to end) answered "Building from `README.md` … Sprint 1 starts now", and
+     * an idea that mentioned its style sheet was built FROM the style sheet.
+     */
+    it.each([
+      ["README.md'yi baştan sona oku", "README.md"],
+      ["Rewrite docs/save-notes.md from scratch", "docs/save-notes.md"],
+      ["Run the end-to-end tests in docs/e2e.md", "docs/e2e.md"],
+      ["Read docs/notes.md end to end", "docs/notes.md"],
+      ["Baştan sona docs/notes.md dosyasını oku", "docs/notes.md"],
+      ["Implement docs/notes.md from scratch", "docs/notes.md"],
+      ["Rewrite README.md from scratch", "README.md"],
+      // A code identifier that says GDD: discovery built docs/Game_GDD.md.
+      ["Rewrite loadGDD from scratch", "loadGDD.ts"],
+      // A code file that says gdd: the message was taken over to say it could not be read.
+      ["Build the game and fix my_gdd_parser.ts", "my_gdd_parser.ts"],
+    ])("%s is the user's task, not a build from that document", async (text, rel) => {
+      writeFileSync(join(projectRoot, rel), "# Notes\n\n" + "n".repeat(400));
+      expect(await say("chat-task", text)).toBe(false);
+      expect(told("chat-task")).toBe("");
+      expect(storage.hasActiveForChat("chat-task")).toBe(false);
+    });
+
+    // A document attached to "rewrite this from scratch" was built as the design, ungated.
+    it.each([
+      ["Rewrite this from scratch", "Quillmoor_GDD.md"],
+      ["Read it end to end", "notes.md"],
+    ])("%s with %s attached is the user's task, not a build from it", async (text, name) => {
+      const incoming = {
+        channelType: "cli", chatId: "chat-rewrite", userId: "u1", text, timestamp: new Date(),
+        attachments: [{ type: "document", name, data: Buffer.from(DESIGN, "utf8") }],
+      } as unknown as IncomingMessage;
+      expect(await manager.tryHandleIncoming(incoming)).toBe(false);
+      expect(told("chat-rewrite")).toBe("");
+      expect(storage.hasActiveForChat("chat-rewrite")).toBe(false);
+    });
+
+    // "The GDD" with only an adverb beside it built docs/Game_GDD.md, ungated.
+    // …and so did a feature request on the GDD's parts, at the gate.
+    it.each(["Read the GDD end to end", "GDD'yi baştan sona oku", "Implement the GDD changes in the HUD"])("%s is the user's task, not a build of the repository's GDD", async (text) => {
+      expect(await say("chat-read-gdd", text)).toBe(false);
+      expect(told("chat-read-gdd")).toBe("");
+      expect(storage.hasActiveForChat("chat-read-gdd")).toBe(false);
+    });
+
+    // A build turned down or asked about answered "Building from `docs/Quillmoor_GDD.md` … Sprint 1 starts now".
+    it.each([
+      "Don't build the game in docs/Quillmoor_GDD.md",
+      "How do I build the game in docs/Quillmoor_GDD.md?",
+      "Bu oyunu yap: docs/Quillmoor_GDD.md mı?",
+      "Don't build the game in the GDD",
+    ])("%s starts no build", async (text) => {
+      writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-declined", text)).toBe(false);
+      expect(told("chat-declined")).toBe("");
+      expect(storage.hasActiveForChat("chat-declined")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    // A build aimed at the style sheet answered "Building from `docs/art-style.md` … Sprint 1 starts now".
+    // The build is aimed at the style sheet and the design is only "seen": the design is offered at the gate, never started from.
+    it("holds the design named beside a style sheet the build is aimed at for confirmation, not the style sheet", async () => {
+      writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+      writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-beside", "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md")).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-beside");
+      expect(campaign?.state).toBe("awaiting-approval");
+      expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.md");
+      expect(told("chat-beside")).toContain("`docs/Quillmoor_GDD.md`");
+      expect(told("chat-beside")).not.toContain("art-style.md");
+      expect(told("chat-beside")).not.toContain("Building from");
+    });
+
+    /**
+     * A build checked only by the words BEFORE its document started at once
+     * whatever followed it: "Build the game following docs/android-signing.md"
+     * and "Build the game (docs/troubleshooting.md has the fix) and send me
+     * the APK" each answered "Building from … Sprint 1 starts now", with no
+     * approval gate. Only the plain form starts at once; any other build that
+     * points at a document stops at the gate the idea path uses, on that
+     * document, and plans only on the user's "evet".
+     */
+    describe("a build not plainly aimed at its design waits at the approval gate", () => {
+      const planMilestones = (): ReturnType<typeof vi.fn> =>
+        (manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones;
+      const atTheGate = (chatId: string, path: string): void => {
+        const campaign = storage.listActive().find((c) => c.chatId === chatId);
+        expect(campaign?.state).toBe("awaiting-approval");
+        expect(campaign?.gddPath).toBe(path);
+        const said = told(chatId);
+        expect(said).toContain(`\`${path}\``);
+        expect(said).toContain("evet/onay");
+        expect(said).not.toContain("Building from");
+        expect(tasks.submitted).toHaveLength(0);
+        expect(planMilestones()).not.toHaveBeenCalled();
+      };
+
+      it("holds a procedure the build follows at the gate, and plans from it only once the user approves", async () => {
+        const signing = "# Signing\n\nKeystore steps.\n" + "k".repeat(400);
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), signing);
+        expect(await say("chat-follow", "Build the game following docs/android-signing.md")).toBe(true);
+        atTheGate("chat-follow", "docs/android-signing.md");
+
+        expect(await say("chat-follow", "evet")).toBe(true);
+        await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+        expect(planMilestones()).toHaveBeenCalled();
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-follow");
+        expect(campaign?.gddText).toBe(signing);
+        expect(told("chat-follow")).toContain("GDD approved");
+      });
+
+      it("revives an expired gate back onto the same document, never into planning it unconfirmed", async () => {
+        tasks = new FakeTaskManager();
+        storage.close();
+        storage = new CampaignStorage(join(dir, "campaigns-confirm-expiry.db"));
+        manager = new CampaignManager({
+          storage,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+          approvalTimeoutMs: 300,
+        });
+        manager.attachEvents();
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-expiry", "Build the game following docs/android-signing.md")).toBe(true);
+        const id = storage.listActive().find((c) => c.chatId === "chat-expiry")!.id;
+        await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+        expect(await manager.tryHandleRevive("chat-expiry", "kampanya devam")).toBe(true);
+        expect(storage.get(id)!.state).toBe("awaiting-approval");
+        expect(storage.get(id)!.gddPath).toBe("docs/android-signing.md");
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
+      /**
+       * The confirm gate reused the idea gate's revision path: "değiştir: …"
+       * — the natural answer to "name the one to build from" — told the
+       * drafter "The current draft is `docs/android-signing.md` — revise THAT
+       * file in place", so the user's own document was rewritten as a GDD.
+       * A gate on a document the user named confirms it or nothing; it never
+       * drafts over it, after a restart or a revival too.
+       */
+      it("never rewrites the document it holds at the gate, whatever the reply asks", async () => {
+        const signing = "# Signing\n\nKeystore steps.\n" + "k".repeat(400);
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), signing);
+        expect(await say("chat-confirm-revise", "Build the game following docs/android-signing.md")).toBe(true);
+        atTheGate("chat-confirm-revise", "docs/android-signing.md");
+
+        expect(await say("chat-confirm-revise", "değiştir: docs/Gercek_GDD.md'yi kullan")).toBe(true);
+        expect(tasks.submitted).toHaveLength(0);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-confirm-revise")!;
+        expect(campaign.state).toBe("awaiting-approval");
+        expect(campaign.draftAttempts).toBe(0);
+        expect(readFileSync(join(projectRoot, "docs", "android-signing.md"), "utf8")).toBe(signing);
+        const said = told("chat-confirm-revise");
+        expect(said).not.toContain("Revision noted");
+        expect(said).toContain("kampanya iptal");
+
+        // …and the gate is still one that confirms, once the process restarts.
+        const reopened = new CampaignStorage(join(dir, "campaigns.db"));
+        const restarted = new CampaignManager({
+          storage: reopened,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+        });
+        expect(
+          await restarted.tryHandleIncoming({ channelType: "cli", chatId: "chat-confirm-revise", userId: "u1", text: "revise: make it a GDD", timestamp: new Date() } as unknown as IncomingMessage),
+        ).toBe(true);
+        expect(tasks.submitted).toHaveLength(0);
+        expect(reopened.get(campaign.id)!.state).toBe("awaiting-approval");
+        reopened.close();
+      });
+
+      // A tentative caption with the GDD attached started nothing at all (main built it at once).
+      it.each(["Can we build the game from this?", "I tried to build the game from this GDD"])(
+        "holds an attached design whose caption does not plainly ask for the build at the gate: %s",
+        async (text) => {
+          const incoming = {
+            channelType: "cli", chatId: "chat-attached-gate", userId: "u1", text, timestamp: new Date(),
+            attachments: [{ type: "document", name: "Bramble_GDD.md", data: Buffer.from(DESIGN, "utf8") }],
+          } as unknown as IncomingMessage;
+          expect(await manager.tryHandleIncoming(incoming)).toBe(true);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          atTheGate("chat-attached-gate", "docs/Bramble_GDD.md");
+          expect(readFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), "utf8")).toBe(DESIGN);
+
+          expect(await say("chat-attached-gate", "evet")).toBe(true);
+          await waitFor(() => expect(planMilestones()).toHaveBeenCalled());
+        },
+      );
+
+      it("calls the document it holds no draft when asked to amend it", async () => {
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-confirm-amend", "Build the game following docs/android-signing.md")).toBe(true);
+        expect(await say("chat-confirm-amend", "amend gdd")).toBe(true);
+        const said = told("chat-confirm-amend");
+        expect(said).toContain("`docs/android-signing.md` is not confirmed as the design yet");
+        expect(said).not.toMatch(/draft/i);
+      });
+
+      // A message naming another design while the gate was open went on as an ordinary task, beside the gate.
+      it("answers a new build request while it is open with how to name another design", async () => {
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-confirm-other", "Build the game following docs/android-signing.md")).toBe(true);
+        expect(await say("chat-confirm-other", "Build the game in docs/Bramble_GDD.md")).toBe(true);
+        expect(storage.listActive().filter((c) => c.chatId === "chat-confirm-other")).toHaveLength(1);
+        const said = told("chat-confirm-other");
+        expect(said).toContain("still open");
+        expect(said).toContain("kampanya iptal");
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
+      it("calls the document it holds no draft when the gate expires and is revived, and offers no revision", async () => {
+        tasks = new FakeTaskManager();
+        storage.close();
+        storage = new CampaignStorage(join(dir, "campaigns-confirm-wording.db"));
+        manager = new CampaignManager({
+          storage,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+          approvalTimeoutMs: 300,
+        });
+        manager.attachEvents();
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-confirm-wording", "Build the game following docs/android-signing.md")).toBe(true);
+        const id = storage.listActive().find((c) => c.chatId === "chat-confirm-wording")!.id;
+        await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+        expect(await manager.tryHandleRevive("chat-confirm-wording", "kampanya devam")).toBe(true);
+        const said = told("chat-confirm-wording");
+        expect(said).toContain("`docs/android-signing.md`");
+        expect(said).not.toMatch(/draft/i);
+        expect(said).not.toContain("revise:");
+        expect(said).toContain("evet/onay");
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
+      // The idea a confirm gate keeps is the request that named a document: drafting from it wrote a design nobody asked for.
+      it("drafts nothing when the document it held is gone by the time the gate is revived", async () => {
+        tasks = new FakeTaskManager();
+        storage.close();
+        storage = new CampaignStorage(join(dir, "campaigns-confirm-gone.db"));
+        manager = new CampaignManager({
+          storage,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+          approvalTimeoutMs: 300,
+        });
+        manager.attachEvents();
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-confirm-gone", "Build the game following docs/android-signing.md")).toBe(true);
+        const id = storage.listActive().find((c) => c.chatId === "chat-confirm-gone")!.id;
+        await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+        rmSync(join(projectRoot, "docs", "android-signing.md"));
+        expect(await manager.tryHandleRevive("chat-confirm-gone", "kampanya devam")).toBe(true);
+        expect(tasks.submitted).toHaveLength(0);
+        expect(storage.get(id)!.state).toBe("cancelled");
+        expect(told("chat-confirm-gone")).toContain("could not read `docs/android-signing.md`");
+      });
+
+      // "Can we…?" and "I was wondering if you could…" started nothing at all.
+      it("holds the design a question-form request names at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        expect(await say("chat-can-we", "Can we build the game in docs/Quillmoor_GDD.md?")).toBe(true);
+        atTheGate("chat-can-we", "docs/Quillmoor_GDD.md");
+      });
+
+      it("drafts the idea a polite opening carries, at the gate", async () => {
+        const text = "I was wondering if you could build a game where the beekeeper moves her hives between meadows as the seasons turn";
+        expect(await say("chat-wondering", text)).toBe(true);
+        expect(storage.listActive().find((c) => c.chatId === "chat-wondering")?.ideaText).toBe(text);
+        expect(told("chat-wondering")).toContain("Game idea received");
+      });
+
+      it("holds a design with a qualifier after its name at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        expect(await say("chat-qualified", "Build the game in docs/Quillmoor_GDD.md for the buttons")).toBe(true);
+        atTheGate("chat-qualified", "docs/Quillmoor_GDD.md");
+      });
+
+      it("holds the newest GDD in docs/ at the gate for \"the GDD\" the build is not aimed at", async () => {
+        expect(await say("chat-bare", "Build the game and fix the GDD typo")).toBe(true);
+        atTheGate("chat-bare", "docs/Game_GDD.md");
+      });
+
+      it("offers the first of two designs and names the other", async () => {
+        writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        writeFileSync(join(projectRoot, "docs", "Fernwick_GDD.md"), "# Fernwick\n\n" + "f".repeat(400));
+        expect(await say("chat-two-designs", "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md or docs/Fernwick_GDD.md")).toBe(true);
+        atTheGate("chat-two-designs", "docs/Quillmoor_GDD.md");
+        expect(told("chat-two-designs")).toContain("`docs/Fernwick_GDD.md`");
+      });
+
+      it("names five of the other documents offered, and counts the rest", async () => {
+        writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+        writeFileSync(join(projectRoot, "docs", "Alder_GDD.md"), DESIGN);
+        const names = ["Alder", "Birch", "Cedar", "Damson", "Elm", "Fir", "Gorse", "Hazel"].map((name) => `docs/${name}_GDD.md`);
+        expect(await say("chat-many", `Build the game per docs/art-style.md, the GDD is one of ${names.join(", ")}`)).toBe(true);
+        atTheGate("chat-many", "docs/Alder_GDD.md");
+        const said = told("chat-many");
+        expect(said).toContain("`docs/Fir_GDD.md` and 2 more");
+        expect(said).not.toContain("Gorse");
+      });
+
+      it("refuses a document it cannot read, as a build that starts at once does, and holds nothing", async () => {
+        expect(await say("chat-gate-missing", "Build the game using docs/missing-notes.md")).toBe(true);
+        expect(told("chat-gate-missing")).toContain("could not read `docs/missing-notes.md`");
+        expect(storage.hasActiveForChat("chat-gate-missing")).toBe(false);
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
+      it("starts nothing for a feature request whose document sits in a parenthesis", async () => {
+        writeFileSync(join(projectRoot, "docs", "perf.md"), "# Frame drops\n\n" + "p".repeat(400));
+        expect(await say("chat-faster", "Make the game (docs/perf.md explains the frame drops) faster")).toBe(false);
+        expect(told("chat-faster")).toBe("");
+        expect(storage.hasActiveForChat("chat-faster")).toBe(false);
+      });
+
+      it("drafts the sentence at the gate when its document is the subject of its own predicate", async () => {
+        writeFileSync(join(projectRoot, "docs", "troubleshooting.md"), "# Fixes\n\n" + "t".repeat(400));
+        const text = "Build the game (docs/troubleshooting.md has the fix) and send me the APK";
+        expect(await say("chat-predicate", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-predicate");
+        expect(campaign?.ideaText).toBe(text);
+        expect(campaign?.gddPath).toBeUndefined();
+        expect(told("chat-predicate")).toContain("Game idea received");
+        expect(told("chat-predicate")).not.toContain("Building from");
+      });
+
+      // A bug report that names the design answered "Building from `docs/Bramble_GDD.md`", and the planner ran.
+      it("holds the design a report with no other reading names at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-report", "I tried to build the game in docs/Bramble_GDD.md but the editor freezes")).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        atTheGate("chat-report", "docs/Bramble_GDD.md");
+      });
+
+      // …but held at the gate, a bug report or a feature request on the design took the message over: the user's own task never ran.
+      it.each([
+        "When I build the game in docs/Bramble_GDD.md, Unity crashes.",
+        "Unity crashes when I build the game from docs/Bramble_GDD.md",
+        "Build the game in docs/Bramble_GDD.md fails on Android",
+        "Make the game in docs/Bramble_GDD.md faster",
+        "Can you make the game in docs/Bramble_GDD.md faster?",
+      ])("leaves a bug report or a feature request on the design to the agent: %s", async (text) => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-report-task", text)).toBe(false);
+        expect(told("chat-report-task")).toBe("");
+        expect(storage.hasActiveForChat("chat-report-task")).toBe(false);
+      });
+
+      it("leaves a bug report with the design attached to the agent", async () => {
+        const incoming = {
+          channelType: "cli", chatId: "chat-attached-report", userId: "u1", text: "When I build the game from this GDD, Unity crashes", timestamp: new Date(),
+          attachments: [{ type: "document", name: "Bramble_GDD.md", data: Buffer.from(DESIGN, "utf8") }],
+        } as unknown as IncomingMessage;
+        expect(await manager.tryHandleIncoming(incoming)).toBe(false);
+        expect(told("chat-attached-report")).toBe("");
+        expect(storage.hasActiveForChat("chat-attached-report")).toBe(false);
+      });
+
+      // A feature request beside a document the message only calls the design answered "Building from `docs/menu.md`" and the planner ran.
+      it.each([
+        ["Polish the menu, the design is in docs/menu.md, then build the game for Android", "docs/menu.md"],
+        ["Fix the HUD. The design is in docs/hud.md. Then build the game.", "docs/hud.md"],
+      ])("holds a document the message only calls the design at the gate: %s", async (text, path) => {
+        writeFileSync(join(projectRoot, path), "# Screen\n\n" + "m".repeat(400));
+        expect(await say("chat-called", text)).toBe(true);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        atTheGate("chat-called", path);
+      });
+
+      // A GDD the message says is lost was offered from docs/ at the gate, and the idea it carried was not drafted.
+      it.each([
+        "I lost my GDD, build the game where a gardener plants one new bed each season and every harvest buys a bigger greenhouse",
+        "My GDD was deleted, build the game where a gardener plants one new bed each season and every harvest buys a bigger greenhouse",
+      ])("drafts the idea, not the newest GDD in docs/, when the message says its GDD is lost: %s", async (text) => {
+        expect(await say("chat-lost", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-lost");
+        expect(campaign?.ideaText).toBe(text);
+        expect(campaign?.gddToConfirm).toBeFalsy();
+        expect(campaign?.gddPath).toBeUndefined();
+        expect(told("chat-lost")).toContain("Game idea received");
+        expect(told("chat-lost")).not.toContain("Game_GDD.md");
+      });
+
+      // The Turkish "let's" started nothing, and so did the wish, which "I want to build" confirms at the gate.
+      it("holds the Turkish wish at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-tr-wish", "docs/Bramble_GDD.md'deki oyunu yapmak istiyorum")).toBe(true);
+        atTheGate("chat-tr-wish", "docs/Bramble_GDD.md");
+      });
+
+      it("builds at once from the Turkish \"let's\"", async () => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-tr-lets", "docs/Bramble_GDD.md'deki oyunu yapalım")).toBe(true);
+        expect(told("chat-tr-lets")).toContain("Building from `docs/Bramble_GDD.md`");
+      });
+
+      // "With P" was read only when P was called the design: the build started nothing at all.
+      it("holds a document the build is made with at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "notes.md"), "# Notes\n\n" + "n".repeat(400));
+        expect(await say("chat-with", "Build the game with docs/notes.md")).toBe(true);
+        atTheGate("chat-with", "docs/notes.md");
+      });
+
+      it("still builds at once from a design the build is plainly aimed at", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        expect(await say("chat-plain", "Build the game in docs/Quillmoor_GDD.md and send me the APK")).toBe(true);
+        expect(told("chat-plain")).toContain("Building from `docs/Quillmoor_GDD.md`");
+        expect(storage.listActive().find((c) => c.chatId === "chat-plain")?.state).not.toBe("awaiting-approval");
+      });
+    });
+
+    it("starts nothing when the only design beside the style sheet is one the message turns away", async () => {
+      writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+      writeFileSync(join(projectRoot, "docs", "Old_GDD.md"), DESIGN);
+      expect(await say("chat-away", "Build the game per docs/art-style.md, not docs/Old_GDD.md")).toBe(false);
+      expect(told("chat-away")).toBe("");
+      expect(storage.hasActiveForChat("chat-away")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    // "Ignore the GDD at P" answered "Building from `docs/Old_GDD.md`", the planner ran, and an idea beside it was thrown away.
+    it("builds nothing from a GDD the message calls the design and rules out", async () => {
+      writeFileSync(join(projectRoot, "docs", "Old_GDD.md"), DESIGN);
+      expect(await say("chat-ignore", "Build the game. Ignore the GDD at docs/Old_GDD.md.")).toBe(false);
+      expect(told("chat-ignore")).toBe("");
+      expect(storage.hasActiveForChat("chat-ignore")).toBe(false);
+
+      const idea = "Build a game where a gardener plants one new bed each season and every harvest buys a bigger greenhouse. Ignore the GDD at docs/Old_GDD.md.";
+      expect(await say("chat-ignore-idea", idea)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-ignore-idea");
+      expect(campaign?.ideaText).toBe(idea);
+      expect(campaign?.gddPath).toBeUndefined();
+      expect(told("chat-ignore-idea")).toContain("Game idea received");
+      expect(told("chat-ignore-idea")).not.toContain("Building from");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect((manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones).not.toHaveBeenCalled();
+    });
+
+    // "Build the game" is also the player build; the build instructions were read as the design, ungated.
+    it("starts nothing for a build aimed at the build instructions", async () => {
+      writeFileSync(join(projectRoot, "docs", "BUILD.md"), "# Build\n\nOpen the project, pick Android, press Build.\n" + "b".repeat(400));
+      expect(await say("chat-player-build", "Build the game per docs/BUILD.md")).toBe(false);
+      expect(told("chat-player-build")).toBe("");
+      expect(storage.hasActiveForChat("chat-player-build")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    it("an idea that names its style sheet is drafted from the idea, at the approval gate", async () => {
+      writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+      const idea = "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.";
+      expect(await say("chat-idea", idea)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-idea");
+      expect(campaign?.ideaText).toBe(idea);
+      expect(campaign?.gddPath).toBeUndefined();
+      expect(told("chat-idea")).toContain("Game idea received");
+      expect(told("chat-idea")).not.toContain("Building from");
+    });
+
+    // "I don't have a GDD, but build…" built docs/Game_GDD.md, the design the message said did not exist.
+    // …and "The GDD doesn't exist yet; build…" held docs/Game_GDD.md at the gate instead of drafting the idea.
+    it.each([
+      "I don't have a GDD, but build a game where the beekeeper moves her hives between meadows as the seasons turn",
+      "The GDD doesn't exist yet; build a game where the beekeeper moves her hives between meadows as the seasons turn",
+      "GDD henüz yazılmadı, şöyle bir oyun yap: arıcı kovanlarını mevsim döndükçe çayırdan çayıra taşır",
+    ])("an idea beside a GDD the message says it does not have is drafted from the idea, not from docs/: %s", async (idea) => {
+      expect(await say("chat-no-gdd", idea)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-no-gdd");
+      expect(campaign?.ideaText).toBe(idea);
+      expect(campaign?.gddPath).toBeUndefined();
+      expect(told("chat-no-gdd")).toContain("Game idea received");
+      expect(told("chat-no-gdd")).not.toContain("Building from");
+    });
+
+    /**
+     * A GDD named with no extension, as a .pptx or .html, or by a link was a
+     * bare "the GDD", and discovery started an immediate build of
+     * docs/Game_GDD.md — another document.
+     */
+    describe("a design named without a readable extension, or by a link", () => {
+      const refusedWithoutBuilding = (chatId: string): string => {
+        const said = told(chatId);
+        expect(said).not.toContain("Building from");
+        expect(storage.hasActiveForChat(chatId)).toBe(false);
+        expect(tasks.submitted).toHaveLength(0);
+        return said;
+      };
+
+      it.each([
+        ["Build the game in docs/Quillmoor_GDD", "docs/Quillmoor_GDD.md"],
+        ["Build the game in QuillmoorGDD", "docs/QuillmoorGDD.md"],
+        ["Quillmoor_GDD'deki oyunu yap", "docs/Quillmoor_GDD.md"],
+        // A file that is called exactly that is that file.
+        ["Build the game in docs/Quillmoor_GDD", "docs/Quillmoor_GDD"],
+      ])("%s builds %s, the document with that name", async (text, rel) => {
+        writeFileSync(join(projectRoot, rel), DESIGN);
+        // Older than the repository's own GDD, which discovery would take instead.
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        utimesSync(join(projectRoot, rel), hourAgo, hourAgo);
+        expect(await say("chat-stem", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-stem");
+        expect(campaign?.gddPath).toBe(rel);
+        expect(campaign?.gddText).toBe(DESIGN);
+        expect(told("chat-stem")).toContain(`Building from \`${rel}\``);
+      });
+
+      it("names every document the name could be, and builds none of them", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.txt"), DESIGN);
+        expect(await say("chat-two", "Build the game in docs/Quillmoor_GDD")).toBe(true);
+        const said = refusedWithoutBuilding("chat-two");
+        expect(said).toContain("`docs/Quillmoor_GDD.md`");
+        expect(said).toContain("`docs/Quillmoor_GDD.txt`");
+      });
+
+      it("says a name with no document behind it could not be read", async () => {
+        expect(await say("chat-none", "Build the game in docs/Quillmoor_GDD")).toBe(true);
+        expect(refusedWithoutBuilding("chat-none")).toContain("could not read `docs/Quillmoor_GDD`");
+      });
+
+      it("does not read a file with no extension as the design when it is not text", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x08, 0x00]));
+        expect(await say("chat-binary", "Build the game in docs/Quillmoor_GDD")).toBe(true);
+        expect(refusedWithoutBuilding("chat-binary")).toContain("could not read `docs/Quillmoor_GDD`");
+      });
+
+      it("refuses a link in so many words", async () => {
+        expect(await say("chat-link", "Build this game: https://example.com/files/Quillmoor_GDD.md")).toBe(true);
+        expect(refusedWithoutBuilding("chat-link")).toContain("`https://example.com/files/Quillmoor_GDD.md` is a link");
+      });
+
+      it("refuses a format no design is read from, even when the file is there", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.html"), `<html><body>${DESIGN}</body></html>`);
+        expect(await say("chat-html", "Build this game: docs/Quillmoor_GDD.html")).toBe(true);
+        expect(refusedWithoutBuilding("chat-html")).toContain("`docs/Quillmoor_GDD.html` is not a format I read a design from");
+      });
+
+      it("reads a named PowerPoint deck through the document extractor", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pptx"), "not a deck");
+        expect(await say("chat-pptx", "Build this game: docs/Quillmoor_GDD.pptx")).toBe(true);
+        expect(refusedWithoutBuilding("chat-pptx")).toContain("`docs/Quillmoor_GDD.pptx`, but no text could be read from it");
+      });
+
+      /**
+       * A download copy, or a name with "+" in it, was read short or not at
+       * all: the original beside the copy was built, or discovery built
+       * docs/Game_GDD.md.
+       */
+      it.each([
+        ["Build this game: docs/Quillmoor_GDD (1).md", "docs/Quillmoor_GDD (1).md"],
+        ["Bu oyunu yap: docs/Quill+Moor_GDD.md", "docs/Quill+Moor_GDD.md"],
+      ])("%s builds %s, not the original beside it or the repository's GDD", async (text, rel) => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), "# Quillmoor\n\nThe original, before the copy was edited.\n");
+        writeFileSync(join(projectRoot, rel), DESIGN);
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        utimesSync(join(projectRoot, rel), hourAgo, hourAgo);
+        expect(await say("chat-copy", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-copy");
+        expect(campaign?.gddPath).toBe(rel);
+        expect(campaign?.gddText).toBe(DESIGN);
+        expect(told("chat-copy")).toContain(`Building from \`${rel}\``);
+      });
+
+      it("reads a named workbook through the document extractor", async () => {
+        writeFileSync(join(projectRoot, "docs", "quillmoor-balance.xlsx"), "not a workbook");
+        expect(await say("chat-xlsx", "Build this game: docs/quillmoor-balance.xlsx")).toBe(true);
+        expect(refusedWithoutBuilding("chat-xlsx")).toContain("`docs/quillmoor-balance.xlsx`, but no text could be read from it");
+      });
+
+      // A drive letter names no place on this machine unless it is Windows — and there, not this project.
+      it("refuses a drive-letter path as outside the project", async () => {
+        expect(await say("chat-drive", "Build the game in C:\\Games\\Quillmoor_GDD.odt")).toBe(true);
+        expect(refusedWithoutBuilding("chat-drive")).toContain("is outside this project");
+      });
+    });
+
+    // "Quill Moor GDD.md", unquoted and with no folder, was read as "GDD.md" and docs/GDD.md was built.
+    it("reads an unquoted name with spaces whole, and builds no shorter name in its place", async () => {
+      writeFileSync(join(projectRoot, "docs", "GDD.md"), "# Another game\n\n" + "o".repeat(400));
+      expect(await say("chat-spaced", "Build the game in Quill Moor GDD.md")).toBe(true);
+      const said = told("chat-spaced");
+      expect(said).toContain("could not read `Quill Moor GDD.md`");
+      expect(said).not.toContain("Building from");
+      expect(storage.hasActiveForChat("chat-spaced")).toBe(false);
+
+      writeFileSync(join(projectRoot, "docs", "Quill Moor GDD.md"), DESIGN);
+      expect(await say("chat-spaced-there", "Build the game in Quill Moor GDD.md")).toBe(true);
+      expect(storage.listActive().find((c) => c.chatId === "chat-spaced-there")?.gddPath).toBe("docs/Quill Moor GDD.md");
+    });
+
+    it("says a named document that is not there could not be read, and builds no other design", async () => {
+      expect(await say("chat-missing", "Build this game: docs/Missing_GDD.md")).toBe(true);
+      const said = told("chat-missing");
+      expect(said).toContain("could not read `docs/Missing_GDD.md`");
+      expect(said).not.toContain("Building from");
+      expect(storage.hasActiveForChat("chat-missing")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
+    /**
+     * A named PDF (or Word file, ODT, RTF) was read as UTF-8: its compressed
+     * bytes went to the planner as the design, and the path every sprint reads
+     * as text was the PDF itself.
+     */
+    describe("a named document in a rich format", () => {
+      const PROSE = "Quillmoor: the baker opens one new recipe every morning and every loaf sold buys another oven.";
+      /** A one-page PDF whose content stream shows `shown` (FlateDecode, as exporters write it). */
+      const pdf = (shown: string): Buffer => {
+        const content = deflateSync(Buffer.from(`BT /F1 12 Tf 72 712 Td ${shown} Tj ET`, "latin1"));
+        return Buffer.concat([
+          Buffer.from(`%PDF-1.4\n4 0 obj\n<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`, "latin1"),
+          content,
+          Buffer.from("\nendstream\nendobj\n%%EOF\n", "latin1"),
+        ]);
+      };
+
+      it("is built from its text, kept as Markdown beside it; the PDF itself is not touched", async () => {
+        const bytes = pdf(`(${PROSE})`);
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf"), bytes);
+        expect(await say("chat-pdf", "Build the game in docs/Quillmoor_GDD.pdf")).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-pdf");
+        expect(campaign?.gddText).toBe(PROSE);
+        expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.pdf.md");
+        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf.md"), "utf8")).toBe(PROSE);
+        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf")).equals(bytes)).toBe(true);
+        expect(told("chat-pdf")).toContain("Building from the text of `docs/Quillmoor_GDD.pdf`, kept as `docs/Quillmoor_GDD.pdf.md`");
+      });
+
+      it("held at the gate, is kept as its text and approved from it, never from the PDF's bytes", async () => {
+        writeFileSync(join(projectRoot, "docs", "quillmoor-notes.pdf"), pdf(`(${PROSE})`));
+        expect(await say("chat-pdf-gate", "Build the game using docs/quillmoor-notes.pdf")).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-pdf-gate");
+        expect(campaign?.state).toBe("awaiting-approval");
+        expect(campaign?.gddPath).toBe("docs/quillmoor-notes.pdf.md");
+        expect(readFileSync(join(projectRoot, "docs", "quillmoor-notes.pdf.md"), "utf8")).toBe(PROSE);
+        expect(told("chat-pdf-gate")).toContain("`docs/quillmoor-notes.pdf`");
+        expect(await say("chat-pdf-gate", "onay")).toBe(true);
+        await waitFor(() => expect(storage.get(campaign!.id)?.gddText).toBe(PROSE));
+      });
+
+      /**
+       * Its text was kept as docs/<name>.md, so naming docs/design/Foo_GDD.pdf
+       * replaced a docs/Foo_GDD.md that was already there — possibly the
+       * user's own uncommitted design — with flattened PDF text.
+       */
+      it("never replaces another document that already holds the same name", async () => {
+        const handWritten = "# Quillmoor\n\nThe design as the user wrote it by hand.\n";
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), handWritten);
+        mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
+        writeFileSync(join(projectRoot, "docs", "design", "Quillmoor_GDD.pdf"), pdf(`(${PROSE})`));
+        expect(await say("chat-same-name", "Build the game in docs/design/Quillmoor_GDD.pdf")).toBe(true);
+        expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), "utf8")).toBe(handWritten);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-same-name");
+        expect(campaign?.gddText).toBe(PROSE);
+        expect(campaign?.gddPath).toBe("docs/design/Quillmoor_GDD.pdf.md");
+      });
+
+      it("with no text to read is said so, and no other design is built", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf"), pdf(`<${Buffer.from(PROSE, "latin1").toString("hex")}>`));
+        expect(await say("chat-scan", "Bu oyunu yap: docs/Quillmoor_GDD.pdf")).toBe(true);
+        const said = told("chat-scan");
+        expect(said).toContain("`docs/Quillmoor_GDD.pdf`, but no text could be read from it");
+        expect(said).not.toContain("Building from");
+        expect(storage.hasActiveForChat("chat-scan")).toBe(false);
+        expect(tasks.submitted).toHaveLength(0);
+      });
     });
   });
 

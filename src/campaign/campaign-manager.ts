@@ -25,7 +25,8 @@ import {
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { getLoggerSafe } from "../utils/logger.js";
 import { allProvidersCoolingDownMs, describeProviderOutage, msSinceNewestProviderFailure, providerFailuresSince } from "../agents/providers/provider-outage.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
@@ -45,6 +46,8 @@ import {
 import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
+import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "../agents/tools/document-text.js";
+import { projectRelativeTarget } from "../security/path-guard.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
@@ -359,6 +362,13 @@ const APPROVE_RE = /^(evet|onay|onaylıyorum|yes|approve[ds]?|lgtm|go ahead)[.!\
  * unrelated question used to become a paid redraft and spend a revision round.
  */
 const REVISE_RE = /^(?:revise|revision|change|revize|revizyon|değiştir|degistir)\s*[:\-–—]\s*(\S[\s\S]*)$/i;
+/**
+ * The answers a gate on a document the user named takes. Another design is
+ * named in a new message once this one is cancelled: a reply naming it here
+ * is a revision, and a revision redrafts the gate's document in place.
+ */
+const CONFIRM_GATE_REPLY =
+  "Reply **evet/onay** to build the game from it, or **kampanya iptal** if it is not the design — then send the build again, naming the design.";
 /** "amend gdd" / "/campaign amend gdd" / "gdd amendment" / "gdd değişikliğini onayla". */
 const AMEND_GDD_RE = /^\/?(?:campaign\s+)?(?:amend\s+(?:the\s+)?gdd|gdd\s+amend(?:ment)?|accept\s+(?:the\s+)?gdd\s+(?:change|amendment)|gdd\s+değişikliğini\s+onayla)[.!\s]*$/i;
 
@@ -1407,33 +1417,65 @@ export class CampaignManager {
    * ladder and start building immediately.
    */
   startFromGdd(ctx: CampaignContext, gddText: string, gddPath?: string): Campaign {
-    // THE APPROVED DOCUMENT IS THE ONE ON DISK (plan 1.9). A supplied text
-    // that names a path is written there when the file differs, so the
-    // document the workers read and the gates judge is the one that was
-    // approved; a write that fails leaves a text-only intake, disclosed.
-    if (gddPath !== undefined && readGddFile(this.projectRoot, gddPath) !== gddText) {
-      // …INSIDE THE PROJECT ONLY: "../victim.md" or a symlinked docs/ would
-      // write outside the root (round 6 #4). The nearest existing ancestor is
-      // resolved and held inside the project's real path.
-      if (!pathIsInsideProject(this.projectRoot, gddPath)) {
-        getLoggerSafe().warn("The GDD path leaves the project; the intake text stands alone", { gddPath });
-        gddPath = undefined;
-      } else {
-        try {
-          mkdirSync(dirname(join(this.projectRoot, gddPath)), { recursive: true });
-          writeFileSync(join(this.projectRoot, gddPath), gddText, "utf8");
-        } catch (err) {
-          getLoggerSafe().warn("The approved GDD could not be written to its path; the intake text stands alone", { gddPath, error: err instanceof Error ? err.message : String(err) });
-          // …AND WITHOUT THE PATH: the file there does not hold this text, and
-          // planning adopts a path only for a row that has none (review
-          // campaign-artifacts P3), so a kept one went to the planner as is.
-          gddPath = undefined;
-        }
-      }
-    }
-    const campaign = this.newCampaign(ctx, { gddText, gddPath });
+    const campaign = this.newCampaign(ctx, { gddText, gddPath: gddPath === undefined ? undefined : this.keepGddText(gddText, gddPath) });
     void this.planAndLaunch(campaign.id);
     return campaign;
+  }
+
+  /**
+   * A document a message pointed a whole-game build at in any form but the
+   * plain one (intake's "gdd-to-confirm", or an attachment whose caption asks
+   * tentatively), held at the approval gate the idea
+   * path stops at: the user confirms it is the design before Sprint 1. The
+   * request is kept as the campaign's idea, so every path that resumes an
+   * unapproved idea — a restart, an expired gate, "kampanya devam" — comes
+   * back to this gate, and planning refuses it until it is approved.
+   */
+  holdAtApprovalGate(ctx: CampaignContext, request: string, gddText: string, gddPath: string | undefined): Campaign {
+    const kept = gddPath === undefined ? undefined : this.keepGddText(gddText, gddPath);
+    const held = kept === undefined ? { gddText } : { gddPath: kept };
+    const campaign = this.newCampaign(ctx, { ideaText: request, ...held, gddToConfirm: true });
+    campaign.state = "awaiting-approval";
+    if (this.persist(campaign)) this.armApprovalExpiry(campaign.id);
+    return campaign;
+  }
+
+  /**
+   * The path that holds `gddText` once it is written there, or undefined when
+   * it cannot be.
+   *
+   * THE APPROVED DOCUMENT IS THE ONE ON DISK (plan 1.9). A supplied text that
+   * names a path is written there when the file differs, so the document the
+   * workers read and the gates judge is the one that was approved; a write
+   * that fails leaves a text-only intake, disclosed.
+   */
+  private keepGddText(gddText: string, gddPath: string): string | undefined {
+    if (readGddFile(this.projectRoot, gddPath) === gddText) return gddPath;
+    // …INSIDE THE PROJECT ONLY: "../victim.md" or a symlinked docs/ would
+    // write outside the root (round 6 #4). The nearest existing ancestor is
+    // resolved and held inside the project's real path.
+    if (!pathIsInsideProject(this.projectRoot, gddPath)) {
+      getLoggerSafe().warn("The GDD path leaves the project; the intake text stands alone", { gddPath });
+      return undefined;
+    }
+    try {
+      mkdirSync(dirname(join(this.projectRoot, gddPath)), { recursive: true });
+      writeFileSync(join(this.projectRoot, gddPath), gddText, "utf8");
+      return gddPath;
+    } catch (err) {
+      getLoggerSafe().warn("The approved GDD could not be written to its path; the intake text stands alone", { gddPath, error: err instanceof Error ? err.message : String(err) });
+      // …AND WITHOUT THE PATH: the file there does not hold this text, and
+      // planning adopts a path only for a row that has none (review
+      // campaign-artifacts P3), so a kept one went to the planner as is.
+      return undefined;
+    }
+  }
+
+  /** The newest GDD already in the repo, read — what a message that named no document means by "the GDD". */
+  private newestGddInDocs(): { text: string; path: string; source: string } | undefined {
+    const path = this.findNewestGddPath();
+    const text = path === undefined ? undefined : readGddFile(this.projectRoot, path);
+    return path !== undefined && text ? { text, path, source: path } : undefined;
   }
 
   /** GDD-from-docs mode: build from the newest GDD already in the repo. */
@@ -1444,12 +1486,12 @@ export class CampaignManager {
     // …AND A NAMED PATH THAT CANNOT BE READ IS A REFUSAL, NOT A HINT. Falling
     // back to discovery started a campaign on whatever other design the repo
     // held — the wrong game, silently (audit 06.4, 2026-09-13).
-    if (preferredPath !== undefined && !readGddFile(this.projectRoot, preferredPath)) return undefined;
-    const gddPath = preferredPath ?? this.findNewestGddPath();
-    if (!gddPath) return undefined;
-    const gddText = readGddFile(this.projectRoot, gddPath);
-    if (!gddText) return undefined;
-    return this.startFromGdd(ctx, gddText, gddPath);
+    if (preferredPath !== undefined) {
+      const named = this.readNamedGdd(preferredPath);
+      return "text" in named ? this.startFromGdd(ctx, named.text, named.path) : undefined;
+    }
+    const newest = this.newestGddInDocs();
+    return newest && this.startFromGdd(ctx, newest.text, newest.path);
   }
 
   /**
@@ -1466,7 +1508,17 @@ export class CampaignManager {
 
     const intent = detectCampaignIntent(msg);
     if (!intent) return false;
-    if (this.storage.hasActiveForChat(msg.chatId, this.isOurs)) return false; // one build per chat
+    if (this.storage.hasActiveForChat(msg.chatId, this.isOurs)) {
+      // A gate on a document the user named asks which design it is: a build
+      // request naming another while it was open went on as an ordinary task,
+      // beside the gate. The chat is told how to name one; nothing changes.
+      const gate = this.storage.findAwaitingApproval(msg.chatId, this.isOurs);
+      if (gate?.gddToConfirm) {
+        await this.tell(gate, `The gate on ${heldDocumentName(gate)} is still open. ${CONFIRM_GATE_REPLY}`);
+        return true;
+      }
+      return false; // one build per chat
+    }
     if (this.hasActiveHere()) {
       // Another chat is already building this project — a second concurrent
       // ladder against the same repo is never what anyone wants.
@@ -1497,20 +1549,26 @@ export class CampaignManager {
         // Persist the supplied design into the repo FIRST so planning and
         // every sprint prompt reference a durable, committable path.
         const gddPath = this.persistSuppliedGdd(intent.gddText, intent.sourceName);
+        if (intent.confirm) {
+          const held = this.holdAtApprovalGate(ctx, msg.text, intent.gddText, gddPath);
+          const kept = held.gddPath !== undefined ? `, kept as \`${held.gddPath}\`` : "";
+          await this.tell(
+            held,
+            `GDD received (${intent.sourceName})${kept} — but the message did not plainly ask to build it, so I am asking first. ${CONFIRM_GATE_REPLY}`,
+          );
+          return true;
+        }
         const campaign = this.startFromGdd(ctx, intent.gddText, gddPath);
         await this.tell(campaign, `GDD received (${intent.sourceName}) — planning the milestone ladder, then the build starts.`);
         return true;
       }
       case "gdd-from-docs": {
-        if (intent.path !== undefined && !readGddFile(this.projectRoot, intent.path)) {
-          await this.tell(
-            { chatId: msg.chatId },
-            `I could not read \`${intent.path}\` — check the path, or share the document and I'll build from that. ` +
-              "I am not starting from another design in the repo in its place.",
-          );
+        const named = intent.path === undefined ? undefined : this.readNamedGdd(intent.path);
+        if (named !== undefined && "refusal" in named) {
+          await this.tell({ chatId: msg.chatId }, named.refusal);
           return true;
         }
-        const campaign = this.startFromGddFromDocs(ctx, intent.path);
+        const campaign = named !== undefined ? this.startFromGdd(ctx, named.text, named.path) : this.startFromGddFromDocs(ctx);
         if (!campaign) {
           await this.tell(
             { chatId: msg.chatId },
@@ -1518,7 +1576,40 @@ export class CampaignManager {
           );
           return true;
         }
-        await this.tell(campaign, `Building from \`${campaign.gddPath}\` — planning the milestone ladder, then the build starts.`);
+        const from =
+          named === undefined || named.source === campaign.gddPath
+            ? `\`${campaign.gddPath}\``
+            : `the text of \`${named.source}\`${campaign.gddPath !== undefined ? `, kept as \`${campaign.gddPath}\`` : ""}`;
+        await this.tell(campaign, `Building from ${from} — planning the milestone ladder, then the build starts.`);
+        return true;
+      }
+      case "gdd-to-confirm": {
+        // A refusal is the same as for a build that starts at once, and so is
+        // "no GDD": the gate holds only a document that could be read.
+        const found = intent.path === undefined ? this.newestGddInDocs() : this.readNamedGdd(intent.path);
+        if (found === undefined) {
+          await this.tell(
+            { chatId: msg.chatId },
+            "No GDD found under docs/ — share the document or write the idea, and I'll take it from there.",
+          );
+          return true;
+        }
+        if ("refusal" in found) {
+          await this.tell({ chatId: msg.chatId }, found.refusal);
+          return true;
+        }
+        const campaign = this.holdAtApprovalGate(ctx, msg.text, found.text, found.path);
+        const kept = campaign.gddPath !== undefined && campaign.gddPath !== found.source ? `, its text kept as \`${campaign.gddPath}\`` : "";
+        const newest = intent.path === undefined ? " (the newest GDD under docs/)" : "";
+        // A few by name: a long message can offer thousands, and the gate is one chat message.
+        const also = intent.others ?? [];
+        const more = also.length > 5 ? ` and ${also.length - 5} more` : "";
+        const others = also.length > 0 ? ` You also named ${also.slice(0, 5).map((path) => `\`${path}\``).join(", ")}${more}.` : "";
+        await this.tell(
+          campaign,
+          `I would build the game from \`${found.source}\`${newest}${kept} — but the message did not plainly point the build at it, so I am asking first.${others} ` +
+            CONFIRM_GATE_REPLY,
+        );
         return true;
       }
       case "gdd-unreadable": {
@@ -1559,7 +1650,9 @@ export class CampaignManager {
     const stopped = active === undefined && campaign.autoReviveAt === undefined;
     await this.tell(
       campaign,
-      hash === undefined && this.isIdeaModeBeforeApproval(campaign)
+      hash === undefined && campaign.gddToConfirm && this.isIdeaModeBeforeApproval(campaign)
+        ? `${capitalised(heldDocumentName(campaign))} is not confirmed as the design yet, so there is nothing to amend — confirm it at the gate (**evet/onay**) instead.`
+        : hash === undefined && this.isIdeaModeBeforeApproval(campaign)
         ? "The GDD is still a draft nobody has approved, so there is nothing to amend — approve it at the gate (**evet/onay**) instead."
         : hash === undefined
         ? `The GDD could not be re-read from ${campaign.gddPath ?? "its path"}, so nothing was amended.`
@@ -1641,6 +1734,19 @@ export class CampaignManager {
 
     const revisionNote = userId === undefined ? trimmed : REVISE_RE.exec(trimmed)?.[1]?.trim();
     if (revisionNote === undefined || revisionNote === "") return false;
+
+    // A DOCUMENT THE USER NAMED IS CONFIRMED, NEVER REDRAFTED. A revision tells
+    // the drafter to revise the gate's document in place, and here that is the
+    // user's own file: "değiştir: docs/Real_GDD.md'yi kullan" — the natural
+    // answer to a gate that asks which design — had docs/android-signing.md
+    // rewritten as a GDD. Nothing is charged: no draft was asked for.
+    if (campaign.gddToConfirm) {
+      await this.tell(
+        campaign,
+        `This gate only confirms ${heldDocumentName(campaign)} as the design — I do not rewrite a document you named. ${CONFIRM_GATE_REPLY}`,
+      );
+      return true;
+    }
 
     // CLAIM THE GATE BEFORE YIELDING, on the revision path too. The approval
     // branch above learned this in 2026-09-02; this one still announced
@@ -2584,10 +2690,14 @@ export class CampaignManager {
     fresh.lastError = `the GDD approval gate expired — no answer in ${hours} h`;
     if (!this.persist(fresh)) return;
     getLoggerSafe().info("Campaign GDD approval gate expired", { id: campaignId, hours });
+    // The user's own document is no draft of ours.
+    const waited = fresh.gddToConfirm
+      ? `${capitalised(heldDocumentName(fresh))} waited ${hours} h for you to confirm it as the design with no answer`
+      : `The GDD draft${fresh.gddPath ? ` at \`${fresh.gddPath}\`` : ""} waited ${hours} h for approval with no answer`;
     await this.tell(
       fresh,
-      `The GDD draft${fresh.gddPath ? ` at \`${fresh.gddPath}\`` : ""} waited ${hours} h for approval with no answer, ` +
-        "so the campaign is parked and this chat and project are free again. Reply **kampanya devam** to reopen the gate on the same draft.",
+      `${waited}, so the campaign is parked and this chat and project are free again. ` +
+        `Reply **kampanya devam** to reopen the gate on ${fresh.gddToConfirm ? "it" : "the same draft"}.`,
     );
   }
 
@@ -2614,6 +2724,7 @@ export class CampaignManager {
    * boot resume must not re-announce the gate on every restart).
    */
   private async reenterApprovalGate(campaign: Campaign, lead?: string): Promise<void> {
+    if (campaign.gddToConfirm) return this.reenterConfirmGate(campaign, lead);
     const draft = campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : undefined;
     if (draft === undefined) {
       this.persist(campaign);
@@ -2632,9 +2743,32 @@ export class CampaignManager {
     );
   }
 
+  /**
+   * reenterApprovalGate for a gate on a document the user named: back at the
+   * gate on that document, or parked when it can no longer be read — never a
+   * draft. The request the gate keeps as its idea is a sentence that pointed
+   * at a document, and drafting from it wrote a design nobody asked for.
+   */
+  private async reenterConfirmGate(campaign: Campaign, lead?: string): Promise<void> {
+    const held = campaign.gddPath !== undefined ? readGddFile(this.projectRoot, campaign.gddPath) : campaign.gddText;
+    const name = heldDocumentName(campaign);
+    if (held === undefined) {
+      campaign.state = "cancelled";
+      campaign.lastError = `the document held at the approval gate (${campaign.gddPath ?? "its text"}) could not be read`;
+      if (!this.persist(campaign)) return;
+      await this.tell(campaign, `${lead ?? "The campaign is parked"} — I could not read ${name} any more, and I write no design in its place. Send the build again, naming the design.`);
+      return;
+    }
+    campaign.state = "awaiting-approval";
+    if (!this.persist(campaign)) return;
+    this.armApprovalExpiry(campaign.id);
+    if (lead === undefined) return;
+    await this.tell(campaign, `${lead} — ${name} was never confirmed as the design, so the build does not start from it. ${CONFIRM_GATE_REPLY}`);
+  }
+
   private newCampaign(
     ctx: CampaignContext,
-    seed: { ideaText?: string; gddText?: string; gddPath?: string },
+    seed: { ideaText?: string; gddText?: string; gddPath?: string; gddToConfirm?: boolean },
   ): Campaign {
     const now = Date.now();
     const campaign: Campaign = {
@@ -10346,6 +10480,63 @@ export class CampaignManager {
   }
 
   /**
+   * The design a message named by its path (`source`, project-relative), the
+   * text to build from and the path that holds it — or what to say instead.
+   * A refusal never falls back to another design.
+   *
+   * A WORD FILE, AN ODT, AN RTF, A DECK OR A PDF IS ITS TEXT. Read as UTF-8,
+   * the document's bytes went to the planner and every sprint prompt as the
+   * design. Its text is kept as Markdown beside it, because the campaign's
+   * path is read as text everywhere and startFromGdd writes the text it is
+   * given over that path.
+   */
+  private readNamedGdd(named: string): { text: string; path: string; source: string } | { refusal: string } {
+    const notInstead = "I am not starting from another design in the repo in its place.";
+    const located = locateNamedGdd(this.projectRoot, named);
+    if ("link" in located) {
+      return { refusal: `\`${named}\` is a link, and I build only from a design inside this project — download it into docs/, or share the file here. ${notInstead}` };
+    }
+    if ("outside" in located) {
+      return { refusal: `\`${named}\` is outside this project, and I build only from a design inside it — copy it into docs/, or share the file here. ${notInstead}` };
+    }
+    if ("several" in located) {
+      return {
+        refusal: `\`${named}\` could be any of ${located.several.map((rel) => `\`${rel}\``).join(", ")} — name the one to build from. ${notInstead}`,
+      };
+    }
+    const unreadable = { refusal: `I could not read \`${named}\` — check the path, or share the document and I'll build from that. ${notInstead}` };
+    if ("missing" in located) return unreadable;
+    const source = located.path;
+    const extension = extname(source).toLowerCase();
+    if (extension === "" || NAMED_TEXT_EXTENSIONS.includes(extension)) {
+      const text = readGddFile(this.projectRoot, source);
+      // A file with no extension is read as text only when it is text.
+      return text && !text.includes("\u0000") ? { text, path: source, source } : unreadable;
+    }
+    if (!RICH_DOCUMENT_EXTENSIONS.some((ext) => ext === extension)) {
+      return {
+        refusal:
+          `\`${source}\` is not a format I read a design from — Markdown, TXT, PDF, Word, ODT, RTF, PowerPoint or Excel. Save it as one of those, or paste the design into the message. ${notInstead}`,
+      };
+    }
+    const raw = readGddBytes(this.projectRoot, source);
+    if (!raw) return unreadable;
+    const text = extractDocumentText(source, raw);
+    if (!text?.trim()) {
+      return {
+        refusal:
+          `I found \`${source}\`, but no text could be read from it — paste the design into the message, or keep it as Markdown, TXT or a PDF with selectable text. ${notInstead}`,
+      };
+    }
+    // BESIDE THE SOURCE, UNDER ITS WHOLE NAME. Kept as docs/<name>.md, the
+    // text of docs/design/Foo_GDD.pdf replaced a docs/Foo_GDD.md that was
+    // already there — possibly the user's own uncommitted design. Only an
+    // earlier text of this same document holds "Foo_GDD.pdf.md";
+    // startFromGdd writes it there.
+    return { text, path: `${source}.md`, source };
+  }
+
+  /**
    * Write a supplied GDD into docs/ so sprint prompts reference a durable,
    * committable path. Sanitizes the source filename; idempotent per CONTENT.
    * Audited 2026-09-02: this was "idempotent per name" (an existence check),
@@ -11136,13 +11327,74 @@ function sha256Of(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+/**
+ * The project-relative path of a GDD a chat message named, or `outside` when
+ * the document is not in the project. A full path was joined onto the root as
+ * if relative, so the project's own document named by its full path could not
+ * be read, and one elsewhere was "could not read" rather than outside; the
+ * root is compared in both spellings (/var against /private/var on macOS). A
+ * relative name that is not where it says but is in docs/ is that one —
+ * "with or without docs/".
+ *
+ * A NAME WITHOUT AN EXTENSION A DESIGN IS READ FROM IS THE FILE THAT NAME
+ * STARTS. "docs/Foo_GDD" and "FooGDD" were a bare "the GDD", and discovery
+ * built docs/Game_GDD.md — another document. The name is the one there with
+ * a design extension; none is missing, several are named back to the user.
+ * A link is not a place in the project at all.
+ */
+function locateNamedGdd(
+  projectRoot: string,
+  named: string,
+): { path: string } | { outside: true } | { link: true } | { missing: true } | { several: string[] } {
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(named)) return { link: true };
+  const spelled = /^~[\\/]/.test(named) ? join(homedir(), named.slice(2)) : named;
+  // A drive-letter path names no place on this machine unless it is Windows;
+  // elsewhere it resolves as a folder called "C:" inside the project.
+  if (/^[a-z]:[\\/]/i.test(spelled) && process.platform !== "win32") return { outside: true };
+  const rel = projectRelativeTarget(projectRoot, spelled);
+  if (rel === undefined) return { outside: true };
+  const places = isAbsolute(spelled) ? [rel] : [rel, `docs/${rel}`];
+  const isFile = (path: string): boolean => {
+    try {
+      return statSync(join(projectRoot, path)).isFile();
+    } catch {
+      return false;
+    }
+  };
+  const inside = (path: string): { path: string } | { outside: true } =>
+    pathIsInsideProject(projectRoot, path) ? { path } : { outside: true };
+  const exact = places.find(isFile);
+  if (exact !== undefined) return inside(exact);
+  if (NAMED_DESIGN_EXTENSIONS.includes(extname(rel).toLowerCase())) return { missing: true };
+  const found = places.flatMap((place) => NAMED_DESIGN_EXTENSIONS.map((ext) => `${place}${ext}`)).filter(isFile);
+  if (found.length > 1) return { several: found };
+  return found.length === 1 ? inside(found[0]!) : { missing: true };
+}
+
+/** The document a gate on a named document holds, as the chat names it. */
+function heldDocumentName(campaign: Campaign): string {
+  return campaign.gddPath !== undefined ? `\`${campaign.gddPath}\`` : "the document you named";
+}
+
+function capitalised(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** What a design named in chat is read from: text as it is, the rest through the document extractor. */
+const NAMED_TEXT_EXTENSIONS: readonly string[] = [".md", ".markdown", ".txt"];
+const NAMED_DESIGN_EXTENSIONS: readonly string[] = [...NAMED_TEXT_EXTENSIONS, ".docx", ".odt", ".rtf", ".pdf", ".pptx"];
+
 function readGddFile(projectRoot: string, gddPath: string): string | undefined {
+  return readGddBytes(projectRoot, gddPath)?.toString("utf8");
+}
+
+function readGddBytes(projectRoot: string, gddPath: string): Buffer | undefined {
   // A GDD path can come from a chat message, and what is read goes to the
   // planner and every sprint prompt: the read side is held inside the project
   // exactly as the write side is (CMP-12), links resolved.
   if (!pathIsInsideProject(projectRoot, gddPath)) return undefined;
   try {
-    return readFileSync(join(projectRoot, gddPath), "utf8");
+    return readFileSync(join(projectRoot, gddPath));
   } catch {
     return undefined;
   }

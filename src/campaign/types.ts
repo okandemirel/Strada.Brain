@@ -388,6 +388,13 @@ export interface Campaign {
   ideaText?: string;
   /** Project-relative path to the GDD once known (drafted or supplied). */
   gddPath?: string;
+  /**
+   * The gate holds a document the user named, to be confirmed as the design —
+   * not a draft this system wrote. It is approved or cancelled, never revised:
+   * a revision redrafts the gate's document in place, and here that is the
+   * user's own file.
+   */
+  gddToConfirm?: boolean;
   /** How the plan covers the GDD's measured section inventory (2026-09-10). */
   planCoverage?: { covered: number; total: number; uncovered: string[]; excluded: string[]; minMilestones: number; maxMilestones: number };
   /** The GDD's full text as it was taken in (supplied, or read from docs at intake). */
