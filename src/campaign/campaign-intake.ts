@@ -549,6 +549,15 @@ const TR_BUILD_VERB = `(?:${TR_MAKE}|${TR_WRITE}|${TR_WOULD_YOU_WRITE}|${TR_DEVE
 const TR_BUILD_THE_GAME_VERB = `(?:${TR_BUILD_VERB}|${TR_WOULD_YOU_MAKE})`;
 const BUILD_GAME_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|develop|make)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])`;
 const BUILD_GDD_EN = String.raw`(?<![\p{L}\p{N}_])(?:build|implement)\s+(?:the|this|my|our)\s+(?:GDD|game\s+design\s+doc(?:ument)?)(?![\p{L}\p{N}_'’])`;
+/**
+ * …as a whole-game request: what follows the GDD ends the phrase. A noun
+ * after it makes it work on the document's parts — "Implement the GDD
+ * changes in the HUD", "Build the GDD tooling first" took the user's task
+ * over into a campaign gate (main left them ordinary tasks).
+ */
+const BUILD_THE_WHOLE_GDD_EN =
+  BUILD_GDD_EN +
+  String.raw`(?=\s*(?:$|[:.,;!?()—–]|-\s)|\s+(?:in|at|from|per|for|on|with|now|please|fully|completely|exactly|today|first|as|and|then|so|end[- ]?to[- ]?end|from\s+scratch)(?![\p{L}]))`;
 const BUILD_GDD_TR = String.raw`(?<![\p{L}\p{N}_])GDD['’]y[iı](?:\s+${BUILD_ADVERB})?\s+(?:uygula|hayata\s+geçir|kodla)(?![\p{L}\p{N}_])`;
 const BUILD_GAME_TR =
   String.raw`(?<![\p{L}\p{N}_])(?:oyun(?:u|unu)?(?:\s+${BUILD_ADVERB})?\s+${TR_BUILD_VERB}|oyun(?:u|unu)(?:\s+${BUILD_ADVERB})?\s+(?:${TR_WOULD_YOU_MAKE})|${TR_GAME_BY_DOCUMENT})(?![\p{L}\p{N}_])`;
@@ -566,7 +575,7 @@ const WHOLE_GAME_BUILD_RE = new RegExp(
   [
     String.raw`(?<![\p{L}\p{N}_])(?:build|develop)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])(?!\s+(?:further|more|beyond|better)(?![\p{L}]))`,
     String.raw`(?<![\p{L}\p{N}_])make\s+(?:this|the|a|my)\s+game(?=(?:\s*\([^()\n]*\))?(?:\s*(?:$|[:.,;!?)—–])|\s+(?:in|from|at|per|about|where|set|called|named|that|which|for|exactly|fully|completely|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)|end[- ]?to[- ]?end)(?![\p{L}])))`,
-    BUILD_GDD_EN,
+    BUILD_THE_WHOLE_GDD_EN,
     BUILD_GDD_TR,
     BUILD_GAME_TR,
   ].join("|"),

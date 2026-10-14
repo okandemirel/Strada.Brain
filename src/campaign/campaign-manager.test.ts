@@ -10340,7 +10340,8 @@ describe("CampaignManager", () => {
     });
 
     // "The GDD" with only an adverb beside it built docs/Game_GDD.md, ungated.
-    it.each(["Read the GDD end to end", "GDD'yi baştan sona oku"])("%s is the user's task, not a build of the repository's GDD", async (text) => {
+    // …and so did a feature request on the GDD's parts, at the gate.
+    it.each(["Read the GDD end to end", "GDD'yi baştan sona oku", "Implement the GDD changes in the HUD"])("%s is the user's task, not a build of the repository's GDD", async (text) => {
       expect(await say("chat-read-gdd", text)).toBe(false);
       expect(told("chat-read-gdd")).toBe("");
       expect(storage.hasActiveForChat("chat-read-gdd")).toBe(false);

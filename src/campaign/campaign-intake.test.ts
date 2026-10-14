@@ -609,6 +609,38 @@ describe("a bare reference to the GDD needs a whole-game build", () => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
   });
 
+  /**
+   * "Implement the GDD" with a noun after it is work on the document's parts,
+   * not a build of the game: "Implement the GDD changes in the HUD" took the
+   * user's task over into a campaign gate on the newest GDD (main left it an
+   * ordinary task).
+   */
+  it.each([
+    "Implement the GDD changes in the HUD",
+    "Implement the GDD feedback from yesterday",
+    "Build the GDD tooling first",
+    "Implement the game design document review notes",
+  ])("%s → no campaign (a feature request on the GDD)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each(["Implement the GDD", "Implement the GDD for Android", "Implement the GDD, then send me the APK", "Implement the GDD now"])(
+    "%s → the repository's GDD, at once",
+    (text) => {
+      expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
+    },
+  );
+
+  // The build's clause goes on past the GDD or the verb: the user confirms first.
+  it.each([
+    ["Implement the GDD in the HUD", { kind: "gdd-to-confirm" }],
+    ["Build the game and implement the GDD changes in the HUD", { kind: "gdd-to-confirm" }],
+    ["GDD'yi uygula dedim ama Unity çöktü", { kind: "gdd-to-confirm" }],
+    ["Oyunu docs/Quillmoor_GDD.md'ye göre yap Android için", confirm("docs/Quillmoor_GDD.md")],
+  ])("%s → %j", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
+  });
+
   it.each(["I don't have a GDD, build the game", "GDD yok, oyunu yap"])("%s → no campaign (nothing to build from)", (text) => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
