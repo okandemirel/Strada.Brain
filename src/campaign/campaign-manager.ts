@@ -9653,6 +9653,30 @@ export class CampaignManager {
         gddPlatform(gddText).handheld,
       );
       if (identity.measured) lines.push(...identity.lines);
+      // AND RECORDED, not only printed: a delivery report scrolls away, and
+      // the choices a campaign made where its document said nothing are the
+      // first thing a person wants to change. Re-measured every round; the
+      // store drops the repeats (measured 2026-10-14: nothing recorded any
+      // assumption anywhere, so none could be reviewed).
+      for (const assumption of identity.assumptions) {
+        try {
+          this.storage.recordAssumption({
+            campaignId: campaign.id,
+            ...(campaign.milestones[campaign.currentMilestone]?.id === undefined
+              ? {}
+              : { milestoneId: campaign.milestones[campaign.currentMilestone]!.id }),
+            atMs: Date.now(),
+            ...assumption,
+            source: "project-identity (ProjectSettings.asset vs the approved document)",
+          });
+        } catch (err) {
+          getLoggerSafe().warn("Assumption could not be recorded", {
+            id: campaign.id,
+            what: assumption.what,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       let refusal = report.refusal ?? media.refusal ?? identity.refusal;
       // …OF THE DOCUMENT EVERY OTHER LINE HERE WAS JUDGED AGAINST. With no path
       // the check discovered one, the largest markdown under docs/: for a

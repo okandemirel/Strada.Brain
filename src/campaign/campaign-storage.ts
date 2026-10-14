@@ -86,6 +86,31 @@ CREATE TRIGGER IF NOT EXISTS campaign_judgements_no_update BEFORE UPDATE ON camp
 BEGIN SELECT RAISE(ABORT, 'campaign_judgements is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS campaign_judgements_no_delete BEFORE DELETE ON campaign_judgements
 BEGIN SELECT RAISE(ABORT, 'campaign_judgements is append-only'); END;
+-- WHAT THE SYSTEM DECIDED THAT THE DOCUMENT DID NOT SAY.
+-- Measured 2026-10-14: a campaign resolves ambiguity by mandate ("do not ask
+-- the person") and kept no record of having done so, so a delivered game
+-- carried choices nobody could find, let alone change. Append-only, like the
+-- judgements beside it: an assumption that is revised is a second row, and
+-- what the delivery actually assumed stays readable afterwards.
+CREATE TABLE IF NOT EXISTS campaign_assumptions (
+  seq INTEGER PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  milestone_id TEXT,
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  what TEXT NOT NULL,
+  value TEXT NOT NULL,
+  why TEXT NOT NULL,
+  source TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_assumptions_campaign
+  ON campaign_assumptions(campaign_id, at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_campaign_assumptions_once
+  ON campaign_assumptions(campaign_id, kind, what, value);
+CREATE TRIGGER IF NOT EXISTS campaign_assumptions_no_update BEFORE UPDATE ON campaign_assumptions
+BEGIN SELECT RAISE(ABORT, 'campaign_assumptions is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS campaign_assumptions_no_delete BEFORE DELETE ON campaign_assumptions
+BEGIN SELECT RAISE(ABORT, 'campaign_assumptions is append-only'); END;
 `;
 
 interface CampaignRow {
@@ -693,6 +718,80 @@ export class CampaignStorage {
    * The milestone, mode and revision are the input's own, so the stored
    * columns cannot disagree with the stored input.
    */
+  /**
+   * Record a choice the document did not make.
+   *
+   * `source` names what measured it (a module, a tool), so a reader can go
+   * back to the thing that decided rather than to this row. Repeats are
+   * silently dropped: the same assumption is re-measured on every delivery
+   * round, and a person reading the list wants the choices, not the rounds.
+   */
+  recordAssumption(entry: {
+    readonly campaignId: string;
+    readonly milestoneId?: string;
+    readonly atMs: number;
+    /** A coarse grouping a reader can scan: "platform", "art", "scope"… */
+    readonly kind: string;
+    /** The question the document left open. */
+    readonly what: string;
+    /** What the delivery does instead. */
+    readonly value: string;
+    /** Why this and not something else — measured, never guessed. */
+    readonly why: string;
+    readonly source: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO campaign_assumptions (campaign_id, milestone_id, at, kind, what, value, why, source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        entry.campaignId,
+        entry.milestoneId ?? null,
+        entry.atMs,
+        entry.kind,
+        entry.what,
+        entry.value,
+        entry.why,
+        entry.source,
+      );
+  }
+
+  /** Every assumption recorded for a campaign, oldest first. */
+  listAssumptions(campaignId: string): Array<{
+    milestoneId?: string;
+    atMs: number;
+    kind: string;
+    what: string;
+    value: string;
+    why: string;
+    source: string;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT milestone_id, at, kind, what, value, why, source
+         FROM campaign_assumptions WHERE campaign_id = ? ORDER BY seq ASC`,
+      )
+      .all(campaignId) as Array<{
+        milestone_id: string | null;
+        at: number;
+        kind: string;
+        what: string;
+        value: string;
+        why: string;
+        source: string;
+      }>;
+    return rows.map((r) => ({
+      ...(r.milestone_id === null ? {} : { milestoneId: r.milestone_id }),
+      atMs: r.at,
+      kind: r.kind,
+      what: r.what,
+      value: r.value,
+      why: r.why,
+      source: r.source,
+    }));
+  }
+
   appendJudgement(entry: JudgementEntry): StoredJudgement {
     const { input, judgement } = entry;
     const inputJson = JSON.stringify(input);

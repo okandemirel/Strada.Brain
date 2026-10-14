@@ -5,7 +5,7 @@
  * proof run delivered a handheld project with Unity's DefaultCompany and no
  * application identifier, and no line of the gate had looked).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -24,9 +24,13 @@ function project(settings: string): string {
 }
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
+const recorded: Array<Record<string, unknown>> = [];
 const gate = (root: string, gddText: string): { refusal?: string; lines: string[] } => {
   const manager = Object.create(CampaignManager.prototype) as CampaignManager;
   (manager as unknown as { projectRoot: string }).projectRoot = root;
+  (manager as unknown as { storage: unknown }).storage = {
+    recordAssumption: vi.fn((entry: Record<string, unknown>) => { recorded.push(entry); }),
+  };
   const campaign = {
     id: "c_identity", chatId: "chat", channelType: "cli", userId: "u1", projectRoot: root, gddText,
     state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0,
@@ -82,5 +86,26 @@ describe("the delivery gate reads the project's identity", () => {
 
     expect(verdict.refusal ?? "").not.toContain("handheld");
     expect(verdict.lines.join("\n")).not.toContain("app identity");
+  });
+
+  it("records the choice the document never made, with what measured it", () => {
+    // M7 of the drift audit: ambiguity resolved by mandate and never written
+    // down. The delivery report scrolls away; the store is what a person can
+    // come back to.
+    recorded.length = 0;
+    const root = project(
+      ["PlayerSettings:", "  companyName: Harbor Works", "  defaultScreenOrientation: 2", "  applicationIdentifier:", "    Android: com.harborworks.harborlight"].join("\n"),
+    );
+
+    gate(root, "# Harbor Light\n\nAn Android game. The player taps a buoy.\n");
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      campaignId: "c_identity",
+      kind: "platform",
+      what: "screen orientation",
+      value: "landscape",
+    });
+    expect(String(recorded[0]?.["source"])).toContain("ProjectSettings.asset");
   });
 });

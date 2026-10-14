@@ -107,6 +107,14 @@ export function specOrientation(gddText: string | undefined): ScreenOrientation 
   return portrait ? "portrait" : "landscape";
 }
 
+/** A choice the document did not make, in the shape the store records. */
+export interface IdentityAssumption {
+  readonly kind: string;
+  readonly what: string;
+  readonly value: string;
+  readonly why: string;
+}
+
 export interface IdentityVerdict {
   /**
    * False when ProjectSettings.asset was not read: the caller decides whether
@@ -116,6 +124,12 @@ export interface IdentityVerdict {
   readonly measured: boolean;
   /** What a person is told, measured or not. */
   readonly lines: string[];
+  /**
+   * The choices this delivery made that the document never stated. Recorded
+   * rather than only printed: a delivered game carries decisions nobody can
+   * find afterwards unless something writes them down.
+   */
+  readonly assumptions: IdentityAssumption[];
   /** Set only when the delivery must not go out as it is. */
   readonly refusal?: string;
 }
@@ -138,9 +152,14 @@ export function identityAnswersSpec(
   handheld: boolean,
 ): IdentityVerdict {
   if (!identity.read) {
-    return { measured: false, lines: [`NOT measured: app identity — ${identity.why ?? `${PROJECT_SETTINGS_PATH} was not read`}`] };
+    return {
+      measured: false,
+      assumptions: [],
+      lines: [`NOT measured: app identity — ${identity.why ?? `${PROJECT_SETTINGS_PATH} was not read`}`],
+    };
   }
   const lines: string[] = [];
+  const assumptions: IdentityAssumption[] = [];
   const missing: string[] = [];
   if (identity.companyName === undefined) missing.push("companyName (empty or still DefaultCompany)");
   if (Object.keys(identity.bundleIds).length === 0) missing.push("applicationIdentifier (no platform has one)");
@@ -159,11 +178,18 @@ export function identityAnswersSpec(
       `Orientation: ${identity.orientation ?? "not set in the project"}, and the document states none — ` +
         "this is an assumption, not a requirement",
     );
+    assumptions.push({
+      kind: "platform",
+      what: "screen orientation",
+      value: identity.orientation ?? "left at Unity's default",
+      why: `the document states no orientation; ${PROJECT_SETTINGS_PATH} holds what the delivery ships with`,
+    });
   } else if (identity.orientation === undefined) {
     lines.push(`Orientation: the document asks for ${asked} and the project sets no orientation Unity defines`);
   } else if (identity.orientation !== asked && !(asked === "portrait" && identity.orientation === "auto")) {
     return {
       measured: true,
+      assumptions,
       lines,
       refusal:
         `The document asks for ${asked} and the project is set to ${identity.orientation} ` +
@@ -177,6 +203,7 @@ export function identityAnswersSpec(
   if (handheld && missing.length > 0) {
     return {
       measured: true,
+      assumptions,
       lines,
       refusal:
         `This is a handheld game and ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} unset in ` +
@@ -186,6 +213,12 @@ export function identityAnswersSpec(
   }
   if (missing.length > 0) {
     lines.push(`App identity: ${missing.join(" and ")} — unset, and this document asks for no handheld platform`);
+    assumptions.push({
+      kind: "platform",
+      what: "application identity",
+      value: "shipped without one",
+      why: `${missing.join(" and ")} unset in ${PROJECT_SETTINGS_PATH}, and the document asks for no handheld platform`,
+    });
   }
-  return { measured: true, lines };
+  return { measured: true, assumptions, lines };
 }
