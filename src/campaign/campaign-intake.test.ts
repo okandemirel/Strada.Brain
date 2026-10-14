@@ -335,6 +335,14 @@ describe("a message that names the design document by its path", () => {
       ["GDD'deki yazım hatalarını düzelt", "Quillmoor_GDD.md"],
       ["şu GDD'yi bir incele", "Quillmoor_GDD.md"],
       ["update section 3 of the GDD", "Quillmoor_GDD.md"],
+      // An adverb beside the work is no build of the document it rides on…
+      ["Read it end to end", "notes.md"],
+      ["Rewrite this from scratch", "Quillmoor_GDD.md"],
+      ["bunu baştan sona oku", "Quillmoor_GDD.md"],
+      ["Baştan sona oku", "notes.md"],
+      ["Bunu sıfırdan yeniden yaz", "Quillmoor_GDD.md"],
+      // …nor, past the idea minimum, an idea drafted or a document called unreadable in its place.
+      ["Rewrite this from scratch, the late chapters contradict each other and the tone drifts", "Quillmoor_GDD.md"],
     ])("%s (%s attached) → no campaign", (text, name) => {
       expect(shared(text, name)).toBeUndefined();
     });
@@ -347,6 +355,7 @@ describe("a message that names the design document by its path", () => {
       // Build intent wins over a word of review beside it.
       ["GDD'yi oku ve oyunu yap", "Quillmoor_GDD.md"],
       ["Read it and build the game from scratch", "notes.md"],
+      ["Baştan sona oku ve oyunu yap", "notes.md"],
     ])("%s (%s attached) → the design", (text, name) => {
       expect(shared(text, name)).toMatchObject({ kind: "gdd-attachment", sourceName: name });
     });

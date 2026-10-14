@@ -73,7 +73,7 @@ function refersToGdd(text: string): boolean {
  */
 const WORK_ON_DOCUMENT_RE = new RegExp(
   String.raw`(?<![\p{L}])(?:fix|correct|proofread|typos?|review|summari[sz]e|summary|translate|update|edit|check|read|reword|rewrite|shorten|comment\s+on|feedback)(?![\p{L}])` +
-    String.raw`|(?<![\p{L}])(?:düzelt|güncelle|özet|çevir|[iİ]ncele|kontrol\s+e|gözden\s+geçir|kısalt|düzenle|yazım\s+hata|oku(?:r|yun(?:uz)?|yabilir|yup)?(?![\p{L}]))`,
+    String.raw`|(?<![\p{L}])(?:düzelt|güncelle|özet|çevir|[iİ]ncele|kontrol\s+e|gözden\s+geçir|kısalt|düzenle|yazım\s+hata|yeniden\s+yaz|oku(?:r|yun(?:uz)?|yabilir|yup)?(?![\p{L}]))`,
   "iu",
 );
 
@@ -97,9 +97,16 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
       // …UNLESS THE CAPTION ASKS FOR WORK ON THE DOCUMENT: "fix the typo in
       // this" with Foo_GDD.md attached was an immediate build of the game.
       const asksForWork = WORK_ON_DOCUMENT_RE.test(text);
-      if (!text || BUILD_INTENT_RE.test(text) || (!asksForWork && (refersToGdd(attachment.name) || refersToGdd(text)))) {
+      // …AND AN ADVERB BESIDE THAT WORK IS NO BUILD: "Read it end to end",
+      // "Rewrite this from scratch" and "bunu baştan sona oku" built the game
+      // from the document they asked to have read or rewritten.
+      const buildsGame = WHOLE_GAME_BUILD_RE.test(text) || (!asksForWork && BUILD_INTENT_RE.test(text));
+      if (!text || buildsGame || (!asksForWork && (refersToGdd(attachment.name) || refersToGdd(text)))) {
         return { kind: "gdd-attachment", gddText: extractedText, sourceName: attachment.name };
       }
+      // The message is about the document it carried, which was read: the
+      // rules below would draft its caption as an idea, or call it unreadable.
+      if (asksForWork) return undefined;
     }
   }
 

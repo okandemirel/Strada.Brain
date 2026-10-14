@@ -10323,6 +10323,20 @@ describe("CampaignManager", () => {
       expect(storage.hasActiveForChat("chat-task")).toBe(false);
     });
 
+    // A document attached to "rewrite this from scratch" was built as the design, ungated.
+    it.each([
+      ["Rewrite this from scratch", "Quillmoor_GDD.md"],
+      ["Read it end to end", "notes.md"],
+    ])("%s with %s attached is the user's task, not a build from it", async (text, name) => {
+      const incoming = {
+        channelType: "cli", chatId: "chat-rewrite", userId: "u1", text, timestamp: new Date(),
+        attachments: [{ type: "document", name, data: Buffer.from(DESIGN, "utf8") }],
+      } as unknown as IncomingMessage;
+      expect(await manager.tryHandleIncoming(incoming)).toBe(false);
+      expect(told("chat-rewrite")).toBe("");
+      expect(storage.hasActiveForChat("chat-rewrite")).toBe(false);
+    });
+
     // "The GDD" with only an adverb beside it built docs/Game_GDD.md, ungated.
     it.each(["Read the GDD end to end", "GDD'yi baştan sona oku"])("%s is the user's task, not a build of the repository's GDD", async (text) => {
       expect(await say("chat-read-gdd", text)).toBe(false);
