@@ -2704,6 +2704,13 @@ describe("CampaignManager", () => {
 
   it("delivers a scene that places real prefabs, and the report says what it measured", async () => {
     writeBuiltProject();
+    // A real Unity project has one, and the delivery reads it: this test is
+    // also where the report's "what this build assumed" section is pinned.
+    mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+    writeFileSync(
+      join(projectRoot, "ProjectSettings", "ProjectSettings.asset"),
+      ["PlayerSettings:", "  companyName: DefaultCompany", "  productName: Grove", "  defaultScreenOrientation: 2"].join("\n"),
+    );
     const campaign = await runLadderToDelivery();
 
     settleMilestone("integrated, all 42 tests pass");
@@ -2714,6 +2721,11 @@ describe("CampaignManager", () => {
     expect(report).toContain("What the shipped scenes actually contain");
     expect(report).toContain("Shipped scenes PLACE 1 renderer component");
     expect(report).toContain("Assets/Scenes/Grove.unity");
+    // …and what it decided where the document was silent. The campaign is
+    // told not to ask, so the report is where those choices become visible
+    // (M7, measured 2026-10-14: nothing recorded or showed any of them).
+    expect(report).toContain("What this build assumed, because the document does not say");
+    expect(report).toContain("application identity");
   });
 
   it("discloses the GDD's own dimensionality against the shipped scenes, without refusing", async () => {

@@ -10116,6 +10116,24 @@ export class CampaignManager {
             "(see 'What the shipped scenes actually contain')",
         );
       }
+    // WHAT THIS BUILD DECIDED FOR ITSELF. The campaign is told not to ask, so
+    // the one honest alternative is to say afterwards what it chose where the
+    // document was silent — and to say it in the report a person reads, not
+    // only in the store (M7, measured 2026-10-14).
+    const assumptions = (() => {
+      try {
+        return this.storage.listAssumptions(campaign.id);
+      } catch {
+        return [];
+      }
+    })();
+    if (assumptions.length > 0) {
+      lines.push(
+        "",
+        "**What this build assumed, because the document does not say:**",
+        ...assumptions.map((a) => `- ${a.what}: ${a.value} — ${a.why}`),
+      );
+    }
     } else {
       lines.push("", "⚠️ The shipped scenes were NOT structurally checked — nothing here says what the game renders.");
     }
