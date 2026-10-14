@@ -31,14 +31,14 @@ describe("look description", () => {
     // The shape that sank the earlier attempt: a TOC entry far above the real
     // section, both matching the same heading.
     const gdd = [
-      "CONTENTS",
-      "1.  THE CLIMB",
-      "2.  ROPE SYSTEM",
-      "3.  LOOK AND FEEL",
-      "4.  WEATHER",
-      "5.  ROUTE EDITOR",
+      "Table of contents",
+      "31. The climb",
+      "32. Ropes and anchors",
+      "33. Look and feel",
+      "34. Weather",
+      "35. Route editor",
       ...Array.from({ length: 40 }, (_, i) => `filler line ${i}`),
-      "3.  LOOK AND FEEL",
+      "33. Look and feel",
       "Ink-wash woodblock print: matte low-poly cliffs lit by a single cold sun, ",
       "a grey-blue palette with one rust accent kept for ropes and anchors, and angular ",
       "low-poly climbers with no outlines, drawn as if cut into the same block as the rock.",
@@ -47,7 +47,7 @@ describe("look description", () => {
     const look = extractLookDescription(gdd);
     expect(look.found).toBe(true);
     expect(look.text).toContain("matte low-poly cliffs");
-    expect(look.text).not.toContain("WEATHER");
+    expect(look.text).not.toContain("Weather");
   });
 
   it("says what is missing rather than guessing", () => {

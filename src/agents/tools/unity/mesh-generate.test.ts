@@ -101,7 +101,7 @@ describe("MeshGenerateTool", () => {
   });
 
   it("honours read-only mode", async () => {
-    const result = await tool.execute({ name: "Block", shape: "rounded-box" }, makeContext(dir, true));
+    const result = await tool.execute({ name: "Signpost", shape: "rounded-box" }, makeContext(dir, true));
     expect(result.isError).toBe(true);
   });
 

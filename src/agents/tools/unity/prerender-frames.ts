@@ -43,7 +43,7 @@ export interface PrerenderStyle {
    * for (Codex 2026-09-11 B#21).
    */
   shading?: string;
-  /** Root squash for plumpness [x, y, z]. */
+  /** Root scale [x, y, z] from the profile's body-width factor (`plump`). */
   plump?: [number, number, number];
   /** Head-bone scale multiplier. */
   headScale?: number;
@@ -97,10 +97,10 @@ export function resolvePrerenderStyle(
     outlineWidth: Number.isFinite(outlineRaw) ? Math.max(0, Math.min(3, outlineRaw)) : (profile.outlineWidth ?? 0),
     plump: (() => {
       // No style profile means NO styling: the squash was one fixed factor
-      // for every character and the plumpness defaulted above 1, so a
+      // for every model and the body width defaulted above 1, so a
       // realistic model was squashed into a cartoon (Codex 2026-09-11 B#21).
       // The Y factor now preserves volume, which is 1.0 when nothing asked
-      // for plumpness.
+      // for a wider body.
       const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (profile.plump ?? 1.0);
       // Both horizontal axes are scaled by p, so the vertical compensation
       // is 1/p² — 1/p left the volume 20% larger (Codex 2026-09-11 C#33).

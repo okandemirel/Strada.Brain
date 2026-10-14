@@ -58,10 +58,10 @@ const modelPrefab = (modelGuid: string): string =>
 
 function spriteProject(): ReturnType<typeof assessBuiltAsSpecified> {
   const root = project();
-  buildSettings(root, ["Assets/Scenes/Main.unity"]);
+  buildSettings(root, ["Assets/Scenes/Ascent.unity"]);
   put(
     root,
-    "Assets/Scenes/Main.unity",
+    "Assets/Scenes/Ascent.unity",
     `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
     "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
   );
@@ -74,7 +74,7 @@ describe("describeDimensionality", () => {
   const unmeasurable = assessBuiltAsSpecified("/definitely/not/a/project");
 
   it("discloses the counts when the GDD asks for 3D and the scenes are sprites", () => {
-    const gdd = "5. LOOK AND FEEL\nlow-poly 3D cliffs and climbers under a cold dawn light.";
+    const gdd = "## Look\nlow-poly 3D cliffs and climbers under a cold dawn light.";
     const d = describeDimensionality(gdd, spriteProject());
 
     expect(d.asksFor3D).toBe(true);
@@ -91,10 +91,10 @@ describe("describeDimensionality", () => {
 
   it("counts the 3D geometry a scene really does bind", () => {
     const root = project();
-    buildSettings(root, ["Assets/Scenes/Main.unity"]);
+    buildSettings(root, ["Assets/Scenes/Ascent.unity"]);
     put(
       root,
-      "Assets/Scenes/Main.unity",
+      "Assets/Scenes/Ascent.unity",
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
@@ -106,19 +106,19 @@ describe("describeDimensionality", () => {
   });
 
   it("counts every mention and quotes each, so a table-of-contents line cannot pass as the statement", () => {
-    const gdd = "CONTENTS\n  6.8 3D look ......... 37\n\n6.8 3D look\nThe climbers are 3D models on 3D cliffs.";
+    const gdd = "Table of contents\n  Rendering in 3D, p. 58\n\nRendering in 3D\nThe climbers are 3D models on 3D cliffs.";
     const d = describeDimensionality(gdd, spriteProject());
 
     expect(d.signals.find((s) => s.term === "3D")?.count).toBe(4);
     // Both recorded excerpts are shown; the reader can see one is a contents line.
     expect(d.lines.filter((l) => l.startsWith("GDD says:"))).toHaveLength(2);
-    expect(d.lines.join("\n")).toContain("CONTENTS");
+    expect(d.lines.join("\n")).toContain("Table of contents");
   });
 
   it("reports an orthographic camera and a GDD that does not state 3D", () => {
     const root = project();
-    buildSettings(root, ["Assets/Scenes/Main.unity"]);
-    put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(1)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    buildSettings(root, ["Assets/Scenes/Ascent.unity"]);
+    put(root, "Assets/Scenes/Ascent.unity", `${HEADER}${CAMERA(1)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
     const d = describeDimensionality("The game is 2D, orthographic.", assessBuiltAsSpecified(root));
 
     expect(d.asksFor3D).toBe(false);

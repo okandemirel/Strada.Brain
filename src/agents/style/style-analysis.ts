@@ -43,8 +43,8 @@ function inferFamilyFromText(text: string): StyleProfile["family"] {
   if (/painterly|watercolor|hand[- ]?painted/.test(t)) return "painterly";
   if (/toon|cartoon|chibi|plump|glossy|cute|casual game/.test(t)) return "toon-casual";
   if (/realistic|pbr|military|shooter|simulation/.test(t)) return "realistic";
-  // An unrecognized document is UNKNOWN, not a casual toon game: the default
-  // stamped one genre's look on every GDD (Codex 2026-09-11 B#20).
+  // An unrecognized document is UNKNOWN, not the toon-casual family: the
+  // default stamped one genre's look on every GDD (Codex 2026-09-11 B#20).
   return "unspecified";
 }
 

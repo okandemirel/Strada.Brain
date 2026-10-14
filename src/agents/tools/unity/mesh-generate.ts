@@ -531,9 +531,9 @@ export class MeshGenerateTool implements ITool {
   // AE#13). What the project wants comes from its own style profile and its
   // GDD.
   readonly description =
-    "Generate a 3D mesh (OBJ + import .meta, no Editor needed) for a game element that needs DIMENSION — " +
-    "a barrel, a tree, a vehicle part. Use unity_generate_sprite for flat art, and this for elements the project " +
-    "renders in 3D. Use when unity_my_assets_cloud has nothing the user already owns. Compose a multi-part " +
+    "Generate a 3D mesh (OBJ + import .meta, no Editor needed) for an element the project's design draws as a " +
+    "model. Use unity_generate_sprite for what the design calls 2D, and this for what it calls 3D. " +
+    "Use when unity_my_assets_cloud has nothing the user already owns. Compose a multi-part " +
     "element in the prefab from parts (for example a wheel mesh as a child of a cart mesh). By default the " +
     "installed local image-to-3D model produces the mesh (provider 'local'); an analytic primitive is a " +
     "placeholder the delivery gate counts as such.";
@@ -924,9 +924,9 @@ export class MeshGenerateTool implements ITool {
       }
     }
 
-    // The game's own style profile shapes the silhouette: `plump` squashes
-    // X/Z outward and Y down — what a profile with plump above 1 asks for.
-    // Explicit `plump` input wins; no profile = natural proportions.
+    // The project's style profile scales the silhouette: its `plump` factor
+    // widens X/Z and shortens Y by the same amount. An explicit `plump` input
+    // wins; no profile = the shape as built.
     try {
       const { loadStyleProfile } = await import("../../style/style-profile.js");
       const plumpInput = Number(input["plump"]);

@@ -112,11 +112,11 @@ export const GDD_BRIEF_CHUNK_CHARS = 40_000;
 export const GDD_BRIEF_MAX_CHUNKS = 16;
 
 const BRIEF_SYSTEM = `You brief a planner on ONE section of a game design document.
-List everything the section specifies that would need building or measuring: scheduled elements (with their unlock tags), mechanics and rules, screens and UI flow, systems, content counts (levels, worlds, waves), numbers (frame rate, timings, budgets, sizes), assets (art, audio, VFX, animation), platform and build requirements, save/progression rules.
+List everything the section specifies that would need building or measuring: scheduled elements (with where each is first introduced), mechanics and rules, screens and UI flow, systems, content counts (levels, worlds, waves), numbers (frame rate, timings, budgets, sizes), assets (art, audio, VFX, animation), platform and build requirements, save/progression rules.
 Keep the section's own names and numbers exactly as written. Omit marketing, KPIs and aspiration.
 At most 350 words, plain text, first line = the section heading.`;
 
-/** Any capital opens a numbered section line, as in gdd-scope: "3.2 Çekirdek Kurallar" and "5. Écrans" are headings. */
+/** Any capital opens a numbered section line, as in gdd-scope: "28.4 Çay Molası" and "31. Über uns" are headings. */
 const SECTION_LINE_RE = /^\s{0,3}(?:#{1,3}\s+\S|\d{1,2}(?:\.\d{1,2}){0,2}\.?\s+\p{Lu}[^\n]{2,70}$)/u;
 /** "Bomb: 3x3 blast…" or "Énergie: …": a short definition line, whatever capital opens it. */
 const DEFINITION_LINE_RE = /^\s*\p{Lu}[^:\n]{2,60}:\s+\S/u;
@@ -1060,8 +1060,8 @@ export function quoteIsAbout(requirement: string, fact: string): boolean {
  * particular requirement was delivered (Codex 2026-09-13 AJ).
  */
 export function namesContent(line: string): boolean {
-  // A path segment ("Assets/Scripts/Board.cs"), a file with an extension
-  // ("Board.cs"), or a dotted type name ("Game.Modules.Board").
+  // A path segment ("Assets/Scripts/Journal.cs"), a file with an extension
+  // ("Journal.cs"), or a dotted type name ("Game.Modules.Journal").
   return /[A-Za-z0-9_\-]+\/[A-Za-z0-9_\-.]+|\b[A-Za-z0-9_\-]+\.(?:cs|unity|asset|prefab|png|json|md|shader|mat|asmdef|cginc|hlsl|wav|mp3|ogg|ts)\b|\b[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)+\b/.test(line);
 }
 
