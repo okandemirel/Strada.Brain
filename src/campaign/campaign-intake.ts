@@ -143,12 +143,13 @@ function intentFromText(text: string): CampaignIntent | undefined {
   // built the game from the README, and an idea that mentioned its style sheet
   // was thrown away for the style sheet. A document named without a
   // whole-game build is the user's task, not a campaign.
-  const named = namedDocumentsIn(text);
-  if (named.length > 0 && !WHOLE_GAME_BUILD_RE.test(text)) return undefined;
-  const design = designAmong(text, named);
+  const plain = withoutEmphasis(text);
+  const named = namedDocumentsIn(plain);
+  if (named.length > 0 && !WHOLE_GAME_BUILD_RE.test(plain)) return undefined;
+  const design = designAmong(plain, named);
   if (design) return { kind: "gdd-from-docs", path: design };
   // A document the message only mentions is no part of what it asks for.
-  const rest = withoutDocuments(text, named);
+  const rest = withoutDocuments(plain, named);
   if (refersToGdd(rest)) {
     // …AND DESIGN TEXT WRITTEN IN THE MESSAGE IS THE DESIGN. "Build this
     // game. GDD: <the design>" was read as a reference to a document in the
@@ -159,7 +160,7 @@ function intentFromText(text: string): CampaignIntent | undefined {
     // end to end" and "GDD'yi baştan sona oku" built whatever design docs/
     // held, with no approval gate. A message about the document without a
     // whole-game build is the user's task, not an idea to draft from either.
-    return WHOLE_GAME_BUILD_RE.test(text) ? { kind: "gdd-from-docs" } : undefined;
+    return WHOLE_GAME_BUILD_RE.test(plain) ? { kind: "gdd-from-docs" } : undefined;
   }
 
   if (rest.trim().length < MIN_IDEA_LENGTH) return undefined;
@@ -185,13 +186,33 @@ function unreadDocumentIn(msg: IncomingMessage): Extract<CampaignIntent, { kind:
   return undefined;
 }
 
+/** What a named design is read from: as text, or through the document extractor (a workbook included). */
+const DOCUMENT_EXTENSIONS = "md|markdown|txt|docx|odt|rtf|pdf|pptx|xlsx";
+
 /**
  * A document path in quotes or backticks, which may hold spaces. Unquoted,
  * "docs/My Game GDD.md" yielded only its last word, "GDD.md" — another file.
  * The opening quote stands after a space so a Turkish suffix apostrophe
  * ("GDD'li … docs/x.md'yi") is not read as one.
  */
-const QUOTED_DOCUMENT_PATH_RE = /(?:^|[\s(:])["'`“‘]([^"'`“”‘’\n]+\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx))["'`”’]/giu;
+const QUOTED_DOCUMENT_PATH_RE = new RegExp(
+  String.raw`(?:^|[\s(:])["'\x60“‘]([^"'\x60“”‘’\n]+\.(?:${DOCUMENT_EXTENSIONS}))["'\x60”’]`,
+  "giu",
+);
+
+/**
+ * A character of a path segment. "+", "&" and "@" are in file names too:
+ * "docs/Quill+Moor_GDD.md" was no path, its GDD a bare "the GDD", and
+ * discovery built another document.
+ */
+const PATH_CHAR = String.raw`[\p{L}\p{N}_.~+&@-]`;
+
+/**
+ * A download or export copy's mark before the extension — "Foo_GDD (1).md",
+ * "Foo_GDD (final copy).md". The name before it was taken instead, and the
+ * manager found the ORIGINAL beside the copy the user named.
+ */
+const COPY_MARK = String.raw`(?:\s?\([\p{L}\p{N}_. -]{1,24}\))?`;
 
 /**
  * A document path the message names: relative, absolute (/x, C:\x) or from
@@ -199,8 +220,10 @@ const QUOTED_DOCUMENT_PATH_RE = /(?:^|[\s(:])["'`“‘]([^"'`“”‘’\n]+\.
  * either apostrophe ("x.md'deki", "x.md’deki"). An absolute path was not
  * extracted at all, and the campaign discovered whichever design docs/ held.
  */
-const DOCUMENT_PATH_RE =
-  /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])*[\p{L}\p{N}_.~-]+\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx))(?=$|[\s"'`),.:;!?”’])/giu;
+const DOCUMENT_PATH_RE = new RegExp(
+  String.raw`(?:^|[\s"'\x60(:“‘<])((?:[a-z]:[\\/]|[\\/])?(?:${PATH_CHAR}+[\\/])*${PATH_CHAR}+${COPY_MARK}\.(?:${DOCUMENT_EXTENSIONS}))(?=$|[\s"'\x60),.:;!?”’>#])`,
+  "giu",
+);
 
 /** A link, which the manager refuses by name rather than reading another design in its place. */
 const LINK_RE = /(?:^|[\s"'`(:“‘<])((?:https?|ftp|file):\/\/[^\s"'`<>()“”‘’]+?)(?=[.,;:!?]*(?:$|[\s"'`<>)”’]))/giu;
@@ -208,10 +231,16 @@ const LINK_RE = /(?:^|[\s"'`(:“‘<])((?:https?|ftp|file):\/\/[^\s"'`<>()“�
 /**
  * A name with GDD in it and no extension the path pattern reads — "docs/Foo_GDD",
  * "FooGDD", "Foo_GDD.html". It was a bare "the GDD", and discovery built
- * another document.
+ * another document. ANY CHARACTER A FILE NAME MAY HOLD: a GDD inside a word
+ * the path pattern cannot read whole ("Foo#GDD.md", "Foo_GDD[v2].md") is
+ * still a name the manager finds or refuses, never a reason to discover
+ * another design. A bracket opens no name: "[Foo_GDD.md](docs/Foo_GDD.md)"
+ * is a Markdown link's text.
  */
-const NAME_TOKEN_RE =
-  /(?:^|[\s"'`(:“‘])((?:[a-z]:[\\/]|[\\/]|~[\\/])?(?:[\p{L}\p{N}_.~-]+[\\/])*[\p{L}\p{N}_.~-]*[\p{L}\p{N}_~-])(?=$|[\s"'`),.:;!?”’])/giu;
+const NAME_TOKEN_RE = new RegExp(
+  String.raw`(?:^|[\s"'\x60(:“‘<])((?:[a-z]:[\\/])?(?!\[)[^\s"'\x60“”‘’()<>:,;!?]*[^\s"'\x60“”‘’()<>:,;!?.])(?=$|[\s"'\x60),.:;!?”’>])`,
+  "giu",
+);
 const GDD_ENDS_NAME_RE = /[\p{L}\p{N}][_-]?(?:gdd|game[_-]*design[_-]*doc(?:ument)?)s?(?:[_-]?v?\d+)?$|^(?:gdd|game[_-]*design[_-]*doc(?:ument)?)s?_/iu;
 
 /** A file name that says GDD — not "the GDD" itself, a word built on it ("GDD-driven"), nor "GDD/TDD". */
@@ -224,7 +253,7 @@ function isGddName(token: string): boolean {
 /** A link names a document when its last segment does: an extension the path pattern reads, or GDD. */
 function linkNamesDocument(link: string): boolean {
   const last = link.replace(/[?#].*$/, "").split("/").pop() ?? "";
-  return /\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx)$/i.test(last) || refersToGdd(last);
+  return new RegExp(String.raw`\.(?:${DOCUMENT_EXTENSIONS})$`, "i").test(last) || refersToGdd(last);
 }
 
 /** Documents that sit beside a design — a style sheet, a changelog, a readme — and are not it when the message names it too. */
@@ -284,6 +313,15 @@ function namedDocumentsIn(text: string): NamedDocument[] {
     if (isGddName(m[1]!)) named.push({ path: m[1]!, at: end - m[1]!.length, end });
   }
   return named.sort((a, b) => a.at - b.at);
+}
+
+/**
+ * The message with Markdown emphasis blanked to the same length, so every
+ * position still holds: "Build this game: **docs/Foo_GDD.md**" named no path,
+ * and its GDD was a bare "the GDD" — discovery built another document.
+ */
+function withoutEmphasis(text: string): string {
+  return text.replace(/\*/g, " ");
 }
 
 /** The message without the documents it names, each a single space. */
@@ -395,7 +433,8 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | un
 
 /** The design document the message names, when it names one. */
 export function documentPathIn(text: string): string | undefined {
-  return designAmong(text, namedDocumentsIn(text));
+  const plain = withoutEmphasis(text);
+  return designAmong(plain, namedDocumentsIn(plain));
 }
 
 /** The reference followed by a "GDD:" marker, read exactly as refersToGdd reads one. */

@@ -232,6 +232,9 @@ describe("a message that names the design document by its path", () => {
     ["CHANGELOG.md'yi güncel tut, docs/quillmoor.md'deki oyunu baştan sona yap", "docs/quillmoor.md"],
     // Named alone, it is the one the message meant, whatever it is called.
     ["Build this game: docs/README.md", "docs/README.md"],
+    // A workbook is a format the document extractor reads; this sentence was an idea to draft.
+    ["Build this game: design/quillmoor-balance.xlsx", "design/quillmoor-balance.xlsx"],
+    ["Build this game: **docs/quillmoor.md**", "docs/quillmoor.md"],
   ])("%s → that path", (text, path) => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
   });
@@ -255,6 +258,22 @@ describe("a message that names the design document by its path", () => {
     ["Build this game: https://example.com/files/Quillmoor_GDD.md", "https://example.com/files/Quillmoor_GDD.md"],
     ["Bu oyunu yap: https://example.com/d/quillmoor.pdf", "https://example.com/d/quillmoor.pdf"],
     ["https://example.com/files/Quillmoor_GDD.md'deki oyunu yap", "https://example.com/files/Quillmoor_GDD.md"],
+    // A download copy was read as the name before its "(1)" — the original beside it.
+    ["Build this game: docs/Quillmoor_GDD (1).md", "docs/Quillmoor_GDD (1).md"],
+    ["Build the game in docs/Quillmoor_GDD (final copy).md", "docs/Quillmoor_GDD (final copy).md"],
+    ["Quillmoor_GDD (2).md'deki oyunu yap", "Quillmoor_GDD (2).md"],
+    ["Build the game in docs/Quill Moor GDD (1).md", "docs/Quill Moor GDD (1).md"],
+    // A name with a character the path pattern did not know, or in bold, was no name at all.
+    ["Build this game: docs/Quill+Moor_GDD.md", "docs/Quill+Moor_GDD.md"],
+    ["Build this game: docs/Quill&Moor_GDD.md", "docs/Quill&Moor_GDD.md"],
+    ["Build this game: docs/Quill#Moor_GDD.md", "docs/Quill#Moor_GDD.md"],
+    ["Build this game: docs/Quillmoor_GDD[v2].md", "docs/Quillmoor_GDD[v2].md"],
+    // …while a Markdown link is its target, not its text.
+    ["Build the game in [Quillmoor_GDD.md](docs/design/Quillmoor_GDD.md)", "docs/design/Quillmoor_GDD.md"],
+    ["Build this game: **docs/Quillmoor_GDD.md**", "docs/Quillmoor_GDD.md"],
+    ["Bu oyunu yap: <docs/Quillmoor_GDD.md>", "docs/Quillmoor_GDD.md"],
+    // A section anchor is no part of the file's name.
+    ["Build the game in docs/Quillmoor_GDD.md#combat", "docs/Quillmoor_GDD.md"],
   ])("%s → the document it names, %s, not the repository's other design", (text, path) => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
   });

@@ -10424,6 +10424,32 @@ describe("CampaignManager", () => {
         expect(refusedWithoutBuilding("chat-pptx")).toContain("`docs/Quillmoor_GDD.pptx`, but no text could be read from it");
       });
 
+      /**
+       * A download copy, or a name with "+" in it, was read short or not at
+       * all: the original beside the copy was built, or discovery built
+       * docs/Game_GDD.md.
+       */
+      it.each([
+        ["Build this game: docs/Quillmoor_GDD (1).md", "docs/Quillmoor_GDD (1).md"],
+        ["Bu oyunu yap: docs/Quill+Moor_GDD.md", "docs/Quill+Moor_GDD.md"],
+      ])("%s builds %s, not the original beside it or the repository's GDD", async (text, rel) => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), "# Quillmoor\n\nThe original, before the copy was edited.\n");
+        writeFileSync(join(projectRoot, rel), DESIGN);
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        utimesSync(join(projectRoot, rel), hourAgo, hourAgo);
+        expect(await say("chat-copy", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-copy");
+        expect(campaign?.gddPath).toBe(rel);
+        expect(campaign?.gddText).toBe(DESIGN);
+        expect(told("chat-copy")).toContain(`Building from \`${rel}\``);
+      });
+
+      it("reads a named workbook through the document extractor", async () => {
+        writeFileSync(join(projectRoot, "docs", "quillmoor-balance.xlsx"), "not a workbook");
+        expect(await say("chat-xlsx", "Build this game: docs/quillmoor-balance.xlsx")).toBe(true);
+        expect(refusedWithoutBuilding("chat-xlsx")).toContain("`docs/quillmoor-balance.xlsx`, but no text could be read from it");
+      });
+
       // A drive letter names no place on this machine unless it is Windows — and there, not this project.
       it("refuses a drive-letter path as outside the project", async () => {
         expect(await say("chat-drive", "Build the game in C:\\Games\\Quillmoor_GDD.odt")).toBe(true);

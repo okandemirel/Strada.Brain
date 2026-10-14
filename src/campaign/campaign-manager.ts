@@ -10391,7 +10391,7 @@ export class CampaignManager {
     if (!RICH_DOCUMENT_EXTENSIONS.some((ext) => ext === extension)) {
       return {
         refusal:
-          `\`${source}\` is not a format I read a design from — Markdown, TXT, PDF, Word, ODT, RTF or PowerPoint. Save it as one of those, or paste the design into the message. ${notInstead}`,
+          `\`${source}\` is not a format I read a design from — Markdown, TXT, PDF, Word, ODT, RTF, PowerPoint or Excel. Save it as one of those, or paste the design into the message. ${notInstead}`,
       };
     }
     const raw = readGddBytes(this.projectRoot, source);
