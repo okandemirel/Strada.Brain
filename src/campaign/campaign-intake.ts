@@ -1038,11 +1038,11 @@ function offered(docs: readonly NamedDocument[], design: NamedDocument, now = fa
  * document that could hold the design (no style sheet, changelog, licence,
  * readme or build instructions beside it counts), whose name says it is the
  * design or which the build's own clause calls the GDD, and which ends its
- * clause. Every
- * other document the build points at is offered at the approval gate first:
- * one with any other name ("following docs/android-signing.md"), one of two
- * the build is aimed at together, and one only named beside the documents it
- * is aimed at.
+ * clause. Every other document the build points at is offered at the
+ * approval gate first: one with any other name ("following
+ * docs/android-signing.md"), one only called the design elsewhere in the
+ * message ("the design is in docs/menu.md"), one of two the build is aimed
+ * at together, and one only named beside the documents it is aimed at.
  *
  * Beside them: a build aimed only at a style sheet or a changelog is aimed at
  * no design. "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md"
