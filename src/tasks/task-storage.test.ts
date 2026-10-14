@@ -102,10 +102,10 @@ describe("TaskStorage", () => {
     storage.save(retry);
     const verdict = {
       testsGreen: false,
-      detail: "PlayMode verification FAILED: 6 of 173 tests failed (unfiltered — the whole PlayMode suite).",
+      detail: "PlayMode verification FAILED: 4 of 114 tests failed (unfiltered — the whole PlayMode suite).",
       unfiltered: true,
-      failedTests: ["Game.Tests.WinLevel_ReachesWonState", "Game.Tests.Board_Fills"],
-      failedTestsOmitted: 4,
+      failedTests: ["Game.Tests.Ferry_WaitsForTide", "Game.Tests.Kiln_VentsOnOverheat"],
+      failedTestsOmitted: 2,
       assetSourcingBlind: "Unity account link expired or was revoked — re-run the Unity Link step",
     };
     storage.setVerification(retry.id, JSON.stringify(verdict));

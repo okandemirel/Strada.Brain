@@ -2,10 +2,10 @@
  * Approved by every verifier, and still not delivered.
  *
  * The conformance gates are asks, and an ask must be able to give up or it turns
- * into a loop. But going quiet was read as satisfied: measured on run 52,
- * [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and the
- * run finished with a 123-character success message for a game whose sixty
- * captured frames were identical. The gate's own last words were "say the game
+ * into a loop. But going quiet was read as satisfied: measured on a live run,
+ * [STRADA NOTHING DRAWN] fired until it gave up, then fell silent, and the
+ * run finished with a one-line success message for a game whose captured
+ * frames were all identical. The gate's own last words were "say the game
  * does not render rather than reporting it as delivered" — advice with nothing
  * behind it.
  *

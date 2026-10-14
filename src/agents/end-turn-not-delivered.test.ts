@@ -1,7 +1,7 @@
 /**
  * A run that every verifier approved, reporting what it did not deliver.
  *
- * Measured on one run: [STRADA NOTHING DRAWN] fired three times, fell silent when
+ * Measured on one run: [STRADA NOTHING DRAWN] kept firing, fell silent when
  * its ask budget ran out, and the task finished `failed: false` with a
  * one-line success message for a game whose captured frames were all
  * identical. The gates are asks and an ask must be able to give up; what must
@@ -30,7 +30,7 @@ function contextThatApproves(unmet: readonly string[]): BgEndTurnContext {
     chatId: "c",
     identityKey: "u",
     prompt: "build the game",
-    responseText: "Implemented the board module and its tests.",
+    responseText: "Implemented the irrigation module and its tests.",
     responseUsage: undefined,
     executionStrategy: {
       task: { type: "code_generation", criticality: "normal" },
@@ -119,7 +119,7 @@ describe("a run with an unmet delivery condition", () => {
     const result = await handleBgEndTurn(createInitialState(), contextThatApproves([NOT_DRAWN]));
 
     if (result.flow !== "done") throw new Error("expected done");
-    expect(result.visibleText).toContain("Implemented the board module");
+    expect(result.visibleText).toContain("Implemented the irrigation module");
   });
 
   it("records the phase as blocked, with the reason", async () => {

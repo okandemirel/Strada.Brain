@@ -2976,8 +2976,8 @@ export class CampaignManager {
       // NEVER a silent delivery. A missing milestone here means the ladder is
       // empty or the index ran past its end — a corrupt milestones_json (the
       // storage parser degrades to []) or a bad resume, not a finished game.
-      // Flipping to "done" here made a live 7-sprint campaign vanish with no
-      // message, no report and no revival path (audited 2026-09-01).
+      // Flipping to "done" here made a live campaign vanish with no message,
+      // no report and no revival path (audited 2026-09-01).
       campaign.state = "failed";
       campaign.lastError =
         `Ladder is unusable: milestone index ${campaign.currentMilestone} of ${campaign.milestones.length}. ` +

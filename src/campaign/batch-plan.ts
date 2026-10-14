@@ -4,7 +4,8 @@
  *
  * Three findings shared one cause, the rules living in three places:
  * - a batch computed from time and the producer's cap, not from the catalogue,
- *   asked a three-level game for sessions 1-5 (Codex 2026-09-13 AK#4);
+ *   asked a game for sessions past the last one it has (measured, Codex
+ *   2026-09-13 AK#4);
  * - "at least one fits" answered a round whose allowance exceeds one run's
  *   budget with the same one-session request the producer had just refused
  *   (AK#5);

@@ -463,7 +463,7 @@ function enumeratedDeliverableLabels(prompt: string): string[] {
       continue;
     }
     const body = item[1] ?? "";
-    // "Power-ups: 0 files. Implement them." — the label is what precedes the colon;
+    // "Pollen bursts: 0 files. Build them." — the label is what precedes the colon;
     // without one, the opening words carry the name.
     const head = body.includes(":") ? body.slice(0, body.indexOf(":")) : openingWords(body);
     const label = head.trim();
@@ -476,8 +476,8 @@ function enumeratedDeliverableLabels(prompt: string): string[] {
 
 /**
  * The opening words of a deliverable written without a colon, ending on a word
- * that can end a phrase. "Combo has types but is not wired into scoring" cut at
- * four words reads "Combo has types but", which is a sentence fragment quoted
+ * that can end a phrase. "Blight has types but is not wired into watering" cut at
+ * four words reads "Blight has types but", which is a sentence fragment quoted
  * back at the agent as if it were a name.
  */
 function openingWords(body: string): string {
@@ -516,7 +516,7 @@ function distinctiveTerm(label: string): string | null {
 }
 
 /**
- * "Power-ups", "power ups" and "powerups" are the same word to a reader, and a
+ * "Pollen-bursts", "pollen bursts" and "pollenbursts" are the same word to a reader, and a
  * draft that used a different one of them has not been silent.
  */
 function collapseForMention(text: string): string {

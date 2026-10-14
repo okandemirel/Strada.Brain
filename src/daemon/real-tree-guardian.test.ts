@@ -104,7 +104,7 @@ describe("RealTreeGuardian", () => {
     const messages: string[] = [];
     const guardian = new RealTreeGuardian({
       taskManager: manager as unknown as TaskManager,
-      verify: vi.fn().mockResolvedValue({ ok: false, detail: "RocketState.cs(8,17): error CS0101" }),
+      verify: vi.fn().mockResolvedValue({ ok: false, detail: "KiteState.cs(8,17): error CS0101" }),
       projectRoot: "/p",
       messenger: async (_chatId, text) => {
         messages.push(text);
@@ -746,9 +746,9 @@ describe("the fix task is told the errors, not the whole verdict", () => {
       diagnostics: {
         errorCount: 1,
         entries: [
-          { type: "error", message: "Assets/Modules/RocketModule/Scripts/Services/RocketService.cs(19,21): warning CS0108: 'RocketService.IsInitialized' hides inherited member 'Base.IsInitialized'." },
-          { type: "error", message: "Assets/Modules/RocketModule/Scripts/RocketModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
-          { type: "error", message: "Assets/Modules/RocketModule/Scripts/RocketModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
+          { type: "error", message: "Assets/Modules/KiteModule/Scripts/Services/KiteService.cs(19,21): warning CS0108: 'KiteService.IsInitialized' hides inherited member 'Base.IsInitialized'." },
+          { type: "error", message: "Assets/Modules/KiteModule/Scripts/KiteModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
+          { type: "error", message: "Assets/Modules/KiteModule/Scripts/KiteModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
           { type: "log", message: "## Script Compilation Error for: Csc Library/Bee/artifacts/200b0aE.dag/Game.Modules.Rocket.dll (+2 others)" },
           { type: "log", message: "UnityEngine.StackTraceUtility:ExtractStackTrace () (at /Users/bokken/build/output/unity/unity/Runtime/Export/Scripting/StackTrace.cs:35)" },
           { type: "log", message: "Assembly for Assembly Definition File 'Assets/Modules/CometModule/Tests/Editor/Game.Modules.Comet.Editor.Tests.asmdef' will not be compiled, because it has no scripts associated with it." },
@@ -782,7 +782,7 @@ describe("the fix task is told the errors, not the whole verdict", () => {
   });
 
   it("leaves prose and JSON without an error list untouched", () => {
-    expect(compactCompileDetail("RocketState.cs(8,17): error CS0101")).toBe("RocketState.cs(8,17): error CS0101");
+    expect(compactCompileDetail("KiteState.cs(8,17): error CS0101")).toBe("KiteState.cs(8,17): error CS0101");
     const noList = JSON.stringify({ status: "failed", reason: "Headless compile failed with 2 error(s)" });
     expect(compactCompileDetail(noList)).toBe(noList);
     const noErrors = JSON.stringify({ reason: "x", compile: { diagnostics: { entries: [{ type: "log", message: "Mono: reloaded" }] } } });

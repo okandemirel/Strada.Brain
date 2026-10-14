@@ -2,15 +2,14 @@
  * Every assembly in a module needs tests of its own.
  *
  * A module split into several assemblies is several compilation units. One
- * shared test assembly referencing all of them defeats the split: a Domain test
- * can reach Presentation, no layer can be tested in isolation, and a change in
- * any layer rebuilds and reruns everything.
+ * shared test assembly referencing all of them defeats the split: a test of one
+ * layer can reach every other, no layer can be tested in isolation, and a change
+ * in any layer rebuilds and reruns everything.
  *
- * Measured on a live run: a test-game module split into layer assemblies
- * (domain, application, infrastructure, presentation, core) carried a single
- * YourGame.SampleGame.Tests at the module root whose references listed every
- * one of them. Most of those assemblies had no test of their own, and nothing
- * in the system said so.
+ * Measured on a live run: a module split into several layer assemblies carried
+ * a single catch-all Tests assembly at the module root whose references listed
+ * every one of them. Most of those assemblies had no test of their own, and
+ * nothing in the system said so. The names below are invented.
  */
 
 import { resolve } from "node:path";
@@ -29,19 +28,19 @@ const DEPS = {
 
 // The guard resolves module roots natively ("D:\proj\..." on Windows), so the
 // fixture names the directory the same way.
-const MODULE_DIR = resolve("/proj/Assets/Modules/SampleGame");
+const MODULE_DIR = resolve("/proj/Assets/Modules/Nursery");
 
 /** A guard whose view of a module's .asmdef files is whatever the test says. */
 function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
   const guard = new StradaConformanceGuard(DEPS, {
     projectPath: "/proj",
     // The completeness gate must stay quiet so this one is what we read.
-    listDir: () => ["SampleGameModuleConfig.cs", "SampleGame.asmdef"],
+    listDir: () => ["NurseryModuleConfig.cs", "Nursery.asmdef"],
     listAsmdefs: (dir: string) => (dir === MODULE_DIR ? asmdefs : []),
   });
   guard.trackToolCall(
     "file_write",
-    { path: "Assets/Modules/SampleGame/Domain/Board.cs", content: "class X {}" },
+    { path: "Assets/Modules/Nursery/Sowing/Seedbed.cs", content: "class X {}" },
     false,
     "written",
   );
@@ -52,13 +51,12 @@ describe("per-assembly test coverage", () => {
   it("names every assembly that nothing tests", () => {
     // The measured shape: several layer assemblies, one catch-all test assembly.
     const guard = guardSeeing([
-      "Core/YourGame.SampleGame.Core.asmdef",
-      "Domain/YourGame.SampleGame.Domain.asmdef",
-      "Application/YourGame.SampleGame.Application.asmdef",
-      "Infrastructure/YourGame.SampleGame.Infrastructure.asmdef",
-      "Presentation/YourGame.SampleGame.Presentation.asmdef",
-      "Tests/Runtime/YourGame.SampleGame.Tests.asmdef",
-      "Tests/Editor/YourGame.SampleGame.Editor.Tests.asmdef",
+      "Sowing/Hothouse.Nursery.Sowing.asmdef",
+      "Potting/Hothouse.Nursery.Potting.asmdef",
+      "Misting/Hothouse.Nursery.Misting.asmdef",
+      "Compost/Hothouse.Nursery.Compost.asmdef",
+      "Tests/Runtime/Hothouse.Nursery.Tests.asmdef",
+      "Tests/Editor/Hothouse.Nursery.Editor.Tests.asmdef",
     ]);
 
     const prompt = guard.getPrompt() ?? "";
@@ -69,19 +67,19 @@ describe("per-assembly test coverage", () => {
     // "contains multiple assembly definition files" and nothing compiled.
     expect(prompt).toMatch(/ONE \.asmdef per folder/i);
     expect(prompt).toMatch(/its own directory/i);
-    for (const layer of ["Core", "Domain", "Application", "Infrastructure", "Presentation"]) {
+    for (const layer of ["Sowing", "Potting", "Misting", "Compost"]) {
       expect(prompt, `${layer} was not reported as untested`).toContain(
-        `YourGame.SampleGame.${layer}`,
+        `Hothouse.Nursery.${layer}`,
       );
     }
   });
 
   it("stays quiet when each assembly has its own tests", () => {
     const guard = guardSeeing([
-      "Domain/YourGame.SampleGame.Domain.asmdef",
-      "Domain/Tests/Runtime/YourGame.SampleGame.Domain.Tests.asmdef",
-      "Application/YourGame.SampleGame.Application.asmdef",
-      "Application/Tests/Runtime/YourGame.SampleGame.Application.Tests.asmdef",
+      "Sowing/Hothouse.Nursery.Sowing.asmdef",
+      "Sowing/Tests/Runtime/Hothouse.Nursery.Sowing.Tests.asmdef",
+      "Potting/Hothouse.Nursery.Potting.asmdef",
+      "Potting/Tests/Runtime/Hothouse.Nursery.Potting.Tests.asmdef",
     ]);
 
     expect(guard.getPrompt()).toBeNull();
@@ -91,8 +89,8 @@ describe("per-assembly test coverage", () => {
     // Some layers are only meaningfully testable in the editor; that still
     // counts as tested.
     const guard = guardSeeing([
-      "Presentation/YourGame.SampleGame.Presentation.asmdef",
-      "Presentation/Tests/Editor/YourGame.SampleGame.Presentation.Editor.Tests.asmdef",
+      "Misting/Hothouse.Nursery.Misting.asmdef",
+      "Misting/Tests/Editor/Hothouse.Nursery.Misting.Editor.Tests.asmdef",
     ]);
 
     expect(guard.getPrompt()).toBeNull();
@@ -102,9 +100,9 @@ describe("per-assembly test coverage", () => {
     // The ordinary generated module: one code assembly, Tests/Runtime and
     // Tests/Editor beside it. This gate must not nag about that.
     const guard = guardSeeing([
-      "SampleGame.asmdef",
-      "Tests/Runtime/SampleGame.Tests.asmdef",
-      "Tests/Editor/SampleGame.Editor.Tests.asmdef",
+      "Nursery.asmdef",
+      "Tests/Runtime/Nursery.Tests.asmdef",
+      "Tests/Editor/Nursery.Editor.Tests.asmdef",
     ]);
 
     expect(guard.getPrompt()).toBeNull();

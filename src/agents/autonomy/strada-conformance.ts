@@ -513,7 +513,7 @@ const ASSETS_UNSOURCED_GATE_LIMIT = 2;
  * sibling above — the fix it names is concrete and cheap to attempt.
  *
  * This is the gate for the measured "prefab yapısı sözde oluşturulsa bile
- * sahneler hep boş" failure (the test game, 2026-08-26): code and even prefab
+ * sahneler hep boş" failure (2026-08-26): code and even prefab
  * FILES existed while no element had art and nothing rendered. SPEC SCOPE
  * checks code against the schedule; this checks the schedule against ART.
  */
@@ -1011,10 +1011,9 @@ export class StradaConformanceGuard {
    * test can reach Presentation, no layer can be tested in isolation, and a
    * change anywhere rebuilds everything.
    *
-   * Measured: a module split into layer assemblies (domain, application,
-   * infrastructure, presentation) carried one Tests assembly at the module root
-   * that referenced every one of them, and most of those assemblies had no test
-   * of their own.
+   * Measured: a module split into several layer assemblies carried one Tests
+   * assembly at the module root that referenced every one of them, and most of
+   * those assemblies had no test of their own.
    *
    * Pairing is by name, which is what the generator produces and what Unity
    * shows in the Test Runner: assembly `X` is tested by `X.Tests` or
@@ -1033,8 +1032,8 @@ export class StradaConformanceGuard {
    *
    * Measured: asked to add tests, an agent created the framework's
    * Tests/Runtime + Tests/Editor pair AND kept its own habit of a Tests/ root
-   * assembly, ending with Tests/YourGame.SampleGame.Tests.asmdef and
-   * Tests/Runtime/YourGame.SampleGame.Tests.asmdef claiming one name — plus
+   * assembly, ending with Tests/Hothouse.Nursery.Tests.asmdef and
+   * Tests/Runtime/Hothouse.Nursery.Tests.asmdef claiming one name — plus
    * test files at the Tests root, belonging to neither mode.
    */
   private duplicateAssemblyNames(): string[] {
@@ -1108,7 +1107,7 @@ export class StradaConformanceGuard {
    * proves the game, and nothing here had ever asked for one.
    */
   /**
-   * The design document is the checklist. Measured 2026-08-24 (the test game):
+   * The design document is the checklist. Measured 2026-08-24:
    * the GDD schedules its elements in a literal table; runs delivered a
    * subset and called it done because no gate compared code against spec.
    * Fires only after real code exists (module roots touched) so early boots
@@ -1570,7 +1569,7 @@ export class StradaConformanceGuard {
    * Separate from getPrompt() on purpose. A gate is an ASK, and an ask has to be
    * able to give up — three refusals and it goes quiet, or it stops being a rule
    * and becomes a loop. Going quiet was then read as satisfied: measured on one
-   * run, [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and
+   * run, [STRADA NOTHING DRAWN] fired until its budget ran out, then fell silent, and
    * the run finished `failed: false` with a one-line success message for a
    * game whose captured frames were all identical. The gate's own last words
    * are "say the game does not render rather than reporting it as delivered",
@@ -2057,7 +2056,7 @@ export class StradaConformanceGuard {
 
     // Per-element art coverage: a run can clear "assets sourced" and "frames
     // differ" while its scheduled elements have no sprites at all — measured
-    // (the test game, 2026-08-26): prefab structures existed on paper, scenes
+    // 2026-08-26: prefab structures existed on paper, scenes
     // stayed empty, and no gate ever forced the target game's own assets to
     // exist. SPEC SCOPE checks code against the schedule; this gate checks
     // the schedule against ART — each element needs a sprite that exists AND

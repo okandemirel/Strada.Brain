@@ -12,12 +12,12 @@ function makeContext(projectPath: string, readOnly = false): ToolContext {
 }
 
 describe("buildRenderScript", () => {
-  it("no profile means no styling: no squash, no pink, matte material (Codex 2026-09-11 B#21)", () => {
+  it("no profile means no styling: no squash, no body tint, matte material (Codex 2026-09-11 B#21)", () => {
     const neutral = buildRenderScript({ bodyColor: "#9aa0a6", plump: [1, 1, 1], headScale: 1, outlineWidth: 0, shading: "flat" });
     expect(neutral).toContain('toon.SetFloat("_Glossiness", 0.1f)');
     expect(neutral).not.toContain('toon.SetFloat("_Glossiness", 0.82f)');
     expect(neutral).toContain("bool isEye = false;");
-    const glossy = buildRenderScript({ bodyColor: "#f89eb8", plump: [1.2, 0.833, 1.2], headScale: 1.22, outlineWidth: 1, shading: "glossy" });
+    const glossy = buildRenderScript({ bodyColor: "#3c8d6e", plump: [1.14, 0.88, 1.14], headScale: 1.09, outlineWidth: 1, shading: "glossy" });
     expect(glossy).toContain('toon.SetFloat("_Glossiness", 0.82f)');
     expect(materialForShading("glossy")).toEqual({ glossiness: 0.82, metallic: 0 });
     expect(materialForShading("pbr-realistic")).toEqual({ glossiness: 0.5, metallic: 0.1 });
@@ -26,9 +26,9 @@ describe("buildRenderScript", () => {
 
   it("embeds the tuned lighting, the stylize stage, and the synchronous RT capture", () => {
     const script = buildRenderScript({
-      bodyColor: "#f89eb8",
-      plump: [1.2, 0.86, 1.2],
-      headScale: 1.22,
+      bodyColor: "#3c8d6e",
+      plump: [1.14, 0.88, 1.14],
+      headScale: 1.09,
       outlineWidth: 1.0,
     });
     expect(script).toContain("KeyLight");
@@ -42,9 +42,9 @@ describe("buildRenderScript", () => {
 
   it("can disable the outline shell", () => {
     const script = buildRenderScript({
-      bodyColor: "#f89eb8",
-      plump: [1.2, 0.86, 1.2],
-      headScale: 1.22,
+      bodyColor: "#3c8d6e",
+      plump: [1.14, 0.88, 1.14],
+      headScale: 1.09,
       outlineWidth: 0,
     });
     expect(script).toContain("if (false)");
@@ -141,7 +141,7 @@ describe("PrerenderFramesTool launch semantics", () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "prerender-launch-"));
     mkdirSync(join(dir, "Assets"), { recursive: true });
-    writeFileSync(join(dir, "Assets", "Boar.prefab"), "yaml");
+    writeFileSync(join(dir, "Assets", "Cactus.prefab"), "yaml");
     cliDir = mkdtempSync(join(tmpdir(), "prerender-cli-"));
   });
 
@@ -174,7 +174,7 @@ describe("PrerenderFramesTool launch semantics", () => {
     vi.resetModules();
     const { PrerenderFramesTool: FreshTool } = await import("./prerender-frames.js");
 
-    const result = await new FreshTool().execute({ prefab: "Assets/Boar.prefab" }, makeContext(dir));
+    const result = await new FreshTool().execute({ prefab: "Assets/Cactus.prefab" }, makeContext(dir));
 
     expect(result.isError).toBeUndefined();
     expect(String(result.content)).toContain("2 frames rendered");
@@ -194,7 +194,7 @@ describe("PrerenderFramesTool keeps an authored frame .meta (audit A5 / D56)", (
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "prerender-meta-"));
     mkdirSync(join(dir, "Assets"), { recursive: true });
-    writeFileSync(join(dir, "Assets", "Boar.prefab"), "yaml");
+    writeFileSync(join(dir, "Assets", "Cactus.prefab"), "yaml");
     cliDir = mkdtempSync(join(tmpdir(), "prerender-meta-cli-"));
   });
 
@@ -222,20 +222,20 @@ describe("PrerenderFramesTool keeps an authored frame .meta (audit A5 / D56)", (
       { mode: 0o755 },
     );
     process.env["STRADA_UNITY_CLI"] = fakeCli;
-    const outDir = join(dir, "Assets", "Art", "Prerendered", "Boar");
+    const outDir = join(dir, "Assets", "Art", "Prerendered", "Cactus");
     mkdirSync(outDir, { recursive: true });
     const GUID = "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a";
     const authored = spriteMeta(GUID)
       .replace("spritePixelsToUnits: 100", "spritePixelsToUnits: 16")
       .replace("spritePivot: {x: 0.5, y: 0.5}", "spritePivot: {x: 0.25, y: 0}")
-      .replace("    sprites: []", "    sprites:\n    - name: Boar_0\n      rect: {x: 0, y: 0, width: 32, height: 32}\n    - name: Boar_1\n      rect: {x: 32, y: 0, width: 32, height: 32}");
+      .replace("    sprites: []", "    sprites:\n    - name: Cactus_0\n      rect: {x: 0, y: 0, width: 32, height: 32}\n    - name: Cactus_1\n      rect: {x: 32, y: 0, width: 32, height: 32}");
     writeFileSync(join(outDir, "frame_000.png.meta"), authored, "utf8");
     const WRONG = "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b";
     writeFileSync(join(outDir, "frame_045.png.meta"), `fileFormatVersion: 2\nguid: ${WRONG}\nDefaultImporter:\n  externalObjects: {}\n`, "utf8");
 
     vi.resetModules();
     const { PrerenderFramesTool: FreshTool } = await import("./prerender-frames.js");
-    const result = await new FreshTool().execute({ prefab: "Assets/Boar.prefab" }, makeContext(dir));
+    const result = await new FreshTool().execute({ prefab: "Assets/Cactus.prefab" }, makeContext(dir));
     expect(result.isError).toBeUndefined();
     expect(String(result.content)).toContain("2 frames rendered");
 

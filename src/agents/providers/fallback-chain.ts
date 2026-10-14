@@ -174,8 +174,8 @@ function isNonRetryableRequestError(error: unknown): boolean {
 /**
  * A credential the provider refused: HTTP 401, or a 403 that is not about quota.
  *
- * Measured 2026-08-23 on run 55: a provider whose key had been revoked failed
- * preflight, was reported as failed — and was tried six more times during the
+ * Measured 2026-08-23: a provider whose key had been revoked failed
+ * preflight, was reported as failed — and was tried again and again during the
  * run, each 401 ending the whole chain call rather than that provider's turn in
  * it. One of them blocked the task.
  */
@@ -206,7 +206,7 @@ const EMPTY_RESPONSE_RETRY_DELAY_MS = 1_500;
  *
  * Short on purpose: a first-response stall has already cost the whole budget,
  * and the measured recovery was immediate — the endpoint that stayed silent past
- * 300s answered a fresh request 8 seconds later.
+ * 300s answered a fresh request seconds later.
  */
 const FIRST_RESPONSE_STALL_RETRY_DELAY_MS = 2_000;
 
@@ -603,8 +603,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
    * that cannot answer the probe is skipped forever. So the number has to be one
    * the provider could actually meet.
    *
-   * Measured 2026-08-23 on run 54: OpenCode's queue returns first bytes anywhere
-   * between 2.7s and 70s, it declares a 300s first-response budget for exactly
+   * Measured 2026-08-23: OpenCode's queue returns first bytes anywhere from a
+   * few seconds to over a minute, it declares a 300s first-response budget for exactly
    * that reason, and the probe timed out at 15s. Every provider went to
    * cooldown, the probe could never clear it, and the task died with "All
    * providers are in cooldown. Try again later." — a state it could not leave.
@@ -717,9 +717,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
    * Falling over is the right answer to a stall when something can be fallen
    * over to. When the chain is one provider deep it is not an answer at all: the
    * call simply dies, and "All providers failed" describes a chain of one that
-   * blinked. Measured 2026-08-23 on run 52, the only live provider stayed silent
-   * past its 300s budget once, and direct requests to the same endpoint before
-   * and after returned first bytes in 2.7s, 7.9s and 16s. The condition was a
+   * blinked. Measured 2026-08-23: the only live provider stayed silent past its
+   * 300s budget once, and direct requests to the same endpoint before and after
+   * returned first bytes within seconds. The condition was a
    * queue spike that had already passed by the time the task was told it was
    * fatal.
    *
@@ -937,8 +937,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         if (holdsNoAnswer(response)) {
           // Falling through is the better answer when there is somewhere to fall
           // to. When there is not, "retryable" has to mean something: measured
-          // 2026-08-22, run 39 died on six empty answers in nine seconds from
-          // the only live provider, and a direct probe two minutes later got a
+          // 2026-08-22, a run died on a burst of empty answers within seconds from
+          // the only live provider, and a direct probe minutes later got a
           // normal reply. The condition was transient and had already passed.
           const somewhereToFallTo = this.providers
             .slice(i + 1)

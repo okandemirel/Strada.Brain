@@ -3,7 +3,7 @@
  *
  * Measured 2026-08-21 on a delivered project: plenty of C# files and prefabs,
  * a passing play-mode suite, and no MonoBehaviour, no use of Strada.Core's
- * view layer, a lone GameObject in the only scene. Every service and system was
+ * view layer, and nothing in its scenes a player could see. Every service and system was
  * correct and a player would have faced an empty screen. The tests passed
  * because they call services directly and never go through a scene, so no rule
  * that reads code shape or asserts on tests could have caught it.

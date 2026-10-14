@@ -61,8 +61,8 @@ function attach(root: string, prompt: string, campaign: { gddPath?: string; gddT
 
 describe("the final sprint is told what the tree renders, on every submit", () => {
   it("puts the measured refusal into the prompt", () => {
-    const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.");
-    expect(prompt).toContain("Sprint 7 — deliver the game.");
+    const prompt = attach(emptyGameProject(), "Sprint 38 — deliver the game.");
+    expect(prompt).toContain("Sprint 38 — deliver the game.");
     expect(prompt).toContain("REFUSED:");
     expect(prompt).toContain("render NOTHING");
     // The art it must bind, named — a count alone is not a starting point.
@@ -90,7 +90,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     // "Do not re-read the whole GDD" was read as "do not consult it": the
     // delivered game drifted from rules the sprint was told not to look up.
     // The measurement replaces an audit of the tree, not the design.
-    const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.", {
+    const prompt = attach(emptyGameProject(), "Sprint 38 — deliver the game.", {
       gddPath: "docs/GlassworksDesign.md",
       gddText: "# Glassworks\n## 1. Kilns\nA kiln cools for a full night before it is opened.\n",
     });
@@ -104,7 +104,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     // A campaign whose GDD could not be saved into the project has no file:
     // docs/ may hold another document, and "read the GDD sections" sent the
     // sprint to it. Such a campaign is told where its design is instead.
-    const prompt = attach(emptyGameProject(), "Sprint 7 — deliver the game.", {
+    const prompt = attach(emptyGameProject(), "Sprint 38 — deliver the game.", {
       gddText: "# Glassworks\n## 1. Kilns\nA kiln cools for a full night before it is opened.\n",
     });
     expect(prompt).not.toMatch(/re-read the (?:whole )?GDD/i);
@@ -117,7 +117,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
 
   it("replaces the previous block instead of stacking a stale one", () => {
     const root = emptyGameProject();
-    let prompt = attach(root, "Sprint 7.");
+    let prompt = attach(root, "Sprint 38.");
     prompt = attach(root, prompt);
     prompt = attach(root, prompt);
     const opens = prompt.split("<<MEASURED NOW").length - 1;
@@ -126,7 +126,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
 
   it("keeps a tail appended after the block, and re-measures around it", () => {
     const root = emptyGameProject();
-    const first = attach(root, "Sprint 7.");
+    const first = attach(root, "Sprint 38.");
     const withTail = `${first}\n\nThe previous attempt ended blocked: provider outage.`;
     const second = attach(root, withTail);
     expect(second).toContain("The previous attempt ended blocked: provider outage.");
@@ -142,7 +142,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
       refusal: "the scenes render NOTHING",
       lines: [`unbound: ${"Assets/Prefabs/VeryLongPrefabName.prefab, ".repeat(200)}`],
     });
-    const milestone = { prompt: "Sprint 7." } as { prompt: string };
+    const milestone = { prompt: "Sprint 38." } as { prompt: string };
     (manager as unknown as {
       attachStructureMeasurement(c: unknown, m: unknown): void;
     }).attachStructureMeasurement({ id: "c1", gddText: "" }, milestone);
@@ -161,7 +161,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     const filler = Array.from({ length: 40 }, (_, i) => `scene detail ${i}: ${"x".repeat(90)}`);
     (manager as unknown as { measureDeliveryStructure(): unknown }).measureDeliveryStructure = () => ({
       refusal: "the scenes render NOTHING",
-      lines: [...filler, "Project art: 537 sprite textures — 518 of the 537 sprite textures are placeholder-grade", "Project audio: 23 clips, 17 distinct by content"],
+      lines: [...filler, "Project art: 268 sprite textures — 153 of the 268 sprite textures are placeholder-grade", "Project audio: 37 clips, 33 distinct by content"],
     });
     const milestone = { id: "mcov1", title: "t", prompt: "Sprint.", status: "pending", attempts: 0 } as never;
     (manager as unknown as { attachStructureMeasurement(c: unknown, m: unknown): void }).attachStructureMeasurement(
@@ -170,8 +170,8 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     );
     const prompt = (milestone as { prompt: string }).prompt;
     expect(prompt).toContain("measurement trimmed here");
-    expect(prompt).toContain("518 of the 537 sprite textures are placeholder-grade");
-    expect(prompt).toContain("Project audio: 23 clips");
+    expect(prompt).toContain("153 of the 268 sprite textures are placeholder-grade");
+    expect(prompt).toContain("Project audio: 37 clips");
     expect(prompt.indexOf("Project art")).toBeLessThan(prompt.indexOf("scene detail 0"));
   });
 
@@ -183,7 +183,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
       refusal: "the scenes render NOTHING",
       lines: Array.from({ length: 20 }, (_, i) => line(i)),
     });
-    const milestone = { prompt: "Sprint 7." } as { prompt: string };
+    const milestone = { prompt: "Sprint 38." } as { prompt: string };
     (manager as unknown as {
       attachStructureMeasurement(c: unknown, m: unknown): void;
     }).attachStructureMeasurement({ id: "c1", gddText: "" }, milestone);
@@ -197,7 +197,7 @@ describe("the final sprint is told what the tree renders, on every submit", () =
   it("leaves the prompt alone when the project cannot be measured", () => {
     const root = mkdtempSync(join(tmpdir(), "structprompt-empty-"));
     dirs.push(root);
-    const prompt = attach(root, "Sprint 7.");
+    const prompt = attach(root, "Sprint 38.");
     // No Assets/ at all: the check reports it could not measure, and the
     // prompt must not gain a refusal the tree does not support.
     expect(prompt).not.toContain("REFUSED:");

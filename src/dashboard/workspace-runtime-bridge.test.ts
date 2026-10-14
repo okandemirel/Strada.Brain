@@ -1,9 +1,9 @@
 /**
  * A goal node's own output reaches its row.
  *
- * Measured 2026-09-07: 215 of 215 goal nodes marked completed in goals.db had
- * result="" — among them "Obtain or generate non-placeholder art for every
- * identified entry-scene…", completed, with nothing to show what was obtained.
+ * Measured 2026-09-07: every goal node marked completed in goals.db had
+ * result="" — among them an art-sourcing goal, completed, with nothing to
+ * show what was obtained.
  * The bridge wrote the row's previous (empty) result because the event never
  * carried the worker's output.
  */

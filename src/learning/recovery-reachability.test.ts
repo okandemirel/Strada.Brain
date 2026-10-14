@@ -208,7 +208,7 @@ describe("the fresh-rule allowance is for the same error and a named repair only
     ["retry with no target", "When file_read fails with this pattern, the resolution was to retry with corrected input"],
   ])("a fresh rule with no verified repair (%s) is not offered for its own error", (_label, action) => {
     const errorOutput =
-      "Error: file not found: Assets/Modules/IdentityModule/Scripts/Module/IdentityModuleConfig.cs [ERROR RECOVERY: file_read] Fix: Analyze the error and try an alternative approach.";
+      "Error: file not found: Assets/Modules/LedgerModule/Scripts/Module/LedgerModuleConfig.cs [ERROR RECOVERY: file_read] Fix: Analyze the error and try an alternative approach.";
     legacyRule("instinct_retry_only", "file_read", errorOutput, action);
 
     const result = hooks.onBeforeErrorAnalysis(errorContext("file_read", errorOutput));

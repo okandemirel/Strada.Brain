@@ -235,9 +235,9 @@ describe("vaultId 'project'", () => {
   // Measured 2026-09-06 as a failed call ("vault not found: project"): it is
   // the omitted-id default by another name.
   it('queries exactly the project vault', async () => {
-    const project = makeVault('unity:4ca9bd33', 'unity');
+    const project = makeVault('unity:7d3e0b91', 'unity');
     const self = makeVault('self:strada-brain', 'self' as VaultKind);
-    const ctx = makeContext([self, project], 'unity:4ca9bd33');
+    const ctx = makeContext([self, project], 'unity:7d3e0b91');
     const result = await new VaultSearchTool().execute({ query: 'GameBootstrapper', vaultId: 'project' }, ctx);
     expect(result.isError).toBeFalsy();
     expect((project as { query: ReturnType<typeof vi.fn> }).query).toHaveBeenCalled();
@@ -328,7 +328,7 @@ describe('VaultSearchTool while a vault is still indexing', () => {
   function registryWithIndexingVault(hits: unknown[] = []) {
     const registry = new VaultRegistry();
     const vault = {
-      id: 'unity:4ca9bd33',
+      id: 'unity:7d3e0b91',
       kind: 'unity-project' as VaultKind,
       rootPath: '/project',
       query: vi.fn().mockResolvedValue({ hits, budgetUsed: 0, truncated: false }),
@@ -346,7 +346,7 @@ describe('VaultSearchTool while a vault is still indexing', () => {
 
     const during = await tool.execute({ query: 'GameBootstrapper' }, ctx);
     expect(during.content).toMatch(/no vault hits/u);
-    expect(during.content).toContain('indexing in progress for [unity:4ca9bd33] — results may be partial');
+    expect(during.content).toContain('indexing in progress for [unity:7d3e0b91] — results may be partial');
 
     finishInit();
     await new Promise((resolve) => setImmediate(resolve));
@@ -365,6 +365,6 @@ describe('VaultSearchTool while a vault is still indexing', () => {
     const result = await tool.execute({ query: 'GameBootstrapper' }, ctx);
 
     expect(result.content).toContain('1 hit(s)');
-    expect(result.content).toContain('indexing in progress for [unity:4ca9bd33] — results may be partial');
+    expect(result.content).toContain('indexing in progress for [unity:7d3e0b91] — results may be partial');
   });
 });

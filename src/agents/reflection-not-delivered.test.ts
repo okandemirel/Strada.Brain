@@ -36,7 +36,7 @@ function reflectingState() {
   return transitionPhase(executing, AgentPhase.REFLECTING);
 }
 
-const DRAFT = "Implemented the board module and its tests.";
+const DRAFT = "Implemented the irrigation module and its tests.";
 
 /** Shared core: everything downstream of the draft approves. */
 function coreThatApproves(unmet: readonly string[]) {
@@ -139,7 +139,7 @@ describe("background reflection DONE with an unmet delivery condition", () => {
     if (result.flow !== "done") throw new Error("expected done");
     expect(result.visibleText).toContain("NOT DELIVERED");
     expect(result.visibleText).toContain("all 36 captured frames are identical");
-    expect(result.visibleText).toContain("Implemented the board module");
+    expect(result.visibleText).toContain("Implemented the irrigation module");
   });
 
   it("records the phase as blocked with the reason, not approved", async () => {

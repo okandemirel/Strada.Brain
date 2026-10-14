@@ -8,7 +8,7 @@ import { StradaConformanceGuard } from './strada-conformance.js';
  * A game nobody has seen draw anything is not delivered.
  *
  * Measured across this whole session: every captured frame byte-for-byte
- * identical, all of them empty sky — while the suite kept growing and
+ * identical, all of them an empty background — while the suite kept growing and
  * reported green each time. Runs reported success on a project that has never been
  * observed to render, and the only reason anyone knew otherwise was that a person
  * opened a PNG and looked at it.
@@ -111,10 +111,10 @@ describe('a game that has never been seen to draw', () => {
   });
 
   it('objects when frame variety is HUD-level (below the distinctiveness bar)', () => {
-    // Measured 2026-08-24 (the test game): a run of frames with only a few
-    // distinct — the variety was the progress bar filling over an empty sky. The gate
+    // Measured 2026-08-24: a run of frames with only a few distinct — the only
+    // variety was one HUD element changing over an otherwise static frame. The gate
     // requires >= 25% distinct digests as evidence of real drawing.
-    const frames = [...Array(10).fill('same-pixels'), 'progress-bar-moved'];
+    const frames = [...Array(10).fill('same-pixels'), 'hud-label-changed'];
     const { root, configPath } = project(frames);
 
     const prompt = promptFor(root, configPath);

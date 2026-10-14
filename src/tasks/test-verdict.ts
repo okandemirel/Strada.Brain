@@ -37,10 +37,9 @@ export interface TaskTestVerdict {
    *
    * Audited 2026-09-03: the delivered test-game campaign carried no verdict at
    * all on any milestone, while its filtered runs went green and the ONE
-   * unfiltered run reported 6 of 173 failing — including
-   * WinLevel_ReachesWonState ("LevelWon event did not fire"). A green from a
-   * filter is not the suite passing, and delivery must be able to tell them
-   * apart.
+   * unfiltered run reported failures — among them the test whose failure
+   * means the core loop does not work. A green from a filter is not the suite
+   * passing, and delivery must be able to tell them apart.
    */
   unfiltered?: boolean;
   /**
@@ -48,12 +47,12 @@ export interface TaskTestVerdict {
    * MAX_NAMED_FAILURES. Undefined when the observation was green or named
    * none.
    *
-   * Audited 2026-09-03: the verdict kept only counts, so "6 of 173 tests
-   * failed" reached the delivery report without ever saying that one of them
-   * was WinLevel_ReachesWonState — the test whose failure means the core loop
-   * does not work. Names are read ONLY off the red line itself, never from a
-   * window of following lines: a runner that prints its whole suite after the
-   * summary would otherwise have its PASSING tests named as failures.
+   * Audited 2026-09-03: the verdict kept only counts, so a red "N of M tests
+   * failed" reached the delivery report without ever naming the one test
+   * whose failure means the core loop does not work. Names are read ONLY off
+   * the red line itself, never from a window of following lines: a runner
+   * that prints its whole suite after the summary would otherwise have its
+   * PASSING tests named as failures.
    */
   failedTests?: string[];
   /** How many further names the red line held but this verdict does not list. */
@@ -63,16 +62,16 @@ export interface TaskTestVerdict {
    * art from the purchased library. The tool's own sentence, so the reader is
    * told what to run.
    *
-   * Audited 2026-09-06: across a whole campaign unity_my_assets_cloud was
-   * called three times, all three answered "The Unity account link expired or
-   * was revoked — re-run the Unity Link step" (token refresh HTTP 412), and
-   * not one word of it reached the channel or the delivery report. The only
+   * Audited 2026-09-06: across a whole campaign every unity_my_assets_cloud
+   * call answered "The Unity account link expired or was revoked — re-run the
+   * Unity Link step" (token refresh HTTP 412), and not one word of it reached
+   * the channel or the delivery report. The only
    * real-art source was dead for the entire build and nobody was told.
    */
   assetSourcingBlind?: string;
   /**
-   * How the run ended, as data from the runtime. In a measured campaign five of six
-   * milestone tips ended on the system's own "task_stuck" notice and all six
+   * How the run ended, as data from the runtime. In a measured campaign most
+   * milestone tips ended on the system's own "task_stuck" notice and every one
    * went green: the only record of the stop was that sentence (GDD-drift W01).
    */
   runIntegrity?: TaskRunIntegrity;

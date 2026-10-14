@@ -2,9 +2,9 @@
  * Campaign Planner
  *
  * One LLM pass that turns a GDD into the milestone ladder — the ordered list
- * of self-contained sprint prompts the campaign will walk. This replaces the
- * hand-authored per-sprint kick prompts that drove the test game (Sprint B, then
- * Sprint C hours later, by hand). The rules below are the distilled shape of
+ * of self-contained sprint prompts the campaign will walk. This replaces
+ * hand-authored per-sprint kick prompts, each written and started by hand once
+ * the previous sprint had ended. The rules below are the distilled shape of
  * those prompts.
  */
 

@@ -28,7 +28,7 @@ describe("readPlaymodeRun — a record is counts that add up (Codex 2026-09-11 B
     write({ total: 100, passed: 3, failed: 0, skipped: 0, unfiltered: true });
     expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: false });
 
-    write({ total: 215, passed: 215, failed: 0, skipped: 0, unfiltered: true });
+    write({ total: 117, passed: 117, failed: 0, skipped: 0, unfiltered: true });
     expect(readPlaymodeRun(root, 0)).toMatchObject({ found: true, green: true, unfiltered: true });
 
     // Counts that are not whole non-negative numbers are not a run record
@@ -149,9 +149,9 @@ describe("readPlaymodeRun", () => {
   });
 
   it("red with names, and a filtered run says which filter", () => {
-    write({ total: 215, passed: 205, failed: 10, failedNames: ["A.B.TollPaid_OpensTheGate", "A.B.Other"], filter: "Tollgate.*", unfiltered: false });
+    write({ total: 91, passed: 89, failed: 2, failedNames: ["A.B.TollPaid_OpensTheGate", "A.B.Other"], filter: "Tollgate.*", unfiltered: false });
     const r = readPlaymodeRun(root, 0);
-    expect(r.detail).toBe("PlayMode verification FAILED: 10 of 215 tests failed (filter: Tollgate.*)");
+    expect(r.detail).toBe("PlayMode verification FAILED: 2 of 91 tests failed (filter: Tollgate.*)");
     expect(r.failedNames).toEqual(["A.B.TollPaid_OpensTheGate", "A.B.Other"]);
     expect(r.unfiltered).toBe(false);
     write({ total: 0, passed: 0, failed: 0, unfiltered: true });
@@ -318,18 +318,17 @@ describe("the runner's own verdict, its exceptions, and a suite that did not run
     expect(barely).toMatchObject({ green: false });
     expect(barely.detail).toContain("99 of 100 tests never ran");
 
-    // The project's real record — a couple of platform exclusions — stands,
-    // and the verdict SAYS which tests nobody ran: the count used to ride
-    // invisibly inside "269 of 272 tests passed (unfiltered — the whole
-    // PlayMode suite)", so three tests nobody ran read as three that had
-    // (Codex 2026-09-12 U#F6). Which skips are acceptable is the acceptance
+    // A record with a couple of platform exclusions stands, and the verdict
+    // SAYS which tests nobody ran: the count used to ride invisibly inside
+    // "146 of 148 tests passed (unfiltered — the whole PlayMode suite)", so
+    // two tests nobody ran read as two that had (Codex 2026-09-12 U#F6). Which skips are acceptable is the acceptance
     // contract's to state, so this discloses rather than judges.
-    write({ ...fresh, total: 272, passed: 269, failed: 0, skipped: 3 });
+    write({ ...fresh, total: 148, passed: 146, failed: 0, skipped: 2 });
     const withSkips = readPlaymodeRun(root, 0);
     expect(withSkips).toMatchObject({ green: true });
-    expect(withSkips.detail).toContain("3 SKIPPED");
+    expect(withSkips.detail).toContain("2 SKIPPED");
     // …and a run with none says nothing about skipping.
-    write({ ...fresh, total: 272, passed: 272, failed: 0, skipped: 0 });
+    write({ ...fresh, total: 148, passed: 148, failed: 0, skipped: 0 });
     expect(readPlaymodeRun(root, 0).detail).not.toMatch(/SKIPPED/);
   });
 });

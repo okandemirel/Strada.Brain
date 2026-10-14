@@ -6044,7 +6044,7 @@ export class Orchestrator {
       // Last resort for a tool nobody described: the allowlist AND its shape.
       // `!WRITE_OPERATIONS.has(name)` alone declared every runtime-registered
       // tool read-only, which is how a shell-backed file writer came to run
-      // with no confirmation and corrupt five .asmdef files.
+      // with no confirmation and corrupt the .asmdef files it wrote.
       (!WRITE_OPERATIONS.has(tool.name) && !looksLikeWriteTool(tool.name, tool));
     // Read-only mode offers only what the metadata calls read-only; the name
     // list alone missed writers nobody had added to it.

@@ -303,7 +303,7 @@ export class BackgroundExecutor {
    * taskId → live workspace path, recorded at lease acquisition. Failed tool
    * calls register as "progress", so a task whose workspace directory was
    * deleted under it never trips the inactivity-based reaper — measured
-   * 2026-08-27: a Sprint C task flailed for 40+ minutes against a lease dir
+   * 2026-08-27: a sprint task flailed for 40+ minutes against a lease dir
    * that no longer existed, every call rejected by the path guard. The
    * reaper sweeps this map and settles lost workspaces by name.
    */
@@ -1634,7 +1634,7 @@ export class BackgroundExecutor {
         // skipping this makes the whole lease write-only: the agent edits a
         // temp copy, verifies it, reports success, and the user's project never
         // receives a byte. Measured before this existed — a one-file request
-        // wrote Assets/Scripts/Board.cs into
+        // wrote Assets/Scripts/Weathervane.cs into
         // <tmp>/strada-workspaces/task-<id>/ and it was deleted on release.
         await Promise.resolve()
           .then(() => managedWorkspaceLease.commit())
@@ -1996,11 +1996,11 @@ export class BackgroundExecutor {
           // at the source root, after a successful run. Measured 2026-08-24:
           // milestone branches piled up unmerged and the user had to ask why
           // the system "didn't merge it itself". It runs in the finally, AFTER
-          // the lease write-back: measured 2026-09-07 21:32, a failed merge
-          // attempt rewrote 169 project files one second before the commit,
-          // and the commit read every one of them as "the user changed it" —
-          // the sprint's scene placements and sprite bindings were quarantined
-          // and the project never received them.
+          // the lease write-back: measured 2026-09-07, a failed merge attempt
+          // rewrote a large share of the project's files just before the
+          // commit, and the commit read every one of them as "the user
+          // changed it" — the sprint's scene placements and sprite bindings
+          // were quarantined and the project never received them.
           integrateAfterWriteBack = true;
           return;
         }
@@ -2232,7 +2232,7 @@ export class BackgroundExecutor {
       // Commits UNCONDITIONALLY, including on abort and failure. A `!aborted`
       // guard was tried and reverted: the stall detector aborts a task that
       // stopped making progress, and measured on a real run that had already
-      // written 13 files, the guard threw all of them away. "The user said
+      // written its files, the guard threw all of them away. "The user said
       // stop" and "a watchdog gave up" are not the same thing, and the executor
       // cannot cheaply tell them apart here.
       //
@@ -2264,7 +2264,7 @@ export class BackgroundExecutor {
                 // is not the clean success "files: 15, conflicts: 0" reads as.
                 // Measured 2026-08-21: an agent deleted a duplicate interface it
                 // had just resolved, the deletion was declined, and the next run
-                // opened on 25 CS0101 errors it had already fixed once.
+                // opened on the CS0101 errors it had already fixed once.
                 deletionsDeclined: result.removed.length,
                 deletionsApplied: result.deleted?.length ?? 0,
               });
@@ -2537,7 +2537,7 @@ export class BackgroundExecutor {
   /** Settlement hook for the dev-knowledge completion note. The route-level
    *  call sites fire when a background task is merely SUBMITTED (planner
    *  state empty → real-work gate rejects), so the one useful note type never
-   *  wrote once while the useless verdict notes wrote 213 times. Settlement
+   *  wrote once while the useless verdict notes wrote over and over. Settlement
    *  is where the run's real outcome lives. */
   private devKnowledgeCompletionHook?: (params: {
     goal: string;
@@ -2693,7 +2693,7 @@ export class BackgroundExecutor {
    * inactivity-based reaper cannot catch these: every rejected tool call
    * still registers as progress, so a task flailing against a deleted lease
    * looks busy forever (measured 2026-08-27: 40+ minutes of path-guard
-   * rejections on a Sprint C task whose lease dir had vanished). Failing
+   * rejections on a sprint task whose lease dir had vanished). Failing
    * with the honest cause routes through mission keep-alive, which
    * resubmits onto a fresh workspace.
    */
@@ -2825,8 +2825,8 @@ export class BackgroundExecutor {
     // old key hashed the prompt — but every retry resubmits with a replay
     // preface prepended, so the key changed each round, the attempt counter
     // reset to 0 forever, and the backoff never grew past its floor. Measured
-    // 2026-08-27 (the test game): a fresh full decomposition every 30–60s for
-    // twenty minutes, sixteen plan files deep, cap never reached.
+    // 2026-08-27 (the test game): a fresh full decomposition every 30–60s,
+    // plan file after plan file, cap never reached.
     const key = `mission:${this.lineageRootTaskId(task)}`;
     const attempt = this.missionRetries.get(key) ?? 0;
     // An UNANSWERABLE budget is treated as spent: the predicate reads storage,
@@ -3199,7 +3199,7 @@ export class BackgroundExecutor {
   /**
    * Pick a partially-finished goal tree back up instead of leaving it blocked.
    *
-   * Run 37 stopped here with four of five nodes unfinished and a person asleep.
+   * A measured run stopped here with most of its nodes unfinished and a person asleep.
    * prepareTreeForRetry keeps what completed and resets the rest, so a resume
    * costs only the work that failed. decideAutoResume holds the bounds.
    */

@@ -941,9 +941,9 @@ export async function handleInteractiveEndTurn(
     //
     // The conformance gates are asks, and an ask must be able to give up or it
     // becomes a loop. But going quiet was being read as satisfied: measured on
-    // run 52, [STRADA NOTHING DRAWN] fired three times, fell silent on the
-    // fourth, and the run reported success for a game whose sixty captured
-    // frames were identical. Its own last words were "say the game does not
+    // a live run, [STRADA NOTHING DRAWN] fired until it gave up, then fell
+    // silent, and the run reported success for a game whose captured frames
+    // were all identical. Its own last words were "say the game does not
     // render rather than reporting it as delivered" — advice with nothing
     // behind it.
     //
