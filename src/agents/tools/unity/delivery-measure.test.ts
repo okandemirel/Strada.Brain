@@ -53,11 +53,16 @@ describe("unity_delivery_measure", () => {
     expect(payload.placeholderSprites.listed.some((p) => p.includes("Slime.png"))).toBe(payload.placeholderSprites.count > 0);
   });
 
-  it("refuses to hand back numbers for a directory it could not measure", async () => {
+  it("refuses to hand back numbers for a directory it could not measure, and says why and where", async () => {
     const root = mkdtempSync(join(os.tmpdir(), "delivery-measure-")); roots.push(root);
     const tool = new UnityDeliveryMeasureTool();
     const result = await tool.execute({}, createToolContext({ projectPath: root, workingDirectory: root }));
     expect(result.isError).toBe(true);
     expect(result.content).toContain("nothing here is a count");
+    // The reason the assessment itself gave, and the directory it read — a
+    // guess between two causes left a run knowing neither (live 2026-10-14).
+    expect(result.content).toContain("no Assets/ directory");
+    expect(result.content).toContain(root);
+    expect(result.content).not.toContain("or the walk did not complete");
   });
 });

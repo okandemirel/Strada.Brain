@@ -39,8 +39,13 @@ export class UnityDeliveryMeasureTool {
       return { content: `Error: delivery measurement failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
     }
     if (!report.measured) {
+      // SAY WHICH. The assessment reports the reason it could not measure
+      // (`incomplete`), and this used to answer with a guess between two of
+      // them — so a run that asked for a count was told neither what was
+      // missing nor where it had looked (measured in a live run 2026-10-14).
+      const why = report.incomplete.length > 0 ? report.incomplete.join("; ") : "the assessment gave no reason";
       return {
-        content: "Error: the project could not be measured (no Assets/ to read, or the walk did not complete) — nothing here is a count.",
+        content: `Error: the project at ${context.projectPath} could not be measured: ${why} — nothing here is a count.`,
         isError: true,
       };
     }
