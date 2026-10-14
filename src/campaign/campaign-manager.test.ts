@@ -10316,6 +10316,8 @@ describe("CampaignManager", () => {
       ["Rewrite README.md from scratch", "README.md"],
       // A code identifier that says GDD: discovery built docs/Game_GDD.md.
       ["Rewrite loadGDD from scratch", "loadGDD.ts"],
+      // A code file that says gdd: the message was taken over to say it could not be read.
+      ["Build the game and fix my_gdd_parser.ts", "my_gdd_parser.ts"],
     ])("%s is the user's task, not a build from that document", async (text, rel) => {
       writeFileSync(join(projectRoot, rel), "# Notes\n\n" + "n".repeat(400));
       expect(await say("chat-task", text)).toBe(false);

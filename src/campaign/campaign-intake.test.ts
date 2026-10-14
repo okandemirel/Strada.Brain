@@ -453,6 +453,29 @@ describe("a named document is the design only when the build is aimed at it", ()
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
 
+  /**
+   * A file name with an extension counted as a named design whenever "gdd"
+   * stood in it as a word: "Build the game and fix my_gdd_parser.ts" was a
+   * build from my_gdd_parser.ts, and the manager took the message over to say
+   * it could not read it — the user's task never ran. A source or data file
+   * is no design, nor is the "gdd" inside its name "the GDD".
+   */
+  it.each([
+    "Build the game and fix my_gdd_parser.ts",
+    "Build the game; load_gdd.py fails",
+    "Oyunu yap, gdd_schema.json bozuk",
+  ])("%s → no campaign (a code file is no design)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each([
+    "Build the game after updating gdd_schema.json",
+    "Build the game, then fix src/gdd_loader.cs",
+    "Build the game, then run tools/check_gdd_links.sh over the scenes",
+  ])("%s → neither a named design nor the repository's GDD", (text) => {
+    expect(detectCampaignIntent(msg(text))?.kind).not.toMatch(/^gdd-/);
+  });
+
   it.each([
     "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.",
     "Sıfırdan bir oyun yap: fener bekçisi her gece bir sokağı aydınlatır ve sis geri çekilir; görseller docs/art-style.md'deki gibi olsun.",

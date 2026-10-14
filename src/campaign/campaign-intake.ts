@@ -71,7 +71,26 @@ const GDD_ACRONYM_RE = /(?:(?<![\p{L}\p{N}])(?:gdd|Gdd|GDD)|(?<=\p{Ll})(?:Gdd|GD
 const GDD_SPELLED_RE = /(?<![\p{L}\p{N}])game[\s_-]*design[\s_-]*doc(?:ument)?s?(?![\p{L}])/iu;
 
 function refersToGdd(text: string): boolean {
-  return GDD_ACRONYM_RE.test(text) || GDD_SPELLED_RE.test(text);
+  const words = withoutCodeFiles(text);
+  return GDD_ACRONYM_RE.test(words) || GDD_SPELLED_RE.test(words);
+}
+
+/**
+ * The extensions a document is written in: those a design is read from, and
+ * those the manager names back as no format it reads.
+ */
+const DOCUMENT_NAME_EXTENSION_RE = /\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx|xlsx|html?|pages|gdoc|epub|doc|ppt|xls|od[ps]|key|numbers)$/iu;
+/** A file name with an extension that has a letter in it ("1.2" is a version). */
+const FILE_NAME_RE = /[^\s"'`“”‘’()<>,;!?]+\.(?=\p{N}*\p{L})[\p{L}\p{N}]{1,8}(?![\p{L}\p{N}])/gu;
+
+/**
+ * The text with every source, data or script file name blanked: the "gdd" in
+ * "my_gdd_parser.ts" or "gdd_schema.json" is no GDD. "Build the game and fix
+ * my_gdd_parser.ts" was a build from that file, and the manager took the
+ * message over to say it could not read it — the user's task never ran.
+ */
+function withoutCodeFiles(text: string): string {
+  return text.replace(FILE_NAME_RE, (name) => (DOCUMENT_NAME_EXTENSION_RE.test(name) ? name : " ".repeat(name.length)));
 }
 
 /**
