@@ -22,6 +22,7 @@ import type { CampaignPlanner } from "./campaign-planner.js";
 import { CampaignStorage } from "./campaign-storage.js";
 import { buildCampaignStatus, formatCampaignStatus } from "./campaign-status.js";
 import { encodeRequirement } from "./requirement-identity.js";
+import { rowsNamedBy } from "./scope-report.js";
 import { judgeMilestone } from "./scope-verdict.js";
 import type { Campaign, CampaignMilestone } from "./types.js";
 import type {
@@ -627,5 +628,55 @@ describe("/campaign rejudge replays the judge and changes nothing (W14)", () => 
     const { manager, storage } = build();
     storage.save(ledgerCampaign("/somewhere/else"));
     expect(manager.rejudgeByCommand("chat-1", "campaign_scope_1")).toContain("No campaign campaign_scope_1 on this project");
+  });
+});
+
+/**
+ * WHAT A WAIVER'S TARGET NAMES. A waiver takes rows out of judgement, so the
+ * reading of its target is the whole decision: a target read too widely waives
+ * a rule nobody meant to drop, and one read too narrowly waives nothing while
+ * the owner believes it did. The label forms come from documents a person
+ * writes by hand ("G-04" in one line, "G4" in the next).
+ */
+describe("rowsNamedBy", () => {
+  it("reads one label through the forms a person writes it in", () => {
+    const l = ledger([row("R1", { label: "G-04" }), row("R2", { label: "LD-1" })]);
+    for (const target of ["G-04", "g04", "G4", "g 4", "G_04", "G-004"]) {
+      const named = rowsNamedBy(l, target);
+      expect(named.rows.map((r) => r.rid), target).toEqual(["R1"]);
+      expect(named.how).toBe(`label ${target}`);
+    }
+  });
+
+  it("does not take one label for another that differs only in a digit", () => {
+    const l = ledger([row("R1", { label: "G-1" }), row("R2", { label: "G-10" })]);
+    expect(rowsNamedBy(l, "G1").rows.map((r) => r.rid)).toEqual(["R1"]);
+    expect(rowsNamedBy(l, "G10").rows.map((r) => r.rid)).toEqual(["R2"]);
+  });
+
+  it("names a row by its id before trying it as a label", () => {
+    const l = ledger([row("R7", { label: "G-2" }), row("R8", { label: "R7" })]);
+    const named = rowsNamedBy(l, "r7");
+    expect(named.rows.map((r) => r.rid)).toEqual(["R7"]);
+    expect(named.how).toBe("row R7");
+  });
+
+  it("names a section and every subsection under it, and nothing beside it", () => {
+    const l = ledger([
+      row("R1", { sectionNumber: "7" }),
+      row("R2", { sectionNumber: "7.4" }),
+      row("R3", { sectionNumber: "7.4.1" }),
+      row("R4", { sectionNumber: "71" }),
+    ]);
+    expect(rowsNamedBy(l, "§7.4").rows.map((r) => r.rid)).toEqual(["R2", "R3"]);
+    expect(rowsNamedBy(l, "§7").rows.map((r) => r.rid)).toEqual(["R1", "R2", "R3"]);
+    expect(rowsNamedBy(l, "§7.4").how).toBe("section §7.4");
+  });
+
+  it("waives nothing for a target that names nothing, an empty one included", () => {
+    const l = ledger([row("R1", { label: "G-04" })]);
+    expect(rowsNamedBy(l, "G-05").rows).toEqual([]);
+    expect(rowsNamedBy(l, "   ").rows).toEqual([]);
+    expect(rowsNamedBy(l, "§9").rows).toEqual([]);
   });
 });
