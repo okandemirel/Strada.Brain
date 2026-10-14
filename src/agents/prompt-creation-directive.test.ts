@@ -22,9 +22,9 @@ import {
 import { buildPlanningPrompt } from "./paor-prompts.js";
 
 const GREENFIELD =
-  "Grid Quest adinda 2D bir Unity oyunu gelistir. Izgara yonetimi, akis mantigi, eslestirme ve puanlama kur.";
+  "Fern Brook adinda 2D bir Unity oyunu gelistir. Dere haritasi, hava durumu, toplama ve puanlama kur.";
 const WITH_TARGET =
-  "Assets/Scripts altina GridQuest namespace'inde Board.cs adli tek bir C# dosyasi yaz.";
+  "Assets/Scripts altina Fernbrook namespace'inde Board.cs adli tek bir C# dosyasi yaz.";
 
 describe("buildCreationExecutionDirective", () => {
   it("fires for a creation request that names no files", () => {

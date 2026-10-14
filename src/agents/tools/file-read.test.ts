@@ -132,7 +132,7 @@ describe("what a failed read is told", () => {
 describe("a miss inside a directory that exists", () => {
   // Measured on the run of 2026-08-20: the agent wrote
   // docs/SampleGame_GDD_StructuredSummary.md, then tried three times to read
-  // docs/GridQuest_StructuredBrief.md — its own file under a name it had
+  // docs/Fernbrook_StructuredBrief.md — its own file under a name it had
   // misremembered. "File not found" gave it nothing to correct from.
   it("names what the directory actually holds", async () => {
     const root = mkdtempSync(join(tmpdir(), "strada-read-"));
@@ -141,7 +141,7 @@ describe("a miss inside a directory that exists", () => {
     writeFileSync(join(root, "docs", "SampleGame_GDD_RequirementsSummary.md"), "x");
 
     const result = await new FileReadTool().execute(
-      { path: "docs/GridQuest_StructuredBrief.md" },
+      { path: "docs/Fernbrook_StructuredBrief.md" },
       { projectPath: root } as never,
     );
     rmSync(root, { recursive: true, force: true });
@@ -157,10 +157,10 @@ describe("a miss inside a directory that exists", () => {
     // Uppercase so the directory's own byte order puts them ahead of the close
     // match: eight of them push it past the cut, and only ranking pulls it back.
     for (let i = 0; i < 8; i++) writeFileSync(join(root, "docs", `AAA-unrelated-${i}.md`), "x");
-    writeFileSync(join(root, "docs", "GridQuest_Notes.md"), "x");
+    writeFileSync(join(root, "docs", "Fernbrook_Notes.md"), "x");
 
     const result = await new FileReadTool().execute(
-      { path: "docs/GridQuest_Missing.md" },
+      { path: "docs/Fernbrook_Missing.md" },
       { projectPath: root } as never,
     );
     rmSync(root, { recursive: true, force: true });
@@ -168,7 +168,7 @@ describe("a miss inside a directory that exists", () => {
     // Position, not mere presence: without ranking the directory's own order
     // decides, and the one name worth seeing sits behind eight that are not.
     const listed = result.content.split("that directory holds:")[1] ?? "";
-    expect(listed.indexOf("GridQuest_Notes.md"), "the close match was not put first").toBe(1);
+    expect(listed.indexOf("Fernbrook_Notes.md"), "the close match was not put first").toBe(1);
   });
 
   it("refuses a non-integer offset or limit instead of reading nothing under a NaN header (TLS-17)", async () => {

@@ -6,7 +6,7 @@ import { basename as pathBasename, dirname as pathDirname, join as pathJoin, rel
  *
  * Measured on the run of 2026-08-20: the agent wrote
  * docs/SampleGame_GDD_StructuredSummary.md and then tried three times to read
- * docs/GridQuest_StructuredBrief.md — its own file, misremembered. "File not
+ * docs/Fernbrook_StructuredBrief.md — its own file, misremembered. "File not
  * found" ends there; the names beside it turn the miss into one correction.
  */
 export async function nearbyNames(fullPath: string): Promise<string> {

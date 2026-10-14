@@ -13,7 +13,7 @@
  * discarded.
  *
  * Measured cost of that: "write one C# file under Assets/Scripts in the
- * GridQuest namespace" is 113 characters and classifies as
+ * Fernbrook namespace" is 113 characters and classifies as
  * code-generation/moderate — below the configured "complex" threshold. The
  * classifier said no; the length check overruled it; a single-file edit was
  * routed through goal decomposition, a wave planner and multi-agent dispatch,
@@ -74,7 +74,7 @@ function makeOrchestrator(options: {
 
 /** Longer than the 60-character pre-filter, so length alone would admit it. */
 const LONG_MODERATE_PROMPT =
-  "Assets/Scripts altina GridQuest namespace'inde Board.cs adli tek bir C# dosyasi yaz: basit bir grid sinifi olsun.";
+  "Assets/Scripts altina Fernbrook namespace'inde Board.cs adli tek bir C# dosyasi yaz: basit bir grid sinifi olsun.";
 
 describe("supervisor admission", () => {
   it("sends a long but only-moderate request to the direct worker", async () => {
