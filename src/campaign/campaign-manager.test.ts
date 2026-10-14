@@ -10378,6 +10378,15 @@ describe("CampaignManager", () => {
       expect(tasks.submitted).toHaveLength(0);
     });
 
+    // "Build the game" is also the player build; the build instructions were read as the design, ungated.
+    it("starts nothing for a build aimed at the build instructions", async () => {
+      writeFileSync(join(projectRoot, "docs", "BUILD.md"), "# Build\n\nOpen the project, pick Android, press Build.\n" + "b".repeat(400));
+      expect(await say("chat-player-build", "Build the game per docs/BUILD.md")).toBe(false);
+      expect(told("chat-player-build")).toBe("");
+      expect(storage.hasActiveForChat("chat-player-build")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
     it("an idea that names its style sheet is drafted from the idea, at the approval gate", async () => {
       writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
       const idea = "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.";

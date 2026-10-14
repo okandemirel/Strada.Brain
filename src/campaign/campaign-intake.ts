@@ -153,6 +153,7 @@ function intentFromText(text: string): CampaignIntent | undefined {
   const wholeGame = asksForWholeGame(prose);
   if (named.length > 0 && !wholeGame) return undefined;
   const design = designAmong(plain, named);
+  if (design === null) return undefined;
   if (design) return { kind: "gdd-from-docs", path: design };
   // A document the message only mentions is no part of what it asks for.
   const rest = withoutDocuments(plain, named);
@@ -264,10 +265,26 @@ function linkNamesDocument(link: string): boolean {
 
 /** Documents that sit beside a design — a style sheet, a changelog, a readme — and are not it when the message names it too. */
 const SUPPORT_DOCUMENT_WORDS = new Set(["style", "styles", "stylesheet", "styleguide", "stil", "changelog", "readme", "license", "licence", "contributing"]);
+/**
+ * Instructions for compiling or shipping the game. In a Unity project "build
+ * the game per docs/BUILD.md" is the player build: it started no campaign on
+ * main, and a named path made it an immediate one with the instructions for
+ * the design. Whole words only — "city-builder.md" and "deck-building.md" are
+ * designs.
+ */
+const BUILD_INSTRUCTION_WORDS = new Set(["build", "builds", "release", "releases", "deploy", "deployment", "ci", "checklist", "packaging", "compile"]);
+
+function documentWords(path: string): string[] {
+  const name = path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
+  return name.split(/[^\p{L}\p{N}]+|(?<=\p{Ll})(?=\p{Lu})/u).map((word) => word.toLowerCase());
+}
+
+function isBuildInstructions(path: string): boolean {
+  return documentWords(path).some((word) => BUILD_INSTRUCTION_WORDS.has(word));
+}
 
 function isSupportDocument(path: string): boolean {
-  const name = path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "");
-  return name.split(/[^\p{L}\p{N}]+|(?<=\p{Ll})(?=\p{Lu})/u).some((word) => SUPPORT_DOCUMENT_WORDS.has(word.toLowerCase()));
+  return isBuildInstructions(path) || documentWords(path).some((word) => SUPPORT_DOCUMENT_WORDS.has(word));
 }
 
 /**
@@ -512,9 +529,11 @@ function turnedAway(prose: string, doc: NamedDocument): boolean {
  * — the only GDD, else the only other document — unless the message turns it
  * away or names two, and then there is no campaign to start (the user's task
  * asks which). Named alone, with nothing else to build from, it is still the
- * document the message meant.
+ * document the message meant — unless it is build or release instructions:
+ * then the build is the player build, and `null` says no campaign at all,
+ * however long the message is (it is no idea to draft either).
  */
-function designAmong(text: string, named: readonly NamedDocument[]): string | undefined {
+function designAmong(text: string, named: readonly NamedDocument[]): string | null | undefined {
   if (named.length === 0) return undefined;
   const prose = proseOf(text, named);
   const wholeGame = asksForWholeGame(prose);
@@ -539,8 +558,9 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | un
   const aimedDocs = named.filter((_, i) => aimed[i]);
   const design = aimedDocs.find((doc) => refersToGdd(doc.path)) ?? aimedDocs.find((doc) => !isSupportDocument(doc.path));
   if (design) return design.path;
+  const playerBuild = aimedDocs.length > 0 && aimedDocs.every((doc) => isBuildInstructions(doc.path));
   const rest = withoutDocuments(text, named);
-  if (!wholeGame || !(refersToGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return undefined;
+  if (!wholeGame || !(refersToGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
   const beside = named.filter((doc) => !aimedDocs.includes(doc));
   const candidates = beside.filter((doc) => !turnedAway(prose, doc));
   const gdds = candidates.filter((doc) => refersToGdd(doc.path));
@@ -548,13 +568,14 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | un
   if (aimedDocs.length === 0) return undefined;
   const designs = candidates.filter((doc) => !isSupportDocument(doc.path));
   if (designs.length > 0) return designs.length === 1 ? designs[0]!.path : undefined;
-  return beside.some((doc) => !isSupportDocument(doc.path)) ? undefined : aimedDocs[0]!.path;
+  if (beside.some((doc) => !isSupportDocument(doc.path))) return undefined;
+  return playerBuild ? null : aimedDocs.find((doc) => !isBuildInstructions(doc.path))!.path;
 }
 
 /** The design document the message names, when it names one. */
 export function documentPathIn(text: string): string | undefined {
   const plain = withoutEmphasis(text);
-  return designAmong(plain, namedDocumentsIn(plain));
+  return designAmong(plain, namedDocumentsIn(plain)) ?? undefined;
 }
 
 /** The reference followed by a "GDD:" marker, read exactly as refersToGdd reads one. */

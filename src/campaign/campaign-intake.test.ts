@@ -690,6 +690,31 @@ describe("a build aimed only at a document that sits beside the design", () => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
 
+  /**
+   * In a Unity project "build the game" is also the player build: "Build the
+   * game per docs/BUILD.md" (no campaign on main) became an immediate,
+   * ungated campaign that read the build instructions as the design.
+   */
+  it.each([
+    "Build the game per docs/BUILD.md",
+    "Build the game per docs/android-build.md",
+    "Make the game per docs/release-checklist.md",
+    "Build the game per docs/BUILD.md, then upload the APK to the internal testing track",
+    "docs/android-build.md'ye göre oyunu yap",
+  ])("%s → no campaign (build instructions are no design)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each([
+    ["Build the game per docs/BUILD.md, see docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Build the game in docs/BUILD.md and docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game per docs/Quillmoor_Build_GDD.md", "docs/Quillmoor_Build_GDD.md"],
+    ["Build the game per docs/city-builder.md", "docs/city-builder.md"],
+    ["Build this game: docs/deck-building.md", "docs/deck-building.md"],
+  ])("%s → %s (a design beside build instructions, or one only named like them)", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
   it("an idea written beside the style sheet the build is aimed at is the design", () => {
     const text = "Build this game from scratch per docs/art-style.md: a beekeeper moves her hives between meadows as the seasons turn.";
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
