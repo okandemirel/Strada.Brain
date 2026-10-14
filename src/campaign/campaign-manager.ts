@@ -6178,7 +6178,15 @@ export class CampaignManager {
       }
       for (const check of checks) {
         const test = tests.find((t) => t.rid === check.rid);
-        if (test) newRefs.set(check.rid, { kind: "test", testName: test.testName, path: rendered.path, bodySha: test.bodySha });
+        if (test) {
+          newRefs.set(check.rid, {
+            kind: "test",
+            testName: test.testName,
+            path: rendered.path,
+            bodySha: test.bodySha,
+            ...(test.constructs !== undefined && test.constructs.length > 0 ? { constructs: test.constructs } : {}),
+          });
+        }
       }
       const owning = campaign.milestones.find((m) => m.id === owner);
       if (owning !== undefined) owning.acceptanceFile = rendered.path;

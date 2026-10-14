@@ -41,6 +41,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { generateFolderMetaContent, generateMetaContent } from "../agents/tools/unity/meta-file-utils.js";
+import { constructsNamedBy } from "./acceptance-constructs.js";
 import { requirementTokens } from "./campaign-planner.js";
 import {
   ACCEPTANCE_DIR,
@@ -820,6 +821,9 @@ export function renderAcceptanceFile(milestoneId: string, tests: readonly Accept
       rid: row.rid,
       testName: `${namespace}.${className}.${methods[i]}`,
       bodySha: checkBodySha(check),
+      // What the body itself names, so a row's construct is evidence rather
+      // than a claim (acceptance-constructs.ts).
+      constructs: constructsNamedBy(check),
     })),
   };
 }

@@ -318,7 +318,23 @@ function seedProof(memory: string, opts: ProofOptions = {}): void {
     sessions: [{ index: 0, outcome: "Won" }, { index: 1, outcome: "Lost" }],
     ...(opts.futureRecords ? { inputRoute: "input" } : {}),
   };
-  const construct = opts.futureRecords ? { construct: "SystemBase" } : {};
+  // The construct a row maps to is read from its own acceptance check, not
+  // claimed on the row: a check may not use reflection, so the framework types
+  // its body names are what the row's behaviour went through
+  // (src/campaign/acceptance-constructs.ts).
+  const construct = opts.futureRecords
+    ? {
+        checks: [
+          {
+            kind: "test",
+            testName: "Strada.Acceptance.M1.Acceptance_M1.R1",
+            path: "Assets/StradaAcceptance/Acceptance_M1.cs",
+            bodySha: "a".repeat(64),
+            constructs: ["Strada.Core.DI:Game.Modules.Harbor.IBeamService", "Strada.Core.Sync.EntityView"],
+          },
+        ],
+      }
+    : {};
   const storage = new CampaignStorage(join(memory, "campaigns.db"));
   try {
     storage.save(

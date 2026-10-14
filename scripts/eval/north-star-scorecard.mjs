@@ -1147,7 +1147,15 @@ function ledgerCounts(campaign) {
   const scoped = rows.filter(inScope);
   const ids = new Set(campaign.milestones.map((m) => m.id));
   const owned = scoped.filter((r) => ids.has(ownerOf(r) ?? ""));
-  const construct = scoped.filter((r) => typeof r.construct === "string" && r.construct.trim() !== "");
+  // THE CONSTRUCT IS READ FROM THE ROW'S OWN CHECK, not claimed anywhere: an
+  // acceptance check may not use reflection, so the Strada.Core/Strada.Modules
+  // types its body names — and the types it resolves through the framework's
+  // registration — are what the row's behaviour actually went through
+  // (src/campaign/acceptance-constructs.ts). A row whose checks name none has
+  // no construct, and this rung says so.
+  const construct = scoped.filter((r) =>
+    (r.checks ?? []).some((c) => Array.isArray(c?.constructs) && c.constructs.some((name) => typeof name === "string" && name.trim() !== "")),
+  );
   return { rows: rows.length, scoped: scoped.length, owned: owned.length, construct: construct.length, excluded: rows.filter((r) => r.status === "excluded").length };
 }
 

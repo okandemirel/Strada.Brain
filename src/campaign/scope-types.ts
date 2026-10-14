@@ -171,6 +171,14 @@ export type AcceptanceCheckRef =
       path: string;
       /** sha256 of the body the writer returned, before the system wrapped it. */
       bodySha: string;
+      /**
+       * The framework constructs this check's own body names
+       * (`acceptance-constructs.ts`): a Strada.Core/Strada.Modules type, or a
+       * type reached through the framework's registration
+       * (`Strada.Core.DI:<type>`). Read from the check, never claimed — and
+       * absent on every check written before it was read.
+       */
+      constructs?: string[];
       /** When a later test replaced this one (a changed GDD number, a rebind). */
       supersededAtMs?: number;
       /** Why the independent review called it weak; the row stays open until a regenerated test passes. */
@@ -305,6 +313,8 @@ export interface AcceptanceTestRef {
   rid: string;
   testName: string;
   bodySha: string;
+  /** The framework constructs this test's own body names (`acceptance-constructs.ts`). */
+  constructs?: string[];
   /** Set when this test was written by another call than the file's (a regeneration, a rebind). */
   writer?: AcceptanceWriter;
   /**

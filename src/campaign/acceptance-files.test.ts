@@ -165,7 +165,15 @@ describe("renderAcceptanceFile", () => {
     );
     expect(rendered.sha256).toBe(sha256(rendered.source));
     expect(rendered.tests).toEqual([
-      { rid: "req-007-a1b2c3d4e5f6", testName: "Strada.Acceptance.M1.Acceptance_M1.R007_a1b2c3", bodySha: checkBodySha(goodRuleCheck) },
+      {
+        rid: "req-007-a1b2c3d4e5f6",
+        testName: "Strada.Acceptance.M1.Acceptance_M1.R007_a1b2c3",
+        bodySha: checkBodySha(goodRuleCheck),
+        // WHAT THE CHECK ITSELF NAMED, so the row's framework construct is
+        // evidence rather than a claim (north-star rung 4, measured
+        // 2026-10-14: no row had ever named one).
+        constructs: ["Strada.Core.Play.PlaythroughOutcome.None", "Strada.Core.Play.PlaythroughOutcome.Won"],
+      },
     ]);
     expect(isAcceptanceTestName(rendered.tests[0]!.testName)).toBe(true);
   });
