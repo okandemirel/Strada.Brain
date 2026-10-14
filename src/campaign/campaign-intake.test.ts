@@ -569,3 +569,79 @@ describe("a bare reference to the GDD needs a whole-game build", () => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
   });
 });
+
+/**
+ * A build the message turns down or asks about is no request for one. The
+ * whole-game test looked only at the build verb, never at what stood before
+ * it: "Don't build the game in docs/Old_GDD.md — use the new one" built the
+ * very document the user ruled out, and "How do I build the game in
+ * docs/q.md?" answered "Building from `docs/q.md` … Sprint 1 starts now" —
+ * an immediate build with no approval gate. "The GDD" had the same blind spot.
+ */
+describe("a build the message turns down or asks about", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it.each([
+    "Don't build the game in docs/Old_GDD.md — use the new one",
+    "Do not build the game from docs/Quillmoor_GDD.md yet, I am still editing it",
+    "Wait, don't build the game in docs/Quillmoor_GDD.md",
+    "Don't, for now, build the game in docs/quillmoor.md",
+    "Never build the game from docs/quillmoor.md",
+    "I don't want you to build the game in docs/quillmoor.md",
+    "Let's not build the game in docs/quillmoor.md",
+    "How do I build the game in docs/quillmoor.md?",
+    "Did you build the game in docs/quillmoor.md?",
+    "Should we build the game in docs/quillmoor.md?",
+    "Should we build the game in docs/quillmoor.md",
+    "Hey, should we build the game in docs/quillmoor.md?",
+    "Can you tell me how to build the game in docs/quillmoor.md?",
+    "If you build the game in docs/quillmoor.md, keep the save system",
+    "Build the game in docs/quillmoor.md?",
+    "Bu oyunu yap: docs/quillmoor.md mı?",
+    "docs/quillmoor.md'deki oyunu yap mı?",
+    "Don't build the game in the GDD",
+    "How do I build the game in the GDD?",
+    "Should I build the game from scratch: a beekeeper moves her hives between meadows as the seasons turn?",
+  ])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each([
+    ["Can you build the game in docs/quillmoor.md?", "docs/quillmoor.md"],
+    ["Could you please build this game: docs/Quillmoor_GDD.md?", "docs/Quillmoor_GDD.md"],
+    ["Please build the game in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game in docs/quillmoor.md. Can you keep me posted?", "docs/quillmoor.md"],
+    ["Build the game in docs/quillmoor.md, okay?", "docs/quillmoor.md"],
+    ["If you can, build the game in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Don't build the game in docs/Old_GDD.md; build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Don't wait for me, build the game in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Bu oyunu yap: docs/quillmoor.md, tamam mı?", "docs/quillmoor.md"],
+    ["docs/quillmoor.md'deki oyunu yazar mısın?", "docs/quillmoor.md"],
+  ])("%s → %s (asked for, politely or plainly)", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  });
+
+  it("an idea whose own sentence carries a question further on is still the idea", () => {
+    const text = "Build this game: a beekeeper moves her hives between meadows each season, can the swarms grow slowly?";
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  describe("with the design attached", () => {
+    const design = `# Quillmoor\n\n${"Design content. ".repeat(30)}`;
+    const shared = (text: string): ReturnType<typeof detectCampaignIntent> =>
+      detectCampaignIntent({ chatId: "c", text, attachments: [{ type: "document", name: "Quillmoor_GDD.md", data: Buffer.from(design) }] } as never);
+
+    it.each([
+      "Don't build the game from this yet, I am still editing it",
+      "Should I build the game in this GDD?",
+      "Bu GDD'deki oyunu yap mı?",
+    ])("%s → no campaign", (text) => {
+      expect(shared(text)).toBeUndefined();
+    });
+
+    it("…while a polite request still builds it", () => {
+      expect(shared("Can you build the game in this GDD?")).toMatchObject({ kind: "gdd-attachment", sourceName: "Quillmoor_GDD.md" });
+    });
+  });
+});

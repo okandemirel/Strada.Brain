@@ -97,16 +97,20 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
       // …UNLESS THE CAPTION ASKS FOR WORK ON THE DOCUMENT: "fix the typo in
       // this" with Foo_GDD.md attached was an immediate build of the game.
       const asksForWork = WORK_ON_DOCUMENT_RE.test(text);
+      const prose = proseOf(withoutEmphasis(text));
       // …AND AN ADVERB BESIDE THAT WORK IS NO BUILD: "Read it end to end",
       // "Rewrite this from scratch" and "bunu baştan sona oku" built the game
       // from the document they asked to have read or rewritten.
-      const buildsGame = WHOLE_GAME_BUILD_RE.test(text) || (!asksForWork && BUILD_INTENT_RE.test(text));
-      if (!text || buildsGame || (!asksForWork && (refersToGdd(attachment.name) || refersToGdd(text)))) {
+      const buildsGame = asksForWholeGame(prose) || (!asksForWork && asksToBuild(prose));
+      // …NOR IS A BUILD THE CAPTION TURNS DOWN OR ASKS ABOUT: "Don't build the
+      // game from this yet" built it, through the GDD in the file's name.
+      const declined = !buildsGame && BUILD_INTENT_RE.test(prose);
+      if (!text || buildsGame || (!asksForWork && !declined && (refersToGdd(attachment.name) || refersToGdd(text)))) {
         return { kind: "gdd-attachment", gddText: extractedText, sourceName: attachment.name };
       }
       // The message is about the document it carried, which was read: the
       // rules below would draft its caption as an idea, or call it unreadable.
-      if (asksForWork) return undefined;
+      if (asksForWork || declined) return undefined;
     }
   }
 
@@ -122,7 +126,10 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
 
 /** Steps 2 and 3: what the message's own text asks for. */
 function intentFromText(text: string): CampaignIntent | undefined {
-  if (!BUILD_INTENT_RE.test(text)) return undefined;
+  const plain = withoutEmphasis(text);
+  const named = namedDocumentsIn(plain);
+  const prose = proseOf(plain, named);
+  if (!asksToBuild(prose)) return undefined;
 
   // 2. "Build the game in the GDD" — the design already lives in the repo.
   // BEFORE the idea-length minimum: that minimum exists because an IDEA has
@@ -143,9 +150,8 @@ function intentFromText(text: string): CampaignIntent | undefined {
   // built the game from the README, and an idea that mentioned its style sheet
   // was thrown away for the style sheet. A document named without a
   // whole-game build is the user's task, not a campaign.
-  const plain = withoutEmphasis(text);
-  const named = namedDocumentsIn(plain);
-  if (named.length > 0 && !WHOLE_GAME_BUILD_RE.test(plain)) return undefined;
+  const wholeGame = asksForWholeGame(prose);
+  if (named.length > 0 && !wholeGame) return undefined;
   const design = designAmong(plain, named);
   if (design) return { kind: "gdd-from-docs", path: design };
   // A document the message only mentions is no part of what it asks for.
@@ -160,7 +166,7 @@ function intentFromText(text: string): CampaignIntent | undefined {
     // end to end" and "GDD'yi baştan sona oku" built whatever design docs/
     // held, with no approval gate. A message about the document without a
     // whole-game build is the user's task, not an idea to draft from either.
-    return WHOLE_GAME_BUILD_RE.test(plain) ? { kind: "gdd-from-docs" } : undefined;
+    return wholeGame ? { kind: "gdd-from-docs" } : undefined;
   }
 
   if (rest.trim().length < MIN_IDEA_LENGTH) return undefined;
@@ -289,16 +295,14 @@ function namedDocumentsIn(text: string): NamedDocument[] {
   }
   // Each span found is blanked to the same length, so every position still
   // holds and no later pattern reads a part of it again.
-  const blank = (s: string, spans: readonly NamedDocument[]): string =>
-    spans.reduce((acc, span) => acc.slice(0, span.at) + " ".repeat(span.end - span.at) + acc.slice(span.end), s);
-  let unread = blank(text, named);
+  let unread = blankSpans(text, named);
   const links: NamedDocument[] = [];
   for (const m of unread.matchAll(LINK_RE)) {
     const end = m.index + m[0].length;
     links.push({ path: m[1]!, at: end - m[1]!.length, end });
   }
   named.push(...links.filter((link) => linkNamesDocument(link.path)));
-  unread = blank(unread, links);
+  unread = blankSpans(unread, links);
   const paths: NamedDocument[] = [];
   for (const m of unread.matchAll(DOCUMENT_PATH_RE)) {
     const end = m.index + m[0].length;
@@ -308,7 +312,7 @@ function namedDocumentsIn(text: string): NamedDocument[] {
     paths.push({ path: text.slice(at, end), at, end });
   }
   named.push(...paths);
-  for (const m of blank(unread, paths).matchAll(NAME_TOKEN_RE)) {
+  for (const m of blankSpans(unread, paths).matchAll(NAME_TOKEN_RE)) {
     const end = m.index + m[0].length;
     if (isGddName(m[1]!)) named.push({ path: m[1]!, at: end - m[1]!.length, end });
   }
@@ -322,6 +326,16 @@ function namedDocumentsIn(text: string): NamedDocument[] {
  */
 function withoutEmphasis(text: string): string {
   return text.replace(/\*/g, " ");
+}
+
+/** Each span blanked to its own length, so every position still holds. */
+function blankSpans(text: string, spans: readonly NamedDocument[]): string {
+  return spans.reduce((acc, span) => acc.slice(0, span.at) + " ".repeat(span.end - span.at) + acc.slice(span.end), text);
+}
+
+/** The message's own words: the documents it names blanked, so no file name reads as a verb, a "not" or a full stop. */
+function proseOf(plain: string, named: readonly NamedDocument[] = namedDocumentsIn(plain)): string {
+  return blankSpans(plain, named);
 }
 
 /** The message without the documents it names, each a single space. */
@@ -356,6 +370,71 @@ const WHOLE_GAME_BUILD_RE = new RegExp(
   ].join("|"),
   "iu",
 );
+
+/**
+ * Whether the build written at `at`..`end` is asked for, not turned down or
+ * asked about. The whole-game test looked only at the verb: "Don't build the
+ * game in docs/Old_GDD.md — use the new one" built the document the user
+ * ruled out, and "How do I build the game in docs/q.md?" was an immediate
+ * build with no approval gate. A "not" ANYWHERE in the verb's clause counts
+ * ("I don't want you to build…"), so "Don't stop until you build…" is no
+ * campaign either — the side that costs a rephrase, not a multi-day build.
+ * Turkish turns a verb down inside the word ("yapma"), which the verb
+ * patterns already refuse; its question particle stands apart ("…mı?").
+ */
+function buildIsAsked(prose: string, at: number, end: number): boolean {
+  const clause = clauseBefore(prose, at);
+  const sentence = sentenceBefore(prose, at);
+  if (TURNS_DOWN_RE.test(clause) || ASKS_ABOUT_RE.test(clause) || QUESTION_OPENER_RE.test(clause) || DANGLING_NOT_RE.test(sentence)) return false;
+  // A question mark that closes the build's own clause asks about it ("Build
+  // the game in P?", "Bu oyunu yap: P mı?"); one past a comma belongs to
+  // another clause ("…, okay?", "…, can the fog roll back?").
+  const close = SENTENCE_END_RE.exec(prose.slice(end));
+  const tail = close ? prose.slice(end, end + close.index) : prose.slice(end);
+  if (close?.[0] !== "?" || /[,;—–]|\s-\s/.test(tail)) return true;
+  return POLITE_REQUEST_RE.test(sentence) || /m[ıiuü]s[ıiuü]n/iu.test(prose.slice(at, end));
+}
+
+/** A word that turns down what follows it in its clause. */
+const TURNS_DOWN_RE = /(?<![\p{L}])(?:not|never|dont|cannot|rather\s+than|instead\s+of|\p{L}+n['’]t)(?![\p{L}])/iu;
+/** A word that makes the build a condition or a question about it. */
+const ASKS_ABOUT_RE = /(?<![\p{L}])(?:if|unless|whether|how|why|what|which|where)(?![\p{L}])/iu;
+/** A clause opened as a yes/no question; "can you" and its kin are requests. */
+const QUESTION_OPENER_RE =
+  /^\s*(?:(?:hey|so|ok(?:ay)?|wait|well|also|now)\s+)*(?:should|shall|did|does|do|is|are|was|were|am|have|has|had|may|might|must|(?:can|could|would|will)(?!\s+(?:you|u|ya)(?![\p{L}])))(?![\p{L}])/iu;
+/** "Don't, for now, build …": a "not" cut off from its verb by a comma or a dash. */
+const DANGLING_NOT_RE = /(?<![\p{L}])(?:not|never|dont|\p{L}+n['’]t)\s*[,—–(]/iu;
+const POLITE_REQUEST_RE =
+  /^\s*(?:(?:hey|hi|ok(?:ay)?|so|now|alright|also|well)[\s,!]+)*(?:(?:please|pls|plz|kindly|lütfen)(?![\p{L}])|(?:(?:please|pls|plz)[\s,]+)?(?:can|could|would|will)\s+(?:you|u|ya)(?![\p{L}]))/iu;
+/** The end of a sentence: a stop, a bang or a question mark before a space, or a line break. */
+const SENTENCE_END_RE = /[.!?](?=["'\x60”’)\]]*(?:\s|$))|\n/u;
+const CLAUSE_BREAK_RE = /[,;:()[\]—–\n]|[.!?](?=\s|$)|\s-\s|(?<![\p{L}])(?:and|but|then|or|ve|ama|fakat|sonra)(?![\p{L}])/giu;
+const SENTENCE_BREAK_RE = /[.!?](?=["'\x60”’)\]]*(?:\s|$))|\n/gu;
+
+function clauseBefore(prose: string, at: number): string {
+  let start = 0;
+  for (const m of prose.slice(0, at).matchAll(CLAUSE_BREAK_RE)) start = m.index + m[0].length;
+  return prose.slice(start, at);
+}
+
+function sentenceBefore(prose: string, at: number): string {
+  let start = 0;
+  for (const m of prose.slice(0, at).matchAll(SENTENCE_BREAK_RE)) start = m.index + m[0].length;
+  return prose.slice(start, at);
+}
+
+const WHOLE_GAME_BUILDS_RE = new RegExp(WHOLE_GAME_BUILD_RE.source, "giu");
+const BUILD_INTENTS_RE = new RegExp(BUILD_INTENT_RE.source, "gi");
+
+/** A whole-game build the message asks for (see buildIsAsked). */
+function asksForWholeGame(prose: string): boolean {
+  return [...prose.matchAll(WHOLE_GAME_BUILDS_RE)].some((m) => buildIsAsked(prose, m.index, m.index + m[0].length));
+}
+
+/** Any build intent — an adverb included — the message asks for. */
+function asksToBuild(prose: string): boolean {
+  return [...prose.matchAll(BUILD_INTENTS_RE)].some((m) => buildIsAsked(prose, m.index, m.index + m[0].length));
+}
 
 /**
  * The build is aimed at the document written right after it: "Build this
@@ -407,13 +486,17 @@ const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?
  */
 function designAmong(text: string, named: readonly NamedDocument[]): string | undefined {
   if (named.length === 0) return undefined;
-  const wholeGame = WHOLE_GAME_BUILD_RE.test(text);
-  const aimed = named.map(
-    (doc) =>
-      BUILDS_FROM_NEXT_RE.test(text.slice(0, doc.at)) ||
-      GAME_IN_PREVIOUS_RE.test(text.slice(doc.end)) ||
-      (wholeGame && GDD_NAMES_NEXT_RES.some((re) => re.test(text.slice(0, doc.at)))),
-  );
+  const prose = proseOf(text, named);
+  const wholeGame = asksForWholeGame(prose);
+  // A build aimed at a document counts only when it is asked for: "Don't
+  // build the game in docs/Old_GDD.md; build the game in docs/New_GDD.md".
+  const aimed = named.map((doc) => {
+    const before = BUILDS_FROM_NEXT_RE.exec(text.slice(0, doc.at));
+    if (before && buildIsAsked(prose, before.index, doc.at)) return true;
+    const after = GAME_IN_PREVIOUS_RE.exec(text.slice(doc.end));
+    if (after && buildIsAsked(prose, doc.at, doc.end + after[0].length)) return true;
+    return wholeGame && GDD_NAMES_NEXT_RES.some((re) => re.test(text.slice(0, doc.at)));
+  });
   for (let spread = true; spread; ) {
     spread = false;
     for (let i = 1; i < named.length; i++) {

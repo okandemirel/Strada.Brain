@@ -10344,6 +10344,20 @@ describe("CampaignManager", () => {
       expect(storage.hasActiveForChat("chat-read-gdd")).toBe(false);
     });
 
+    // A build turned down or asked about answered "Building from `docs/Quillmoor_GDD.md` … Sprint 1 starts now".
+    it.each([
+      "Don't build the game in docs/Quillmoor_GDD.md",
+      "How do I build the game in docs/Quillmoor_GDD.md?",
+      "Bu oyunu yap: docs/Quillmoor_GDD.md mı?",
+      "Don't build the game in the GDD",
+    ])("%s starts no build", async (text) => {
+      writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+      expect(await say("chat-declined", text)).toBe(false);
+      expect(told("chat-declined")).toBe("");
+      expect(storage.hasActiveForChat("chat-declined")).toBe(false);
+      expect(tasks.submitted).toHaveLength(0);
+    });
+
     it("an idea that names its style sheet is drafted from the idea, at the approval gate", async () => {
       writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
       const idea = "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.";
