@@ -245,7 +245,7 @@ export function reduceToEvidenceLines(text, selectPieces) {
     });
 }
 
-/** "§5.1–§5.3", "§2": the sections a milestone prompt names, in order, once each. */
+/** "§2.7–§2.9", "§3.14": the sections a milestone prompt names, in order, once each. */
 export function sectionRefsOf(prompt) {
   const refs = [];
   for (const m of (prompt ?? "").matchAll(SECTION_REF_RE)) {

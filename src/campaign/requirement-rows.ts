@@ -996,10 +996,10 @@ const LABEL_MENTION_RE = /(?<![\p{L}\p{N}])([A-Z]{1,4}-?)(\d{1,3})(?![\p{N}.])/g
 
 /**
  * A numbered series the document defines only in part. Reported from what
- * the document SAYS — a stated span ("G-01 to G-09") that the definitions
+ * the document SAYS — a stated span ("Q-51 to Q-74") that the definitions
  * stop short of, or holes in a series that is otherwise complete — and never
- * invented: a sparse series ("T4, T9, T15…") is a schedule, not a list with
- * gaps.
+ * invented: a sparse series ("N43, N76, N109…") is a schedule, not a list
+ * with gaps.
  */
 function numberingGapsOf(doc: Document, labels: readonly string[]): NumberingGap[] {
   const defined = new Map<string, { numbers: Set<number>; width: number }>();

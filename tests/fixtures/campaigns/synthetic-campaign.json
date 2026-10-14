@@ -64,8 +64,8 @@
   },
   "gdd": {
     "path": "docs/GDD.md",
-    "chars": 1623,
-    "sha256": "1da7050919ecb93d6f5029ec31d9c80601c687738e43a7d6eadd1858064ed13c",
+    "chars": 1356,
+    "sha256": "98894593294e9971af2628caac178b58c3a83840e550e13e26fc6aa74ff814d9",
     "storedSha256": null,
     "revision": null
   },
@@ -400,8 +400,8 @@
         "§4.1",
         "§4.2"
       ],
-      "promptChars": 39,
-      "promptSha256": "65a139800e2bb6c69fdcbe0c172989e3cc0dbd8030596ea23b2d107089918398",
+      "promptChars": 46,
+      "promptSha256": "e749c316a2f016741524669ee08c32e3aa557128d3779a6bcb96d7d21b67ca6c",
       "tip": {
         "id": "task_0000a005",
         "status": "completed",

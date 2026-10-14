@@ -50,7 +50,7 @@ function row(rid: string, fields: Partial<RequirementRow> = {}): RequirementRow 
     rid,
     encoded: encodeRequirement({ id: rid, text, lineage: rid, gddSha256: GDD_SHA, gddRevision: 1 }),
     text,
-    section: "4.2 Catalogue rules",
+    section: "4.2 Confirmation",
     sectionNumber: "4.2",
     line: 10,
     span: { start: 0, end: text.length },
@@ -90,23 +90,23 @@ const testCheck = (rid: string) => ({
 /** m1 owns one row of every status; m2 is parked; m3 went green before the gate; the rest are disclosed or queued. */
 function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campaign {
   const rows = [
-    row("req-1-aaaaaa", { label: "C-1", owner: "m1", status: "passing", last: passed, checks: [testCheck("req-1-aaaaaa")] }),
+    row("req-1-aaaaaa", { label: "OBS-311", owner: "m1", status: "passing", last: passed, checks: [testCheck("req-1-aaaaaa")] }),
     row("req-2-bbbbbb", {
-      label: "C-2",
+      label: "OBS-312",
       owner: "m1",
       status: "failing",
       checks: [testCheck("req-2-bbbbbb")],
-      last: { revision: REV, atMs: 5, outcome: "fail", detail: "Expected 31 but was 29" },
+      last: { revision: REV, atMs: 5, outcome: "fail", detail: "Expected 47 but was 44" },
     }),
-    row("req-3-cccccc", { label: "C-3", owner: "m1", status: "check-fault" }),
-    row("req-4-dddddd", { label: "C-4", owner: "m1", status: "unmeasured" }),
+    row("req-3-cccccc", { label: "OBS-313", owner: "m1", status: "check-fault" }),
+    row("req-4-dddddd", { label: "OBS-315", owner: "m1", status: "unmeasured" }),
     row("req-5-eeeeee", {
-      label: "C-5",
+      label: "OBS-316",
       owner: "m1",
       status: "waived",
       waiver: { userId: "u1", atMs: 7, reason: "deferred until the spectrograph is fitted" },
     }),
-    row("req-6-ffffff", { label: "C-6", owner: "m2", status: "failing", sectionNumber: "5.2", section: "5.2 Dome care" }),
+    row("req-6-ffffff", { label: "OBS-318", owner: "m2", status: "failing", sectionNumber: "5.2", section: "5.2 Dome care" }),
     row("req-7-gggggg", { owner: "m3", status: "open", sectionNumber: "5.3", section: "5.3 Log viewer", kind: "screen" }),
     row("req-8-hhhhhh", {
       status: "excluded",
@@ -133,7 +133,7 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
       {
         reasonClass: "red",
         code: "row-failing",
-        detail: 'C-2 (§4.2, line 10): "Rule req-2-bbbbbb holds on every observing night." fails on 01234567: Expected 31 but was 29',
+        detail: 'OBS-312 (§4.2, line 10): "Rule req-2-bbbbbb holds on every observing night." fails on 01234567: Expected 47 but was 44',
         rid: "req-2-bbbbbb",
       },
     ],
@@ -162,7 +162,7 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
       parked: {
         atMs: 11,
         queued: ["req-6-ffffff"],
-        reasons: [{ reasonClass: "red", code: "row-failing", detail: "C-6 (§5.2, line 10): the shutter stays open after dawn", rid: "req-6-ffffff" }],
+        reasons: [{ reasonClass: "red", code: "row-failing", detail: "OBS-318 (§5.2, line 10): the shutter stays open after dawn", rid: "req-6-ffffff" }],
       },
     },
     { id: "m3", title: "Sprint 3", prompt: "p3", status: "green", attempts: 1, judgementBasis: "legacy" },
@@ -185,7 +185,13 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
     gddRevision: 1,
     requirements: ledger(rows, {
       overflow: { count: 3, sections: ["9 Orbit tables"] },
-      numberingGaps: [{ series: "C", missing: ["C-7", "C-8"], detail: "C-1…C-9 named, C-7 and C-8 not defined" }],
+      numberingGaps: [
+        {
+          series: "OBS-",
+          missing: ["OBS-314", "OBS-317"],
+          detail: "6 OBS-* label(s) defined (OBS-311…OBS-318); OBS-314, OBS-317 are never defined",
+        },
+      ],
       llmAdded: 2,
     }),
     pendingCoverageGaps: [
@@ -273,7 +279,7 @@ describe("the delivery report names each milestone's GDD rows and how its verdic
     expect(m1).toContain("GDD rows: 1 passing, 1 failing, 1 check-fault, 1 unmeasured, 1 waived");
     expect(m1).toContain("deepseek:deepseek-v4 (different-model)");
     expect(m1).toContain("scope gate (shadow, not acted on): would NOT be green");
-    expect(text).toContain("C-2 (§4.2, line 10)");
+    expect(text).toContain("OBS-312 (§4.2, line 10)");
 
     // No new status: a parked milestone keeps the failed icon and says PARKED in its line.
     const m2 = lineOf(text, "Sprint 2");
@@ -292,8 +298,8 @@ describe("the delivery report names each milestone's GDD rows and how its verdic
     expect(text).toContain("1 aspiration row(s)");
     expect(text).toContain("1 look-and-feel row(s)");
     expect(text).toContain("3 row(s) past the extraction cap were NOT checked");
-    expect(text).toContain("C-7, C-8");
-    expect(text).toContain('waived by a person: C-5 (§4.2) — "deferred until the spectrograph is fitted"');
+    expect(text).toContain("OBS-314, OBS-317");
+    expect(text).toContain('waived by a person: OBS-316 (§4.2) — "deferred until the spectrograph is fitted"');
   });
 
   it("with the gate off and no ledger the report gains no line", () => {
@@ -356,12 +362,12 @@ describe("/campaign rows (W14)", () => {
     expect(all).toMatch(/queued with no owner: 1/);
 
     const m1 = manager.describeRows("chat-1", "M1") ?? "";
-    expect(m1).toContain("C-2");
+    expect(m1).toContain("OBS-312");
     expect(m1).toContain("failing");
     expect(m1).toContain(testCheck("req-2-bbbbbb").testName);
-    expect(m1).toContain("Expected 31 but was 29");
+    expect(m1).toContain("Expected 47 but was 44");
     expect(m1).toContain("waived by u1: deferred until the spectrograph is fitted");
-    expect(m1).not.toContain("C-6");
+    expect(m1).not.toContain("OBS-318");
 
     expect(manager.describeRows("chat-1", "m9")).toContain("no milestone m9");
   });
@@ -377,7 +383,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
   it("refuses anyone but the campaign's owner and changes nothing", async () => {
     const { manager, storage, root, messages } = build();
     storage.save(ledgerCampaign(root));
-    expect(await manager.waiveByCommand("chat-1", "someone-else", "C-2", "not needed")).toBe(false);
+    expect(await manager.waiveByCommand("chat-1", "someone-else", "OBS-312", "not needed")).toBe(false);
     expect(messages.at(-1)!.text).toContain("Only the person who started this campaign can waive");
     const stored = storage.get("campaign_scope_1")!;
     expect(stored.requirements!.rows.find((r) => r.rid === "req-2-bbbbbb")!.status).toBe("failing");
@@ -386,7 +392,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
   it("refuses a waiver with no reason", async () => {
     const { manager, storage, root, messages } = build();
     storage.save(ledgerCampaign(root));
-    expect(await manager.waiveByCommand("chat-1", "u1", "C-2", "   ")).toBe(false);
+    expect(await manager.waiveByCommand("chat-1", "u1", "OBS-312", "   ")).toBe(false);
     expect(messages.at(-1)!.text).toMatch(/reason/i);
     expect(storage.get("campaign_scope_1")!.requirements!.rows.find((r) => r.rid === "req-2-bbbbbb")!.status).toBe("failing");
   });
@@ -394,9 +400,9 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
   it("the owner's waiver is recorded, disclosed, dequeued, and the row no longer blocks the judge", async () => {
     const { manager, storage, root, messages } = build({ extra: { scopeGateMode: "shadow" } });
     storage.save(ledgerCampaign(root));
-    expect(await manager.waiveByCommand("chat-1", "u1", "C-6", "dome care is cut from the MVP")).toBe(true);
+    expect(await manager.waiveByCommand("chat-1", "u1", "OBS-318", "dome care is cut from the MVP")).toBe(true);
     expect(messages.at(-1)!.text).toContain("Waived 1 GDD row");
-    expect(messages.at(-1)!.text).toContain("C-6");
+    expect(messages.at(-1)!.text).toContain("OBS-318");
 
     const stored = storage.get("campaign_scope_1")!;
     const waived = stored.requirements!.rows.find((r) => r.rid === "req-6-ffffff")!;
@@ -443,7 +449,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
     expect(judgeMilestone(input([waived, other])).green).toBe(true);
 
     // Disclosed in the report.
-    expect(report(manager, stored)).toContain('waived by a person: C-6 (§5.2) — "dome care is cut from the MVP"');
+    expect(report(manager, stored)).toContain('waived by a person: OBS-318 (§5.2) — "dome care is cut from the MVP"');
   });
 
   it("waives a whole GDD section by its number", async () => {
@@ -463,15 +469,15 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
   it("names a target that matches nothing instead of waiving at random", async () => {
     const { manager, storage, root, messages } = build();
     storage.save(ledgerCampaign(root));
-    expect(await manager.waiveByCommand("chat-1", "u1", "C-99", "no such row")).toBe(false);
-    expect(messages.at(-1)!.text).toContain("No GDD row matches C-99");
+    expect(await manager.waiveByCommand("chat-1", "u1", "OBS-398", "no such row")).toBe(false);
+    expect(messages.at(-1)!.text).toContain("No GDD row matches OBS-398");
   });
 
   it("a stale copy saved after the waiver does not undo it or requeue the row", async () => {
     const { manager, storage, root } = build();
     storage.save(ledgerCampaign(root));
     const stale = storage.get("campaign_scope_1")!;
-    expect(await manager.waiveByCommand("chat-1", "u1", "C-6", "cut from the MVP")).toBe(true);
+    expect(await manager.waiveByCommand("chat-1", "u1", "OBS-318", "cut from the MVP")).toBe(true);
     (manager as unknown as { persist(c: Campaign): boolean }).persist(stale);
     const stored = storage.get("campaign_scope_1")!;
     expect(stored.requirements!.rows.find((r) => r.rid === "req-6-ffffff")!.status).toBe("waived");
@@ -484,7 +490,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
     const { acceptanceTestRows } = await import("./scope-report.js");
     const before = acceptanceTestRows(storage.get("campaign_scope_1")!, "m2").map((r) => r.rid);
     expect(before).toEqual(["req-6-ffffff"]);
-    await manager.waiveByCommand("chat-1", "u1", "C-6", "cut from the MVP");
+    await manager.waiveByCommand("chat-1", "u1", "OBS-318", "cut from the MVP");
     expect(acceptanceTestRows(storage.get("campaign_scope_1")!, "m2")).toEqual([]);
   });
 });

@@ -126,7 +126,7 @@ function seedCampaign(path: string): void {
       milestones: [
         milestone({
           id: "m1",
-          prompt: "Read docs/GDD.md, then build §2 and §5.1–§5.3 before §6. PROMPT-SENTINEL",
+          prompt: "Read docs/GDD.md, then build §2 and §2.7–§2.9 before §3.14. PROMPT-SENTINEL",
           taskId: "task_m1_root",
           timeBoxEscalations: 2,
           resultExcerpt: M1_TIP_RESULT.slice(-500),
@@ -140,7 +140,7 @@ function seedCampaign(path: string): void {
           // The runtime writes the project root home-relative; a measured m7 did.
           visualConformance: "Judged from `~/Games/SentinelGame/Recordings/frame_00342.png` by openai.",
         }),
-        milestone({ id: "m3", prompt: "Implement §1.2: the shutter.", taskId: "task_never_written" }),
+        milestone({ id: "m3", prompt: "Implement §6.12: the shutter.", taskId: "task_never_written" }),
       ],
       currentMilestone: 3,
       createdAt: 1_000,
@@ -276,14 +276,14 @@ describe("export-campaign-fixture", () => {
     const fixture = await exportSynthetic();
     const m1 = fixture.milestones[0];
     expect(m1).not.toHaveProperty("prompt");
-    expect(m1.sectionRefs).toEqual(["§2", "§5.1–§5.3", "§6"]);
+    expect(m1.sectionRefs).toEqual(["§2", "§2.7–§2.9", "§3.14"]);
     expect(m1.promptSha256).toBe(
-      sha256("Read docs/GDD.md, then build §2 and §5.1–§5.3 before §6. PROMPT-SENTINEL"),
+      sha256("Read docs/GDD.md, then build §2 and §2.7–§2.9 before §3.14. PROMPT-SENTINEL"),
     );
     expect(m1.timeBoxEscalations).toBe(2);
     expect(m1.status).toBe("green");
     expect(fixture.milestones[1].visualEvidenceBounced).toBe(true);
-    expect(fixture.milestones[2].sectionRefs).toEqual(["§1.2"]);
+    expect(fixture.milestones[2].sectionRefs).toEqual(["§6.12"]);
   });
 
   // Included, the text is the replay's extraction input: the approved bytes, its address untouched.
@@ -348,11 +348,11 @@ describe("export-campaign-fixture", () => {
   });
 
   it("reads § references the way prompts write them", () => {
-    expect(sectionRefsOf("build §9, the star table, §2.3, §5.10–§5.14. and §1.1 - §1.3; again §9")).toEqual([
-      "§9",
-      "§2.3",
-      "§5.10–§5.14",
-      "§1.1–§1.3",
+    expect(sectionRefsOf("first §11.7 - §11.9, then §23 and the plate ledger; §4.6–§4.8. with §2.9, again §23")).toEqual([
+      "§11.7–§11.9",
+      "§23",
+      "§4.6–§4.8",
+      "§2.9",
     ]);
     expect(sectionRefsOf(undefined)).toEqual([]);
   });
