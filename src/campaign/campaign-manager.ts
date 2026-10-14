@@ -1507,7 +1507,17 @@ export class CampaignManager {
 
     const intent = detectCampaignIntent(msg);
     if (!intent) return false;
-    if (this.storage.hasActiveForChat(msg.chatId, this.isOurs)) return false; // one build per chat
+    if (this.storage.hasActiveForChat(msg.chatId, this.isOurs)) {
+      // A gate on a document the user named asks which design it is: a build
+      // request naming another while it was open went on as an ordinary task,
+      // beside the gate. The chat is told how to name one; nothing changes.
+      const gate = this.storage.findAwaitingApproval(msg.chatId, this.isOurs);
+      if (gate?.gddToConfirm) {
+        await this.tell(gate, `The gate on ${heldDocumentName(gate)} is still open. ${CONFIRM_GATE_REPLY}`);
+        return true;
+      }
+      return false; // one build per chat
+    }
     if (this.hasActiveHere()) {
       // Another chat is already building this project — a second concurrent
       // ladder against the same repo is never what anyone wants.

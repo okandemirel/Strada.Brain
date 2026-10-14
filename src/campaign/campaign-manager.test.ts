@@ -10481,6 +10481,19 @@ describe("CampaignManager", () => {
         reopened.close();
       });
 
+      // A message naming another design while the gate was open went on as an ordinary task, beside the gate.
+      it("answers a new build request while it is open with how to name another design", async () => {
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-confirm-other", "Build the game following docs/android-signing.md")).toBe(true);
+        expect(await say("chat-confirm-other", "Build the game in docs/Bramble_GDD.md")).toBe(true);
+        expect(storage.listActive().filter((c) => c.chatId === "chat-confirm-other")).toHaveLength(1);
+        const said = told("chat-confirm-other");
+        expect(said).toContain("still open");
+        expect(said).toContain("kampanya iptal");
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
       it("calls the document it holds no draft when the gate expires and is revived, and offers no revision", async () => {
         tasks = new FakeTaskManager();
         storage.close();
