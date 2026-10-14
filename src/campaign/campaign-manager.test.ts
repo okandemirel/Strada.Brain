@@ -10471,6 +10471,17 @@ describe("CampaignManager", () => {
         expect(told("chat-two-designs")).toContain("`docs/Fernwick_GDD.md`");
       });
 
+      it("names five of the other documents offered, and counts the rest", async () => {
+        writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+        writeFileSync(join(projectRoot, "docs", "Alder_GDD.md"), DESIGN);
+        const names = ["Alder", "Birch", "Cedar", "Damson", "Elm", "Fir", "Gorse", "Hazel"].map((name) => `docs/${name}_GDD.md`);
+        expect(await say("chat-many", `Build the game per docs/art-style.md, the GDD is one of ${names.join(", ")}`)).toBe(true);
+        atTheGate("chat-many", "docs/Alder_GDD.md");
+        const said = told("chat-many");
+        expect(said).toContain("`docs/Fir_GDD.md` and 2 more");
+        expect(said).not.toContain("Gorse");
+      });
+
       it("refuses a document it cannot read, as a build that starts at once does, and holds nothing", async () => {
         expect(await say("chat-gate-missing", "Build the game using docs/missing-notes.md")).toBe(true);
         expect(told("chat-gate-missing")).toContain("could not read `docs/missing-notes.md`");

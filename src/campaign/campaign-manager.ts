@@ -1573,7 +1573,10 @@ export class CampaignManager {
         const campaign = this.holdAtApprovalGate(ctx, msg.text, found.text, found.path);
         const kept = campaign.gddPath !== undefined && campaign.gddPath !== found.source ? `, its text kept as \`${campaign.gddPath}\`` : "";
         const newest = intent.path === undefined ? " (the newest GDD under docs/)" : "";
-        const others = intent.others?.length ? ` You also named ${intent.others.map((path) => `\`${path}\``).join(", ")}.` : "";
+        // A few by name: a long message can offer thousands, and the gate is one chat message.
+        const also = intent.others ?? [];
+        const more = also.length > 5 ? ` and ${also.length - 5} more` : "";
+        const others = also.length > 0 ? ` You also named ${also.slice(0, 5).map((path) => `\`${path}\``).join(", ")}${more}.` : "";
         await this.tell(
           campaign,
           `I would build the game from \`${found.source}\`${newest}${kept} — but the message did not plainly point the build at it, so I am asking first.${others} ` +

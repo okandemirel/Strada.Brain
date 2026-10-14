@@ -102,17 +102,24 @@ function speaksOfTheGdd(text: string): boolean {
  * those the manager names back as no format it reads.
  */
 const DOCUMENT_NAME_EXTENSION_RE = /\.(?:md|markdown|txt|docx|odt|rtf|pdf|pptx|xlsx|html?|pages|gdoc|epub|doc|ppt|xls|od[ps]|key|numbers)$/iu;
-/** A file name with an extension that has a letter in it ("1.2" is a version). */
-const FILE_NAME_RE = /[^\s"'`“”‘’()<>,;!?]+\.(?=\p{N}*\p{L})[\p{L}\p{N}]{1,8}(?![\p{L}\p{N}])/gu;
+/** A word as a file name is written, and the extension that ends one — with a letter in it ("1.2" is a version). */
+const FILE_TOKEN_RE = /[^\s"'`“”‘’()<>,;:!?]+/gu;
+const FILE_EXTENSION_RE = /\.(?=\p{N}*\p{L})[\p{L}\p{N}]{1,8}$/u;
 
 /**
  * The text with every source, data or script file name blanked: the "gdd" in
  * "my_gdd_parser.ts" or "gdd_schema.json" is no GDD. "Build the game and fix
  * my_gdd_parser.ts" was a build from that file, and the manager took the
- * message over to say it could not read it — the user's task never ran.
+ * message over to say it could not read it — the user's task never ran. Each
+ * word is read once: a name searched for from each of its characters made a
+ * long unbroken word cost its length squared.
  */
 function withoutCodeFiles(text: string): string {
-  return text.replace(FILE_NAME_RE, (name) => (DOCUMENT_NAME_EXTENSION_RE.test(name) ? name : " ".repeat(name.length)));
+  return text.replace(FILE_TOKEN_RE, (token) => {
+    const name = token.replace(/\.+$/u, "");
+    if (!FILE_EXTENSION_RE.test(name) || DOCUMENT_NAME_EXTENSION_RE.test(name)) return token;
+    return " ".repeat(name.length) + token.slice(name.length);
+  });
 }
 
 /**
@@ -392,14 +399,13 @@ const TOPIC_SUFFIX_RE = /^(?:['’]|\s+(?:oyun|dosya|belge|ile)(?![\p{L}]))/iu;
 function titledNameStart(text: string, at: number, end: number): number {
   let start = at;
   for (let words = 0; words < 3; words++) {
-    const word = NAME_WORD_BEFORE_RE.exec(text.slice(0, start))?.[1];
+    const word = execBefore(NAME_WORD_BEFORE_RE, text, start)?.[1];
     // Both lower cases: in Turkish "In" is "ın", and in English "İle" keeps its dot.
     if (word === undefined || SENTENCE_WORDS.has(word.toLowerCase()) || SENTENCE_WORDS.has(word.toLocaleLowerCase("tr"))) break;
     start -= word.length + 1;
   }
-  const before = text.slice(0, start);
-  const topic = /(?:^|[.!?\n])\s*$/u.test(before) && TOPIC_SUFFIX_RE.test(text.slice(end));
-  return start < at && (LEADS_INTO_NAME_RE.test(before) || topic) ? start : at;
+  const topic = testBefore(/(?:^|[.!?\n])\s*$/u, text, start) && TOPIC_SUFFIX_RE.test(text.slice(end));
+  return start < at && (testBefore(LEADS_INTO_NAME_RE, text, start) || topic) ? start : at;
 }
 
 interface NamedDocument {
@@ -430,7 +436,7 @@ function namedDocumentsIn(text: string): NamedDocument[] {
   for (const m of unread.matchAll(DOCUMENT_PATH_RE)) {
     const end = m.index + m[0].length;
     let at = end - m[1]!.length;
-    const head = /[\\/]/.test(m[1]!) ? null : SPLIT_PATH_HEAD_RE.exec(unread.slice(0, at));
+    const head = /[\\/]/.test(m[1]!) ? null : execBefore(SPLIT_PATH_HEAD_RE, unread, at);
     if (head) at = head.index + head[0].indexOf(head[1]!);
     else if (!/[\\/]/.test(m[1]!)) at = titledNameStart(unread, at, end);
     paths.push({ path: text.slice(at, end), at, end });
@@ -456,9 +462,17 @@ function withoutMarkup(text: string): string {
     .replace(/\[([^\]\n]*)\]\(([^()\s]+)\)/g, (_link, label: string, target: string) => `${" ".repeat(label.length + 3)}${target} `);
 }
 
-/** Each span blanked to its own length, so every position still holds. */
+/** Each span blanked to its own length, so every position still holds — in one pass, not one copy of the text per span. */
 function blankSpans(text: string, spans: readonly NamedDocument[]): string {
-  return spans.reduce((acc, span) => acc.slice(0, span.at) + " ".repeat(span.end - span.at) + acc.slice(span.end), text);
+  let blanked = "";
+  let from = 0;
+  for (const span of [...spans].sort((a, b) => a.at - b.at)) {
+    const at = Math.max(span.at, from);
+    if (span.end <= at) continue;
+    blanked += text.slice(from, at) + " ".repeat(span.end - at);
+    from = span.end;
+  }
+  return blanked + text.slice(from);
 }
 
 /** The message's own words: the documents it names blanked, so no file name reads as a verb, a "not" or a full stop. */
@@ -466,11 +480,48 @@ function proseOf(plain: string, named: readonly NamedDocument[] = namedDocuments
   return blankSpans(plain, named);
 }
 
-/** The message without the documents it names, each a single space. */
+/** The message without the documents it names (in their order), each a single space. */
 function withoutDocuments(text: string, named: readonly NamedDocument[]): string {
-  let rest = text;
-  for (const doc of [...named].reverse()) rest = `${rest.slice(0, doc.at)} ${rest.slice(doc.end)}`;
-  return rest;
+  let rest = "";
+  let from = 0;
+  for (const doc of named) {
+    rest += `${text.slice(from, doc.at)} `;
+    from = doc.end;
+  }
+  return rest + text.slice(from);
+}
+
+/**
+ * How far before a document the words that aim a build at it are read. Each
+ * pattern anchored there ran against the whole text before it, so a message
+ * that named many documents cost the square of its length — 396 KB took
+ * 5.4 s, synchronously, on every message.
+ */
+const BEFORE_WINDOW = 256;
+
+/**
+ * The text just before `at` as a pattern anchored there reads it, and where
+ * it starts in the text. A window cut short starts at a space, behind a mark
+ * that is no letter, no space and no start of the text, so no word is read
+ * from its middle and no clause seems to open where the cut fell.
+ */
+function textBefore(text: string, at: number): { before: string; offset: number } {
+  if (at <= BEFORE_WINDOW) return { before: text.slice(0, at), offset: 0 };
+  const from = at - BEFORE_WINDOW;
+  const space = text.slice(from, at).search(/\s/u);
+  const cut = space < 0 ? at : from + space;
+  return { before: `\u0001${text.slice(cut, at)}`, offset: cut - 1 };
+}
+
+function execBefore(re: RegExp, text: string, at: number): RegExpExecArray | null {
+  const { before, offset } = textBefore(text, at);
+  const m = re.exec(before);
+  if (m) m.index += offset;
+  return m;
+}
+
+function testBefore(re: RegExp, text: string, at: number): boolean {
+  return re.test(textBefore(text, at).before);
 }
 
 /** How a build runs — never, on its own, a request for one. */
@@ -516,44 +567,105 @@ const WHOLE_GAME_BUILD_RE = new RegExp(
  * patterns already refuse; its question particle stands apart ("…mı?").
  */
 function buildIsAsked(prose: string, at: number, end: number): boolean {
-  const clause = clauseBefore(prose, at);
-  const sentence = sentenceBefore(prose, at);
-  if (TURNS_DOWN_RE.test(clause) || ASKS_ABOUT_RE.test(clause) || QUESTION_OPENER_RE.test(clause) || DANGLING_NOT_RE.test(sentence)) return false;
+  const clause = clauseStart(prose, at);
+  const sentence = sentenceStart(prose, at);
+  if (
+    matchesInside(prose, TURNS_DOWN_RE, clause, at) ||
+    matchesInside(prose, ASKS_ABOUT_RE, clause, at) ||
+    QUESTION_OPENER_RE.test(prose.slice(clause, at)) ||
+    matchesInside(prose, DANGLING_NOT_RE, sentence, at)
+  ) {
+    return false;
+  }
   // A question mark that closes the build's own clause asks about it ("Build
   // the game in P?", "Bu oyunu yap: P mı?"); one past a comma belongs to
   // another clause ("…, okay?", "…, can the fog roll back?").
-  const close = SENTENCE_END_RE.exec(prose.slice(end));
-  const tail = close ? prose.slice(end, end + close.index) : prose.slice(end);
-  if (close?.[0] !== "?" || /[,;—–]|\s-\s/.test(tail)) return true;
-  return POLITE_REQUEST_RE.test(sentence) || /m[ıiuü]s[ıiuü]n/iu.test(prose.slice(at, end));
+  const ends = matchesOf(prose, SENTENCE_BREAK_RE).at;
+  const close = ends[countBelow(ends, end)];
+  if (close === undefined || prose[close] !== "?" || matchesInside(prose, PAUSE_RE, end, close)) return true;
+  return POLITE_REQUEST_RE.test(prose.slice(sentence, at)) || /m[ıiuü]s[ıiuü]n/iu.test(prose.slice(at, end));
 }
 
 /** A word that turns down what follows it in its clause. */
-const TURNS_DOWN_RE = /(?<![\p{L}])(?:not|never|dont|cannot|rather\s+than|instead\s+of|\p{L}+n['’]t)(?![\p{L}])/iu;
+const TURNS_DOWN_RE = /(?<![\p{L}])(?:not|never|dont|cannot|rather\s+than|instead\s+of|\p{L}+n['’]t)(?![\p{L}])/giu;
 /** A word that makes the build a condition or a question about it. */
-const ASKS_ABOUT_RE = /(?<![\p{L}])(?:if|unless|whether|how|why|what|which|where)(?![\p{L}])/iu;
+const ASKS_ABOUT_RE = /(?<![\p{L}])(?:if|unless|whether|how|why|what|which|where)(?![\p{L}])/giu;
 /** A clause opened as a yes/no question; "can you" and its kin are requests. */
 const QUESTION_OPENER_RE =
   /^\s*(?:(?:hey|so|ok(?:ay)?|wait|well|also|now)\s+)*(?:should|shall|did|does|do|is|are|was|were|am|have|has|had|may|might|must|(?:can|could|would|will)(?!\s+(?:you|u|ya)(?![\p{L}])))(?![\p{L}])/iu;
 /** "Don't, for now, build …": a "not" cut off from its verb by a comma or a dash. */
-const DANGLING_NOT_RE = /(?<![\p{L}])(?:not|never|dont|\p{L}+n['’]t)\s*[,—–(]/iu;
+const DANGLING_NOT_RE = /(?<![\p{L}])(?:not|never|dont|\p{L}+n['’]t)\s*[,—–(]/giu;
 const POLITE_REQUEST_RE =
   /^\s*(?:(?:hey|hi|ok(?:ay)?|so|now|alright|also|well)[\s,!]+)*(?:(?:please|pls|plz|kindly|lütfen)(?![\p{L}])|(?:(?:please|pls|plz)[\s,]+)?(?:can|could|would|will)\s+(?:you|u|ya)(?![\p{L}]))/iu;
-/** The end of a sentence: a stop, a bang or a question mark before a space, or a line break. */
-const SENTENCE_END_RE = /[.!?](?=["'\x60”’)\]]*(?:\s|$))|\n/u;
+/** A comma, a semicolon or a dash: what puts a later question mark in another clause. */
+const PAUSE_RE = /[,;—–]|\s-\s/gu;
 const CLAUSE_BREAK_RE = /[,;:()[\]—–\n]|[.!?](?=\s|$)|\s-\s|(?<![\p{L}])(?:and|but|then|or|ve|ama|fakat|sonra)(?![\p{L}])/giu;
+/** The end of a sentence: a stop, a bang or a question mark before a space, or a line break. */
 const SENTENCE_BREAK_RE = /[.!?](?=["'\x60”’)\]]*(?:\s|$))|\n/gu;
 
-function clauseBefore(prose: string, at: number): string {
-  let start = 0;
-  for (const m of prose.slice(0, at).matchAll(CLAUSE_BREAK_RE)) start = m.index + m[0].length;
-  return prose.slice(start, at);
+/**
+ * Every match of the global `re` in `text`, found once for the text being
+ * read. Each build and each document read its clause, its sentence and the
+ * words in them again from the start of the text, so a message that named
+ * many documents cost the square of its length.
+ */
+let readText: string | undefined;
+let readMatches = new Map<RegExp, { at: number[]; end: number[] }>();
+
+function matchesOf(text: string, re: RegExp): { at: number[]; end: number[] } {
+  if (readText !== text) readMatches = new Map();
+  // The same text in another string is compared in full: keep the one asked for, so the next call compares it by reference.
+  readText = text;
+  let found = readMatches.get(re);
+  if (found === undefined) {
+    found = { at: [], end: [] };
+    for (const m of text.matchAll(re)) {
+      found.at.push(m.index);
+      found.end.push(m.index + m[0].length);
+    }
+    readMatches.set(re, found);
+  }
+  return found;
+}
+
+/** How many of the ascending `list` are below `value` — the index of the first at or above it. */
+function countBelow(list: readonly number[], value: number): number {
+  let low = 0;
+  let high = list.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (list[middle]! < value) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+/** Whether a match of the global `re` lies wholly inside `text` from `from` to `to`. */
+function matchesInside(text: string, re: RegExp, from: number, to: number): boolean {
+  const { at, end } = matchesOf(text, re);
+  const first = countBelow(at, from);
+  return first < at.length && end[first]! <= to;
+}
+
+/** Where the clause that `at` stands in begins — after the last break before it, a stop just before it included. */
+function clauseStart(prose: string, at: number): number {
+  const ends = matchesOf(prose, CLAUSE_BREAK_RE).end;
+  const last = countBelow(ends, at + 1);
+  const start = last > 0 ? ends[last - 1]! : 0;
+  return at > start && /[.!?]/u.test(prose[at - 1]!) ? at : start;
+}
+
+/** Where the sentence that `at` stands in begins (see clauseStart). */
+function sentenceStart(prose: string, at: number): number {
+  const ends = matchesOf(prose, SENTENCE_BREAK_RE).end;
+  const last = countBelow(ends, at + 1);
+  const start = last > 0 ? ends[last - 1]! : 0;
+  const stop = /[.!?]["'\x60”’)\]]*$/u.exec(prose.slice(Math.max(start, at - 16), at));
+  return stop ? Math.max(start, at - 16) + stop.index + 1 : start;
 }
 
 function sentenceBefore(prose: string, at: number): string {
-  let start = 0;
-  for (const m of prose.slice(0, at).matchAll(SENTENCE_BREAK_RE)) start = m.index + m[0].length;
-  return prose.slice(start, at);
+  return prose.slice(sentenceStart(prose, at), at);
 }
 
 /**
@@ -677,17 +789,17 @@ const DESIGN_NAMES_NEXT_RE =
 const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?|\s+(?:and|or|ve|veya|&|\+)\s+)["'`“‘(]?$/iu;
 
 /** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P", "no GDD". */
-const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without|no)(?![\p{L}])/iu;
+const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without|no)(?![\p{L}])/giu;
 /** …and after it: "P is outdated", "P'yi kullanma", "P değil", "P yerine", "GDD yok". */
 const TURNS_AWAY_AFTER_RE =
-  /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden|yok)(?![\p{L}])/iu;
+  /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden|yok)(?![\p{L}])/giu;
 
 function turnedAway(prose: string, doc: Pick<NamedDocument, "at" | "end">): boolean {
-  const before = clauseBefore(prose, doc.at);
-  if (TURNS_DOWN_RE.test(before) || TURNS_AWAY_BEFORE_RE.test(before)) return true;
-  const after = prose.slice(doc.end);
-  const clauseEnd = [...after.matchAll(CLAUSE_BREAK_RE)][0]?.index ?? after.length;
-  return TURNS_AWAY_AFTER_RE.test(after.slice(0, clauseEnd));
+  const start = clauseStart(prose, doc.at);
+  if (matchesInside(prose, TURNS_DOWN_RE, start, doc.at) || matchesInside(prose, TURNS_AWAY_BEFORE_RE, start, doc.at)) return true;
+  const breaks = matchesOf(prose, CLAUSE_BREAK_RE).at;
+  const clauseEnd = breaks[countBelow(breaks, doc.end)] ?? prose.length;
+  return matchesInside(prose, TURNS_AWAY_AFTER_RE, doc.end, clauseEnd);
 }
 
 /**
@@ -746,7 +858,7 @@ interface Aim {
  */
 function aimAt(text: string, prose: string, doc: Span, request: Request | undefined): Aim | undefined {
   const after = text.slice(doc.end);
-  const before = BUILDS_FROM_NEXT_RE.exec(text.slice(0, doc.at));
+  const before = execBefore(BUILDS_FROM_NEXT_RE, text, doc.at);
   const beforeAsked = before && requestAt(prose, before.index, doc.at);
   if (beforeAsked && documentEndsItsClause(text, doc)) {
     return { request: beforeAsked, called: before.groups?.gdd !== undefined || before.groups?.design !== undefined };
@@ -757,11 +869,11 @@ function aimAt(text: string, prose: string, doc: Span, request: Request | undefi
   const next = BUILDS_FROM_PREVIOUS_RE.exec(after);
   const nextAsked = next && requestAt(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length);
   if (nextAsked) return { request: nextAsked, called: false };
-  const object = GAME_BEFORE_RE.exec(text.slice(0, doc.at));
+  const object = execBefore(GAME_BEFORE_RE, text, doc.at);
   const verb = object && BY_DOCUMENT_AFTER_RE.exec(after);
   const verbAsked = object && verb && requestAt(prose, object.index, doc.end + verb[0].length);
   if (verbAsked && endsItsClause(after.slice(verb[0].length))) return { request: verbAsked, called: false };
-  const called = request !== undefined && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => re.test(text.slice(0, doc.at)));
+  const called = request !== undefined && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => testBefore(re, text, doc.at));
   return called && documentEndsItsClause(text, doc) ? { request, called } : undefined;
 }
 
@@ -826,16 +938,15 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
   const aims = named.map((doc) => aimAt(text, prose, doc, request));
   // "P and Q", "P ve Q": named together, aimed at together — as long as the
   // one the aim spreads to ends its clause too.
-  for (let spread = true; spread; ) {
-    spread = false;
-    for (let i = 1; i < named.length; i++) {
-      if (!aims[i - 1] === !aims[i] || !NAMED_TOGETHER_RE.test(text.slice(named[i - 1]!.end, named[i]!.at))) continue;
-      const [to, from] = aims[i] ? [i - 1, i] : [i, i - 1];
-      if (!documentEndsItsClause(text, named[to]!)) continue;
-      aims[to] = { request: aims[from]!.request, called: false };
-      spread = true;
-    }
-  }
+  // One sweep each way reaches every document of a chain: a pass repeated
+  // until nothing moved went one step per pass, its length squared.
+  const spread = (from: number, to: number): void => {
+    const [left, right] = from < to ? [from, to] : [to, from];
+    if (!aims[from] || aims[to] || !NAMED_TOGETHER_RE.test(text.slice(named[left]!.end, named[right]!.at))) return;
+    if (documentEndsItsClause(text, named[to]!)) aims[to] = { request: aims[from]!.request, called: false };
+  };
+  for (let i = 1; i < named.length; i++) spread(i - 1, i);
+  for (let i = named.length - 1; i > 0; i--) spread(i, i - 1);
   const aimedDocs = named.filter((_, i) => aims[i]);
   const designs = aimedDocs.filter((doc) => refersToGdd(doc.path) || !isSupportDocument(doc.path));
   if (designs.length > 0) {
@@ -846,7 +957,7 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
   const playerBuild = aimedDocs.length > 0 && aimedDocs.every((doc) => isBuildInstructions(doc.path));
   const rest = withoutDocuments(text, named);
   if (!request || !(speaksOfTheGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
-  const beside = named.filter((doc) => !aimedDocs.includes(doc));
+  const beside = named.filter((_, i) => !aims[i]);
   const candidates = beside.filter((doc) => !turnedAway(prose, doc));
   const gdds = candidates.filter((doc) => refersToGdd(doc.path));
   if (gdds.length > 0) return offered(gdds, gdds[0]!);

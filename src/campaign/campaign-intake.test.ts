@@ -1018,3 +1018,33 @@ describe("a document the build names, read to the end of its clause", () => {
     },
   );
 });
+
+/**
+ * Intake runs synchronously on every incoming message, and its cost grew with
+ * the square of the message's length: each pattern anchored at a document was
+ * run against the whole text before it, each span blanked by copying the
+ * whole text, each clause read from the start of the text, and a token was
+ * searched for a file name from every one of its characters — a pasted
+ * 396 KB design took 5.4 s, a 50 KB unbroken token 7.8 s. A generous bound:
+ * linear intake takes a few milliseconds per hundred kilobytes.
+ */
+describe("intake cost grows with the message's length, not its square", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+  const timed = (text: string): number => {
+    const started = performance.now();
+    detectCampaignIntent(msg(text));
+    return performance.now() - started;
+  };
+
+  it.each([
+    ["a pasted design naming a document in every sentence", "Build this game: " + "The beekeeper moves hives between meadows as seasons turn, see docs/hives.md for details; ".repeat(4400)],
+    ["names with spaces, over and over", "Build the game. " + "Quill Moor GDD.md ".repeat(11000)],
+    ["one unbroken token", "Build the game " + "x".repeat(200_000)],
+    ["one unbroken path", "Build the game in " + "a/".repeat(100_000) + "x"],
+    ["a build asked for in every sentence", "Build the game in docs/Quillmoor_GDD.md, then ".repeat(5000) + "send it?"],
+  ])("%s", (_what, text) => {
+    expect(text.length).toBeGreaterThan(190_000);
+    expect(timed(text)).toBeLessThan(2000);
+  });
+});
