@@ -10310,6 +10310,12 @@ describe("CampaignManager", () => {
       ["README.md'yi baştan sona oku", "README.md"],
       ["Rewrite docs/save-notes.md from scratch", "docs/save-notes.md"],
       ["Run the end-to-end tests in docs/e2e.md", "docs/e2e.md"],
+      ["Read docs/notes.md end to end", "docs/notes.md"],
+      ["Baştan sona docs/notes.md dosyasını oku", "docs/notes.md"],
+      ["Implement docs/notes.md from scratch", "docs/notes.md"],
+      ["Rewrite README.md from scratch", "README.md"],
+      // A code identifier that says GDD: discovery built docs/Game_GDD.md.
+      ["Rewrite loadGDD from scratch", "loadGDD.ts"],
     ])("%s is the user's task, not a build from that document", async (text, rel) => {
       writeFileSync(join(projectRoot, rel), "# Notes\n\n" + "n".repeat(400));
       expect(await say("chat-task", text)).toBe(false);

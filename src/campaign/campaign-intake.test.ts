@@ -407,6 +407,20 @@ describe("a named document is the design only when the build is aimed at it", ()
     "Develop the game further as docs/roadmap.md says, starting with the cavern chapter",
     "docs/notes.md dosyasını sıfırdan yaz",
     "docs/geri-bildirim.md'deki notlara göre oyunu geliştir",
+    // Reading, rewriting, implementing or testing a file, with only an adverb beside it.
+    "Read docs/notes.md end to end",
+    "Baştan sona docs/notes.md dosyasını oku",
+    "Implement docs/notes.md from scratch",
+    "Rewrite README.md from scratch",
+    "docs/cache.md'yi sıfırdan yaz",
+    "Rewrite docs/Quillmoor_GDD.md from scratch",
+    "Write end-to-end tests described in docs/notes.md",
+    "The end-to-end tests in docs/notes.md fail",
+    // A code identifier that says GDD is no design to build from.
+    "Rewrite loadGDD from scratch",
+    "Rewrite readGddFile from scratch",
+    "GddParser end to end test",
+    "loadGDD fonksiyonunu sıfırdan yaz",
   ])("%s → no campaign (no whole-game build is aimed at the document)", (text) => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
@@ -416,6 +430,7 @@ describe("a named document is the design only when the build is aimed at it", ()
     "Sıfırdan bir oyun yap: fener bekçisi her gece bir sokağı aydınlatır ve sis geri çekilir; görseller docs/art-style.md'deki gibi olsun.",
     "Build this game: a lantern keeper lights one street per night and the fog retreats from it. Put the notes into docs/notes.md.",
     "Build this game from scratch: a city of lanterns where every lit street pushes the fog back; keep docs/Old_GDD.md only as a tone reference.",
+    "Build the game from scratch: a lantern keeper writes every street she lights into log.txt, and the fog retreats from those streets.",
   ])("%s → the idea it carries, not the document it mentions", (text) => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
   });
@@ -424,6 +439,9 @@ describe("a named document is the design only when the build is aimed at it", ()
     // The name that says GDD wins over another design-looking document…
     ["Build the game in docs/notes.md and docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
     ["Following docs/notes.md, build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    // …the one the build is aimed at over a GDD the message turns away…
+    ["Don't use docs/Old_GDD.md, build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["docs/Old_GDD.md'yi kullanma, docs/Quillmoor_GDD.md'deki oyunu yap", "docs/Quillmoor_GDD.md"],
     // …a design over a style sheet named beside it…
     ["Build the game in docs/art-style.md and docs/quillmoor.md", "docs/quillmoor.md"],
     // …and a path written with spaces is the whole path, not its last word.
