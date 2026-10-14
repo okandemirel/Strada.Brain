@@ -46,14 +46,21 @@ export type CampaignIntent =
  * yapılandır" (configure the game) and "oyun yapısı" (its structure) were
  * "make the game". The polite forms — "yapın", "yapıver", "yazın", "yazar
  * mısınız" — were matched only by that accident, and are named instead, with
- * "geliştirin", "kodlayın" and "inşa edin" beside them.
+ * "geliştirin", "kodlayın" and "inşa edin" beside them. So are the "let's"
+ * ("yapalım"), the colloquial order ("yapsana") and the wish ("yapmak
+ * istiyorum", "yapmanı istiyorum"): each started nothing, where "Let's build
+ * the game in P" built and "I want to build the game in P" was confirmed.
  */
-const TR_MAKE = String.raw`yap(?:ın(?:ız)?|ıver(?:in)?)?`;
-const TR_WRITE = String.raw`yaz(?:ın(?:ız)?|ıver(?:in)?)?`;
+const TR_WISH_BACK = String.raw`mak\s+isti(?:yorum|yoruz)|man(?:ız)?ı\s+isti(?:yorum|yoruz)`;
+const TR_WISH_FRONT = String.raw`mek\s+isti(?:yorum|yoruz)|men(?:iz)?i\s+isti(?:yorum|yoruz)`;
+const TR_MAKE = String.raw`yap(?:ın(?:ız)?|ıver(?:in)?|alım|sana|${TR_WISH_BACK})?`;
+const TR_WRITE = String.raw`yaz(?:ın(?:ız)?|ıver(?:in)?|alım|sana|${TR_WISH_BACK})?`;
 const TR_WOULD_YOU_WRITE = String.raw`yazar\s+mısın(?:ız)?`;
-const TR_DEVELOP = String.raw`geliştir(?:in(?:iz)?)?`;
-const TR_CONSTRUCT = String.raw`inşa\s+(?:et|edin(?:iz)?)`;
-const TR_CODE = String.raw`kodla(?:yın(?:ız)?)?`;
+const TR_DEVELOP = String.raw`geliştir(?:in(?:iz)?|elim|sene|${TR_WISH_FRONT})?`;
+const TR_CONSTRUCT = String.raw`inşa\s+(?:et|edin(?:iz)?|edelim|etsene|et(?:${TR_WISH_FRONT}))`;
+const TR_CODE = String.raw`kodla(?:yın(?:ız)?|yalım|sana|${TR_WISH_BACK})?`;
+/** The wish among those forms ("yapmak istiyorum"): a request, but a tentative one (see requestAt). */
+const TR_WISH_RE = /m[ae]k\s+isti/iu;
 /** "Şu oyunu yapar mısın: P" asks for the build; only the definite object takes it, as "oyun yapar mısın" asks what you do. */
 const TR_WOULD_YOU_MAKE = String.raw`yapar\s+mısın(?:ız)?|yapabilir\s+misin(?:iz)?`;
 /**
@@ -740,7 +747,7 @@ type Request = "firm" | "tentative";
 function requestAt(prose: string, at: number, end: number): Request | undefined {
   if (TENTATIVE_REQUEST_RE.test(sentenceBefore(prose, at))) return "tentative";
   if (!buildIsAsked(prose, at, end)) return undefined;
-  if (!ENGLISH_BUILD_VERB_RE.test(prose.slice(at, at + 12))) return "firm";
+  if (!ENGLISH_BUILD_VERB_RE.test(prose.slice(at, at + 12))) return TR_WISH_RE.test(prose.slice(at, end)) ? "tentative" : "firm";
   // An opener is a few words: a longer run before the verb is read no further.
   const clause = clauseStart(prose, at);
   return at - clause <= ORDER_OPENER_MAX && ORDER_OPENER_RE.test(prose.slice(clause, at)) ? "firm" : "tentative";

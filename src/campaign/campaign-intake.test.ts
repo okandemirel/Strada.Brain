@@ -1267,6 +1267,48 @@ describe("a build the message reports, not orders", () => {
   it.each(["Please build the game in the GDD", "Let's implement the GDD"])("%s → the repository's GDD, at once", (text) => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
   });
+
+  /**
+   * The Turkish "let's", the colloquial order and the wish started nothing at
+   * all, where "Let's build the game in P" built and "I want to build the game
+   * in P" was confirmed at the gate: "P'deki oyunu yapalım", "…yapsana" and
+   * "…yapmak istiyorum" are the same requests.
+   */
+  it.each([
+    `${P}'deki oyunu yapalım`,
+    `${P}'deki oyunu yapsana`,
+    `${P}'deki oyunu yazalım`,
+    `${P}'deki oyunu yazsana`,
+    `Bu oyunu geliştirelim: ${P}`,
+    `${P}'deki oyunu geliştirsene`,
+    `${P}'deki oyunu kodlayalım`,
+    `${P}'deki oyunu kodlasana`,
+    `Bu oyunu inşa edelim: ${P}`,
+    `Bu oyunu inşa etsene: ${P}`,
+    `${P}'deki oyunu yapmanı istiyorum`,
+    `${P}'deki oyunu yapmanızı istiyoruz`,
+    `${P}'deki oyunu geliştirmeni istiyorum`,
+  ])("%s → that design, at once", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now(P));
+  });
+
+  it.each([
+    `${P}'deki oyunu yapmak istiyorum`,
+    `${P}'deki oyunu yapmak istiyoruz`,
+    `${P}'deki oyunu geliştirmek istiyoruz`,
+    `Bu oyunu inşa etmek istiyorum: ${P}`,
+  ])("%s → confirmed first (a wish, as \"I want to build\" is)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm(P));
+  });
+
+  it.each([`${P}'deki oyunu yapalım mı?`, `Oyun yapmak zor`])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it("…and a game idea asked for so is drafted at the gate", () => {
+    const text = "Şöyle bir oyun yapalım: bir fırıncı her sabah yeni bir tarif açar, satılan her somun yeni bir fırın getirir.";
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
 });
 
 /**

@@ -10683,6 +10683,19 @@ describe("CampaignManager", () => {
         expect(told("chat-lost")).not.toContain("Game_GDD.md");
       });
 
+      // The Turkish "let's" started nothing, and so did the wish, which "I want to build" confirms at the gate.
+      it("holds the Turkish wish at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-tr-wish", "docs/Bramble_GDD.md'deki oyunu yapmak istiyorum")).toBe(true);
+        atTheGate("chat-tr-wish", "docs/Bramble_GDD.md");
+      });
+
+      it("builds at once from the Turkish \"let's\"", async () => {
+        writeFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), DESIGN);
+        expect(await say("chat-tr-lets", "docs/Bramble_GDD.md'deki oyunu yapalım")).toBe(true);
+        expect(told("chat-tr-lets")).toContain("Building from `docs/Bramble_GDD.md`");
+      });
+
       // "With P" was read only when P was called the design: the build started nothing at all.
       it("holds a document the build is made with at the gate", async () => {
         writeFileSync(join(projectRoot, "docs", "notes.md"), "# Notes\n\n" + "n".repeat(400));
