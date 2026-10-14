@@ -7,12 +7,19 @@
 import { describe, expect, it } from "vitest";
 import { describeProjectInventory, readProjectInventory } from "./project-inventory.js";
 
+/**
+ * A fake project. Paths are written POSIX here and the reader joins them with
+ * the platform's separator, so every lookup normalises both sides — without
+ * that, these tests passed on macOS and failed on Windows (CI, 2026-10-14).
+ */
 function io(files: Record<string, string>) {
+  const norm = (p: string): string => p.replace(/\\/gu, "/");
+  const keys = Object.keys(files);
   return {
     listFiles: (_dir: string, match?: (f: string) => boolean) =>
-      Object.keys(files).filter((f) => f.includes("/Assets/") && (match?.(f) ?? true)),
-    readFile: (p: string) => files[p] ?? "",
-    exists: (p: string) => p.endsWith("Assets") || Object.keys(files).some((f) => f.startsWith(p)),
+      keys.filter((f) => f.includes("/Assets/") && (match?.(f) ?? true)),
+    readFile: (p: string) => files[norm(p)] ?? "",
+    exists: (p: string) => norm(p).endsWith("Assets") || keys.some((f) => f.startsWith(norm(p))),
   };
 }
 

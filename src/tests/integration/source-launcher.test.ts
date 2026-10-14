@@ -797,7 +797,12 @@ describe("uninstall --purge-config in a source checkout", () => {
 
     expect(output).not.toContain("were purged");
     expect(output).toContain(`Nothing under ${repo} was purged`);
-    expect(output).toContain("not a git repository");
+    // THE REASON GIT GAVE, not the words git chose. The Windows runner says
+    // "detected dubious ownership" where Linux says "not a git repository",
+    // and the contract here is that the reason reaches the person at all —
+    // pinning one git's phrasing failed CI twice on 2026-10-14 for a purge
+    // that behaved correctly.
+    expect(output).toMatch(/git said: \S/u);
     expect(result.purgeBlocked).toBeTruthy();
     expect(existsSync(path.join(repo, ".env"))).toBe(true);
     expect(existsSync(path.join(repo, "strada-brain-sync.log"))).toBe(true);
@@ -877,7 +882,7 @@ describe.skipIf(process.platform === "win32")("uninstall --purge-config through 
     });
 
     expect(run.stdout).toContain(`Nothing under ${root} was purged`);
-    expect(run.stdout).toContain("not a git repository");
+    expect(run.stdout).toMatch(/git said: \S/u);
     expect(run.stderr).not.toContain("fatal:");
     expect(run.status).toBe(1);
     expect(existsSync(path.join(root, ".env"))).toBe(true);
