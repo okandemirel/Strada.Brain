@@ -18,8 +18,10 @@ import { fileURLToPath } from "node:url";
 import {
   EXIT,
   VERDICT,
+  classifyVaultPath,
   parseExpectations,
   readSpecPlatform,
+  reportPath,
   scoreNorthStar,
   screenOrientationOf,
 } from "../../scripts/eval/north-star-scorecard.mjs";
@@ -398,5 +400,26 @@ describe("criterion G from the command line", () => {
     const bad = run("--expect-pipeline", "vulkan");
     expect(bad.status).toBe(EXIT.USAGE);
     expect(bad.stderr).toContain('--expect-pipeline must be urp, hdrp or built-in, not "vulkan"');
+  });
+});
+
+/**
+ * ONE SPELLING FOR A PATH THIS REPORT PRINTS. Windows hands back
+ * `Modules\\Flight\\Scripts\\X.cs` and macOS `Modules/Flight/Scripts/X.cs`, so
+ * the same project scored on two machines produced two different report texts
+ * and this rung's own checks, written on one of them, failed on the other
+ * (CI, windows-test, 2026-10-14).
+ */
+describe("the paths the scorecard prints do not carry the platform", () => {
+  it("reads a Windows path as the same path", () => {
+    expect(reportPath("Modules\\Flight\\Scripts\\GliderFlight.cs")).toBe("Modules/Flight/Scripts/GliderFlight.cs");
+    expect(reportPath("Modules/Flight/Scripts/GliderFlight.cs")).toBe("Modules/Flight/Scripts/GliderFlight.cs");
+    expect(reportPath("GliderFlight.cs")).toBe("GliderFlight.cs");
+  });
+
+  it("classifies a vault path the same way whichever separator it arrives with", () => {
+    const windows = "D:\\work\\project\\Packages\\Submodules\\Strada.Core\\Runtime\\Bootstrap\\GameBootstrapper.cs";
+    const posix = "/work/project/Packages/Submodules/Strada.Core/Runtime/Bootstrap/GameBootstrapper.cs";
+    expect(classifyVaultPath(windows, {})).toEqual(classifyVaultPath(posix, {}));
   });
 });

@@ -22,10 +22,36 @@ beforeEach(() => {
   source = mkdtempSync(join(tmpdir(), "lease-review-src-"));
   leaseRoot = mkdtempSync(join(tmpdir(), "lease-review-root-"));
 });
-afterEach(() => {
-  rmSync(source, { recursive: true, force: true });
-  rmSync(leaseRoot, { recursive: true, force: true });
+afterEach(async () => {
+  // Let each manager finish before the tree it writes into goes away.
+  for (const made of managers.splice(0)) {
+    try {
+      await made.dispose();
+    } catch {
+      /* a manager that already settled has nothing to dispose */
+    }
+  }
+  await removeTree(source);
+  await removeTree(leaseRoot);
 });
+
+/**
+ * Remove a tree, giving a still-settling lock heartbeat a moment to stop.
+ * Only a busy path is waited on; anything else is reported as it is.
+ */
+async function removeTree(dir: string): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM") throw error;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  rmSync(dir, { recursive: true, force: true });
+}
 
 function put(root: string, rel: string, body: string): string {
   const abs = join(root, rel);
@@ -37,13 +63,27 @@ function put(root: string, rel: string, body: string): string {
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-c", "user.email=a@b", "-c", "user.name=t", ...args], { cwd, encoding: "utf8" });
 }
+/**
+ * Every manager this file makes, so the cleanup can let each one finish.
+ *
+ * A manager salvages orphans in its CONSTRUCTOR, and a salvage takes the
+ * project write lock, whose holder heartbeats into
+ * `<project>/.strada/locks/` while it works. Deleting the project tree under
+ * that is harmless on POSIX and EBUSY on Windows — which is exactly what CI
+ * reported (windows-test, 2026-10-14): the test, not production, was removing
+ * a directory a salvage it had started was still writing to.
+ */
+const managers: WorkspaceLeaseManager[] = [];
+
 function manager(opts: { worktree?: boolean; projectRoot?: string } = {}): WorkspaceLeaseManager {
-  return new WorkspaceLeaseManager({
+  const made = new WorkspaceLeaseManager({
     projectRoot: opts.projectRoot ?? source,
     leaseRoot,
     additionalExcludes: EXCL,
     preferGitWorktree: opts.worktree ?? false,
   });
+  managers.push(made);
+  return made;
 }
 const past = new Date(Date.now() - 60_000);
 

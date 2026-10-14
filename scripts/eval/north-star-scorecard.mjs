@@ -37,7 +37,7 @@
 import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import Database from "better-sqlite3";
@@ -535,11 +535,20 @@ function frameworkKind(name) {
 }
 
 /**
+ * A path this scorecard PRINTS, in one spelling. Windows hands back
+ * `Modules\\Flight\\Scripts\\X.cs` and macOS `Modules/Flight/Scripts/X.cs`,
+ * so the same project scored on two machines produced two different report
+ * texts — and the rung's own tests, written on one of them, failed on the
+ * other (CI, windows-test, 2026-10-14). Slashes forward, everywhere.
+ */
+export const reportPath = (p) => p.split(/[\\/]/).join("/");
+
+/**
  * Whether a path under Assets sits in a framework copy (Assets/Strada.MCP, as
  * strada-deps.ts can install it, or a Modules copy): the framework's files are
  * not the game's, and its own Strada.Modules references must not pass rung 7.
  */
-const inFrameworkCopy = (assetsRel) => assetsRel.split(sep).slice(0, -1).some((d) => frameworkKind(d) !== null);
+const inFrameworkCopy = (assetsRel) => reportPath(assetsRel).split("/").slice(0, -1).some((d) => frameworkKind(d) !== null);
 
 function walkFiles(root, skip = SKIP_DIRS) {
   const out = [];
@@ -675,7 +684,7 @@ function frameRateValue(expr, constants) {
 }
 
 function moduleOf(assetsRel) {
-  const parts = assetsRel.split(sep);
+  const parts = reportPath(assetsRel).split("/");
   return parts[0] === "Modules" && parts.length > 2 ? parts[1] : parts[0];
 }
 
@@ -692,9 +701,11 @@ export function scanGameCode(assets) {
   const registered = new Set();
   const autoRegistered = new Set();
   for (const file of files) {
-    const rel = relative(assets, file);
+    // Reported and dissected in one spelling (reportPath): a backslash path
+    // put the platform into every string this rung prints.
+    const rel = reportPath(relative(assets, file));
     if (inFrameworkCopy(rel)) continue;
-    const dirs = rel.split(sep).slice(0, -1);
+    const dirs = rel.split("/").slice(0, -1);
     const raw = readText(file);
     if (raw === null) continue;
     const src = stripCSharp(raw);
@@ -933,7 +944,9 @@ function audioState(assets) {
     for (const m of (readText(f) ?? "").matchAll(/guid:\s*([0-9a-f]{32})/g)) referenced.add(m[1]);
   }
   // A clip under Resources/ is loaded by name; nothing in YAML names it.
-  const unreferenced = clips.filter((c) => !c.split(sep).includes("Resources") && !referenced.has(guidOfMeta(c) ?? "")).map((c) => relative(assets, c));
+  const unreferenced = clips
+    .filter((c) => !reportPath(c).split("/").includes("Resources") && !referenced.has(guidOfMeta(c) ?? ""))
+    .map((c) => reportPath(relative(assets, c)));
   return { clips: clips.length, unreferenced };
 }
 
@@ -974,7 +987,7 @@ const UPSTREAM_NAME = { core: "Strada.Core", modules: "Strada.Modules", mcp: "St
 
 /** What one indexed file is, judged from its absolute path. */
 export function classifyVaultPath(absPath, upstream) {
-  const parts = absPath.split(sep);
+  const parts = reportPath(absPath).split("/");
   let at = -1;
   let kind = null;
   for (let i = parts.length - 2; i >= 0; i--) {
