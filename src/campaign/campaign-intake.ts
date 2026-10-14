@@ -780,15 +780,18 @@ function buildRequest(prose: string): Request | undefined {
  * The build is aimed at the document written right after it: "Build this
  * game: P", "build the game in / from / per / using / following P", "build
  * the game (P)", "build the game from the GDD at P", "Bu oyunu yap: P".
- * "With P" is how a build goes ("with docs/ui-notes.md in mind") unless P is
- * called the design: "with the design in P". The groups say when the build's
- * own clause calls P the GDD: `gdd`, the build is of the GDD itself
- * ("implement the GDD at P"); `calledGdd`, P is introduced as it ("from the
- * GDD at P"). "From the design in P" says no more than P's name does.
+ * "With P" too: read only when P was called the design, "Build the game
+ * with docs/quillmoor.md" started nothing at all, where "using P" was
+ * confirmed at the gate. How a build goes ("with docs/ui-notes.md in mind")
+ * is no aim, as its document does not end its clause. The groups say when
+ * the build's own clause calls P the GDD: `gdd`, the build is of the GDD
+ * itself ("implement the GDD at P"); `calledGdd`, P is introduced as it
+ * ("from the GDD at P"). "From the design in P" says no more than P's name
+ * does.
  */
 const BUILDS_FROM_NEXT_RE = new RegExp(
   `(?:${BUILD_GAME_EN}|(?<gdd>${BUILD_GDD_EN}|${BUILD_GDD_TR})|${BUILD_GAME_TR})(?:\\s+${BUILD_ADVERB})*` +
-    String.raw`(?:\s*[:(]|\s+(?:in|from|at|per|using|following|with(?=\s+(?:the|this|that|my|our)\s+(?:GDD|game\s+design|design))|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)\s+in))` +
+    String.raw`(?:\s*[:(]|\s+(?:in|from|at|per|using|following|with|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)\s+in))` +
     String.raw`(?:\s+(?:the|this|that|my|our))?` +
     String.raw`(?:\s+(?:(?<calledGdd>GDD|game\s+design\s+doc(?:ument)?)|design(?:\s+doc(?:ument)?)?|document|doc|spec(?:ification)?|file)(?:\s+(?:at|in)|\s*:)?)?` +
     String.raw`\s*["'\x60“‘(<]?$`,

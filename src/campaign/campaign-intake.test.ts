@@ -949,6 +949,9 @@ describe("a build aimed only at a document that sits beside the design", () => {
   const AIMED_FORMS = [
     "Build the game using P",
     "Build the game following P",
+    // "With P" was read only when P was called the design: "Build the game with docs/quillmoor.md" started nothing.
+    "Build the game with P",
+    "Develop this game with P, for Android",
     "Build the game (P)",
     "Build the game (P) and send me the APK",
     "P: build this game end to end",

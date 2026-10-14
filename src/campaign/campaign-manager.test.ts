@@ -10669,6 +10669,13 @@ describe("CampaignManager", () => {
         atTheGate("chat-called", path);
       });
 
+      // "With P" was read only when P was called the design: the build started nothing at all.
+      it("holds a document the build is made with at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "notes.md"), "# Notes\n\n" + "n".repeat(400));
+        expect(await say("chat-with", "Build the game with docs/notes.md")).toBe(true);
+        atTheGate("chat-with", "docs/notes.md");
+      });
+
       it("still builds at once from a design the build is plainly aimed at", async () => {
         writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
         expect(await say("chat-plain", "Build the game in docs/Quillmoor_GDD.md and send me the APK")).toBe(true);
