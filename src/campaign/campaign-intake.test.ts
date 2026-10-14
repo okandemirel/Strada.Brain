@@ -1444,3 +1444,43 @@ describe("intake cost grows with the message's length, not its square", () => {
     expect(timed(text)).toBeLessThan(1000);
   });
 });
+
+/**
+ * A FAILURE REPORTED PAST THE CLAUSE BREAK IS NOT A BUILD ORDER. The clause
+ * rule reads a comma, a stop, a dash or an "and" as a clean end and never
+ * looked past it, so "Build the game in P, it crashes on start" started a
+ * whole campaign from a crash report (reviewed 2026-10-14; the same defect
+ * class as a build aimed at the wrong document, but here the document is a
+ * real design, so the harm is the days of work, not the target).
+ *
+ * The build word and the design are both named, so this is the ambiguous case
+ * the approval gate exists for — not nothing, and not a campaign at once.
+ */
+describe("a build whose sentence goes on to report a failure waits at the gate", () => {
+  const DESIGN = "docs/Quillmoor_GDD.md";
+
+  it.each([
+    [",", `Build the game in ${DESIGN}, it crashes on start`],
+    [";", `Build the game in ${DESIGN}; it crashes on start`],
+    ["an em dash", `Build the game in ${DESIGN} — it crashes on start`],
+    ["a hyphen", `Build the game in ${DESIGN} - it crashes on start`],
+    ["and", `Build the game in ${DESIGN} and it crashes on start`],
+    ["a full stop", `Build the game in ${DESIGN}. It crashes on start`],
+    ["a stated subject", `Build the game in ${DESIGN}, the build fails on Android`],
+    ["a freeze", `Build the game in ${DESIGN}, it freezes after the first level`],
+    ["a Turkish crash", `${DESIGN}'deki oyunu yap, Android'de çöküyor`],
+    ["a Turkish build failure", `Oyunu ${DESIGN}'ye göre yap, derlenmiyor`],
+  ])("reaches the gate when the failure follows %s", (_form, text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm(DESIGN));
+  });
+
+  it.each([
+    ["another request", `Build the game in ${DESIGN} and send me the APK`],
+    ["a platform", `Build the game in ${DESIGN} for Android`],
+    ["a plain stop", `Build the game in ${DESIGN}.`],
+    ["a courtesy", `Build the game in ${DESIGN}, please`],
+    ["a Turkish order", `${DESIGN}'deki oyunu baştan sona yap`],
+  ])("still starts at once with %s after the document", (_form, text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now(DESIGN));
+  });
+});

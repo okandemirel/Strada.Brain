@@ -945,6 +945,47 @@ function endsItsClause(after: string): boolean {
 }
 
 /**
+ * A DEFECT REPORTED PAST THE CLAUSE BREAK. The clause-end rule above reads a
+ * stop, a comma, a dash or an "and" as a clean end and never looks past it, so
+ * "Build the game in P, it crashes on start" was a plain build of P and a
+ * whole campaign started from a crash report (reviewed 2026-10-14). The build
+ * word and the real design are both there, so this is not nothing — it is the
+ * ambiguous case the confirmation gate exists for.
+ *
+ * The cue is a failure stated about the game or the build, in either language,
+ * anywhere in the rest of the message; a clause that asks for something else
+ * ("and send me the APK") is untouched.
+ */
+const DEFECT_REPORTED_RE = new RegExp(
+  String.raw`(?:` +
+    // English: a subject, then the failure.
+    String.raw`\b(?:it|that|this|the\s+(?:game|build|app|apk|player|scene|editor)|everything|nothing)\b[^.!?\n]{0,60}?` +
+    String.raw`\b(?:crash(?:es|ed|ing)?|fail(?:s|ed|ing)?|freez(?:es|ed|ing)|hangs?|hung|break(?:s|ing)?|broke(?:n)?|` +
+    String.raw`errors?\s+out|won['’]?t\s+(?:start|build|open|run|compile)|does(?:n['’]?t| not)\s+(?:start|build|open|run|compile|work))\b` +
+    String.raw`|` +
+    // Turkish: the failure itself, whose verb carries the subject. Bounded by
+    // letter lookarounds, not \b: \w is ASCII, so `\bçöküyor` can never match
+    // after a space — the same trap the heading reader fell into.
+    String.raw`(?<![\p{L}])(?:çöküyor|çöktü|çökme|donuyor|dondu|açılmıyor|çalışmıyor|derlenmiyor|başarısız\s+oluyor|hata\s+(?:veriyor|alıyorum|var))(?![\p{L}])` +
+  String.raw`)`,
+  "iu",
+);
+
+/**
+ * What the message says after the document's clause ends: the clause break
+ * itself is matched by the rule above, so the remainder starts past it.
+ *
+ * Read in a WINDOW, as the build's own words are (BEFORE_WINDOW): a report
+ * belongs to the clause that follows, and scanning the whole rest of the
+ * message for every document named in it is the message's length squared.
+ */
+function defectReportedAfter(after: string): boolean {
+  const end = ENDS_ITS_CLAUSE_RE.exec(after);
+  if (end === null) return false;
+  return DEFECT_REPORTED_RE.test(after.slice(end[0].length, end[0].length + 2 * BEFORE_WINDOW));
+}
+
+/**
  * …and a document inside a parenthesis is followed by the bracket that
  * closes it: "(P)", never "(P, step 4 fails)".
  */
@@ -979,23 +1020,29 @@ interface Aim {
  */
 function aimAt(text: string, prose: string, doc: Span, request: Request | undefined): Aim | undefined {
   const after = text.slice(doc.end);
+  // A build whose own sentence goes on to report a failure is the gate's case,
+  // never an immediate campaign: the firmness is the only thing that changes.
+  // `rest` is the message past the aim's own clause, which is the document's
+  // clause in one word order and the aim's in the other.
+  const soften = (rest: string) => (aim: Aim): Aim =>
+    defectReportedAfter(rest) ? { ...aim, request: "tentative" } : aim;
   const before = execBefore(BUILDS_FROM_NEXT_RE, text, doc.at);
   const beforeAsked = before && requestAt(prose, before.index, doc.at);
   if (beforeAsked && documentEndsItsClause(text, doc)) {
-    return { request: beforeAsked, calledGdd: before.groups?.gdd !== undefined || before.groups?.calledGdd !== undefined };
+    return soften(after)({ request: beforeAsked, calledGdd: before.groups?.gdd !== undefined || before.groups?.calledGdd !== undefined });
   }
   const game = GAME_IN_PREVIOUS_RE.exec(after);
   const gameAsked = game && requestAt(prose, doc.at, doc.end + game[0].length);
-  if (gameAsked && endsItsClause(after.slice(game[0].length))) return { request: gameAsked, calledGdd: false };
+  if (gameAsked && endsItsClause(after.slice(game[0].length))) return soften(after.slice(game[0].length))({ request: gameAsked, calledGdd: false });
   const next = BUILDS_FROM_PREVIOUS_RE.exec(after);
   const nextAsked = next && requestAt(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length);
-  if (nextAsked) return { request: nextAsked, calledGdd: false };
+  if (nextAsked) return soften(after.slice(next[0].length))({ request: nextAsked, calledGdd: false });
   const object = execBefore(GAME_BEFORE_RE, text, doc.at);
   const verb = object && BY_DOCUMENT_AFTER_RE.exec(after);
   const verbAsked = object && verb && requestAt(prose, object.index, doc.end + verb[0].length);
-  if (verbAsked && endsItsClause(after.slice(verb[0].length))) return { request: verbAsked, calledGdd: false };
+  if (verbAsked && endsItsClause(after.slice(verb[0].length))) return soften(after.slice(verb[0].length))({ request: verbAsked, calledGdd: false });
   const called = request !== undefined && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => testBefore(re, text, doc.at));
-  return called && documentEndsItsClause(text, doc) ? { request, calledGdd: false } : undefined;
+  return called && documentEndsItsClause(text, doc) ? soften(after)({ request, calledGdd: false }) : undefined;
 }
 
 /**
@@ -1112,12 +1159,6 @@ function aimAtTheGdd(text: string, request: Request): Request | undefined {
     if (endsItsClause(words.slice(end))) aimed.push(requestAt(words, m.index, end));
   }
   return aimed.includes("firm") ? "firm" : aimed.find((asked) => asked !== undefined);
-}
-
-/** The design document the message names, when it names one. */
-export function documentPathIn(text: string): string | undefined {
-  const plain = withoutMarkup(text);
-  return designAmong(plain, namedDocumentsIn(plain))?.path;
 }
 
 /** The reference followed by a "GDD:" marker, read exactly as refersToGdd reads one. */

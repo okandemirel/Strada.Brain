@@ -44,6 +44,34 @@ export interface ConfigValidationError {
 export type ConfigValidationResult = ValidationResult<Config>;
 
 /**
+ * WHERE THE STORES LIVE WHEN AN OPERATOR NAMES A HOME. `MEMORY_DB_PATH`
+ * defaults to the relative `.strada-memory`, which resolves against the
+ * process's working directory — so a run started with an explicit STRADA_HOME
+ * (a second installation, a measured proof run) still wrote its campaigns,
+ * tasks, goals and learning into the checkout it was launched from, and read
+ * none of the home it was given. Measured 2026-10-14: a run pointed at a fresh
+ * home put its campaign in `<cwd>/.strada-memory`.
+ *
+ * Only an EXPLICIT home moves the default, and only when the working
+ * directory holds no store already: an installation that has been writing
+ * `<cwd>/.strada-memory` keeps it (its data is there), and says which it kept.
+ */
+export function resolveMemoryDbPath(
+  configured: string | undefined,
+  env: Record<string, string | undefined>,
+  cwd: string,
+): { path: string; legacyKept?: string } {
+  const DEFAULT_DIR = ".strada-memory";
+  if (configured !== undefined && configured.trim() !== "") return { path: configured };
+  const home = env["STRADA_HOME"]?.trim();
+  if (!home) return { path: DEFAULT_DIR };
+  const legacy = join(cwd, DEFAULT_DIR);
+  const underHome = join(resolveStradaHome(env), DEFAULT_DIR);
+  if (legacy === underHome) return { path: underHome };
+  return existsSync(legacy) ? { path: legacy, legacyKept: underHome } : { path: underHome };
+}
+
+/**
  * Validate raw config values
  */
 export function validateConfig(raw: unknown): ConfigValidationResult {
@@ -1576,6 +1604,18 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
 
   const activeEnv = envOverride ?? defaultEnv;
   const raw = loadFromEnv(activeEnv);
+
+  // The stores go under an explicit STRADA_HOME, unless this working directory
+  // already holds them (see resolveMemoryDbPath).
+  const memory = resolveMemoryDbPath(activeEnv["MEMORY_DB_PATH"], activeEnv, process.cwd());
+  raw.memoryDbPath = memory.path;
+  if (memory.legacyKept !== undefined) {
+    warnAboutConfig(
+      `Using ${memory.path} for this installation's databases, left from before STRADA_HOME was set; ` +
+        `move it to ${memory.legacyKept} to keep it with the rest of this installation's state, ` +
+        `or set MEMORY_DB_PATH to say which it should be.`,
+    );
+  }
 
   // Resolve the system preset BEFORE validation (env vars override preset
   // values). The schema's credential gate lets a keyless deployment through

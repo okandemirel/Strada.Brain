@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { loadConfig, resetConfigCache, validateConfig, secretPatterns, hasRequiredApiKeys } from "./config.js";
 import { realpathSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 vi.mock("node:fs", () => ({
   existsSync: vi.fn(() => true),
@@ -882,7 +883,10 @@ describe("loadConfig", () => {
       const config = loadConfig();
       expect(config.memory).toEqual({
         enabled: true,
-        dbPath: ".strada-memory",
+        // This suite runs with STRADA_HOME set (a per-worker temp home), and
+        // the checkout it runs in already holds `.strada-memory`, so that
+        // store is the one kept — see resolveMemoryDbPath.
+        dbPath: join(process.cwd(), ".strada-memory"),
         backend: "agentdb",
         unified: {
           dimensions: 1536,
