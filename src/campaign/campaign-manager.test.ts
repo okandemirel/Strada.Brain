@@ -10481,6 +10481,24 @@ describe("CampaignManager", () => {
         reopened.close();
       });
 
+      // A tentative caption, or a bug report, with the GDD attached started nothing at all (main built it at once).
+      it.each(["Can we build the game from this?", "When I build the game from this GDD, Unity crashes"])(
+        "holds an attached design whose caption does not plainly ask for the build at the gate: %s",
+        async (text) => {
+          const incoming = {
+            channelType: "cli", chatId: "chat-attached-gate", userId: "u1", text, timestamp: new Date(),
+            attachments: [{ type: "document", name: "Bramble_GDD.md", data: Buffer.from(DESIGN, "utf8") }],
+          } as unknown as IncomingMessage;
+          expect(await manager.tryHandleIncoming(incoming)).toBe(true);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          atTheGate("chat-attached-gate", "docs/Bramble_GDD.md");
+          expect(readFileSync(join(projectRoot, "docs", "Bramble_GDD.md"), "utf8")).toBe(DESIGN);
+
+          expect(await say("chat-attached-gate", "evet")).toBe(true);
+          await waitFor(() => expect(planMilestones()).toHaveBeenCalled());
+        },
+      );
+
       it("calls the document it holds no draft when asked to amend it", async () => {
         writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
         expect(await say("chat-confirm-amend", "Build the game following docs/android-signing.md")).toBe(true);

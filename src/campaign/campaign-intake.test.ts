@@ -809,6 +809,30 @@ describe("a build the message turns down or asks about", () => {
     it("…while a polite request still builds it", () => {
       expect(shared("Can you build the game in this GDD?")).toMatchObject({ kind: "gdd-attachment", sourceName: "Quillmoor_GDD.md" });
     });
+
+    /**
+     * A caption that asks tentatively, or reports a build, is confirmed at the
+     * gate: "Can we build the game from this?" and "We'd like you to build the
+     * game from this" started nothing at all, and a bug report that carried the
+     * GDD ("When I build the game from this GDD, Unity crashes") nothing too —
+     * where main built each at once.
+     */
+    it.each([
+      "Can we build the game from this?",
+      "I was wondering if you could build the game from this GDD",
+      "We'd like you to build the game from this",
+      "When I build the game from this GDD, Unity crashes",
+    ])("%s → the attached design, confirmed first", (text) => {
+      expect(shared(text)).toEqual({ kind: "gdd-attachment", gddText: design, sourceName: "Quillmoor_GDD.md", confirm: true });
+    });
+
+    it.each(["Build the game from this", "Please build the game from this", "Bu GDD'deki oyunu yap"])("%s → the attached design, at once", (text) => {
+      expect(shared(text)).toEqual({ kind: "gdd-attachment", gddText: design, sourceName: "Quillmoor_GDD.md" });
+    });
+
+    it("…and a caption that asks for work on the document is still no build", () => {
+      expect(shared("I tried to build the game from this, please fix the typo")).toBeUndefined();
+    });
   });
 });
 

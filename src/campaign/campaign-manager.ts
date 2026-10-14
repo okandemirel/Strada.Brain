@@ -1424,14 +1424,15 @@ export class CampaignManager {
 
   /**
    * A document a message pointed a whole-game build at in any form but the
-   * plain one (intake's "gdd-to-confirm"), held at the approval gate the idea
+   * plain one (intake's "gdd-to-confirm", or an attachment whose caption asks
+   * tentatively), held at the approval gate the idea
    * path stops at: the user confirms it is the design before Sprint 1. The
    * request is kept as the campaign's idea, so every path that resumes an
    * unapproved idea — a restart, an expired gate, "kampanya devam" — comes
    * back to this gate, and planning refuses it until it is approved.
    */
-  holdAtApprovalGate(ctx: CampaignContext, request: string, gddText: string, gddPath: string): Campaign {
-    const kept = this.keepGddText(gddText, gddPath);
+  holdAtApprovalGate(ctx: CampaignContext, request: string, gddText: string, gddPath: string | undefined): Campaign {
+    const kept = gddPath === undefined ? undefined : this.keepGddText(gddText, gddPath);
     const held = kept === undefined ? { gddText } : { gddPath: kept };
     const campaign = this.newCampaign(ctx, { ideaText: request, ...held, gddToConfirm: true });
     campaign.state = "awaiting-approval";
@@ -1548,6 +1549,15 @@ export class CampaignManager {
         // Persist the supplied design into the repo FIRST so planning and
         // every sprint prompt reference a durable, committable path.
         const gddPath = this.persistSuppliedGdd(intent.gddText, intent.sourceName);
+        if (intent.confirm) {
+          const held = this.holdAtApprovalGate(ctx, msg.text, intent.gddText, gddPath);
+          const kept = held.gddPath !== undefined ? `, kept as \`${held.gddPath}\`` : "";
+          await this.tell(
+            held,
+            `GDD received (${intent.sourceName})${kept} — but the message did not plainly ask to build it, so I am asking first. ${CONFIRM_GATE_REPLY}`,
+          );
+          return true;
+        }
         const campaign = this.startFromGdd(ctx, intent.gddText, gddPath);
         await this.tell(campaign, `GDD received (${intent.sourceName}) — planning the milestone ladder, then the build starts.`);
         return true;

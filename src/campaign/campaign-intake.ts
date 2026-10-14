@@ -25,7 +25,8 @@ import { extractDocumentText } from "../agents/tools/document-text.js";
 
 export type CampaignIntent =
   | { kind: "idea"; ideaText: string }
-  | { kind: "gdd-attachment"; gddText: string; sourceName: string }
+  /** `confirm`: the caption asks for the build tentatively or reports one — the user confirms the document at the approval gate first. */
+  | { kind: "gdd-attachment"; gddText: string; sourceName: string; confirm?: true }
   /** Build at once from the document the message named — or, with no path, the newest GDD under docs/. */
   | { kind: "gdd-from-docs"; path?: string }
   /**
@@ -161,12 +162,20 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
       // …AND AN ADVERB BESIDE THAT WORK IS NO BUILD: "Read it end to end",
       // "Rewrite this from scratch" and "bunu baştan sona oku" built the game
       // from the document they asked to have read or rewritten.
-      const buildsGame = wholeGameRequest(prose) === "firm" || (!asksForWork && buildRequest(prose) === "firm");
+      const whole = wholeGameRequest(prose);
+      const request = whole === "firm" || asksForWork ? whole : buildRequest(prose);
+      const buildsGame = request === "firm";
       // …NOR IS A BUILD THE CAPTION TURNS DOWN OR ASKS ABOUT: "Don't build the
       // game from this yet" built it, through the GDD in the file's name.
       const declined = !buildsGame && BUILD_INTENT_RE.test(prose);
       if (!text || buildsGame || (!asksForWork && !declined && (refersToGdd(attachment.name) || refersToGdd(text)))) {
         return { kind: "gdd-attachment", gddText: extractedText, sourceName: attachment.name };
+      }
+      // …AND ONE ASKED FOR TENTATIVELY, OR REPORTED, IS CONFIRMED AT THE GATE:
+      // "Can we build the game from this?" started nothing, and "When I build
+      // the game from this GDD, Unity crashes" nothing either.
+      if (request === "tentative" && !asksForWork) {
+        return { kind: "gdd-attachment", gddText: extractedText, sourceName: attachment.name, confirm: true };
       }
       // The message is about the document it carried, which was read: the
       // rules below would draft its caption as an idea, or call it unreadable.
