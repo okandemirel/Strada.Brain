@@ -148,7 +148,11 @@ function intentFromText(text: string): CampaignIntent | undefined {
     // repository and the supplied design was discarded (AD#6).
     const inline = inlineDesignIn(text);
     if (inline) return { kind: "idea", ideaText: inline };
-    return { kind: "gdd-from-docs" };
+    // "THE GDD" IS A POINTER TOO, held to the rule a path is: "Read the GDD
+    // end to end" and "GDD'yi baştan sona oku" built whatever design docs/
+    // held, with no approval gate. A message about the document without a
+    // whole-game build is the user's task, not an idea to draft from either.
+    return WHOLE_GAME_BUILD_RE.test(text) ? { kind: "gdd-from-docs" } : undefined;
   }
 
   if (rest.trim().length < MIN_IDEA_LENGTH) return undefined;

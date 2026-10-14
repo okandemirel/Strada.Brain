@@ -506,3 +506,38 @@ describe("the build verbs and the GDD reference, word by word", () => {
     expect(detectCampaignIntent(msg("GDD'deki oyunu yapın"))).toEqual({ kind: "gdd-from-docs" });
   });
 });
+
+/**
+ * "The GDD" is a pointer too, and it took the same shortcut a path did: with
+ * only an adverb or a feature phrase for build intent, "Read the GDD end to
+ * end", "GDD'yi baştan sona oku" and "Develop the game further, as the GDD
+ * says" built whatever design docs/ held — an immediate multi-day build with
+ * no approval gate.
+ */
+describe("a bare reference to the GDD needs a whole-game build", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+
+  it.each([
+    "Read the GDD end to end",
+    "Rewrite the GDD from scratch",
+    "Review the game design document end-to-end before the playtest",
+    "Develop the game further, as the GDD says",
+    "Make the game harder, the way the GDD describes the late levels",
+    "GDD'yi baştan sona oku",
+    "GDD'yi sıfırdan yaz",
+    "Baştan sona GDD'yi gözden geçir",
+  ])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each([
+    "Build the game in the GDD from scratch",
+    "Implement the GDD end to end",
+    "GDD'yi baştan sona uygula",
+    "GDD'deki oyunu sıfırdan yap",
+    "Baştan sona GDD'deki oyunu geliştir",
+  ])("%s → the repository's GDD", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
+  });
+});

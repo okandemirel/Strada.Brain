@@ -10323,6 +10323,13 @@ describe("CampaignManager", () => {
       expect(storage.hasActiveForChat("chat-task")).toBe(false);
     });
 
+    // "The GDD" with only an adverb beside it built docs/Game_GDD.md, ungated.
+    it.each(["Read the GDD end to end", "GDD'yi baştan sona oku"])("%s is the user's task, not a build of the repository's GDD", async (text) => {
+      expect(await say("chat-read-gdd", text)).toBe(false);
+      expect(told("chat-read-gdd")).toBe("");
+      expect(storage.hasActiveForChat("chat-read-gdd")).toBe(false);
+    });
+
     it("an idea that names its style sheet is drafted from the idea, at the approval gate", async () => {
       writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
       const idea = "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.";
