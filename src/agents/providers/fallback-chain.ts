@@ -1233,10 +1233,58 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         + (cooled > 0 ? `, ${cooled} still in cooldown` : "")
         + `. Last probe error: ${sanitizeSecrets(lastError?.message ?? "")}`;
     } else {
-      detail = "All providers are in cooldown. Try again later.";
+      // "Try again later" is not a measurement. Every layer above logs this
+      // sentence and the campaign writes it into a block a person reads, so a
+      // two-hour quota wall and a thirty-second blink were indistinguishable
+      // without opening the health file by hand (measured 2026-10-14). The
+      // registry already holds each member's cause and expiry; say them. The
+      // leading sentence is kept verbatim — callers match on it.
+      detail = `All providers are in cooldown. ${describeCoolingChain(
+        this.providers,
+        (name) => health.getEntry(name),
+        Date.now(),
+      )}`;
     }
     throw attachLost(new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined }));
   }
+}
+
+/**
+ * Who is cooling, why, and when the chain has capacity again.
+ *
+ * Reads the health registry rather than guessing: `cooldownUntil` is when the
+ * member is eligible again and `lastError` is what put it there. A member with
+ * no recorded cooldown is named as such — the chain skipped it for a reason
+ * this function cannot see, and claiming a wait it did not measure is the
+ * defect this message exists to fix.
+ */
+export function describeCoolingChain(
+  providers: ReadonlyArray<{ readonly name: string }>,
+  entryOf: (name: string) => { readonly cooldownUntil?: number; readonly lastError?: string } | undefined,
+  now: number,
+): string {
+  const parts: string[] = [];
+  let soonest = Number.POSITIVE_INFINITY;
+  for (const provider of providers) {
+    const entry = entryOf(provider.name);
+    const leftMs = (entry?.cooldownUntil ?? 0) - now;
+    if (leftMs > 0 && leftMs < soonest) soonest = leftMs;
+    const cause = sanitizeSecrets((entry?.lastError ?? "").trim()).replace(/\s+/gu, " ").slice(0, 120);
+    const wait = leftMs > 0 ? `${formatWaitMs(leftMs)} left` : "no cooldown recorded";
+    parts.push(`${provider.name}: ${wait}${cause === "" ? "" : ` (${cause})`}`);
+  }
+  if (parts.length === 0) return "The chain has no members.";
+  const head = Number.isFinite(soonest) ? `Soonest capacity in ${formatWaitMs(soonest)}. ` : "";
+  return `${head}${parts.join("; ")}`;
+}
+
+/** A wait a person can act on: seconds under a minute, then minutes, then hours. */
+function formatWaitMs(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 /**

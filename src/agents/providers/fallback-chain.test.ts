@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { FallbackChainProvider } from "./fallback-chain.js";
+import { FallbackChainProvider, describeCoolingChain } from "./fallback-chain.js";
 import { createMockProvider } from "../../test-helpers.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { QuotaExhaustedError } from "../../common/fetch-with-retry.js";
@@ -56,6 +56,22 @@ describe("FallbackChainProvider", () => {
     expect(line?.[1]).toMatchObject({ label: "chat" });
     expect(typeof (line?.[1] as Record<string, unknown>)["provider"]).toBe("string");
     expect(typeof (line?.[1] as Record<string, unknown>)["ms"]).toBe("number");
+  });
+
+  it("a fully cooled chain says who is cooling, why and when, not 'try again later'", async () => {
+    // Measured live 2026-10-14: the run parked for two hours and every line a
+    // person could read said only "All providers are in cooldown. Try again
+    // later." — the wait and its cause had to be dug out of the health file.
+    const health = ProviderHealthRegistry.getInstance();
+    const worker = { ...createMockProvider({ text: "never" }), name: "opencode" };
+    const writer = { ...createMockProvider({ text: "never" }), name: "opencode2" };
+    health.recordQuotaExhausted("opencode", "usage quota exhausted: Go usage limit exceeded");
+    health.recordQuotaExhausted("opencode2", "usage quota exhausted: Go usage limit exceeded");
+    const chain = new FallbackChainProvider([worker, writer]);
+    await expect(chain.chat("sys", [], [])).rejects.toThrow(
+      /All providers are in cooldown\. Soonest capacity in \d+h \d+m\. opencode: \d+h \d+m left \(usage quota exhausted: Go usage limit exceeded\); opencode2: /u,
+    );
+    expect(worker.chat).not.toHaveBeenCalled();
   });
 
   it("falls through to second provider on failure", async () => {
@@ -1400,5 +1416,49 @@ describe("FallbackChainProvider — recovery probe failures keep their cooldown 
     const entry = ProviderHealthRegistry.getInstance().getEntry("quota-dead")!;
     expect(entry.status).toBe("down");
     expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(2 * 24 * 60 * 60 * 1000);
+  });
+});
+
+/**
+ * WHAT A FULLY COOLED CHAIN SAYS. Measured 2026-10-14: a two-hour quota wall
+ * and a half-minute blink both logged "All providers are in cooldown. Try
+ * again later.", so the wait had to be read out of the health file by hand.
+ */
+describe("describeCoolingChain", () => {
+  const now = 1_700_000_000_000;
+
+  it("names each member's cause and expiry, and the soonest capacity", () => {
+    const entries = new Map([
+      ["worker", { cooldownUntil: now + 7_200_000, lastError: "usage quota exhausted: Go usage limit exceeded" }],
+      ["writer", { cooldownUntil: now + 90_000, lastError: "429 rate limited" }],
+    ]);
+    const said = describeCoolingChain(
+      [{ name: "worker" }, { name: "writer" }],
+      (name) => entries.get(name),
+      now,
+    );
+    expect(said).toContain("Soonest capacity in 2m");
+    expect(said).toContain("worker: 2h 0m left (usage quota exhausted: Go usage limit exceeded)");
+    expect(said).toContain("writer: 2m left (429 rate limited)");
+  });
+
+  it("says a member has no recorded cooldown rather than inventing a wait", () => {
+    const said = describeCoolingChain(
+      [{ name: "worker" }],
+      () => undefined,
+      now,
+    );
+    expect(said).toBe("worker: no cooldown recorded");
+    expect(said).not.toContain("Soonest");
+  });
+
+  it("keeps a secret out of the cause it quotes", () => {
+    const said = describeCoolingChain(
+      [{ name: "worker" }],
+      () => ({ cooldownUntil: now + 60_000, lastError: "401 for key sk-abcdefghijklmnopqrstuvwxyz0123456789" }),
+      now,
+    );
+    expect(said).not.toContain("sk-abcdefghijklmnopqrstuvwxyz0123456789");
+    expect(said).toContain("1m left");
   });
 });
