@@ -234,7 +234,7 @@ export interface RequirementRow {
   section: string;
   /** The heading path, outermost first; ownership by an ancestor heading reads it. */
   sectionPath?: string[];
-  /** The heading's number ("3.9"), when it has one; matched against `§` references. */
+  /** The heading's number ("7.4"), when it has one; matched against `§` references. */
   sectionNumber?: string;
   /** 1-based line in the approved GDD text. */
   line: number;
@@ -257,7 +257,7 @@ export interface RequirementRow {
   gddRevision: number;
 }
 
-/** A numbered series the GDD defines only in part ("G-01…G-09", four defined). Reported, never invented. */
+/** A numbered series the GDD defines only in part (a stated span "G-01 to G-07", four defined). Reported, never invented. */
 export interface NumberingGap {
   series: string;
   missing: string[];

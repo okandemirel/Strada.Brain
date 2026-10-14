@@ -4,9 +4,8 @@
  *
  * In a measured campaign no GDD rule was ever a row the system owned: a
  * labelled rule was "closed" by a worker's prose, a section of tuning
- * constants was never held against anything, and nobody noticed that a rules
- * section announced a longer numbered span than it defined. Everything here
- * is code, not a model:
+ * constants was never held against anything, and nobody noticed a hole in a
+ * numbered series. Everything here is code, not a model:
  *
  *   • extraction reads labelled rules, normative sentences (closed modal
  *     lists in en, tr, de, es and fr), quantities with bounds parsed by code,
@@ -156,9 +155,9 @@ const CONDITIONS: Record<Language, readonly string[]> = {
  * cards, currency conversion and a token budget are all the game.
  *
  *   • A row's own TEXT decides only with the metric names, and only for a
- *     row the document did not label: a principle that calls harvest
- *     feedback a retention feature is about the harvest, and an input
- *     response BUDGET of 80 ms is a game requirement.
+ *     row the document did not label: a labelled rule about the retention
+ *     of seed tokens between seasons is about the economy, and a BUDGET of
+ *     seven grafts per season is a game requirement.
  *   • METRIC and PRODUCTION headings (a KPI section, the roadmap, staffing,
  *     the production schedule — not an element unlock schedule) decide for
  *     every row under them, at any depth.
@@ -286,7 +285,7 @@ function parseNumber(token: string): number {
   return Number(token.replace(",", "."));
 }
 
-/** The precision the document states: "0.35" fixes the hundredths, "12" the units. */
+/** The precision the document states: "0.17" fixes the hundredths, "43" the units. */
 function toleranceOf(token: string, approximate: boolean): number {
   const value = parseNumber(token);
   if (approximate) return Math.abs(value) * 0.1;
@@ -373,7 +372,7 @@ function quantitiesIn(text: string): Quantity[] {
   for (const m of text.matchAll(EXACT_RE)) {
     const plus = m[3] !== undefined;
     const unit = canonicalUnit(m[4]);
-    // "12+ / Teen" is an age rating and "2021+" a year: an unmeasured "+" is no bound.
+    // "44+ varieties" names no unit, and neither does a year: an unmeasured "+" is no bound.
     if (unit === undefined || namesSomething(text, m.index!)) continue;
     const start = m.index!;
     const end = start + m[0].length;
@@ -584,9 +583,9 @@ function isShortCell(line: Line | undefined): line is Line {
  * Which column the label sits in, counted from the row's first cell.
  *
  * The header row is the run of short cells before the first label: when it
- * is wider than a row, the label is not the first column ("Upgrade | Unlock |
- * Effect…" — the unlock level labels the row, the upgrade's name comes first).
- * A row-index column ("2", "3", …) in front of every label says the same.
+ * is wider than a row, the label is not the first column ("Variety | Week |
+ * Note" — the week labels the row, the variety's name comes first). A
+ * row-index column ("2", "3", …) in front of every label says the same.
  */
 function labelColumn(doc: Document, run: readonly Line[], stride: number): number {
   const series = labelParts(run[0]!.text)!.series;
@@ -605,8 +604,8 @@ function labelColumn(doc: Document, run: readonly Line[], stride: number): numbe
  * Labelled rules in a table that lost its pipes: each label alone on a line,
  * its cells on the lines around it (the converter shape spec-scope.ts reads for
  * schedules). A label counts only inside a RUN — two or more labels of one
- * series, in increasing order, at a constant stride — because a lone "G-10"
- * in another table's Trigger column is a reference, not a definition.
+ * series, in increasing order, at a constant stride — because a lone "G-03"
+ * cited in another table's cell is a reference, not a definition.
  */
 function labelRuns(doc: Document, consumed: Set<number>): Candidate[] {
   const out: Candidate[] = [];
@@ -725,9 +724,9 @@ function isLabelCell(line: Line | undefined): line is Line {
 }
 
 /**
- * Label/value pairs of a flattened table: "garden.grow_time" / "30 s" /
- * "Seconds a plant needs…". The third line is the row's description unless it
- * is itself the label of the next pair.
+ * Label/value pairs of a flattened table: "Graft time" / "38 s", and an
+ * optional third line that describes the row — unless that line is itself
+ * the label of the next pair.
  */
 function labelValuePairs(doc: Document, consumed: Set<number>): Candidate[] {
   const out: Candidate[] = [];
@@ -780,7 +779,7 @@ function bareValueBounds(value: string): RequirementBounds {
   return { kind: "exact", value: parseNumber(token), tolerance: toleranceOf(token, approximate) };
 }
 
-/** "5–12 min (single plot), 12–20 min (full estate)": the session lasts between the least and the most any clause allows. */
+/** "6–13 min in a calm season; up to 37 min in a storm season": the session lasts between the least and the most any clause allows. */
 function sessionClaimBounds(value: string): RequirementBounds | undefined {
   const clauses = value.split(";").filter((clause) => !OTHER_SUBJECT_RE.test(clause));
   const timed = clauses.flatMap(quantitiesIn).filter((q) => ["s", "ms", "min", "h"].includes(q.bounds.unit ?? ""));
@@ -925,8 +924,8 @@ const CLAIM_UNIT: Record<NumericClaim["kind"], string> = {
 /**
  * gdd-claims' numbers — frame rate, boot, level load, session length, level
  * count — as rows. They are measured at delivery, wherever the document
- * states them, so even the executive summary's figures are read. Two claims
- * read from one fragment ("lasts 60–90 s") are one row with both bounds.
+ * states them, so even a summary table's figures are read. Two claims read
+ * from one fragment ("lasts 74–95 s") are one row with both bounds.
  */
 function claimRows(doc: Document, fold: FoldedText): Candidate[] {
   const bySpan = new Map<string, { start: number; end: number; bounds: RequirementBounds }>();
@@ -997,9 +996,9 @@ const LABEL_MENTION_RE = /(?<![\p{L}\p{N}])([A-Z]{1,4}-?)(\d{1,3})(?![\p{N}.])/g
 
 /**
  * A numbered series the document defines only in part. Reported from what
- * the document SAYS — a stated span ("G-01 … G-12") that the definitions
+ * the document SAYS — a stated span ("G-01 to G-07") that the definitions
  * stop short of, or holes in a series that is otherwise complete — and never
- * invented: a sparse series ("L4, L13, L27…") is a schedule, not a list with
+ * invented: a sparse series ("W3, W11, W38…") is a schedule, not a list with
  * gaps.
  */
 function numberingGapsOf(doc: Document, labels: readonly string[]): NumberingGap[] {
@@ -1476,8 +1475,8 @@ export interface OwnershipResult {
 }
 
 /**
- * "§5.2", and a range "§5.2–§5.10" or "§12-14". A range's far end needs its
- * own "§" or a dash with no space around it: "§4 – 3 passes" is §4 and a count.
+ * "§7.4", and a range "§7.4–§7.12" or "§21-23". A range's far end needs its
+ * own "§" or a dash with no space around it: "§6 – 2 passes" is §6 and a count.
  */
 const SECTION_REFERENCE_RE =
   /§{1,2}\s*(\d{1,3}(?:\.\d{1,3})*)(?:(?:\s*(?:[–—-]|to|through|thru|bis|ile|a|à|au|hasta)\s*§{1,2}\s*|[–—-])(\d{1,3}(?:\.\d{1,3})*))?/gu;
@@ -1558,7 +1557,7 @@ export function isPlannedMilestone(id: string): boolean {
  *     decides; the earliest milestone breaks a tie);
  *   • a milestone planned before `coveredSections` existed claims by the `§N.N`
  *     references in its prompt: a reference covers its subsections, a range
- *     ("§5.2–§5.10", as a planner's prompt may write them) every section between its
+ *     ("§7.4–§7.12", as a planner's prompt may write them) every section between its
  *     ends, and the most specific reference decides;
  *   • a row nobody claims is QUEUED — failing closed.
  *

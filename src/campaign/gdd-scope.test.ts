@@ -14,46 +14,45 @@ import {
 } from "./gdd-scope.js";
 
 const BIG = `# Orchard Seasons
-## Table of Contents
-## 1. Overview
-## 2. Core Loop
-### 2.1 Grafting
-## 3. Feature unlocks
-| Unlock | Feature | Notes |
+## Contents
+## 1. Orchard Map
+The orchard is a walled grid of plots.
+## 2. Saving and Options
+The journal is saved to the season slot after each harvest. An onboarding season walks the player through pruning. An options menu sets text size.
+## 3. Planning Phase
+### 3.1 Pruning Orders
+## 4. Sound
+A wind-and-birdsong soundtrack plays under every season.
+## 5. Varieties by Year
+| Year | Variety | Note |
 |---|---|---|
-| L1 | Pruning | basic |
-| L2 | Grafting | two trees |
-| L3 | Irrigation | channels |
-| L4 | Beehive | pollination |
-| L5 | Compost | soil |
-| L6 | Cold Frame | |
-| L7 | Frost Night | seasonal event |
-| L8 | Cider Press | |
-| L9 | Hail Storm | |
-## 4. Levels
-There are 100 levels across four orchards.
-## 5. Screens
-Main menu, level select, pause menu, results screen and a HUD.
-## 6. Audio
-Music: one calm loop per season; SFX for pruning, grafting and harvest.
-## 7. Progression and saving
-Progress is saved to the cloud; a tutorial (FTUE) runs on first launch. Settings screen has accessibility toggles.
-## 8. Performance
-Target 60 fps; loads in under 3 seconds. Android APK and iOS.
-## Appendix A
-## Glossary
+| Y1 | Russet Pear | hardy |
+| Y2 | Quince | |
+| Y3 | Medlar | late |
+| Y4 | Damson | |
+| Y5 | Greengage | |
+| Y6 | Bramley | cooking |
+| Y7 | Morello | shade |
+## 6. Campaign
+The campaign runs 53 levels, one per season.
+## 7. Screens
+An orchard map screen, an inventory screen, a leaderboard and a pause menu.
+## 8. Technical Targets
+The season map loads in under 4 seconds. Ships to Steam and the App Store.
+## Credits
+## Appendix C
 `;
 
 describe("extractHeadings", () => {
   it("keeps section headings in order and drops document apparatus", () => {
     const h = extractHeadings(BIG);
     expect(h[0]).toBe("Orchard Seasons");
-    expect(h).toContain("2. Core Loop");
-    expect(h).toContain("2.1 Grafting");
-    expect(h).toContain("8. Performance");
-    expect(h).not.toContain("Table of Contents");
-    expect(h).not.toContain("Appendix A");
-    expect(h).not.toContain("Glossary");
+    expect(h).toContain("3. Planning Phase");
+    expect(h).toContain("3.1 Pruning Orders");
+    expect(h).toContain("8. Technical Targets");
+    expect(h).not.toContain("Contents");
+    expect(h).not.toContain("Credits");
+    expect(h).not.toContain("Appendix C");
   });
 
   it("reads numbered plain-text section lines from a converted document", () => {
@@ -64,12 +63,12 @@ describe("extractHeadings", () => {
 describe("measureGddScope", () => {
   it("counts elements, levels, screens and asks, and sizes the ladder from them", () => {
     const s = measureGddScope(BIG);
-    expect(s.elements).toBe(9);
-    expect(s.levels).toBe(100);
+    expect(s.elements).toBe(7);
+    expect(s.levels).toBe(53);
     expect(s.screens).toBeGreaterThanOrEqual(4);
     expect(s.asks).toMatchObject({ audio: true, save: true, onboarding: true, settings: true, performance: true, build: true, ui: true });
-    // 2 + ceil(9/4)=3 + ceil(100/25)=4 + ui 1 + audio 1 + save/ftue/settings 1 = 12 → 11..15
-    expect([s.minMilestones, s.maxMilestones]).toEqual([11, 15]);
+    // 2 + ceil(7/4)=2 + ceil(53/25)=3 + ui 1 + audio 1 + save/onboarding/settings 1 = 10 → 9..13
+    expect([s.minMilestones, s.maxMilestones]).toEqual([9, 13]);
   });
 
   it("a one-mechanic prototype gets a small ladder, never the same range as an epic", () => {
@@ -91,27 +90,23 @@ describe("uncoveredSections", () => {
 });
 
 describe("a design document's FRONT MATTER is not build work (measured live 2026-09-12)", () => {
-  it("leaves the introduction, the summary and the market section out of the ladder", () => {
+  it("leaves the introduction, the summary and a competitor section out of the ladder", () => {
     // The live campaign's first milestone was "INTRODUCTION": the mechanical
     // grouping turned the GDD's front matter into sprints, and a worker was
     // asked to build an introduction. Apparatus was filtered by a list that
     // named contents and glossaries but not the sections every design document
     // opens with.
     const gdd = [
-      "1. Introduction",
-      "1.1 Summary",
-      "1.2 Competitive Analysis",
-      "1.3 Terminology",
-      "1.4 About This Document",
-      "1.5 Glossary",
-      "2. HOW A SEASON PLAYS",
-      "3. RULES OF THE ORCHARD",
-      "8. RELEASE STEPS",
+      "## Introduction",
+      "## Pruning Orders",
+      "## Summary",
+      "## Harvest Weighing",
+      "## Competitive Analysis",
     ].join("\n");
 
     const headings = extractHeadings(gdd);
 
-    expect(headings).toEqual(["HOW A SEASON PLAYS", "RULES OF THE ORCHARD", "RELEASE STEPS"].map((h) => expect.stringContaining(h)));
+    expect(headings).toEqual(["Pruning Orders", "Harvest Weighing"]);
   });
 
   it("keeps a section whose name only LOOKS like apparatus but names work", () => {
@@ -137,9 +132,9 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
     // …while a section that DESCRIBES is still apparatus.
     expect(extractHeadings([
       "## Introduction",
-      "This document describes the design of Grid Quest.",
+      "This document describes the design of the orchard.",
       "## Core Loop",
-      "Merge frogs.",
+      "Prune the trees.",
     ].join("\n"))).toEqual(["Core Loop"]);
 
     // A section's own body decides, not the NEXT section's: without the
@@ -167,7 +162,7 @@ describe("a design document's FRONT MATTER is not build work (measured live 2026
 
 describe("headingClaimedBy — one containment rule for coverage and for row ownership (W04)", () => {
   it("claims a heading when either side contains the other, normalized; a short claim claims nothing", () => {
-    expect(headingClaimedBy("4.2 Grafting rules (G-01 … G-09)", ["Grafting rules"])).toBe(true);
+    expect(headingClaimedBy("7. Grafting rules for walled plots", ["Grafting rules"])).toBe(true);
     expect(headingClaimedBy("Core Loop", ["2. Core Loop — merging"])).toBe(true);
     expect(headingClaimedBy("Performance", ["Audio", "UI"])).toBe(false);
     expect(headingClaimedBy("UI", ["UI"])).toBe(false);
@@ -180,8 +175,8 @@ describe("headingClaimedBy — one containment rule for coverage and for row own
   it("exports the apparatus and work-demand rules the row extractor shares", () => {
     expect(TRIVIAL_HEADING_RE.test(normalizeHeading("9. Revision History"))).toBe(true);
     expect(TRIVIAL_HEADING_RE.test(normalizeHeading("2.1 Season Phases"))).toBe(false);
-    // A market heading that names its comparison titles is still front matter.
-    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("1.2 Market Analysis & Comparable Titles"))).toBe(true);
+    // A market heading that goes on to name competing titles is still front matter.
+    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("Market Analysis and Competitor Titles"))).toBe(true);
     expect(WORK_DEMAND_RE.test("Build an interactive credits screen.")).toBe(true);
     expect(WORK_DEMAND_RE.test("This document describes the game.")).toBe(false);
   });
@@ -190,14 +185,14 @@ describe("headingClaimedBy — one containment rule for coverage and for row own
 describe("a numbered heading may open with any capital letter, not only A-Z (W04)", () => {
   it("reads Turkish, German, French and Spanish section lines from a converted document", () => {
     expect(extractHeadings([
-      "3.2 Çekirdek Kurallar",
-      "Oyuncu bir tohuma dokunur.",
-      "4. Übersicht der Elemente",
+      "3.2 Çiçeklenme Takvimi",
+      "Ağaçlar sırayla çiçek açar.",
+      "4. Übersicht der Obstsorten",
       "Text.",
       "5. Écrans",
       "Texte.",
       "6. Ámbito del juego",
       "Texto.",
-    ].join("\n"))).toEqual(["Çekirdek Kurallar", "Übersicht der Elemente", "Écrans", "Ámbito del juego"]);
+    ].join("\n"))).toEqual(["Çiçeklenme Takvimi", "Übersicht der Obstsorten", "Écrans", "Ámbito del juego"]);
   });
 });

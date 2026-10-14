@@ -1,7 +1,7 @@
 /**
  * The GDD's own numbers, held against what was measured.
  *
- * A design document states targets in numbers — "60 fps", "loads in under
+ * A design document states targets in numbers — "45 fps", "loads in under
  * 3 seconds", "12 levels", "a round lasts 30–60 seconds" — and until
  * 2026-09-10 nothing in the delivery path ever read one of them back: the
  * planner's prompt repeated them and the gates measured compile, tests, scene
@@ -11,7 +11,7 @@
  * evidence the campaign already holds, or says plainly that it cannot. Three
  * outcomes, never a fourth: MET, NOT MET, or NOT MEASURABLE (with why). A
  * claim without a measurement is listed, not dropped — a report that is silent
- * about "60 fps" reads as if it were checked.
+ * about "45 fps" reads as if it were checked.
  *
  * What is measured today comes from the play-through verdict (Strada.MCP
  * unity_playthrough): boot time to services, average frame rate and the worst
@@ -284,14 +284,15 @@ export function extractNumericClaims(gddText: string): {
     for (const m of text.matchAll(re)) {
       const value = toSeconds(Number(m[1]), m[2] ?? "s");
       if (value <= 0 || value > 600) continue;
-      // A LEVEL LOAD IS NOT A COLD BOOT. "Start-up ≤ 9 s; map load ≤ 3.5 s"
-      // produced two boot claims, and the stricter one won: the boot gate then
+      // A LEVEL LOAD IS NOT A COLD BOOT. A document that gives the game nine
+      // seconds to start and one map a few seconds to open produced two boot
+      // claims, and the stricter one won: the boot gate then
       // demanded that the whole game start in the time one level may take to
       // open (Codex 2026-09-12 U#F3, U#F10). They are separate intervals, and
       // only the producer can separate them.
       const at = m.index ?? 0;
       // WITHIN THE CLAUSE. The lookbehind reached across the sentence before
-      // it, so "Map loads fast; boot under 9 s" read the only boot budget in
+      // it, so "The orchard map opens quickly; boot under 9 s" read the only boot budget in
       // the document as a level-load figure and stopped measuring it (Codex
       // 2026-09-12 V, a regression in my own U#F3 fix).
       const subject = clauseTail(text.slice(Math.max(0, at - 20), at)) + m[0];
@@ -375,9 +376,9 @@ export function extractNumericClaims(gddText: string): {
     const biggest = levelCounts.reduce((max, c) => (c.value > max.value || (c.value === max.value && c.at < max.at) ? c : max));
     for (const claim of levelCounts) {
       if (claim !== biggest) {
-        // NOT SILENTLY DROPPED. A document names its counts by release phase
-        // — an MVP, a launch, a live target — and taking the largest is a
-        // choice of release, not a reading of the document. The others are
+        // NOT SILENTLY DROPPED. A document can give a different count for
+        // each stage of its plan, and taking the largest is a choice of
+        // release, not a reading of the document. The others are
         // carried so the delivery report can name them and a person can see
         // which one this delivery is being held to (Codex 2026-09-12 V).
         otherLevelCounts.push(claim.value);
@@ -421,7 +422,7 @@ export function extractActionBudget(gddText: string): number | undefined {
  * gate.
  *
  * A document may state its durations in a label/value table — a round-length
- * label on one line, a range per mode on the next — which no prose pattern
+ * label on one line, its value on the next — which no prose pattern
  * can see, so `playerRunSpec` derived no deadline and the producer's
  * 45-second default cut a legal multi-minute round short as unfinished
  * (Codex 2026-09-12 AB, Job 3.6). A TYPICAL length is not an every-level
@@ -454,13 +455,13 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
   const lines = text.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
   for (let i = 0; i < lines.length; i++) {
     if (!DURATION_LABEL_RE.test(lines[i] ?? "")) continue;
-    // WITHIN THE CLAUSE THE LABEL INTRODUCES. "Round duration | 9–16
-    // minutes; about 35 minutes of planning per player each week" gave the
-    // week's total as the session allowance, because the sentence goes on to
-    // talk about a WEEK.
-    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "5–12 min (single
-    // plot); 12–20 min (full estate)" lost the longer mode to the first
-    // semicolon, so the run cut a legal 20-minute round short (Codex
+    // WITHIN THE CLAUSE THE LABEL INTRODUCES. A round length followed, after
+    // a semicolon, by how long an evening's sitting runs gave the sitting as
+    // the session allowance, because the sentence goes on to talk about
+    // something other than one round.
+    // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "6–13 min in a calm
+    // season; up to 37 min in a storm season" lost the longer case to the
+    // first semicolon, so the run cut a legal long round short (Codex
     // 2026-09-13 AF#13). A clause that
     // changes the subject — to a DAY, a WEEK, a SITTING — ends the read.
     const OTHER_SUBJECT_RE = /\b(?:per\s+(?:day|week|month|dau|user|player)|daily|weekly|sitting|session\s+count|retention)\b/i;
@@ -518,8 +519,8 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
 export function bootClauseAsksBeyondServices(text: string, medium: string): string | undefined {
   const t = text.toLowerCase();
   const missing: string[] = [];
-  // A SCREEN, not a service registry — as the clause's destination ("to home",
-  // "until the first level is playable") or as the thing that has to APPEAR
+  // A SCREEN, not a service registry — as the clause's destination ("to the
+  // main menu", "until the first level is playable") or as the thing that has to APPEAR
   // ("the main menu appears within 500 ms").
   const screen = "home|main\\s+menu|menu|title|lobby|dashboard|start\\s+screen|first\\s+screen|gameplay|playable|interactive|first\\s+level|game\\s+screen";
   const appears = "appears?|is\\s+shown|shows|is\\s+visible|is\\s+ready|is\\s+usable|is\\s+interactive|loads?|opens?|renders?|comes?\\s+up";
@@ -710,7 +711,7 @@ export function assessNumericClaims(
         // vsync, the frame rate a person sees. Measured, and blocking.
         if (playerPerf?.avgFps !== undefined && playerPerf.medium === "player") {
           // A frame rate measured on the wrong device answers nothing: a
-          // desktop build used to satisfy "50 fps on budget phones"
+          // desktop build used to satisfy "47 fps on a handheld"
           // (Codex 2026-09-11 B#11).
           // A CLAUSE THAT NAMES ITS OWN PLATFORM is about that platform: "at
           // least 60 fps on Android" was answered by a Windows player,
@@ -799,7 +800,7 @@ export function assessNumericClaims(
         // …AND WITHIN IT IS ONLY WITHIN IT FOR WHAT WAS MEASURED. The number
         // is application launch (or scene load) → the bootstrapper's services;
         // a clause that asks for a cold start, a SCREEN ("to the main menu")
-        // or a DEVICE CLASS ("on a mid-range phone") asks about something no
+        // or a DEVICE CLASS ("on a flagship console") asks about something no
         // producer records, and answering MET equated service publication
         // with a screen a person can use (Codex 2026-09-13 AI#12).
         const unmeasuredParts = bootClauseAsksBeyondServices(claim.text, bootMedium);
@@ -1084,9 +1085,9 @@ export function describeClaims(
   });
   if (otherLevelCounts.length > 0) {
     // WHICH RELEASE THIS IS. The largest count wins so that one catalog can
-    // satisfy every mention, but a document that names 150 for an alpha and
-    // 2,400 for a live target is naming release PHASES — and choosing one of
-    // those silently is choosing what to ship (Codex 2026-09-12 V).
+    // satisfy every mention, but a document that names 23 for a demo and 137
+    // for the boxed edition is naming different releases — and choosing one
+    // of those silently is choosing what to ship (Codex 2026-09-12 V).
     const chosen = assessments.find((a) => a.claim.kind === "level_count")?.claim.value;
     lines.push(
       `GDD level count: measured against ${chosen ?? "the largest"}; the document also names ` +

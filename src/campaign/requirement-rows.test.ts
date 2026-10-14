@@ -33,43 +33,40 @@ const ENGLISH = [
   "## 1. Introduction",
   "This document describes the game. Every reader must read it whole.",
   "",
-  "## 2. Core Rules",
+  "## 2. Orchard Rules",
   "| ID | Requirement |",
   "|---|---|",
-  "| FR-1 | The player must tap a seed to plant it in the nearest empty plot. |",
-  "| FR-2 | A plant must ripen in 30 seconds. |",
-  "| FR-4 | Harvested fruit is added to the basket. |",
+  "| FR-1 | The player must press a branch to mark it for pruning. |",
+  "| FR-2 | A graft must take in 38 seconds. |",
+  "| FR-4 | Pruned wood is added to the compost heap. |",
   "",
-  "The basket holds at most 12 fruit.",
-  "Each round lasts 60–90 s.",
+  "A pruning order covers at most 23 branches.",
+  "Each round lasts 74–95 s.",
   "",
-  "### 2.1 Tuning Values",
-  "Setting",
+  "### 2.1 Frost Table",
+  "Key",
   "Value",
-  "Notes",
-  "garden.grow_time",
-  "30 s",
-  "Seconds a plant needs to ripen",
-  "garden.spawn_rate",
-  "2 /s",
-  "Seeds spawned per second",
+  "Graft time",
+  "38 s",
+  "Frost checks",
+  "3 /day",
   "",
-  "## 3. Screens",
-  "### 3.1 Main Menu",
+  "## 3. Performance",
+  "The game must hold 53 fps while the trees sway.",
+  "",
+  "## 4. Studio KPIs",
+  "Week-2 returners must be at least 31% of installs.",
+  "",
+  "## 5. Screens",
+  "### 5.1 Main Menu",
   "The main menu shows a Play button.",
-  "### 3.2 Results Screen",
-  "The results screen must show the harvest total.",
+  "### 5.2 Results Screen",
+  "The results screen must show the harvest weight.",
   "",
-  "## 4. Art Direction",
+  "## 6. Visual Mood",
   "The look must feel calm and warm.",
   "",
-  "## 5. KPI Targets",
-  "Day-1 retention must be at least 40%.",
-  "",
-  "## 6. Performance",
-  "The game must run at 60 fps on budget phones.",
-  "",
-  "The FR-1 … FR-5 series defines the core rules.",
+  "Rules FR-1 through FR-5 are the orchard rules.",
   "",
 ].join("\n");
 
@@ -80,24 +77,24 @@ const TURKISH = [
   "## 1. Giriş",
   "Bu belge oyunu ve bir bahçeyi anlatır.",
   "",
-  "## 2. Temel Kurallar",
-  "K-1: Oyuncu bir tohuma dokunarak onu en yakın boş tarlaya ekler.",
-  "K-2: Bir bitki 30 saniyede olgunlaşmalıdır.",
-  "K-3: Sepet en fazla 12 meyve alır.",
+  "## 2. Bahçe Kuralları",
+  "K-1: Oyuncu bir dala basılı tutarak onu budama için işaretler.",
+  "K-2: Bir aşı 38 saniyede tutmalıdır.",
+  "K-3: Bir budama emri en fazla 23 dalı kapsar.",
   "",
-  "Oyuncu asla aynı anda iki tohum taşıyamaz ve bu bir kuraldır.",
-  "Her tur 60–90 saniye sürmelidir.",
+  "Oyuncu asla aynı anda iki fidan taşıyamaz ve bu bir kuraldır.",
+  "Her tur 74–95 saniye sürmelidir.",
   "",
-  "3.2 Çekirdek Sabitler",
-  "Bir tohum 2 saniyede filizlenmelidir.",
+  "3.2 Çiçeklenme Takvimi",
+  "Bir tomurcuk 2 saniyede açmalıdır.",
   "",
-  "## 4. Ekranlar",
-  "### 4.1 Ana Menü",
-  "### 4.2 Sonuç Ekranı",
+  "## 5. Stüdyo KPI'ları",
+  "İkinci hafta geri dönüş en az %31 olmalıdır.",
+  "",
+  "## 6. Ekranlar",
+  "### 6.1 Ana Menü",
+  "### 6.2 Sonuç Ekranı",
   "Sonuç ekranı toplam hasadı göstermelidir.",
-  "",
-  "## 5. KPI Hedefleri",
-  "Birinci gün elde tutma en az %40 olmalıdır.",
   "",
 ].join("\n");
 
@@ -118,8 +115,8 @@ describe("extractRequirementRows — an invented English GDD", () => {
 
   it("reads labelled rules from a pipe table, verbatim, with their section", () => {
     const fr1 = byLabel(rows, "FR-1");
-    expect(fr1.text).toBe("FR-1 | The player must tap a seed to plant it in the nearest empty plot.");
-    expect(fr1.section).toBe("Core Rules");
+    expect(fr1.text).toBe("FR-1 | The player must press a branch to mark it for pruning.");
+    expect(fr1.section).toBe("Orchard Rules");
     expect(fr1.sectionNumber).toBe("2");
     expect(fr1.kind).toBe("input");
     expect(fr1.source).toBe("extracted");
@@ -130,50 +127,50 @@ describe("extractRequirementRows — an invented English GDD", () => {
     // A quantity inside a labelled rule merges into that rule: one row, bounds parsed by code.
     const fr2 = byLabel(rows, "FR-2");
     expect(fr2.kind).toBe("rule");
-    expect(fr2.bounds).toEqual({ kind: "exact", value: 30, tolerance: 0.5, unit: "s" });
-    expect(rows.filter((r) => r.text.includes("ripen in 30 seconds"))).toHaveLength(1);
+    expect(fr2.bounds).toEqual({ kind: "exact", value: 38, tolerance: 0.5, unit: "s" });
+    expect(rows.filter((r) => r.text.includes("take in 38 seconds"))).toHaveLength(1);
 
     expect(byLabel(rows, "FR-4").kind).toBe("rule");
   });
 
   it("reads normative sentences, quantities and label/value constants, with bounds parsed by code", () => {
-    const basket = byText(rows, "The basket holds at most 12 fruit.");
-    expect(basket.kind).toBe("range");
-    expect(basket.bounds).toEqual({ kind: "range", hi: 12 });
+    const order = byText(rows, "A pruning order covers at most 23 branches.");
+    expect(order.kind).toBe("range");
+    expect(order.bounds).toEqual({ kind: "range", hi: 23 });
 
-    const grow = byText(rows, "garden.grow_time");
-    expect(grow.kind).toBe("constant");
-    expect(grow.section).toBe("Tuning Values");
-    expect(grow.sectionNumber).toBe("2.1");
-    expect(grow.sectionPath).toEqual(["Core Rules", "Tuning Values"]);
-    expect(grow.bounds).toEqual({ kind: "exact", value: 30, tolerance: 0.5, unit: "s" });
-    expect(byText(rows, "garden.spawn_rate").bounds).toEqual({ kind: "exact", value: 2, tolerance: 0.5, unit: "/s" });
+    const graft = byText(rows, "Graft time");
+    expect(graft.kind).toBe("constant");
+    expect(graft.section).toBe("Frost Table");
+    expect(graft.sectionNumber).toBe("2.1");
+    expect(graft.sectionPath).toEqual(["Orchard Rules", "Frost Table"]);
+    expect(graft.bounds).toEqual({ kind: "exact", value: 38, tolerance: 0.5, unit: "s" });
+    expect(byText(rows, "Frost checks").bounds).toEqual({ kind: "exact", value: 3, tolerance: 0.5, unit: "/day" });
 
     // The header cells of a flattened table are not rows.
-    expect(rows.some((r) => r.text.startsWith("Setting"))).toBe(false);
+    expect(rows.some((r) => r.text.startsWith("Key"))).toBe(false);
   });
 
   it("turns a session-length range into ONE claim row and a frame-rate figure into a claim", () => {
     const round = rows.filter((r) => r.text.startsWith("Each round lasts"));
     expect(round).toHaveLength(1);
     expect(round[0]!.kind).toBe("claim");
-    expect(round[0]!.bounds).toEqual({ kind: "range", lo: 60, hi: 90, unit: "s" });
+    expect(round[0]!.bounds).toEqual({ kind: "range", lo: 74, hi: 95, unit: "s" });
 
-    const fps = byText(rows, "The game must run at 60 fps");
+    const fps = byText(rows, "The game must hold 53 fps");
     expect(fps.kind).toBe("claim");
-    expect(fps.bounds).toEqual({ kind: "range", lo: 60, unit: "fps" });
+    expect(fps.bounds).toEqual({ kind: "range", lo: 53, unit: "fps" });
   });
 
   it("reads screens from their headings, and keeps a rule under a screen heading as its own row", () => {
     expect(byText(rows, "Main Menu").kind).toBe("screen");
     expect(byText(rows, "Results Screen").kind).toBe("screen");
-    expect(byText(rows, "The results screen must show the harvest total.").kind).toBe("rule");
+    expect(byText(rows, "The results screen must show the harvest weight.").kind).toBe("rule");
     // "Screens" names a group of screens, not a screen.
     expect(rows.some((r) => r.text === "Screens")).toBe(false);
   });
 
   it("classifies aspiration (excluded and disclosed) and judgement (never blocks)", () => {
-    const kpi = byText(rows, "Day-1 retention must be at least 40%.");
+    const kpi = byText(rows, "Week-2 returners must be at least 31% of installs.");
     expect(kpi.kind).toBe("aspiration");
     expect(kpi.status).toBe("excluded");
     expect(kpi.excludedBecause).toMatch(/aspiration/);
@@ -216,7 +213,7 @@ describe("extractRequirementRows — an invented English GDD", () => {
   });
 
   it("a cosmetic rewording keeps the row's lineage; the new wording gets a new id", () => {
-    const reworded = ENGLISH.replace("A plant must ripen in 30 seconds.", "The plant must ripen in 30 seconds.");
+    const reworded = ENGLISH.replace("A graft must take in 38 seconds.", "The graft must take in 38 seconds.");
     const next = extractRequirementRows(reworded, { gddSha256: "b".repeat(64), gddRevision: 2, previous: rows });
     const before = byLabel(rows, "FR-2");
     const after = byLabel(next.rows, "FR-2");
@@ -235,23 +232,23 @@ describe("extractRequirementRows — an invented Turkish GDD", () => {
   it("reads inline labels, the -mAlI obligation, asla and en fazla, with bounds parsed by code", () => {
     const k1 = byLabel(rows, "K-1");
     expect(k1.kind).toBe("input");
-    expect(k1.section).toBe("Temel Kurallar");
+    expect(k1.section).toBe("Bahçe Kuralları");
 
     const k2 = byLabel(rows, "K-2");
-    expect(k2.bounds).toEqual({ kind: "exact", value: 30, tolerance: 0.5, unit: "s" });
+    expect(k2.bounds).toEqual({ kind: "exact", value: 38, tolerance: 0.5, unit: "s" });
 
     const k3 = byLabel(rows, "K-3");
-    expect(k3.bounds).toEqual({ kind: "range", hi: 12 });
+    expect(k3.bounds).toEqual({ kind: "range", hi: 23 });
 
-    expect(byText(rows, "Oyuncu asla aynı anda iki tohum taşıyamaz").kind).toBe("rule");
-    const round = byText(rows, "Her tur 60–90 saniye sürmelidir.");
+    expect(byText(rows, "Oyuncu asla aynı anda iki fidan taşıyamaz").kind).toBe("rule");
+    const round = byText(rows, "Her tur 74–95 saniye sürmelidir.");
     expect(round.kind).toBe("range");
-    expect(round.bounds).toEqual({ kind: "range", lo: 60, hi: 90, unit: "s" });
+    expect(round.bounds).toEqual({ kind: "range", lo: 74, hi: 95, unit: "s" });
   });
 
   it("reads a numbered heading that opens with a non-ASCII capital", () => {
-    const sprout = byText(rows, "Bir tohum 2 saniyede filizlenmelidir.");
-    expect(sprout.section).toBe("Çekirdek Sabitler");
+    const sprout = byText(rows, "Bir tomurcuk 2 saniyede açmalıdır.");
+    expect(sprout.section).toBe("Çiçeklenme Takvimi");
     expect(sprout.sectionNumber).toBe("3.2");
     expect(sprout.bounds).toEqual({ kind: "exact", value: 2, tolerance: 0.5, unit: "s" });
   });
@@ -264,10 +261,10 @@ describe("extractRequirementRows — an invented Turkish GDD", () => {
   });
 
   it("classifies a KPI row as aspiration", () => {
-    const kpi = byText(rows, "Birinci gün elde tutma en az %40 olmalıdır.");
+    const kpi = byText(rows, "İkinci hafta geri dönüş en az %31 olmalıdır.");
     expect(kpi.kind).toBe("aspiration");
     expect(kpi.status).toBe("excluded");
-    expect(kpi.bounds).toEqual({ kind: "range", lo: 40, unit: "%" });
+    expect(kpi.bounds).toEqual({ kind: "range", lo: 31, unit: "%" });
   });
 
   it("does not read a descriptive sentence as a rule", () => {
@@ -282,18 +279,18 @@ describe("extractRequirementRows — German, Spanish and French documents", () =
         "# Sternengarten — Spieldesign",
         "## 1. Einleitung",
         "Dieses Dokument beschreibt das Spiel und die Welt.",
-        "## 2. Kernregeln",
-        "R-1: Der Spieler tippt auf einen Samen, um ihn zu pflanzen.",
-        "R-2: Eine Pflanze muss in 30 Sekunden reifen.",
-        "Der Korb fasst höchstens 12 Früchte.",
+        "## 2. Obstgartenregeln",
+        "OR-1: Der Spieler tippt auf einen Ast, um ihn für den Schnitt zu markieren.",
+        "OR-2: Eine Veredelung muss in 38 Sekunden anwachsen.",
+        "Ein Schnittauftrag umfasst höchstens 23 Äste.",
         "Ein Spieler darf nie zwei Samen gleichzeitig tragen.",
         "## 3. Übersicht der Bildschirme",
         "### 3.1 Hauptmenü",
         "### 3.2 Ergebnisbildschirm",
         "Der Ergebnisbildschirm muss die Ernte anzeigen.",
       ],
-      section: "Kernregeln",
-      basket: "Der Korb fasst höchstens 12 Früchte.",
+      section: "Obstgartenregeln",
+      capped: "Ein Schnittauftrag umfasst höchstens 23 Äste.",
       never: "Ein Spieler darf nie zwei Samen",
       screens: ["Hauptmenü", "Ergebnisbildschirm"],
       descriptive: "Dieses Dokument",
@@ -303,18 +300,18 @@ describe("extractRequirementRows — German, Spanish and French documents", () =
         "# Jardín Estelar — Documento de diseño",
         "## 1. Introducción",
         "Este documento describe el juego y el mundo.",
-        "## 2. Reglas básicas",
-        "R-1: El jugador toca una semilla para plantarla.",
-        "R-2: Una planta debe madurar en 30 segundos.",
-        "La cesta admite como máximo 12 frutas.",
+        "## 2. Reglas del huerto",
+        "OR-1: El jugador toca una rama para marcarla para la poda.",
+        "OR-2: Un injerto debe prender en 38 segundos.",
+        "Una orden de poda cubre como máximo 23 ramas.",
         "El jugador nunca puede llevar dos semillas a la vez.",
         "## 3. Pantallas",
         "### 3.1 Menú principal",
         "### 3.2 Pantalla de resultados",
         "La pantalla de resultados debe mostrar la cosecha.",
       ],
-      section: "Reglas básicas",
-      basket: "La cesta admite como máximo 12 frutas.",
+      section: "Reglas del huerto",
+      capped: "Una orden de poda cubre como máximo 23 ramas.",
       never: "El jugador nunca puede llevar",
       screens: ["Menú principal", "Pantalla de resultados"],
       descriptive: "Este documento",
@@ -324,18 +321,18 @@ describe("extractRequirementRows — German, Spanish and French documents", () =
         "# Jardin Stellaire — Document de conception",
         "## 1. Présentation",
         "Ce document décrit le jeu et le monde.",
-        "## 2. Règles de base",
-        "R-1 : Le joueur touche une graine pour la planter.",
-        "R-2 : Une plante doit mûrir en 30 secondes.",
-        "Le panier contient au plus 12 fruits.",
+        "## 2. Règles du verger",
+        "OR-1 : Le joueur touche une branche pour la marquer pour la taille.",
+        "OR-2 : Une greffe doit prendre en 38 secondes.",
+        "Un ordre de taille couvre au plus 23 branches.",
         "Le joueur ne peut jamais porter deux graines à la fois.",
         "## 3. Écrans",
         "### 3.1 Menu principal",
         "### 3.2 Écran des résultats",
         "L'écran des résultats doit afficher la récolte.",
       ],
-      section: "Règles de base",
-      basket: "Le panier contient au plus 12 fruits.",
+      section: "Règles du verger",
+      capped: "Un ordre de taille couvre au plus 23 branches.",
       never: "Le joueur ne peut jamais porter",
       screens: ["Menu principal", "Écran des résultats"],
       descriptive: "Ce document",
@@ -345,11 +342,11 @@ describe("extractRequirementRows — German, Spanish and French documents", () =
   for (const [language, doc] of Object.entries(docs)) {
     it(`${language}: labels, obligation words, bounds parsed by code, screens`, () => {
       const { rows } = extractRequirementRows(doc.text.join("\n"), GDD);
-      const r1 = byLabel(rows, "R-1");
-      expect(r1.kind).toBe("input");
-      expect(r1.section).toBe(doc.section);
-      expect(byLabel(rows, "R-2").bounds).toEqual({ kind: "exact", value: 30, tolerance: 0.5, unit: "s" });
-      expect(byText(rows, doc.basket).bounds).toEqual({ kind: "range", hi: 12 });
+      const or1 = byLabel(rows, "OR-1");
+      expect(or1.kind).toBe("input");
+      expect(or1.section).toBe(doc.section);
+      expect(byLabel(rows, "OR-2").bounds).toEqual({ kind: "exact", value: 38, tolerance: 0.5, unit: "s" });
+      expect(byText(rows, doc.capped).bounds).toEqual({ kind: "range", hi: 23 });
       expect(byText(rows, doc.never).kind).toBe("rule");
       for (const screen of doc.screens) expect(byText(rows, screen).kind).toBe("screen");
       expect(rows.some((r) => r.text.startsWith(doc.descriptive))).toBe(false);
@@ -383,8 +380,8 @@ const FLATTENED = [
   "Each tree's yield is weighed in kilograms and added to the store.",
   "",
   "4. SEASON PLAY",
-  "4.2 Grafting rules (G-01 … G-09)",
-  "The rules below hold in every season.",
+  "4.5 Grafting rules",
+  "The settled rules are listed here; the full list runs from G-01 to G-07.",
   "Code",
   "Rule",
   "G-01",
@@ -396,23 +393,23 @@ const FLATTENED = [
   "G-04",
   "Tokens. Each harvest adds seed tokens to the store by weight.",
   "",
-  "5. ORCHARD TOOLS",
-  "5.1 Orchard Upgrades",
-  "Upgrade",
-  "Unlock",
-  "Effect",
-  "Ladder",
-  "L5",
-  "Lets the player prune one extra branch each season.",
-  "Cold frame",
-  "L14",
-  "Shelters every sapling through one frost night.",
+  "6. VARIETIES",
+  "6.8 Planting Calendar",
+  "Variety",
+  "Week",
+  "Note",
+  "Russet pear",
+  "W3",
+  "Needs a sheltered plot beside the south wall.",
+  "Quince",
+  "W11",
+  "Fruits only after a hard winter.",
   "",
-  "5.2 Triggers",
-  "Event",
-  "Rule",
-  "Season ends",
-  "G-02",
+  "6.9 Season Journal",
+  "Entry",
+  "See",
+  "Frost damage",
+  "G-03",
   "",
 ].join("\n");
 
@@ -420,13 +417,13 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
   const { rows, numberingGaps } = extractRequirementRows(FLATTENED, GDD);
 
   it("reads every labelled row of a run with the cells after its label, verbatim, under its own heading", () => {
-    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["S1", "S2", "S3", "G-01", "G-02", "G-03", "G-04", "L5", "L14"]);
+    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["S1", "S2", "S3", "G-01", "G-02", "G-03", "G-04", "W3", "W11"]);
 
     const g1 = byLabel(rows, "G-01");
     expect(g1.text).toBe("G-01 Pruning. A branch pruned in winter must not fruit that season.");
     expect(FLATTENED.slice(g1.span.start, g1.span.end)).toBe("G-01\nPruning. A branch pruned in winter must not fruit that season.");
-    expect(g1.section).toBe("Grafting rules (G-01 … G-09)");
-    expect(g1.sectionNumber).toBe("4.2");
+    expect(g1.section).toBe("Grafting rules");
+    expect(g1.sectionNumber).toBe("4.5");
     expect(g1.status).toBe("open");
 
     // Three cells to a row: the label, a name, what it means.
@@ -440,24 +437,24 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
     expect(rows.filter((r) => r.text.includes("must finish within 0.4 s"))).toHaveLength(1);
 
     // The header row is no row.
-    expect(rows.some((r) => /^(?:Code|Phase|What happens|Rule\b|Upgrade|Event)/.test(r.text))).toBe(false);
+    expect(rows.some((r) => /^(?:Code|Phase|What happens|Rule\b|Variety|Week|Note|Entry|See\b)/.test(r.text))).toBe(false);
   });
 
   it("finds the label's column from a header wider than the row: the cell before the label is the row's", () => {
-    expect(byLabel(rows, "L5").text).toBe("Ladder L5 Lets the player prune one extra branch each season.");
-    expect(byLabel(rows, "L14").text).toBe("Cold frame L14 Shelters every sapling through one frost night.");
+    expect(byLabel(rows, "W3").text).toBe("Russet pear W3 Needs a sheltered plot beside the south wall.");
+    expect(byLabel(rows, "W11").text).toBe("Quince W11 Fruits only after a hard winter.");
   });
 
   it("a lone label in another table refers to a rule; it defines none", () => {
-    expect(rows.filter((r) => r.label === "G-02")).toHaveLength(1);
-    expect(rows.some((r) => r.section === "Triggers")).toBe(false);
+    expect(rows.filter((r) => r.label === "G-03")).toHaveLength(1);
+    expect(rows.some((r) => r.section === "Season Journal")).toBe(false);
   });
 
   it("reports the span the document states and the table stops short of, and invents none of it", () => {
     expect(numberingGaps).toEqual([
-      expect.objectContaining({ series: "G-", missing: ["G-05", "G-06", "G-07", "G-08", "G-09"] }),
+      expect.objectContaining({ series: "G-", missing: ["G-05", "G-06", "G-07"] }),
     ]);
-    expect(numberingGaps[0]!.detail).toContain("G-01 … G-09");
+    expect(numberingGaps[0]!.detail).toContain("G-01 to G-07");
     expect(rows.some((r) => r.label === "G-05")).toBe(false);
   });
 });
@@ -467,34 +464,34 @@ describe("extractRequirementRows — a business word a game uses too excludes no
   // heading is the business section itself.
   const MIXED = [
     "# Rally Garden — Game Design Document",
+    "## 2. Risk Management",
+    "The store submission must finish within 6 days.",
     "## 3. Teams",
     "Players must pick a team before the first round.",
     "### 3.1 Team Size",
     "Each team must have exactly 4 players.",
-    "## 4. Star Rating",
+    "## 4. Roadmap",
+    "### 4.2 Autumn Milestone",
+    "The autumn milestone must ship by week 37.",
+    "## 5. Star Rating",
     "A level awards 3 stars when the player finishes with at least 5 moves left.",
-    "## 5. Risk Cards",
+    "## 6. Store KPIs",
+    "### 6.2 Autumn Quarter",
+    "Week-6 returners must be at least 13% of installs.",
+    "## 7. Risk Cards",
     "Drawing a risk card must cost 2 coins.",
-    "## 6. Currency Conversion",
+    "## 8. Studio",
+    "### 8.1 Team",
+    "The studio must hire 3 more animators by June.",
+    "### 8.2 Budget",
+    "The budget must stay under 38,000 EUR.",
+    "## 9. Currency Conversion",
     "Ten gems must convert to exactly 100 coins.",
-    "## 7. Performance Budget",
+    "## 11. Performance Budget",
     "Frame time must stay under 16 ms.",
-    "## 8. Economy",
-    "### 8.1 Seed Token Budget (per season)",
-    "Each harvest must pay 3–8 seed tokens.",
-    "## 9. KPI Targets",
-    "### 9.1 First Month",
-    "Day-30 retention must be at least 9%.",
-    "## 10. Roadmap",
-    "### 10.1 Studio Crew",
-    "The studio crew must stay at 5 people.",
-    "## 11. Production",
-    "### 11.1 Team",
-    "The studio must hire 2 more artists by March.",
-    "### 11.2 Budget",
-    "The budget must stay under 50,000 USD.",
-    "## 12. Risk Management",
-    "Store review must finish within 7 days.",
+    "## 12. Weather",
+    "### 12.1 Water Budget",
+    "Each tree must receive 4–9 litres of water per turn.",
   ].join("\n");
   const { rows } = extractRequirementRows(MIXED, GDD);
 
@@ -506,7 +503,7 @@ describe("extractRequirementRows — a business word a game uses too excludes no
       "Drawing a risk card must cost 2 coins.",
       "Ten gems must convert to exactly 100 coins.",
       "Frame time must stay under 16 ms.",
-      "Each harvest must pay 3–8 seed tokens.",
+      "Each tree must receive 4–9 litres of water per turn.",
     ]) {
       const row = byText(rows, rule);
       expect({ rule, kind: row.kind, status: row.status }).toEqual({ rule, kind: expect.not.stringMatching(/aspiration/), status: "open" });
@@ -515,11 +512,11 @@ describe("extractRequirementRows — a business word a game uses too excludes no
 
   it("still excludes the business sections themselves, and a metric or production heading excludes what sits under it", () => {
     for (const goal of [
-      "The studio must hire 2 more artists by March.",
-      "The budget must stay under 50,000 USD.",
-      "Store review must finish within 7 days.",
-      "Day-30 retention must be at least 9%.",
-      "The studio crew must stay at 5 people.",
+      "The store submission must finish within 6 days.",
+      "The autumn milestone must ship by week 37.",
+      "Week-6 returners must be at least 13% of installs.",
+      "The studio must hire 3 more animators by June.",
+      "The budget must stay under 38,000 EUR.",
     ]) {
       const row = byText(rows, goal);
       expect({ goal, kind: row.kind, status: row.status }).toEqual({ goal, kind: "aspiration", status: "excluded" });
@@ -541,10 +538,10 @@ describe("extractRequirementRows — caps are disclosed, never silent", () => {
 
   it("gives the cap's last places to aspiration and judgement rows, wherever the document puts them", () => {
     const doc = [
-      "## 2. KPI Targets",
-      "Day-1 retention must be at least 40%.",
-      "Day-30 retention must be at least 9%.",
-      "## 3. Art Direction",
+      "## 2. Store KPIs",
+      "Week-2 returners must be at least 31% of installs.",
+      "Week-6 returners must be at least 13% of installs.",
+      "## 3. Visual Mood",
       "The look must feel calm and warm.",
       "## 4. Rules",
       "The gate must open within 2 s.",
@@ -552,7 +549,7 @@ describe("extractRequirementRows — caps are disclosed, never silent", () => {
     ].join("\n");
     const capped = extractRequirementRows(doc, { ...GDD, maxRows: 2 });
     expect(capped.rows.map((r) => r.text)).toEqual(["The gate must open within 2 s.", "The bridge must hold at most 3 carts."]);
-    expect(capped.overflow).toEqual({ count: 3, sections: ["KPI Targets", "Art Direction"] });
+    expect(capped.overflow).toEqual({ count: 3, sections: ["Store KPIs", "Visual Mood"] });
   });
 });
 
@@ -561,7 +558,7 @@ describe("requirementLedgerFrom — the APPROVED text, never the copy on disk", 
     const root = mkdtempSync(join(tmpdir(), "rows-approved-"));
     try {
       mkdirSync(join(root, "docs"), { recursive: true });
-      writeFileSync(join(root, "docs", "gdd.md"), "## 2. Core Rules\n| FR-9 | The player must never see this disk-only rule. |\n");
+      writeFileSync(join(root, "docs", "gdd.md"), "## 2. Orchard Rules\n| FR-9 | The player must never see this disk-only rule. |\n");
       const campaign = { gddText: ENGLISH, gddPath: "docs/gdd.md", projectRoot: root };
       const ledger = requirementLedgerFrom(campaign, { atMs: 1000 })!;
       expect(ledger.rows.some((r) => r.text.includes("disk-only"))).toBe(false);
@@ -594,7 +591,7 @@ describe("proposeRowsAddOnly — a model may only ADD rows, and only with a verb
       return JSON.stringify({
         rows: [
           // A paraphrase: no such sentence in the document.
-          { requirement: "Seeds are always planted in the closest plot", quote: "Seeds are always planted in the closest free plot of the garden." },
+          { requirement: "Branches are always pruned in pairs", quote: "Branches are always pruned in pairs along the orchard wall." },
           // Verbatim, with the document's line break folded into a space.
           { requirement: "The main menu shows a Play button", quote: "The   main menu shows a Play button." },
         ],
@@ -621,7 +618,7 @@ describe("proposeRowsAddOnly — a model may only ADD rows, and only with a verb
       JSON.stringify({
         rows: [
           { requirement: "Main menu", quote: "Main Menu" },
-          { requirement: "The basket holds at most 12 fruit", quote: "The basket holds at most 12 fruit." },
+          { requirement: "A pruning order covers at most 23 branches", quote: "A pruning order covers at most 23 branches." },
           { requirement: "The boss has three phases and a rage timer", quote: "The main menu shows a Play button." },
         ],
       });
@@ -635,7 +632,7 @@ describe("proposeRowsAddOnly — a model may only ADD rows, and only with a verb
   });
 
   it("takes at most ten rows from one chunk, and a failed call removes nothing", async () => {
-    const lines = Array.from({ length: 14 }, (_, i) => `Garden bed number ${i + 1} grows a different flower.`);
+    const lines = Array.from({ length: 14 }, (_, i) => `Orchard row number ${i + 1} grows a different apple.`);
     const doc = `## 2. Beds\n${lines.join("\n")}\n`;
     const many = async (): Promise<string> => JSON.stringify({ rows: lines.map((quote) => ({ quote })) });
     const result = await proposeRowsAddOnly(doc, many, [], GDD);
@@ -657,7 +654,7 @@ describe("assignOwners", () => {
     const result = assignOwners(
       rows,
       [
-        { id: "m1", coveredSections: ["Core Rules"], prompt: "" },
+        { id: "m1", coveredSections: ["Orchard Rules"], prompt: "" },
         { id: "m2", coveredSections: ["Screens"], prompt: "" },
         { id: "m3", coveredSections: ["Performance"], prompt: "" },
       ],
@@ -665,19 +662,19 @@ describe("assignOwners", () => {
     );
     const owned = (prefix: string) => result.rows.find((r) => r.text.startsWith(prefix))!;
     expect(owned("FR-1").owner).toBe("m1");
-    expect(owned("FR-1").ownership).toEqual([{ milestoneId: "m1", reason: "covered-section", detail: "Core Rules", atMs: 5 }]);
+    expect(owned("FR-1").ownership).toEqual([{ milestoneId: "m1", reason: "covered-section", detail: "Orchard Rules", atMs: 5 }]);
     // An ancestor heading claims a row under a sub-heading.
-    expect(owned("garden.grow_time").owner).toBe("m1");
+    expect(owned("Graft time").owner).toBe("m1");
     expect(owned("Results Screen").owner).toBe("m2");
     // Claims are measured at delivery: the final milestone owns them.
     expect(owned("Each round lasts").owner).toBe("m3");
     expect(owned("Each round lasts").ownership[0]!.reason).toBe("final-milestone");
-    // Nobody claims Art Direction: the row is queued, failing closed.
+    // Nobody claims Visual Mood: the row is queued, failing closed.
     const look = owned("The look must feel");
     expect(look.owner).toBeUndefined();
     expect(result.queued).toContain(look.rid);
     // An aspiration is excluded, not queued.
-    expect(result.queued).not.toContain(owned("Day-1 retention").rid);
+    expect(result.queued).not.toContain(owned("Week-2 returners").rid);
     expect(result.byMilestone.m1).toContain(owned("FR-1").rid);
     // The input is not mutated.
     expect(rows.every((r) => r.owner === undefined)).toBe(true);
@@ -687,18 +684,18 @@ describe("assignOwners", () => {
     const result = assignOwners(
       rows,
       [
-        { id: "m1", prompt: "Build the core rules of §2 and nothing else." },
-        { id: "m2", prompt: "Tune the timing constants in §2.1." },
-        { id: "m3", prompt: "Ship it (§6)." },
+        { id: "m1", prompt: "Build the orchard rules of §2 and nothing else." },
+        { id: "m2", prompt: "Tune the frost table in §2.1." },
+        { id: "m3", prompt: "Ship it (§3)." },
       ],
       { atMs: 5 },
     );
     const owned = (prefix: string) => result.rows.find((r) => r.text.startsWith(prefix))!;
     expect(owned("FR-2").owner).toBe("m1");
     expect(owned("FR-2").ownership[0]).toMatchObject({ reason: "section-reference", detail: "§2" });
-    expect(owned("garden.grow_time").owner).toBe("m2");
-    expect(owned("garden.grow_time").ownership[0]).toMatchObject({ reason: "section-reference", detail: "§2.1" });
-    // §2 does not reach §20-something, and nothing references §3.
+    expect(owned("Graft time").owner).toBe("m2");
+    expect(owned("Graft time").ownership[0]).toMatchObject({ reason: "section-reference", detail: "§2.1" });
+    // §2 does not reach §20-something, and nothing references §5.
     expect(owned("Main Menu").owner).toBeUndefined();
   });
 
@@ -706,39 +703,39 @@ describe("assignOwners", () => {
     const result = assignOwners(
       rows,
       [
-        { id: "m1", prompt: "Core rules: §1–§2." },
-        { id: "m2", prompt: "Screens and art (§3.1–§3.2, §4 – 3 passes)." },
-        { id: "m3", prompt: "Polish the results screen (§3.2)." },
+        { id: "m1", prompt: "Orchard rules: §1–§2." },
+        { id: "m2", prompt: "Screens and mood (§5.1–§5.2, §6 – 2 passes)." },
+        { id: "m3", prompt: "Polish the results screen (§5.2)." },
       ],
       { atMs: 5 },
     );
     const owned = (prefix: string) => result.rows.find((r) => r.text.startsWith(prefix))!;
-    expect(owned("garden.grow_time").owner).toBe("m1");
+    expect(owned("Graft time").owner).toBe("m1");
     // §2.1 lies inside §1–§2: a range reaches the subsections of its last chapter.
-    expect(owned("garden.grow_time").ownership[0]).toMatchObject({ reason: "section-reference", detail: "§1–§2" });
-    // §3.1 lies inside §3.1–§3.2; nothing else names it.
+    expect(owned("Graft time").ownership[0]).toMatchObject({ reason: "section-reference", detail: "§1–§2" });
+    // §5.1 lies inside §5.1–§5.2; nothing else names it.
     expect(owned("Main Menu").owner).toBe("m2");
-    // §3.2 is inside m2's range, but m3 names it alone.
+    // §5.2 is inside m2's range, but m3 names it alone.
     expect(owned("Results Screen").owner).toBe("m3");
-    expect(owned("Results Screen").ownership[0]).toMatchObject({ detail: "§3.2" });
-    // "§4 – 3 passes" is §4, not a range from §4 back to §3.
+    expect(owned("Results Screen").ownership[0]).toMatchObject({ detail: "§5.2" });
+    // "§6 – 2 passes" is §6, not a range from §6 back to §2.
     expect(owned("The look must feel").owner).toBe("m2");
   });
 
   it("gives claims to the last PLANNED milestone: a stored ladder ends with coverage sprints and a final proof, which own nothing by plan", () => {
     const ladder = [
-      { id: "m1", prompt: "Core rules: §1–§2." },
-      { id: "m2", prompt: "Screens (§3) and the rest (§4–§6)." },
-      { id: "mcov1", prompt: "Close the gaps: the timing constants of §2.1 and the art of §4." },
-      { id: "mfinal-4", prompt: "Prove §6 at delivery." },
+      { id: "m1", prompt: "Orchard rules: §1–§2." },
+      { id: "m2", prompt: "Performance (§3) and the rest (§4–§6)." },
+      { id: "mcov1", prompt: "Close the gaps: the frost table of §2.1 and the mood of §6." },
+      { id: "mfinal-4", prompt: "Prove §3 at delivery." },
     ];
     const result = assignOwners(rows, ladder, { atMs: 5 });
     const owned = (prefix: string) => result.rows.find((r) => r.text.startsWith(prefix))!;
     expect(owned("Each round lasts").owner).toBe("m2");
     expect(owned("Each round lasts").ownership[0]!.reason).toBe("final-milestone");
-    expect(owned("The game must run at 60 fps").owner).toBe("m2");
-    // mcov1 names §2.1 and §4 alone, which would outrank the planned ranges.
-    expect(owned("garden.grow_time").owner).toBe("m1");
+    expect(owned("The game must hold 53 fps").owner).toBe("m2");
+    // mcov1 names §2.1 and §6 alone, which would outrank the planned ranges.
+    expect(owned("Graft time").owner).toBe("m1");
     expect(owned("The look must feel").owner).toBe("m2");
     expect(result.byMilestone.mcov1).toBeUndefined();
     expect(result.byMilestone["mfinal-4"]).toBeUndefined();
@@ -751,10 +748,10 @@ describe("assignOwners", () => {
   it("keeps a claim under an excluded heading owned: delivery measures it whatever the plan excluded", () => {
     const result = assignOwners(
       rows,
-      [{ id: "m1", coveredSections: ["Core Rules"], prompt: "" }],
+      [{ id: "m1", coveredSections: ["Orchard Rules"], prompt: "" }],
       { excluded: ["Performance: tuned after launch"], atMs: 5 },
     );
-    const fps = result.rows.find((r) => r.text.startsWith("The game must run at 60 fps"))!;
+    const fps = result.rows.find((r) => r.text.startsWith("The game must hold 53 fps"))!;
     expect(fps.status).toBe("open");
     expect(fps.owner).toBe("m1");
     expect(fps.ownership[0]!.reason).toBe("final-milestone");
@@ -764,12 +761,12 @@ describe("assignOwners", () => {
   it("marks rows under a heading the planner excluded as excluded, with the planner's reason", () => {
     const result = assignOwners(
       rows,
-      [{ id: "m1", coveredSections: ["Core Rules"], prompt: "" }],
-      { excluded: ["Art Direction: the GDD defers art to phase two"], atMs: 5 },
+      [{ id: "m1", coveredSections: ["Orchard Rules"], prompt: "" }],
+      { excluded: ["Visual Mood: the GDD defers the look to phase two"], atMs: 5 },
     );
     const look = result.rows.find((r) => r.text.startsWith("The look must feel"))!;
     expect(look.status).toBe("excluded");
-    expect(look.excludedBecause).toContain("Art Direction: the GDD defers art to phase two");
+    expect(look.excludedBecause).toContain("Visual Mood: the GDD defers the look to phase two");
     expect(result.queued).not.toContain(look.rid);
     expect(result.excluded).toContain(look.rid);
   });
@@ -777,8 +774,8 @@ describe("assignOwners", () => {
   it("an exclusion that only MENTIONS a heading excludes nothing under it: the rows stay owned (fail closed)", () => {
     const result = assignOwners(
       rows,
-      [{ id: "m1", coveredSections: ["Core Rules"], prompt: "" }],
-      { excluded: ["Seasonal events beyond the core rules: the GDD defers them past launch"], atMs: 5 },
+      [{ id: "m1", coveredSections: ["Orchard Rules"], prompt: "" }],
+      { excluded: ["Seasonal events beyond the orchard rules: the GDD defers them past launch"], atMs: 5 },
     );
     const fr1 = result.rows.find((r) => r.label === "FR-1")!;
     expect(fr1.status).toBe("open");

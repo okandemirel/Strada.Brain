@@ -2101,7 +2101,7 @@ export class CampaignManager {
     // test run again (audited 2026-09-02: the gate landed after this block).
     milestone.deliveryVerificationBounced = false;
     // The art and prose one-shots are gates too (review 2026-09-07): left
-    // spent, a revived remediation sprint could go green on 410/429
+    // spent, a revived remediation sprint could go green on a tree of
     // placeholders and documentation-only commits without a bounce. The
     // structural flag follows the next measurement, and a stale time-box
     // directive must not survive a reset of the time box itself.
@@ -4185,8 +4185,8 @@ export class CampaignManager {
         return;
       }
       // ART NOT PRODUCED. Measured 2026-09-07: four coverage-remediation
-      // attempts against a tree whose sprite art was 410/429 placeholder-grade
-      // ended with the same 410/429 — the sprints compiled, verified and wrote
+      // attempts against a tree whose sprite art was nearly all placeholder-grade
+      // ended with the same count — the sprints compiled, verified and wrote
       // documents, and never called a generator or the purchased library. The
       // installed local model draws a real sprite in ~45 s (measured today).
       // The measurement that says "placeholder art" at delivery says it here,
@@ -4377,8 +4377,8 @@ export class CampaignManager {
       // DELIVERY NEEDS THE WHOLE SUITE. A verdict that merely EXISTS is not
       // proof: the delivered test-game campaign carried no verdict on any
       // milestone, its filtered runs were green, and the one unfiltered run
-      // reported 6 of 173 failing — including WinLevel_ReachesWonState
-      // ("LevelWon event did not fire"). A green from a filter is the sprint
+      // reported several failures — including the test that proves a level
+      // can be won. A green from a filter is the sprint
       // choosing which tests count (audited 2026-09-03).
       // ASK THE COMPILER, not the agent. Every other gate reads what a run
       // REPORTED; this one measures. Sprint 7 was committed green (1296 files,
@@ -4453,7 +4453,7 @@ export class CampaignManager {
         // for a reason nobody caused.
         if (isLast) revisionBefore = this.pastAcceptanceCommits(revisionBefore);
       }
-      // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
+      // THE GDD'S OWN NUMBERS. "45 fps", "loads in under 3 s", "a round lasts
       // 30–90 s" were repeated to the planner and measured by nothing until
       // 2026-09-10. Each is now answered from the play-through's timing or
       // listed as NOT MEASURED with the reason; a blown budget the medium can
@@ -4489,7 +4489,7 @@ export class CampaignManager {
       const playerUnrunnableHere = player !== undefined && typeof (player as { unrunnableHere?: string }).unrunnableHere === "string";
       const playerMissing = isLast && build?.ran === true && build.ok === true
         && (player === undefined || (!player.found && !playerUnrunnableHere));
-      // THE GDD'S OWN NUMBERS. "60 fps", "loads in under 3 s", "a round lasts
+      // THE GDD'S OWN NUMBERS. "45 fps", "loads in under 3 s", "a round lasts
       // 30–90 s" were repeated to the planner and measured by nothing until
       // 2026-09-10. Each is now answered from the play-throughs' timing (the
       // built player's frame rate when it was played) or listed as NOT
@@ -4784,9 +4784,9 @@ export class CampaignManager {
         // STRUCTURAL DELIVERY GATE (audited 2026-09-03): nothing in the
         // pipeline ever asked what the delivered SCENES contain. The test game
         // shipped "game build complete" with an entry scene holding zero
-        // renderer components, five runtime scripts drawing the world with
-        // GameObject.CreatePrimitive, and 100 prefabs / 198 pngs / 62 models
-        // nothing bound — the user opened it and found flat squares and four
+        // renderer components, runtime scripts drawing the world with
+        // GameObject.CreatePrimitive, and the project's prefabs, sprites and
+        // models bound by nothing — the user opened it and found flat squares and four
         // spheres. This measures the enabled build scenes and the prefabs they
         // place, and refuses ONLY the strong case; everything else is recorded
         // for the report. Delivery-only by construction (inside `isLast`), and
@@ -5643,8 +5643,8 @@ export class CampaignManager {
       }
       // Measure the tree being delivered, not the one an earlier sprint saw.
       // Measured 2026-09-07 07:00: the report rendered findings stored two
-      // days before ("198 sprite textures", no placeholder line) while the
-      // tree on disk held 429 sprites, 410 of them placeholder-grade — and a
+      // days before (a sprite count with no placeholder line) while the
+      // tree on disk held mostly placeholder-grade sprites — and a
       // refusal that stands makes this NOT a delivery, whatever the ladder.
       const structure = this.measureDeliveryStructure(campaign);
       milestone.structureFindings = structure.lines;
@@ -7407,7 +7407,7 @@ export class CampaignManager {
     // at all, so the producer's 45-second default cut every round short and
     // the requirement could not be met by any run (Codex 2026-09-12 W#9).
     // …AND WHAT A LABEL/VALUE TABLE STATES. A document may give its
-    // durations as a label on one line and a range per mode on the next,
+    // durations as a label on one line and its value on the next,
     // which no prose pattern sees, so the run kept the producer's 45-second
     // default and cut a legal multi-minute round short (Codex 2026-09-12 AB,
     // Job 3.6). An allowance, never a gate: a typical length is not a ceiling.
@@ -9157,7 +9157,7 @@ export class CampaignManager {
     }
     // Most actionable first, so a trim takes the least important lines.
     // Measured 2026-09-07 14:23: the block for the coverage sprint was cut at
-    // its budget before "Project art: … 410 of the 429 sprite textures are
+    // its budget before "Project art: … N of the M sprite textures are
     // placeholder-grade" — the one line the art sprint exists to act on.
     // A bounce's "DELIVERY REFUSED … <refusal>" paragraph must say what is
     // refused NOW: rewritten to the fresh refusal while the gate still
@@ -9419,8 +9419,8 @@ export class CampaignManager {
     if (!now) return undefined;
     // Real art added under NEW names counts as much as a placeholder replaced.
     // Measured 2026-09-07 15:15: the first sprint to draw real sprites wrote
-    // Comet.png and Banner.png beside the 410 placeholders — the placeholder
-    // count alone would have bounced the one attempt that did the work.
+    // two new sprite files beside the placeholders — the placeholder count
+    // alone would have bounced the one attempt that did the work.
     const realBefore = start.sprites - start.placeholders;
     const realNow = now.sprites - now.placeholders;
     if (now.placeholders < start.placeholders || realNow > realBefore) return undefined;
@@ -9450,7 +9450,7 @@ export class CampaignManager {
   private measureDeliveryStructure(campaign: Campaign): { refusal?: string; lines: string[] } {
     try {
       // The GDD's own dimensionality against the scenes (audited 2026-09-03):
-      // it asked for 3D art and nothing ever checked.
+      // a document can ask for 3D, and nothing ever checked it.
       // DELIVERY is judged against the whole GDD, so the whole text is read.
       const gddText =
         campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
@@ -9745,8 +9745,8 @@ export class CampaignManager {
         else caveats.push(`${m.title}: ${line}`);
         if (m.playthroughVerdict?.found && m.playthroughVerdict.autoStarted === false) {
           // AN IDLE FIRST SCREEN IS A DEFECT ONLY IF THE DOCUMENT DID NOT ASK
-          // FOR ONE. A design can say "start-up ≤ 8 s to the title screen", and the
-          // report called its own design a defect (Codex 2026-09-12 V, Job
+          // FOR ONE. A design can name the screen the game opens on, and the
+          // report called that design a defect (Codex 2026-09-12 V, Job
           // 3.9). What is unproven either way is the route from that screen
           // into play, which no producer measures yet.
           const opensOn = entryScreenInDocument(this.gddTextOf(campaign));
@@ -10847,7 +10847,7 @@ export class CampaignManager {
       await this.tell(
         { chatId },
         outcome.untouched.length === 0
-          ? `No GDD row matches ${target.trim()} — name a row id, the GDD's own label (G-04) or a section (§5.2); \`/campaign rows\` lists them.`
+          ? `No GDD row matches ${target.trim()} — name a row id, the GDD's own label (G-04) or a section (§7.4); \`/campaign rows\` lists them.`
           : `Nothing to waive: ${outcome.untouched.map(rowRef).join(", ")} ${outcome.untouched.length === 1 ? "is" : "are"} already waived or excluded.`,
       );
       return false;

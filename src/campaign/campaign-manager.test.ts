@@ -323,7 +323,7 @@ describe("CampaignManager", () => {
     dir = mkdtempSync(join(tmpdir(), "campaign-mgr-"));
     projectRoot = join(dir, "project");
     mkdirSync(join(projectRoot, "docs"), { recursive: true });
-    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# Test GDD\n\nElement schedule: ...");
+    writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), "# Test GDD\n\nUnlock table: ...");
     writePlaythroughVerdict(true);
     storage = new CampaignStorage(join(dir, "campaigns.db"));
     tasks = new FakeTaskManager();
@@ -526,10 +526,10 @@ describe("CampaignManager", () => {
   });
 
   it("idea mode: drafts the GDD, gates on approval, builds after 'evet'", async () => {
-    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+    const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
     expect(campaign.state).toBe("drafting-gdd");
     expect(tasks.submitted).toHaveLength(1);
-    expect(tasks.submitted[0]!.prompt).toContain("frogs fly");
+    expect(tasks.submitted[0]!.prompt).toContain("pears ripen in winter");
 
     // Draft completes; the GDD file exists in docs/.
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
@@ -953,7 +953,7 @@ describe("CampaignManager", () => {
     mkdirSync(join(projectRoot, "Assets", "Scenes"), { recursive: true });
     mkdirSync(join(projectRoot, "Assets", "Prefabs"), { recursive: true });
     writeFileSync(join(projectRoot, "Assets", "Scenes", "Game.unity"), "GameObject:\n  m_Name: Root");
-    writeFileSync(join(projectRoot, "Assets", "Prefabs", "Ball.prefab"), "MeshRenderer:\n  m_Materials: []");
+    writeFileSync(join(projectRoot, "Assets", "Prefabs", "Seed.prefab"), "MeshRenderer:\n  m_Materials: []");
     writeFileSync(
       join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"),
       "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Game.unity",
@@ -1123,8 +1123,8 @@ describe("CampaignManager", () => {
   it("refuses delivery on a FILTERED green — the whole suite must be seen", async () => {
     runRecordOnSettle = undefined; // this sprint leaves no NUnit record
     // Audited 2026-09-03: the delivered test-game build's filtered runs were
-    // green while its one unfiltered run reported 6 of 173 failing, including
-    // WinLevel_ReachesWonState ("LevelWon event did not fire").
+    // green while its one unfiltered run reported several failures, including
+    // the test that proves a level can be won.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1134,7 +1134,7 @@ describe("CampaignManager", () => {
 
     tasks.verifications.set("task_3", {
       testsGreen: true,
-      detail: "PlayMode verification passed: 2 of 2 tests passed (filter: GameplayWinLossTests)",
+      detail: "PlayMode verification passed: 2 of 2 tests passed (filter: SeasonOutcomeTests)",
       unfiltered: false,
     });
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1146,9 +1146,8 @@ describe("CampaignManager", () => {
   });
 
   it("names the tests that were RED on the way in the delivery report", async () => {
-    // Audited 2026-09-03: "6 of 173 tests failed" reached the report without
-    // ever naming WinLevel_ReachesWonState — the failure that means the core
-    // loop does not work.
+    // Audited 2026-09-03: a failed-test count reached the report without ever
+    // naming the failure that means the core loop does not work.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1160,7 +1159,7 @@ describe("CampaignManager", () => {
       testsGreen: true,
       detail: "179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
       unfiltered: true,
-      failedTests: ["YourGame.SampleGame.PlayModeTests.GameplayWinLossTests.WinLevel_ReachesWonState"],
+      failedTests: ["YourGame.SampleGame.PlayModeTests.SeasonOutcomeTests.FinishSeason_RecordsHarvest"],
       failedTestsOmitted: 5,
     } as never);
     tasks.emit("task:completed", "task_3", "green, shipping");
@@ -1170,7 +1169,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(true), { timeout: 15_000 });
 
     const report = messages.map((m) => m.text).find((t) => t.includes("Campaign delivery"))!;
-    expect(report).toContain("WinLevel_ReachesWonState");
+    expect(report).toContain("FinishSeason_RecordsHarvest");
     expect(report).toContain("+5 more");
     // A DELIVERED campaign is not recoverable: whatever it retired was hard
     // cancelled, so nothing resumes writing to a shipped game (F#6). A task
@@ -1381,9 +1380,9 @@ describe("CampaignManager", () => {
   it("a document that opens on a menu is not reported as broken for doing so (Codex 2026-09-12 V, Job 3.9)", async () => {
     // The system told every final sprint to make the game start playing by
     // itself and called an idle first screen a defect — one game's shape
-    // imposed on all of them. A document may name the screen its start-up
-    // reaches; the report called that a defect.
-    const gdd = "# GDD\n\nStart-up ≤ 8 s to the lobby on a budget tablet. Choose an orchard in the lobby to start a season.";
+    // imposed on all of them. A document may name the screen the game opens
+    // on; the report called that a defect.
+    const gdd = "# GDD\n\nThe game opens on the hub. Choose an orchard in the hub to start a season.";
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
     settleMilestone("sprint A done");
@@ -1393,7 +1392,7 @@ describe("CampaignManager", () => {
 
     // The final sprint is told to prove the document's OWN entry route.
     const finalPrompt = tasks.submitted[2]!.prompt;
-    expect(finalPrompt).toContain("This document opens on lobby, so play must NOT start by itself");
+    expect(finalPrompt).toContain("This document opens on hub, so play must NOT start by itself");
     expect(finalPrompt).toContain("through the same controls a person uses");
 
     tasks.verifications.set("task_3", {
@@ -1409,7 +1408,7 @@ describe("CampaignManager", () => {
 
     const report = messages.map((m) => m.text).join("\n");
     expect(report).not.toContain("sees an idle screen");
-    expect(report).toContain("the game opens on lobby, as the document specifies");
+    expect(report).toContain("the game opens on hub, as the document specifies");
     // …and the route nobody drove is still named as unproven.
     expect(report).toContain("that route is NOT proven");
   });
@@ -1417,10 +1416,10 @@ describe("CampaignManager", () => {
   it("refuses delivery while a GDD-scheduled element has no trace in code, and delivers once it does (spec-scope wired 2026-09-10)", async () => {
     writeFileSync(
       join(projectRoot, "docs", "Game_GDD.md"),
-      "# GDD\n\n## Feature unlocks\n\n| Unlock | Feature | Notes |\n|---|---|---|\n| L1 | Pruning | basic |\n| L9 | Frost Night | seasonal event |\n",
+      "# GDD\n\n## Varieties by year\n\n| Year | Variety | Note |\n|---|---|---|\n| Y1 | Quince | hardy |\n| Y6 | Medlar | late frost |\n",
     );
     mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
-    writeFileSync(join(projectRoot, "Assets", "Scripts", "Pruning.cs"), "public class Pruning {}");
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "Quince.cs"), "public class Quince {}");
     const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -1432,14 +1431,14 @@ describe("CampaignManager", () => {
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     const prompt = tasks.submitted[3]!.prompt;
-    expect(prompt).toContain("L9 Frost Night");
+    expect(prompt).toContain("Y6 Medlar");
     expect(prompt).toContain("the code never mentions");
     expect(storage.get(campaign.id)!.state).not.toBe("done");
     expect(storage.get(campaign.id)!.milestones[2]!.structureRefused).toBe(true);
 
-    writeFileSync(join(projectRoot, "Assets", "Scripts", "FrostNight.cs"), "public class FrostNight {}");
+    writeFileSync(join(projectRoot, "Assets", "Scripts", "Medlar.cs"), "public class Medlar {}");
     tasks.verifications.set("task_4", green);
-    tasks.emit("task:completed", "task_4", "frost night built, shipping");
+    tasks.emit("task:completed", "task_4", "medlar built, shipping");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("done"), { timeout: 15_000 });
     expect(storage.get(campaign.id)!.milestones[2]!.structureFindings?.join("\n")).toContain("all 2 scheduled element(s) have a trace in code");
   });
@@ -1447,7 +1446,7 @@ describe("CampaignManager", () => {
   it("refuses a silent delivery: the GDD asks for audio, clips exist, no shipped scene reaches one (2026-09-10)", async () => {
     const HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
     const scene = (extra: string): string =>
-      `${HEADER}--- !u!1 &1\nGameObject:\n  m_Name: Main Camera\n--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 1\n--- !u!1 &2\nGameObject:\n  m_Name: Frog\n--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n${extra}`;
+      `${HEADER}--- !u!1 &1\nGameObject:\n  m_Name: Main Camera\n--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 1\n--- !u!1 &2\nGameObject:\n  m_Name: Sapling\n--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n${extra}`;
     const meta = (rel: string, guid: string): void => writeFileSync(join(projectRoot, `${rel}.meta`), `fileFormatVersion: 2\nguid: ${guid}\n`);
     mkdirSync(join(projectRoot, "Assets", "Scenes"), { recursive: true });
     mkdirSync(join(projectRoot, "Assets", "Art"), { recursive: true });
@@ -1456,11 +1455,11 @@ describe("CampaignManager", () => {
     writeFileSync(join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"), "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
     writeFileSync(join(projectRoot, "Assets", "Scenes", "Main.unity"), scene(""));
     meta("Assets/Scenes/Main.unity", "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-    writeFileSync(join(projectRoot, "Assets", "Art", "frog.png"), "pixels");
-    meta("Assets/Art/frog.png", "22222222222222222222222222222222");
-    writeFileSync(join(projectRoot, "Assets", "Audio", "merge.wav"), "RIFF");
-    meta("Assets/Audio/merge.wav", "33333333333333333333333333333333");
-    const gdd = "# GDD\n\n## Audio\nMusic base loop per area; SFX for tap, merge and win; audio ducks on pause.\n";
+    writeFileSync(join(projectRoot, "Assets", "Art", "sapling.png"), "pixels");
+    meta("Assets/Art/sapling.png", "22222222222222222222222222222222");
+    writeFileSync(join(projectRoot, "Assets", "Audio", "graft.wav"), "RIFF");
+    meta("Assets/Audio/graft.wav", "33333333333333333333333333333333");
+    const gdd = "# GDD\n\n## Audio\nAmbience: wind in the branches through every season. Sound effects for each graft and for the harvest weigh-in; the soundtrack fades out at night.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
@@ -1541,7 +1540,7 @@ describe("CampaignManager", () => {
   });
 
   it("plays the built player at delivery: its frame rate answers the GDD, and a failed run bounces (2026-09-10)", async () => {
-    const gdd = "# GDD\n\nTarget 60 fps on budget phones. Ships on Android.";
+    const gdd = "# GDD\n\nHold 53 fps in the orchard view. Ships on Android.";
     // The campaign builds for the platform the GDD names, so the frame rate
     // it measures answers the claim (Codex 2026-09-11 B#11).
     buildVerdict = { ran: true, ok: true, target: "Android", artifactPath: "/tmp/Builds/Android/Game.apk", sizeBytes: 88_000_000, durationMs: 120_000, scenes: 2 };
@@ -1558,7 +1557,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
     expect(playerRuns).toEqual(["/tmp/Builds/Android/Game.apk"]);
     expect(buildTargetsAsked).toContain("android");
-    expect(tasks.submitted[3]!.prompt).toContain("THE GDD'S OWN NUMBERS ARE NOT MET: frame rate ≥ 60 fps measured 42 fps");
+    expect(tasks.submitted[3]!.prompt).toContain("THE GDD'S OWN NUMBERS ARE NOT MET: frame rate ≥ 53 fps measured 42 fps");
     expect(storage.get(campaign.id)!.milestones[2]!.playerPlaythrough).toMatchObject({ found: true, ok: true, perf: { medium: "player", avgFps: 42 } });
 
     // The player runs but the session never ends: the run itself blocks.
@@ -1585,7 +1584,7 @@ describe("CampaignManager", () => {
       expect(c.state, why).toBe("done");
     }, { timeout: 15_000 });
     const report = messages.map((m) => m.text).join("\n");
-    expect(report).toContain("GDD frame rate ≥ 60 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering)");
+    expect(report).toContain("GDD frame rate ≥ 53 fps: MET — 60.0 fps average over 600 frames in the built player (real rendering)");
     expect(report).toContain("inside the built player: play-through OK in Entry");
   });
 
@@ -1694,7 +1693,7 @@ describe("CampaignManager", () => {
     const structured = {
       milestones: [
         { title: "Sprint A — Foundations", prompt: "build the foundations, verify compile", coveredSections: ["1. Core Loop"], deliverables: ["Main scene"] },
-        { title: "Sprint B — Elements", prompt: "build the elements, PlayMode green", coveredSections: ["3. Element schedule"], deliverables: [] },
+        { title: "Sprint B — Elements", prompt: "build the elements, PlayMode green", coveredSections: ["3. Varieties by year"], deliverables: [] },
         { title: "Sprint C — Delivery", prompt: "integrate, full suite, DELIVERY REPORT", coveredSections: [], deliverables: ["player build"] },
       ],
       excluded: ["leaderboards: the GDD says none in v1"],
@@ -1736,7 +1735,7 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
     // Prose says green and unfiltered; the file says 10 failed.
-    writeRun({ total: 215, passed: 205, failed: 10, failedNames: ["Game.Tests.WinLevel_ReachesWonState"], filter: null, categories: null, unfiltered: true });
+    writeRun({ total: 215, passed: 205, failed: 10, failedNames: ["Game.Tests.FinishSeason_RecordsHarvest"], filter: null, categories: null, unfiltered: true });
     tasks.verifications.set("task_3", { testsGreen: true, detail: "PlayMode verification passed: 215 of 215 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
     tasks.emit("task:completed", "task_3", "green, shipping");
     await waitFor(() => expect(tasks.submitted).toHaveLength(4));
@@ -1745,7 +1744,7 @@ describe("CampaignManager", () => {
     expect(m.testVerdict).toBeUndefined();
     expect(m.status).not.toBe("green");
     expect(m.testRunSource).toBe("nunit");
-    expect(m.testFailures).toEqual(["Game.Tests.WinLevel_ReachesWonState"]);
+    expect(m.testFailures).toEqual(["Game.Tests.FinishSeason_RecordsHarvest"]);
     expect(storage.get(campaign.id)!.state).toBe("executing");
 
     // Prose says filtered; the file says the whole suite passed with no filter.
@@ -1809,7 +1808,7 @@ describe("CampaignManager", () => {
       "# GDD", "## Look and feel",
       "Matte papier-mache trees modelled in true 3D, seen from a high top-down camera over a walled ",
       "orchard grid. Muted autumn colours (rust, ochre, moss and slate) under soft daylight, with no ",
-      "outlines and no gloss; each tree's growth stage reads from its silhouette and leaf density.",
+      "outlines; each tree's growth stage reads from its leaf density and the height of its crown.",
     ].join("\n");
     const answers = ["The frame shows a flat grey grid and no trees.\nMATCH: no", "Matte papier-mache trees on an autumn orchard grid, as described.\nMATCH: yes"];
     let asked = 0;
@@ -1876,9 +1875,9 @@ describe("CampaignManager", () => {
   });
 
   /**
-   * SCENE HYGIENE. Measured on the delivered test-game tree 2026-09-03: 20
-   * scenes on disk, 14 enabled in Build Settings, and the person who opened
-   * the delivery could not tell which one is the game.
+   * SCENE HYGIENE. Measured on a delivered tree 2026-09-03: most of its
+   * scenes were enabled in Build Settings, and the person who opened the
+   * delivery could not tell which one is the game.
    */
   const buildSettings = (scenes: ReadonlyArray<[string, number]>, disabled: readonly string[] = []): void => {
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
@@ -1895,22 +1894,20 @@ describe("CampaignManager", () => {
     writeFileSync(join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"), lines.join("\n"));
   };
 
-  /** The delivered tree's real enabled set and GameObject counts. */
+  /** An untidy delivered shape: a thin first scene, scaffolding by name and by size, and a rich scene last. */
   const REAL_DELIVERED_BUILD: ReadonlyArray<[string, number]> = [
-    ["Assets/Scenes/Gameplay.unity", 3],
-    ["Assets/Scenes/Main.unity", 6],
-    ["Assets/Scenes/CometShowcase.unity", 5],
-    ["Assets/Scenes/AssembledGame.unity", 2],
-    ["Assets/Scenes/ModuleBoundary.unity", 3],
-    ["Assets/InitTestScene4abd18f9.unity", 5],
-    ["Assets/Scenes/LiveOpsAssembled.unity", 3],
-    ["Assets/Scenes/AssembledMain.unity", 3],
-    ["Assets/Scenes/AssembledCometRuntime.unity", 3],
-    ["Assets/Modules/LiveOpsModule/Scenes/LiveOpsVisualAssembly.unity", 1],
-    ["Assets/Scenes/LiveOpsVisualsVerified.unity", 3],
-    ["Assets/Scenes/LiveOpsPresentation.unity", 4],
-    ["Assets/Scenes/TargetedLevel42Verification.unity", 5],
-    ["Assets/Scenes/ProductionMain.unity", 17],
+    ["Assets/Scenes/Orchard.unity", 3],
+    ["Assets/Scenes/Journal.unity", 6],
+    ["Assets/Scenes/GraftSandbox.unity", 5],
+    ["Assets/Scenes/PruningSmokeTest.unity", 2],
+    ["Assets/Scenes/FenceBoundary.unity", 3],
+    ["Assets/InitTestScene7c51e2a0.unity", 5],
+    ["Assets/Scenes/HarvestTestScene.unity", 3],
+    ["Assets/Tools/Scenes/ToolProbe.unity", 1],
+    ["Assets/Scenes/FrostVerified.unity", 3],
+    ["Assets/Scenes/SeasonReview.unity", 4],
+    ["Assets/Scenes/Season7Verification.unity", 5],
+    ["Assets/Scenes/FullOrchard.unity", 17],
   ];
 
   /** Walk the ladder to the final sprint (task_3 in flight). */
@@ -1951,12 +1948,12 @@ describe("CampaignManager", () => {
     buildSettings([["Assets/Scenes/Main.unity", 1]]);
     mkdirSync(join(projectRoot, "Assets", "Prefabs"), { recursive: true });
     writeFileSync(
-      join(projectRoot, "Assets", "Prefabs", "Frog.prefab"),
-      "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Frog\n" +
+      join(projectRoot, "Assets", "Prefabs", "Sapling.prefab"),
+      "%YAML 1.1\n--- !u!1 &7\nGameObject:\n  m_Name: Sapling\n" +
         "--- !u!212 &8\nSpriteRenderer:\n  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n",
     );
     writeFileSync(
-      join(projectRoot, "Assets", "Prefabs", "Frog.prefab.meta"),
+      join(projectRoot, "Assets", "Prefabs", "Sapling.prefab.meta"),
       "fileFormatVersion: 2\nguid: 11111111111111111111111111111111\n",
     );
 
@@ -1965,7 +1962,7 @@ describe("CampaignManager", () => {
     const finalPrompt = tasks.submitted[2]!.prompt;
     expect(finalPrompt).toContain("MEASURED NOW");
     expect(finalPrompt).toContain("render NOTHING");
-    expect(finalPrompt).toContain("Assets/Prefabs/Frog.prefab");
+    expect(finalPrompt).toContain("Assets/Prefabs/Sapling.prefab");
     // Earlier sprints are not judged on the whole tree's delivery shape.
     expect(tasks.submitted[0]!.prompt).not.toContain("MEASURED NOW");
   });
@@ -1984,10 +1981,10 @@ describe("CampaignManager", () => {
     // The build's FIRST enabled scene is what a person opens; the richest is
     // named beside it (Codex 2026-09-11 C#26).
     expect(report).toContain("FIRST enabled scene");
-    expect(report).toContain("ProductionMain.unity");
-    expect(report).toContain("13 other scenes are enabled");
-    expect(report).toContain("10 of them");
-    expect(report).toContain("TargetedLevel42Verification.unity");
+    expect(report).toContain("FullOrchard.unity");
+    expect(report).toContain("11 other scenes are enabled");
+    expect(report).toContain("8 of them");
+    expect(report).toContain("Season7Verification.unity");
     // The three that match neither rule are NOT called scaffolding.
     expect(report).toContain("3 match neither rule");
     // Untidy is disclosed, never refused — deleting a user's scenes is not
@@ -2069,7 +2066,7 @@ describe("CampaignManager", () => {
       join(projectRoot, "ProjectSettings", "ProjectVersion.txt"),
       "m_EditorVersion: 6000.3.22f1\nm_EditorVersionWithRevision: 6000.3.22f1 (1c726e1fb402)\n",
     );
-    const coreLoopGdd = "# GDD\n\nCore mechanic\nPlan each growing season by pruning, grafting and harvesting on a walled orchard grid, then end the turn.\n";
+    const coreLoopGdd = "# GDD\n\nCore loop: plan a growing season on the walled orchard grid, then end the turn and weigh the harvest.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), coreLoopGdd);
 
     // The document on disk is the approved one (plan 1.9): the intake is given the same text.
@@ -2084,11 +2081,11 @@ describe("CampaignManager", () => {
 
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
     expect(readme).toContain("6000.3.22f1");
-    expect(readme).toContain("Assets/Scenes/ProductionMain.unity");
-    expect(readme).toContain("Plan each growing season by pruning, grafting and harvesting");
+    expect(readme).toContain("Assets/Scenes/FullOrchard.unity");
+    expect(readme).toContain("plan a growing season on the walled orchard grid");
     expect(readme).toContain("179 of 179");
     expect(readme).toContain("-testPlatform PlayMode");
-    expect(readme).toContain("TargetedLevel42Verification.unity");
+    expect(readme).toContain("Season7Verification.unity");
     expect(readme).not.toContain("Unknown");
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
@@ -2103,7 +2100,7 @@ describe("CampaignManager", () => {
     buildSettings(REAL_DELIVERED_BUILD);
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
     writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.3.22f1\n");
-    const gdd = "# GDD\n\nCore mechanic\nPlan each growing season by pruning, grafting and harvesting on a walled orchard grid, then end the turn.\n";
+    const gdd = "# GDD\n\nCore loop: plan a growing season on the walled orchard grid, then end the turn and weigh the harvest.\n";
     writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), gdd);
     const campaign = await reachFinalSprint(gdd);
     tasks.verifications.set("task_3", {
@@ -2263,8 +2260,8 @@ describe("CampaignManager", () => {
   };
   const UNITY_HEADER = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n";
   const CAMERA_DOC = "--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 0\n";
-  const FROG_PREFAB =
-    `${UNITY_HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Frog\n` +
+  const SAPLING_PREFAB =
+    `${UNITY_HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Sapling\n` +
     "--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Materials:\n" +
     "  - {fileID: 2100000, guid: aaaabbbbccccddddeeeeffff00001111, type: 2}\n" +
     "  m_Sprite: {fileID: 21300000, guid: 22222222222222222222222222222222, type: 3}\n";
@@ -2279,13 +2276,13 @@ describe("CampaignManager", () => {
 
   /** The delivered test-game shape: a scene with a camera and nothing else. */
   const writeSlopProject = (): void => {
-    buildList(["Assets/Scenes/ProductionMain.unity"]);
-    putAsset("Assets/Scenes/ProductionMain.unity", `${UNITY_HEADER}${CAMERA_DOC}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-    putAsset("Assets/Prefabs/Frog.prefab", FROG_PREFAB, "11111111111111111111111111111111");
-    putAsset("Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    buildList(["Assets/Scenes/Grove.unity"]);
+    putAsset("Assets/Scenes/Grove.unity", `${UNITY_HEADER}${CAMERA_DOC}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    putAsset("Assets/Prefabs/Sapling.prefab", SAPLING_PREFAB, "11111111111111111111111111111111");
+    putAsset("Assets/Art/sapling.png", "pixels", "22222222222222222222222222222222");
     putAsset(
-      "Assets/Scripts/BoardBuilder.cs",
-      "class BoardBuilder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }",
+      "Assets/Scripts/OrchardBuilder.cs",
+      "class OrchardBuilder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }",
       "66666666666666666666666666666666",
     );
   };
@@ -2294,7 +2291,7 @@ describe("CampaignManager", () => {
   const writeBuiltProject = (): void => {
     writeSlopProject();
     putAsset(
-      "Assets/Scenes/ProductionMain.unity",
+      "Assets/Scenes/Grove.unity",
       `${UNITY_HEADER}${CAMERA_DOC}--- !u!1001 &1001\nPrefabInstance:\n  m_Modification:\n    m_Modifications: []\n` +
         "  m_SourcePrefab: {fileID: 100100000, guid: 11111111111111111111111111111111, type: 3}\n",
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
@@ -2694,9 +2691,9 @@ describe("CampaignManager", () => {
     expect(after.milestones[2]!.deliveryVerificationBounces).toBe(1);
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("DELIVERY REFUSED — THE GAME IS NOT BUILT AS THE GDD SPECIFIES");
-    expect(prompt).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(prompt).toContain("Assets/Scenes/Grove.unity");
     expect(prompt).toContain("0 renderer components");
-    expect(prompt).toContain("Assets/Prefabs/Frog.prefab");
+    expect(prompt).toContain("Assets/Prefabs/Sapling.prefab");
     expect(prompt).toContain("GameObject.CreatePrimitive");
     expect(messages.some((m) => m.text.includes("Campaign delivery"))).toBe(false);
   });
@@ -2712,12 +2709,12 @@ describe("CampaignManager", () => {
     const report = messages.at(-1)!.text;
     expect(report).toContain("What the shipped scenes actually contain");
     expect(report).toContain("Shipped scenes PLACE 1 renderer component");
-    expect(report).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(report).toContain("Assets/Scenes/Grove.unity");
   });
 
   it("discloses the GDD's own dimensionality against the shipped scenes, without refusing", async () => {
     // Audited 2026-09-03: the GDD asks for 3D art and the delivered scenes
-    // had no mesh renderers and bound none of the project's 62 imported
+    // had no mesh renderers and bound none of the project's imported
     // models. A stylised 3D look CAN be built from sprites,
     // so this is disclosure with counts — the reader judges.
     writeBuiltProject();
@@ -4234,7 +4231,7 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
 
-    const gdd = "# GDD\n\nThe game ships 30 levels. Each round lasts 300 seconds. You win a level by clearing it.";
+    const gdd = "# GDD\n\nThe game ships 31 levels. Each round lasts 260 seconds. You win a level by clearing it.";
     // The document on disk is what the gates judge (plan 1.9): the fixture's
     // sample GDD is replaced by this one, as intake does.
     mkdirSync(join(projectRoot, "docs"), { recursive: true });
@@ -4247,7 +4244,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
     const finalPrompt = tasks.submitted[2]!.prompt;
-    // Five 300-second rounds is what one run's budget allows.
+    // Six 260-second rounds is what one run's budget allows.
     // An unknown catalogue with long rounds is DISCOVERED with one session
     // (plan 0-B.4): the worker is told the same call the gate will make.
     expect(finalPrompt).toContain('unity_playthrough sessions="1"');
@@ -4955,7 +4952,7 @@ describe("CampaignManager", () => {
           state: "executing", draftAttempts: 0, milestones: [], currentMilestone: 0, createdAt: Date.now(), updatedAt: Date.now(),
         }) as unknown as Campaign;
       const schedule = (title: string, rows: string): string =>
-        `# ${title}\n\n## Feature unlocks\n\n| Unlock | Feature | Notes |\n|---|---|---|\n${rows}`;
+        `# ${title}\n\n## Varieties by year\n\n| Year | Variety | Note |\n|---|---|---|\n${rows}`;
       const privateOf = (m: CampaignManager) =>
         m as unknown as {
           measureDeliveryStructure(c: Campaign): { refusal?: string; lines: string[] };
@@ -4966,18 +4963,18 @@ describe("CampaignManager", () => {
 
       it("the delivery's element schedule is the campaign's own, never the largest document in docs/ (P2)", () => {
         // docs/ holds ANOTHER game's GDD whose schedule this game never had:
-        // discovery read it and refused the delivery for its Frost Night.
-        writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), schedule("Other GDD", "| L9 | Frost Night | seasonal event |\n"));
+        // discovery read it and refused the delivery for its Medlar.
+        writeFileSync(join(projectRoot, "docs", "Game_GDD.md"), schedule("Other GDD", "| Y6 | Medlar | late frost |\n"));
         mkdirSync(join(projectRoot, "Assets", "Scripts"), { recursive: true });
-        writeFileSync(join(projectRoot, "Assets", "Scripts", "Pruning.cs"), "public class Pruning {}");
-        const own = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Pruning GDD", "| L1 | Pruning | basic |\n")));
+        writeFileSync(join(projectRoot, "Assets", "Scripts", "Quince.cs"), "public class Quince {}");
+        const own = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Quince GDD", "| Y1 | Quince | hardy |\n")));
         const ownText = `${own.refusal ?? ""}\n${own.lines.join("\n")}`;
-        expect(ownText).not.toContain("Frost Night");
+        expect(ownText).not.toContain("Medlar");
         expect(own.lines.join("\n")).toContain("all 1 scheduled element(s) have a trace in code");
         // …and the campaign's OWN schedule is still held against the code.
-        const missing = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Press GDD", "| L4 | Cider Press | late game |\n")));
-        expect(missing.refusal).toContain("L4 Cider Press");
-        expect(missing.refusal).not.toContain("Frost Night");
+        const missing = privateOf(manager).measureDeliveryStructure(textOnlyRow(schedule("Damson GDD", "| Y4 | Damson | shade |\n")));
+        expect(missing.refusal).toContain("Y4 Damson");
+        expect(missing.refusal).not.toContain("Medlar");
       });
 
       it("a docs/GDD.md that holds another document is never adopted as the campaign's path (P3)", async () => {
@@ -5012,20 +5009,20 @@ describe("CampaignManager", () => {
       });
 
       it("a gap sprint carries the GDD's own words instead of sending the worker to look for a file (P3)", () => {
-        const gdd = "# Space GDD\n\n## Rocket\n\nThe rocket fires every 3 seconds and costs 40 fuel.";
-        const sprint = privateOf(manager).gapSprint(textOnlyRow(gdd), 1, 0, "Rocket: absent");
-        expect(sprint.prompt).toContain("The rocket fires every 3 seconds and costs 40 fuel.");
+        const gdd = "# Space GDD\n\n## Thruster\n\nThe thruster fires every 3 seconds and costs 7 fuel.";
+        const sprint = privateOf(manager).gapSprint(textOnlyRow(gdd), 1, 0, "Thruster: absent");
+        expect(sprint.prompt).toContain("The thruster fires every 3 seconds and costs 7 fuel.");
         expect(sprint.prompt).toContain("not saved in the project");
         // A document too large to quote whole: the passages ABOUT the item travel.
         const lore = Array.from({ length: 3000 }, (_, i) => `Lore paragraph ${i}: the kingdom's history, told at length.`).join("\n\n");
-        const big = `# Space GDD\n\n${lore}\n\n## Rocket\n\nThe rocket fires every 3 seconds and costs 40 fuel.\n\n${lore}`;
-        const bigSprint = privateOf(manager).gapSprint(textOnlyRow(big), 1, 0, "Rocket: absent");
-        expect(bigSprint.prompt).toContain("The rocket fires every 3 seconds and costs 40 fuel.");
+        const big = `# Space GDD\n\n${lore}\n\n## Thruster\n\nThe thruster fires every 3 seconds and costs 7 fuel.\n\n${lore}`;
+        const bigSprint = privateOf(manager).gapSprint(textOnlyRow(big), 1, 0, "Thruster: absent");
+        expect(bigSprint.prompt).toContain("The thruster fires every 3 seconds and costs 7 fuel.");
         expect(bigSprint.prompt.length).toBeLessThan(big.length / 4);
         // A campaign whose document is in the project is still pointed at it.
-        const onDisk = privateOf(manager).gapSprint({ ...textOnlyRow(gdd), gddPath: "docs/Game_GDD.md" } as Campaign, 1, 0, "Rocket: absent");
+        const onDisk = privateOf(manager).gapSprint({ ...textOnlyRow(gdd), gddPath: "docs/Game_GDD.md" } as Campaign, 1, 0, "Thruster: absent");
         expect(onDisk.prompt).toContain("docs/Game_GDD.md");
-        expect(onDisk.prompt).not.toContain("costs 40 fuel");
+        expect(onDisk.prompt).not.toContain("costs 7 fuel");
       });
 
       it("the independent reviewer is handed the GDD's text, not '(unknown path) — read it' (P3)", async () => {
@@ -5217,9 +5214,9 @@ describe("CampaignManager", () => {
   });
 
   it("schedules one gap sprint per audit finding, art first, and moves past a spent one", async () => {
-    // Measured 2026-09-07: art + audio + story in ONE remediation sprint;
-    // four attempts, the time-box narrowed three of them to something that
-    // was never the art, and the campaign delivered with all three open.
+    // Measured 2026-09-07: art, audio and a third gap in ONE remediation
+    // sprint; four attempts, the time-box narrowed three of them to something
+    // that was never the art, and the campaign delivered with all three open.
     tasks = new FakeTaskManager();
     storage.close();
     storage = new CampaignStorage(join(dir, "campaigns-gap-sprints.db"));
@@ -5228,9 +5225,9 @@ describe("CampaignManager", () => {
       auditCoverage: vi
         .fn()
         .mockResolvedValueOnce([
-          "Audio production: base music loop and SFX are not covered",
-          "Art production: frog skins and area backgrounds are not covered",
-          "Story and theme content: area naming vignettes are not covered",
+          "Audio production: the wind ambience and the graft chime are not covered",
+          "Art production: blossom sprites and fence tiles are not covered",
+          "Season planner: the pruning-order preview is not covered",
         ])
         .mockResolvedValue([]),
     } as unknown as CampaignPlanner;
@@ -5810,14 +5807,14 @@ describe("CampaignManager", () => {
   });
 
   it("bounces a remediation sprint once when the placeholder-art count did not drop, then accepts a drop", async () => {
-    // Measured 2026-09-07: four remediation attempts, 410/429 placeholder
-    // sprites before and after each, nothing compared the two numbers.
+    // Measured 2026-09-07: four remediation attempts, the same placeholder
+    // count before and after each, and nothing compared the two numbers.
     tasks = new FakeTaskManager();
     storage.close();
     storage = new CampaignStorage(join(dir, "campaigns-art-gate.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: frog skins are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: blossom sprites are not covered"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -5853,7 +5850,7 @@ describe("CampaignManager", () => {
     // bounce first; the art gate speaks on the completion that reaches it.
     for (let i = 0; i < 3 && !storage.get(campaign.id)!.milestones.at(-1)!.artBounced; i++) {
       const before = tasks.submitted.length;
-      settleMilestone("frog skins implemented and verified");
+      settleMilestone("blossom sprites implemented and verified");
       await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(before), { timeout: 15_000 });
     }
     const bounced = storage.get(campaign.id)!.milestones.at(-1)!;
@@ -5871,7 +5868,7 @@ describe("CampaignManager", () => {
     const mcov1 = () => storage.get(campaign.id)!.milestones.find((m) => m.id === "mcov1")!;
     for (let i = 0; i < 3 && mcov1().status === "running"; i++) {
       const before = tasks.submitted.length;
-      settleMilestone("frog skins drawn with the local model and bound");
+      settleMilestone("blossom sprites drawn with the local model and bound");
       await waitFor(
         () => expect(mcov1().status !== "running" || tasks.submitted.length > before).toBe(true),
         { timeout: 15_000 },
@@ -6054,7 +6051,7 @@ describe("CampaignManager", () => {
     expect(askedFor(3)).toBe("1-3");
     expect(askedFor(12)).toBe("1-12");
     expect(askedFor(13)).toBe("1-12");
-    expect(askedFor(3000)).toBe("1-12");
+    expect(askedFor(517)).toBe("1-12");
 
     // A RUN THAT FOUND NOTHING reports no catalogue at all, and a catalogue of
     // zero is a game that registers none — neither is a measurement of size,
@@ -6066,23 +6063,23 @@ describe("CampaignManager", () => {
         .playerRunSpec({ gddText: gdd, milestones: milestonesOf(runs) } as never).sessions;
     // A DOCUMENT WHOSE ROUNDS ARE LONG fits fewer sessions in one run, and
     // the producer REFUSES a request that needs more wall-clock than a run
-    // may take — so asking for twelve five-minute rounds came back "nothing
-    // was played" (Codex 2026-09-13 AJ#1).
+    // may take — so asking for twelve long rounds came back "nothing was
+    // played" (Codex 2026-09-13 AJ#1).
     const longRounds = (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string; deadlineSeconds?: number } })
-      .playerRunSpec({ gddText: "# G\nThe game ships 3000 levels. Each round lasts 300 seconds.", milestones: [] } as never);
-    expect(longRounds.deadlineSeconds).toBe(465);
+      .playerRunSpec({ gddText: "# G\nThe game ships 517 levels. Each round lasts 260 seconds.", milestones: [] } as never);
+    expect(longRounds.deadlineSeconds).toBe(405);
     // An UNKNOWN catalogue with rounds too long for the whole cap is discovered
     // with one session: a range guessed from time asked for levels that do
     // not exist (plan 0-B.4, AK#4).
     expect(longRounds.sessions).toBe("1");
     // …AND NEVER MORE LEVELS THAN THE GAME HAS. Time and the producer's cap
     // bounded the batch, the catalogue did not, so a three-level game with
-    // long rounds was asked for sessions 1-5 and its driver refused levels 4
-    // and 5 — a broken play-through for a correct game (Codex 2026-09-13
-    // AK#4).
+    // long rounds was asked for more sessions than it has and its driver
+    // refused the extra ones — a broken play-through for a correct game
+    // (Codex 2026-09-13 AK#4).
     const threeLongRounds = (manager as unknown as { playerRunSpec(c: unknown): { sessions?: string } })
       .playerRunSpec({
-        gddText: "# G\nThe game ships 3 levels. Each round lasts 300 seconds.",
+        gddText: "# G\nThe game ships 3 levels. Each round lasts 260 seconds.",
         milestones: [{ id: "m", title: "t", prompt: "p", status: "green", attempts: 1, playerPlaythrough: { found: true, ok: true, sessionCount: 3 } }],
       } as never).sessions;
     expect(threeLongRounds).toBe("1-3");
@@ -6344,13 +6341,9 @@ describe("CampaignManager", () => {
       "",
       "The game ships 3 levels.",
       "",
-      "6.3 Season rhythm",
-      "Measure",
-      "Goal",
-      "Notes",
-      "Expected round duration",
-      "2–4 min (single plot), 4–7 min (full estate)",
-      "One growing season of planning",
+      "Season timing",
+      "Round length",
+      "about 5 min, and up to 8 min when a storm arrives",
     ].join("\n");
     const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1), { timeout: 15_000 });
@@ -6361,8 +6354,8 @@ describe("CampaignManager", () => {
     settleMilestone("integrated, all 42 tests pass");
 
     await waitFor(() => expect(specs.length).toBeGreaterThan(0), { timeout: 15_000 });
-    // 420 s with the same headroom every allowance gets.
-    expect(specs[0]).toMatchObject({ deadlineSeconds: 645 });
+    // 480 s with the same headroom every allowance gets.
+    expect(specs[0]).toMatchObject({ deadlineSeconds: 735 });
     expect(storage.get(campaign.id)!.id).toBe(campaign.id);
   });
 
@@ -8194,7 +8187,7 @@ describe("CampaignManager", () => {
     const flatGdd = [
       "# GDD", "## Art Direction",
       "A minimalist geometric look: solid colour shapes, no gradients, no texture detail anywhere.",
-      "Every element reads as a silhouette at 64 px, and the palette never exceeds four colours.",
+      "Shapes stay crisp at 44 px, and the palette is limited to three colours.",
       "Nothing is shaded; the whole game is flat colour on flat colour, deliberately.",
     ].join("\n");
     const milestone = { id: "mcov1", title: "Art", prompt: "make art", status: "running", attempts: 1, placeholderArtAtStart: { sprites: 20, placeholders: 19 } } as never;
@@ -8220,7 +8213,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-art-retry.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: frog skins are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: blossom sprites are not covered"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8261,14 +8254,14 @@ describe("CampaignManager", () => {
   });
 
   it("real sprites added under new names satisfy the art gate — no directive on the retry", async () => {
-    // Measured 2026-09-07 15:15: Comet.png and Banner.png drawn beside the
-    // 410 placeholders; the placeholder count alone would have bounced it.
+    // Measured 2026-09-07 15:15: two real sprites drawn under new names beside
+    // the placeholders; the placeholder count alone would have bounced it.
     tasks = new FakeTaskManager();
     storage.close();
     storage = new CampaignStorage(join(dir, "campaigns-art-added.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: frog skins are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Art production: blossom sprites are not covered"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8328,7 +8321,7 @@ describe("CampaignManager", () => {
       milestoneTimeBoxMs: 60 * 60_000,
       independentReviewer: async ({ prompt }) => {
         seenPrompts.push(prompt);
-        return { ok: true, model: "fake-astra", text: "VERDICT: NOT DELIVERABLE\nBLOCKERS: 1. no frogs", ms: 1234 };
+        return { ok: true, model: "fake-astra", text: "VERDICT: NOT DELIVERABLE\nBLOCKERS: 1. no saplings", ms: 1234 };
       },
     });
     manager.attachEvents();
@@ -8402,7 +8395,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-partial-refused.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Frog skins: no milestone made them"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Blossom sprites: no milestone made them"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8429,9 +8422,9 @@ describe("CampaignManager", () => {
       c.milestones.some((m) => m.id.startsWith("mcov"))
         ? {
             refusal: "The shipped scenes render NOTHING: 0 renderer components",
-            lines: ["Project art: 429 sprite textures — 410 of them placeholder-grade"],
+            lines: ["Project art: 137 sprite textures — 121 of them placeholder-grade"],
           }
-        : { lines: ["Project art: 429 sprite textures"] };
+        : { lines: ["Project art: 137 sprite textures"] };
     manager.attachEvents();
 
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
@@ -8469,7 +8462,7 @@ describe("CampaignManager", () => {
     expect(delivered.autoReviveAt).toBeGreaterThan(Date.now());
     const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
     expect(report).toContain("NOT DELIVERED");
-    expect(report).toContain("410 of them placeholder-grade");
+    expect(report).toContain("121 of them placeholder-grade");
   });
 
   it("bounces a completion once when the sprint demanded a capture and none exists", async () => {
@@ -8837,7 +8830,7 @@ describe("CampaignManager", () => {
     // while the executor's own retry ran untracked. Four blips failed the
     // campaign before a real draft was attempted; each blip also spent one
     // of the designer's revision rounds (same counter).
-    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+    const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
     expect(tasks.submitted).toHaveLength(1);
 
     const retryId = tasks.addRetry("task_1");
@@ -8866,7 +8859,7 @@ describe("CampaignManager", () => {
     registry.recordOverloaded("cm-draft", "quota wall");
     setLiveChainMemberNames(["cm-draft"]);
     try {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       // Dead retry promise (tip idle past its horizon) so the settle is judged.
       tasks.updatedAts.set("task_1", Date.now() - 30 * 60_000);
       tasks.emit("task:failed", "task_1", "Task execution failed: All providers are in cooldown. Auto-retry 1/10 in ~30s.");
@@ -8889,7 +8882,7 @@ describe("CampaignManager", () => {
     // so a lineage tip whose updatedAt kept refreshing (the promise never
     // reads dead) re-deferred every horizon forever — no draft, no failure,
     // no message, and the one-campaign-per-project slot held.
-    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+    const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
     expect(tasks.submitted).toHaveLength(1);
 
     // A live promise: the tip was touched just now, so it is not dead.
@@ -8919,7 +8912,7 @@ describe("CampaignManager", () => {
     // gated on state === "executing", so a drafting-gdd campaign whose draft
     // had completed fell through to submitDraft — a whole new LLM draft, no
     // revision note, no attempt charged, and the approval gate never opened.
-    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+    const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
     expect(tasks.submitted).toHaveLength(1);
     // The draft completed, but its settlement event died with the process.
     tasks.markTerminal("task_1", TaskStatus.completed, "wrote docs/Game_GDD.md");
@@ -8936,7 +8929,7 @@ describe("CampaignManager", () => {
     // docs/design/Ashen_GDD.md was invisible and the campaign redrafted.
     rmSync(join(projectRoot, "docs", "Game_GDD.md"));
     mkdirSync(join(projectRoot, "docs", "design"), { recursive: true });
-    writeFileSync(join(projectRoot, "docs", "design", "Ashen_GDD.md"), "# Ashen GDD\n\nElement schedule: ...");
+    writeFileSync(join(projectRoot, "docs", "design", "Ashen_GDD.md"), "# Ashen GDD\n\nUnlock table: ...");
     const campaign = manager.startFromIdea(ctx, "a roguelike about ash");
 
     tasks.emit("task:completed", "task_1", "wrote docs/design/Ashen_GDD.md");
@@ -9031,7 +9024,7 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
 
-    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+    const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
 
@@ -9069,7 +9062,7 @@ describe("CampaignManager", () => {
     });
     manager.attachEvents();
 
-    const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+    const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
     tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
     await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"), { timeout: 15_000 });
     const before = tasks.submitted.length;
@@ -9094,7 +9087,7 @@ describe("CampaignManager", () => {
     // the ladder was planned from v2 and every sprint prompt pointed agents at
     // the v1 file. The whole build ran against the superseded design.
     const v1 = "# GDD v1\n" + "core loop: match three tiles and clear the board. ".repeat(8);
-    const v2 = "# GDD v2 REVISED\n" + "core loop: match FOUR tiles; a storm boss guards level 5. ".repeat(8);
+    const v2 = "# GDD v2 REVISED\n" + "core loop: match FOUR tiles; a hail storm strikes in season 5. ".repeat(8);
     const share = (text: string): IncomingMessage =>
       ({
         channelType: "cli",
@@ -9478,7 +9471,7 @@ describe("CampaignManager", () => {
       userId: "u1",
       projectRoot,
       state: "planning",
-      ideaText: "a match-3 where frogs fly",
+      ideaText: "an orchard game where pears ripen in winter",
       draftAttempts: 0,
       milestones: [],
       currentMilestone: 0,
@@ -9490,7 +9483,7 @@ describe("CampaignManager", () => {
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
 
     expect(planMilestones).not.toHaveBeenCalled();
-    expect(tasks.submitted[0]!.prompt).toContain("a match-3 where frogs fly");
+    expect(tasks.submitted[0]!.prompt).toContain("an orchard game where pears ripen in winter");
     const fresh = storage.get("campaign_idea_1")!;
     expect(fresh.state).toBe("drafting-gdd");
     expect(fresh.gddPath).toBeUndefined(); // the other game's GDD was not adopted
@@ -9742,7 +9735,7 @@ describe("CampaignManager", () => {
 
     /** Idea → the first draft lands at the gate → the designer asks for a revision. */
     const toRevision = async (): Promise<string> => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       expect(await manager.tryHandleApproval("cli-local", "no, make it about cats")).toBe(true);
@@ -9779,7 +9772,7 @@ describe("CampaignManager", () => {
     });
 
     it("a campaign cancelled for its revision budget revives at the gate with a fresh budget", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       const spent = storage.get(campaign.id)!;
@@ -9810,7 +9803,7 @@ describe("CampaignManager", () => {
     });
 
     it("planning refuses an idea-mode campaign nobody approved, and a boot resume goes back to the gate", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
 
@@ -9931,7 +9924,7 @@ describe("CampaignManager", () => {
       (manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones;
 
     const atTheGate = async (): Promise<string> => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       expect(messages.at(-1)!.text).toContain("revise:");
@@ -10143,7 +10136,7 @@ describe("CampaignManager", () => {
     });
 
     it("a person's stop of the GDD draft stops the campaign instead of starting a new paid draft (campaign#4)", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       expect(tasks.submitted).toHaveLength(1);
       tasks.cancel("task_1", { reason: "user" });
       tasks.emit("task:cancelled", "task_1");
@@ -10165,7 +10158,7 @@ describe("CampaignManager", () => {
     });
 
     it("a draft stopped before a restart is not redrafted at boot (campaign#4)", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       tasks.cancel("task_1", { reason: "user" }); // the process died before the settle was handled
       await manager.resumeActive();
       await draftMoved(campaign.id);
@@ -10174,7 +10167,7 @@ describe("CampaignManager", () => {
     });
 
     it("a stopped revision revives at the gate without carrying the stopped lineage into the new generation (campaign#4)", async () => {
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
       tasks.emit("task:completed", "task_1", "wrote docs/Game_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
       expect(await manager.tryHandleIncoming(incoming("revise: make it about cats"))).toBe(true);
@@ -10282,34 +10275,34 @@ describe("CampaignManager", () => {
     it("the path the draft names wins, and a revision is told which file it revises", async () => {
       rmSync(join(projectRoot, "docs", "Game_GDD.md"));
       stale("docs/GDD.md", "# Another game's GDD\n");
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
-      writeFileSync(join(projectRoot, "docs", "Frog_Draft_GDD.md"), "# Frog GDD v1\n");
-      tasks.emit("task:completed", "task_1", "Wrote the GDD.\n\ndocs/Frog_Draft_GDD.md");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
+      writeFileSync(join(projectRoot, "docs", "Pear_Draft_GDD.md"), "# Pear GDD v1\n");
+      tasks.emit("task:completed", "task_1", "Wrote the GDD.\n\ndocs/Pear_Draft_GDD.md");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
-      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Frog_Draft_GDD.md");
+      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pear_Draft_GDD.md");
 
       expect(await manager.tryHandleApproval("cli-local", "add a boss level")).toBe(true);
       await waitFor(() => expect(tasks.submitted).toHaveLength(2));
-      expect(tasks.submitted[1]!.prompt).toContain("`docs/Frog_Draft_GDD.md` — revise THAT file in place");
+      expect(tasks.submitted[1]!.prompt).toContain("`docs/Pear_Draft_GDD.md` — revise THAT file in place");
     });
 
     it("a revision written beside the old draft is the one presented", async () => {
       rmSync(join(projectRoot, "docs", "Game_GDD.md"));
-      const campaign = manager.startFromIdea(ctx, "a match-3 where frogs fly");
-      writeFileSync(join(projectRoot, "docs", "Frog_GDD.md"), "# Frog GDD v1\n");
+      const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
+      writeFileSync(join(projectRoot, "docs", "Pear_GDD.md"), "# Pear GDD v1\n");
       tasks.emit("task:completed", "task_1", "done");
-      await waitFor(() => expect(storage.get(campaign.id)!.gddPath).toBe("docs/Frog_GDD.md"));
+      await waitFor(() => expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pear_GDD.md"));
       // The first draft is history by the time the revision runs.
       const past = new Date(Date.now() - 60 * 60_000);
-      utimesSync(join(projectRoot, "docs", "Frog_GDD.md"), past, past);
+      utimesSync(join(projectRoot, "docs", "Pear_GDD.md"), past, past);
 
       expect(await manager.tryHandleApproval("cli-local", "make it about cats")).toBe(true);
       await waitFor(() => expect(tasks.submitted).toHaveLength(2));
-      writeFileSync(join(projectRoot, "docs", "Frog_GDD_v2.md"), "# Frog GDD v2 — cats\n");
+      writeFileSync(join(projectRoot, "docs", "Pear_GDD_v2.md"), "# Pear GDD v2 — cats\n");
       tasks.emit("task:completed", "task_2", "revised");
       await waitFor(() => expect(storage.get(campaign.id)!.state).toBe("awaiting-approval"));
-      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Frog_GDD_v2.md");
-      expect(messages.at(-1)!.text).toContain("docs/Frog_GDD_v2.md");
+      expect(storage.get(campaign.id)!.gddPath).toBe("docs/Pear_GDD_v2.md");
+      expect(messages.at(-1)!.text).toContain("docs/Pear_GDD_v2.md");
     });
   });
 

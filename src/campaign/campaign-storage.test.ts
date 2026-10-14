@@ -373,15 +373,15 @@ function makeRow(rid: string, status: RequirementStatus, overrides: Partial<Requ
     encoded: `Enemies cannot pass walls. [${rid}]`,
     label: "G-04",
     text: "Enemies cannot pass walls.",
-    section: "5.3 Movement",
-    sectionPath: ["5 Season Play", "5.3 Movement"],
-    sectionNumber: "5.3",
+    section: "7.4 Movement",
+    sectionPath: ["7 Season Play", "7.4 Movement"],
+    sectionNumber: "7.4",
     line: 120,
     span: { start: 4000, end: 4026 },
     kind: "rule",
     source: "extracted",
     owner: "m1",
-    ownership: [{ milestoneId: "m1", reason: "covered-section", detail: "5.3 Movement", atMs: 1 }],
+    ownership: [{ milestoneId: "m1", reason: "covered-section", detail: "7.4 Movement", atMs: 1 }],
     status,
     checks: [{ kind: "test", testName: `Strada.Acceptance.M1.Acceptance_M1.R1_${rid}`, path: "Assets/StradaAcceptance/M1/Acceptance_M1.cs", bodySha: "b".repeat(64) }],
     last: { revision: "abc12345", runId: "run-1", atMs: 2, outcome: status === "passing" ? "pass" : "fail", detail: "observed 3" },
@@ -399,7 +399,7 @@ function makeLedger(rows: RequirementRow[]): RequirementLedger {
     extractedAtMs: 1_700_000_000_000,
     rows,
     overflow: { count: 2, sections: ["9 Appendix"] },
-    numberingGaps: [{ series: "G", missing: ["G-09"], detail: "G-01…G-09, 8 defined" }],
+    numberingGaps: [{ series: "G-", missing: ["G-07"], detail: "6 G-* label(s) defined (G-01…G-06); the document names G-01 to G-07; G-07 is never defined" }],
     llmAdded: 1,
   };
 }
@@ -456,7 +456,7 @@ describe("the requirement ledger on the campaign row (GDD plan W03)", () => {
   afterEach(() => { storage.close(); rmSync(dir, { recursive: true, force: true }); });
 
   it("round-trips the ledger and when the scope gate first ran", () => {
-    const ledger = makeLedger([makeRow("r1", "passing"), makeRow("r2", "open", { bounds: { kind: "range", lo: 0.25, hi: 0.35, unit: "s" } })]);
+    const ledger = makeLedger([makeRow("r1", "passing"), makeRow("r2", "open", { bounds: { kind: "range", lo: 0.17, hi: 0.29, unit: "s" } })]);
     storage.save(makeCampaign({ id: "c_ledger", requirements: ledger, scopeGateSince: 1_700_000_123_456 }));
 
     // Through a second connection, so nothing is served from this one's memory.

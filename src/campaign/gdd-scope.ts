@@ -3,8 +3,8 @@
  * should be.
  *
  * Until 2026-09-10 every game got the same ladder bounds — "2 to 12
- * milestones" — whatever the document asked for: a 100-level, 16-element
- * design and a one-mechanic prototype were planned into the same range, and
+ * milestones" — whatever the document asked for: a long campaign with a deep
+ * unlock schedule and a one-mechanic prototype were planned into the same range, and
  * nothing recorded which sections of the document a sprint claimed to cover,
  * so "was section 7 ever planned?" could only be answered by a later LLM
  * audit over titles. This module counts what is countable — headings,
@@ -45,8 +45,8 @@ export interface GddScope {
  * "INTRODUCTION" and a worker was asked to build one (measured live
  * 2026-09-12). Anchored at both ends: "Introduction Cinematic" and "Scope of
  * the Map Editor" are work, and only a heading that is ENTIRELY apparatus is
- * dropped. A market heading may name the titles it compares against
- * ("Market Analysis and Comparable Titles"); that is still apparatus.
+ * dropped. A heading about the market may go on to name the titles the game
+ * is compared with; that is still apparatus.
  */
 export const TRIVIAL_HEADING_RE =
   /^(?:about this document|acknowledg(?:e)?ments|appendix(?:\s+[a-z0-9])?|approvals?|bibliography|change ?log|competitive analysis|(?:comparable|competitor|reference) titles|confidentiality|contents|conventions|credits|disclaimer|document (?:control|conventions|history)|executive summary|glossary|index|introduction|legal|market (?:analysis|position(?:ing)?)(?: (?:and )?(?:comparable|competitor|reference) titles)?|overview of this document|prepared by|purpose(?: of this document)?|references|(?:revision|version) history|scope|sign off|summary|table of contents|terminology)$/i;
@@ -54,7 +54,7 @@ export const TRIVIAL_HEADING_RE =
 /**
  * A section ASKING for something, as opposed to describing it: an imperative
  * or an obligation. A bare verb list kept "This document describes the design
- * of Grid Quest" as work, because "design" is a noun far more often than a
+ * of the orchard" as work, because "design" is a noun far more often than a
  * verb in a design document.
  */
 export const WORK_DEMAND_RE =
@@ -73,8 +73,8 @@ export function sectionAsksForWork(lines: readonly string[], headingIndex: numbe
 const HEADING_RE = /^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$/;
 /**
  * "3. Core Loop", "3.2 Scoring", "III. Art" as plain-text section lines
- * (converted documents). ANY capital opens one: with A-Z only, "3.2 Çekirdek
- * Kurallar" or "5. Écrans" was body text, and everything under it was read as
+ * (converted documents). ANY capital opens one: with A-Z only, "3.2 Çiçeklenme
+ * Takvimi" or "5. Écrans" was body text, and everything under it was read as
  * part of the section before.
  */
 const NUMBERED_HEADING_RE = /^\s{0,3}(?:\d{1,2}(?:\.\d{1,2}){0,2}\.?|[IVX]{1,4}\.)\s+(\p{Lu}[^\n]{2,70})$/u;
@@ -215,8 +215,8 @@ export function headingClaimedBy(heading: string, claims: readonly string[]): bo
  * who opens the entry scene is playing, not staring at an idle screen", and
  * the delivery report called an idle first screen a defect. That is one game
  * shape imposed on all of them: a document may specify a home, menu or lobby
- * as its first screen, and real documents do — a start-up budget can name
- * the screen it reaches (Codex 2026-09-12 V, Job 3.9). What must be proven then is not auto-start
+ * as its first screen, and real documents do — they say which screen the game
+ * opens on (Codex 2026-09-12 V, Job 3.9). What must be proven then is not auto-start
  * but the ROUTE from that screen into play.
  */
 const BOOTS_TO_SCREEN_RE =
