@@ -41,8 +41,8 @@ const PARTICLES = "--- !u!198 &302\nParticleSystem:\n  serializedVersion: 8\n  l
 const CLIP = "33333333333333333333333333333333";
 const CONTROLLER = "44444444444444444444444444444444";
 const GDD =
-  "# Night Freight\n\n## Weather\nSteam particles roll off the boiler, smoke particles trail from the stack, " +
-  "and rain leaves a trail effect on the cab glass.\n" +
+  "# Night Freight\n\n## Weather\nSteam particles roll off the boiler, smoke particles drift from the stack, " +
+  "and the fog in the cutting is a visual effect of its own.\n" +
   "## Cab\nThe drive rods are animated from keyframes; the firebox door has an opening animation; the pressure needle tweens.\n" +
   "## Audio\nA voice-over from the dispatcher opens each shift, the ambient sound of the rails runs under every stretch, " +
   "and SFX for the whistle and the coal shovel sit above both.\n";
@@ -160,7 +160,7 @@ describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
   const cueList =
     "# GDD\n\n## Audio\nVoice-over when the dispatcher clears the line. Ambient sound on the long night stretch. " +
     "SFX for the coal shovel. A soundtrack cue on arrival at each depot. Sound effects for the brake hiss. " +
-    "A jingle on the timetable board.\n";
+    "Music when the line climbs into the hills.\n";
 
   it("reads the cues the document states, and nothing from a document that only says 'audio'", () => {
     expect(audioCuesNamed(cueList).length).toBeGreaterThanOrEqual(4);
@@ -198,7 +198,7 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     // sentence is the ONLY thing that could exempt the game — and it must not.
     const doc =
       "A voice-over cast of three reads the dispatcher's lines. The ambient sound of the rails was taped at a real branch line. " +
-      "The jingle at the timetable board is a phrase from the harmonica soundtrack. " +
+      "The soundtrack is harmonica music recorded in a disused signal box. " +
       "Without sound a driver can still finish every run, because each whistle and bell shows a caption.";
     const d = describeMedia(doc, report);
     // The clips are there and no shipped scene reaches one: that is silent.
@@ -214,9 +214,9 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     put(root, "Assets/Audio/whistle.wav", "RIFF", CLIP);
     const report = assessBuiltAsSpecified(root);
     const doc =
-      "# Night Freight\n\nThe first release ships without music.\n\n## Audio\nMoment | Sound | Volume\n" +
-      "Leaving the station | sfx.whistle.depart | 0.73\nPulling into a siding | sfx.brake.release | 0.47\n" +
-      "Stoking the firebox | sfx.coal.shovel | 0.31\nNearing a crossing | sfx.bell.signal | 0.62\n";
+      "# Night Freight\n\nThe first release ships without music.\n\n## Audio\nHeard when | Cue id\n" +
+      "A level crossing comes into view | sfx.bell.crossing\nThe fireman feeds the firebox | sfx.coal.shovel\n" +
+      "The train dives into a tunnel | sfx.whistle.tunnel\n";
     expect(describeMedia(doc, report).refusal).toContain("the delivery is silent");
   });
 

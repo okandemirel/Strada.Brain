@@ -2,13 +2,12 @@
  * unity_generate_audio — procedural SFX and music loops written straight into
  * Assets/ as WAV + AudioImporter .meta, no Editor needed.
  *
- * Measured 2026-09-07 on the test game's project: the GDD schedules a music
- * base loop, area variations and a complete SFX cue list; the toolchain had
- * no audio tool at all, and the project held nineteen WAVs — thirteen
- * 0.15-second blips, four byte-identical to another clip. This is the audio
- * counterpart of the procedural sprite: deterministic (seeded), honest about
- * what it is (synthesis, not composition), and enough for a cue list to be
- * bound and heard.
+ * Measured 2026-09-07 on the test game's project: the GDD asks for music and
+ * a full SFX cue list; the toolchain had no audio tool at all, and the
+ * project held only short blips, several of them byte-identical to another
+ * clip. This is the audio counterpart of the procedural sprite: deterministic
+ * (seeded), honest about what it is (synthesis, not composition), and enough
+ * for a cue list to be bound and heard.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -320,7 +319,7 @@ export class AudioGenerateTool implements ITool {
   readonly inputSchema = {
     type: "object",
     properties: {
-      name: { type: "string", description: "Clip name, e.g. 'ui_click' or 'music_main' (letters, digits, _ or -)." },
+      name: { type: "string", description: "Clip name, e.g. 'door_creak' or 'wind_bed' (letters, digits, _ or -)." },
       kind: { type: "string", enum: ["sfx", "music"], description: "'sfx' (default) or 'music'." },
       preset: { type: "string", enum: [...SFX_PRESETS], description: `sfx only: ${SFX_PRESETS.join(", ")} (default 'pop').` },
       bpm: { type: "number", description: "music only: tempo, 60-200 (default 110)." },
@@ -337,7 +336,7 @@ export class AudioGenerateTool implements ITool {
     if (context.readOnly) return { content: "Error: audio generation is disabled in read-only mode", isError: true };
     const rawName = String(input["name"] ?? "").trim();
     if (!/^[A-Za-z][\w-]{0,60}$/.test(rawName)) {
-      return { content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'ui_click')", isError: true };
+      return { content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'door_creak')", isError: true };
     }
     const kind = String(input["kind"] ?? "sfx");
     if (kind !== "sfx" && kind !== "music") return { content: "Error: kind must be 'sfx' or 'music'", isError: true };
