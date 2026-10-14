@@ -72,10 +72,10 @@ describe("unity_generate_audio", () => {
 
   it("keeps the guid on regeneration so bindings survive", async () => {
     const tool = new AudioGenerateTool();
-    await tool.execute({ name: "pop_tap" }, ctx);
-    const first = readFileSync(join(root, "Assets/Audio/Generated/pop_tap.wav.meta"), "utf8");
-    await tool.execute({ name: "pop_tap", seed: 99 }, ctx);
-    const second = readFileSync(join(root, "Assets/Audio/Generated/pop_tap.wav.meta"), "utf8");
+    await tool.execute({ name: "Whistle01" }, ctx);
+    const first = readFileSync(join(root, "Assets/Audio/Generated/Whistle01.wav.meta"), "utf8");
+    await tool.execute({ name: "Whistle01", seed: 99 }, ctx);
+    const second = readFileSync(join(root, "Assets/Audio/Generated/Whistle01.wav.meta"), "utf8");
     expect(second).toBe(first);
   });
 
@@ -92,23 +92,23 @@ describe("unity_generate_audio", () => {
 describe("regeneration keeps an authored AudioImporter .meta (audit A5 / D56)", () => {
   it("loadType and forceToMono set in the Inspector survive a re-generation", async () => {
     const tool = new AudioGenerateTool();
-    const metaPath = join(root, "Assets/Audio/Generated/pop_tap.wav.meta");
-    await tool.execute({ name: "pop_tap" }, ctx);
+    const metaPath = join(root, "Assets/Audio/Generated/Whistle01.wav.meta");
+    await tool.execute({ name: "Whistle01" }, ctx);
     const first = readFileSync(metaPath, "utf8");
     const authored = first.replace("loadType: 0", "loadType: 1").replace("forceToMono: 0", "forceToMono: 1");
     expect(authored).not.toBe(first);
     writeFileSync(metaPath, authored, "utf8");
-    const r = await tool.execute({ name: "pop_tap", seed: 99 }, ctx);
+    const r = await tool.execute({ name: "Whistle01", seed: 99 }, ctx);
     expect(r.isError).toBeFalsy();
     expect(readFileSync(metaPath, "utf8")).toBe(authored);
   });
 
   it("guard: a DefaultImporter meta on the clip path is replaced by the audio template, guid kept", async () => {
-    const metaPath = join(root, "Assets/Audio/Generated/pop_tap.wav.meta");
+    const metaPath = join(root, "Assets/Audio/Generated/Whistle01.wav.meta");
     mkdirSync(join(root, "Assets/Audio/Generated"), { recursive: true });
     const guid = "11112222333344445555666677778888";
     writeFileSync(metaPath, `fileFormatVersion: 2\nguid: ${guid}\nDefaultImporter:\n  externalObjects: {}\n`, "utf8");
-    await new AudioGenerateTool().execute({ name: "pop_tap" }, ctx);
+    await new AudioGenerateTool().execute({ name: "Whistle01" }, ctx);
     const meta = readFileSync(metaPath, "utf8");
     expect(meta).toContain(`guid: ${guid}`);
     expect(meta).toContain("AudioImporter:");

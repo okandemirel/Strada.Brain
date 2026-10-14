@@ -1,9 +1,9 @@
 /**
  * Sound, motion and effects: what the GDD asks for against what ships.
  *
- * Until 2026-09-10 a GDD's cue list (a music loop per area, a full SFX
- * list), its animation brief (squash-and-stretch characters) and its effects
- * (particles when a level is cleared) were measured by nothing: the
+ * Until 2026-09-10 a GDD's cue list (menu music, a sound for each action),
+ * its animation brief (walk and idle cycles) and its effects (smoke or spark
+ * particles) were measured by nothing: the
  * structural gate counted renderers and sprites, the art inventory counted
  * clips on disk, and a silent, static delivery read as complete.
  *
@@ -39,11 +39,12 @@ export interface MediaDisclosure {
  * Does the document ASK FOR SILENCE — as against asking that the game be
  * PLAYABLE in silence?
  *
- * A promise that playing muted loses nothing ("no audio-only cues") is an
- * accessibility requirement, and it matched the denial, so the vehicle's whole
- * audio gate was switched off on a project with twenty-nine imported clips and
- * none reachable from a shipped scene (Codex 2026-09-12 V). An accessibility
- * promise cannot negate the sound the same document specifies.
+ * A promise that the game stays playable with the sound off ("without sound,
+ * every whistle shows a caption") is an accessibility requirement, and it
+ * matched the denial, so the whole audio gate was switched off on a project
+ * with twenty-nine imported clips and none reachable from a shipped scene
+ * (Codex 2026-09-12 V). An accessibility promise cannot negate the sound the
+ * same document specifies.
  */
 const DENIES_SOUND_RE = /\b(?:no (?:music|audio|sound|sfx)\b|silent by design|without (?:any )?(?:music|audio|sound))\b/gi;
 /** The clause words that make such a sentence an accessibility promise. */
@@ -55,7 +56,7 @@ export function deniesSoundAnywhere(documentText: string): boolean {
   let m: RegExpExecArray | null;
   while ((m = DENIES_SOUND_RE.exec(documentText)) !== null) {
     const at = m.index;
-    // …and "no audio-ONLY cues" denies a KIND of cue, not the sound itself.
+    // …and "no music-ONLY stages" denies a KIND of content, not the sound itself.
     if (/^-?only\b/i.test(documentText.slice(at + m[0].length, at + m[0].length + 6))) continue;
     const from = Math.max(0, documentText.lastIndexOf("\n", at), documentText.lastIndexOf(".", at) + 1);
     let to = documentText.indexOf("\n", at);
@@ -67,14 +68,14 @@ export function deniesSoundAnywhere(documentText: string): boolean {
 }
 
 /**
- * Does the document ask for sound anywhere? A prose cue ("SFX for the tap"),
- * a labelled list or column ("Audio: chime_tap"), or a section of its own — the
- * vehicle states its cues as an Event/Visual/Audio/Haptic table, which no
- * prose pattern can see (Codex 2026-09-12 V).
+ * Does the document ask for sound anywhere? A prose cue ("SFX for the
+ * whistle"), a labelled list or column ("Audio: sfx.brake.release"), or a
+ * section of its own — cues written as table rows under an audio heading are
+ * seen by no prose pattern (Codex 2026-09-12 V).
  */
 export function asksForSoundAnywhere(documentText: string): boolean {
   if (/\b(?:sfx|sound effects?|voice ?over|music)\s+(?:for|on|when|plays?|cue)/i.test(documentText)) return true;
-  // A colon, or a dash with a space: "audio-only" is a kind of cue, not a
+  // A colon, or a dash with a space: "music-only" is a kind of content, not a
   // label introducing one.
   if (/\b(?:sfx|sound effects?|audio|music|soundtrack|jingle|voice ?over)\b\s*(?::\s*\S|[—–-]\s+\S)/i.test(documentText)) return true;
   // A heading or table column of its own: a document with an AUDIO section is
@@ -90,8 +91,8 @@ export const MEDIA_ASK_THRESHOLD = 3;
  * The audio CUES a document names, as its own sentences.
  *
  * One reachable clip used to clear a cue list of any length: the gate asked
- * whether ANY clip was reachable, so a document listing "SFX for the tap,
- * music on the menu, a jingle when the level ends…" was satisfied by a single
+ * whether ANY clip was reachable, so a document listing "SFX for the whistle,
+ * music on the menu, a sound when the signal clears…" was satisfied by a single
  * imported sound (Codex 2026-09-12 R#12). Only explicit cue statements count —
  * a sound named FOR an event — so a document that merely says "audio" many
  * times names no cues and this measures nothing.

@@ -41,26 +41,27 @@ const PARTICLES = "--- !u!198 &302\nParticleSystem:\n  serializedVersion: 8\n  l
 const CLIP = "33333333333333333333333333333333";
 const CONTROLLER = "44444444444444444444444444444444";
 const GDD =
-  "# GDD\n\n## Audio\nMusic: one calm loop per pond; SFX for tap, match and win; audio ducks on pause.\n" +
-  "## Feel\nLanterns use squash-and-stretch animation; every match is animated with a tween.\n" +
-  "## Effects\nEmber particles on level clear, a sparkle on match, screen shake on the storm pond.\n";
+  "# Night Freight\n\n## Weather\nSteam particles roll off the boiler, smoke particles trail from the stack, " +
+  "and rain leaves a trail effect on the cab glass.\n" +
+  "## Cab\nThe drive rods are animated from keyframes; the firebox door has an opening animation; the pressure needle tweens.\n" +
+  "## Audio\nSoundtrack: a slow harmonica theme on the night line; SFX for the whistle, brake hiss and coal shovel; the audio level rises with the cab window open.\n";
 
 function withScene(body: string, extraFiles?: (root: string) => void): ReturnType<typeof assessBuiltAsSpecified> {
   const root = project();
   buildSettings(root, ["Assets/Scenes/Main.unity"]);
   put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA}${SPRITE}${body}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-  put(root, "Assets/Art/lantern.png", "pixels", "22222222222222222222222222222222");
+  put(root, "Assets/Art/locomotive.png", "pixels", "22222222222222222222222222222222");
   extraFiles?.(root);
   return assessBuiltAsSpecified(root);
 }
-const withClip = (root: string): void => put(root, "Assets/Audio/merge.wav", "RIFF", CLIP);
+const withClip = (root: string): void => put(root, "Assets/Audio/whistle.wav", "RIFF", CLIP);
 
 describe("built-as-specified counts sound, motion and effects", () => {
   it("counts AudioSource/Animator/Animation/ParticleSystem and which are bound", () => {
     const r = withScene(`${AUDIO(CLIP)}${AUDIO()}${ANIMATOR(CONTROLLER)}${ANIMATOR()}${PARTICLES}`, (root) => {
       withClip(root);
-      put(root, "Assets/Anim/Lantern.controller", "controller", CONTROLLER);
-      put(root, "Assets/Anim/Squash.anim", "clip");
+      put(root, "Assets/Anim/DriveRods.controller", "controller", CONTROLLER);
+      put(root, "Assets/Anim/Pistons.anim", "clip");
     });
     expect(r.shippedAudioSources).toBe(2);
     expect(r.shippedAudioSourcesBound).toBe(1);
@@ -70,7 +71,7 @@ describe("built-as-specified counts sound, motion and effects", () => {
     expect(r.reachableAudioClips).toBe(1);
     expect(r.animatorControllers).toBe(1);
     expect(r.animationClips).toBe(1);
-    expect(r.scenes[0]!.audioClipsBound).toEqual(["Assets/Audio/merge.wav"]);
+    expect(r.scenes[0]!.audioClipsBound).toEqual(["Assets/Audio/whistle.wav"]);
     expect(r.disclosures.join("\n")).toContain("2 AudioSource(s) (1 with a project clip; 1 of the 1 clip(s) reachable from a shipped scene by any route), 2 Animator(s) (1 with a controller; project holds 1 controller(s), 1 clip(s)), 0 legacy Animation(s), 1 ParticleSystem(s).");
   });
 });
@@ -153,8 +154,8 @@ describe("describeMedia", () => {
 
 describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
   const cueList =
-    "# GDD\n\n## Audio\nMusic plays on the menu. SFX for the tap. A jingle when the level ends. " +
-    "Sound effects for the merge. Voice-over on the boss intro.\n";
+    "# GDD\n\n## Audio\nMusic plays on the depot menu. SFX for the whistle. A sound plays when the signal bell rings. " +
+    "Sound effects for the coal shovel. Voice-over on the dispatcher call.\n";
 
   it("reads the cues the document states, and nothing from a document that only says 'audio'", () => {
     expect(audioCuesNamed(cueList).length).toBeGreaterThanOrEqual(4);
@@ -182,33 +183,35 @@ describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
  * holding 29 imported clips with none reachable from a shipped scene.
  */
 describe("an accessibility promise is not a request for silence (Codex 2026-09-12 V)", () => {
-  it("does not exempt a game whose document promises play without sound is equivalent", () => {
+  it("does not exempt a game whose document promises it stays playable without sound", () => {
     const root = project();
     buildSettings(root, ["Assets/Scenes/Main.unity"]);
     put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO());
-    put(root, "Assets/Audio/pop.wav", "RIFF", CLIP);
+    put(root, "Assets/Audio/whistle.wav", "RIFF", CLIP);
     const report = assessBuiltAsSpecified(root);
-    // The cues live in a table this reader cannot parse, so the accessibility
+    // No sentence here states a cue any reader can parse, so the accessibility
     // sentence is the ONLY thing that could exempt the game — and it must not.
     const doc =
-      "Every hit carries its own sfx id. The mix ducks audio on pause. Combos raise the sfx pitch. " +
-      "Playing without sound loses nothing, since every cue is mirrored on screen (no audio-only signals); vibration has its own toggle.";
+      "The whistle, the brake hiss and the coal shovel are each recorded as their own sfx. " +
+      "The audio follows the cab window. A harmonica soundtrack carries the night runs. " +
+      "Without sound the run stays playable: every whistle and bell shows a caption on screen.";
     const d = describeMedia(doc, report);
     // The clips are there and no shipped scene reaches one: that is silent.
     expect(d.refusal).toContain("the delivery is silent");
   });
 
   it("a document with an AUDIO SECTION is not asking for silence", () => {
-    // The vehicle states its cues as an Event/Visual/Audio/Haptic table, which
-    // no prose pattern can see; the section it sits under can be seen.
+    // Cues written as table rows are seen by no prose pattern; the heading
+    // they sit under can be seen.
     const root = project();
     buildSettings(root, ["Assets/Scenes/Main.unity"]);
     put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO());
-    put(root, "Assets/Audio/pop.wav", "RIFF", CLIP);
+    put(root, "Assets/Audio/whistle.wav", "RIFF", CLIP);
     const report = assessBuiltAsSpecified(root);
     const doc =
-      "# GDD\n\nNo music in v1.\n\n## Audio\nEvent / Visual / Audio / Haptic\n" +
-      "Tap shrine | glow ring | chime_tap | Light\nLantern docks | dock flash | splash_dock | Light\n";
+      "# Night Freight\n\nNo music in the first release.\n\n## Audio\nMoment | Sound | Volume\n" +
+      "Leaving the station | sfx.whistle.depart | 0.9\nPulling into a siding | sfx.brake.release | 0.6\n" +
+      "Stoking the firebox | sfx.coal.shovel | 0.4\nNearing a crossing | sfx.bell.signal | 0.8\n";
     expect(describeMedia(doc, report).refusal).toContain("the delivery is silent");
   });
 
