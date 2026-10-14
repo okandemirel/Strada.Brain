@@ -467,6 +467,12 @@ describe("CampaignManager", () => {
   it("GDD mode: plans the ladder and submits sprint 1 immediately (no approval gate)", async () => {
     const campaign = manager.startFromGdd(ctx, "# GDD text", "docs/Game_GDD.md");
     expect(campaign.state).toBe("planning");
+    // WHICH DOOR IT CAME THROUGH, recorded: a campaign started from a design
+    // the message named carries gddPath, and so does one whose design was
+    // drafted from an idea and approved, so the store could not tell them
+    // apart afterwards (north-star rung 2, measured 2026-10-14).
+    expect(campaign.startedFrom).toBe("named-design");
+    expect(storage.get(campaign.id)!.startedFrom).toBe("named-design");
 
     await waitFor(() => {
       expect(tasks.submitted).toHaveLength(1);
@@ -529,6 +535,7 @@ describe("CampaignManager", () => {
   it("idea mode: drafts the GDD, gates on approval, builds after 'evet'", async () => {
     const campaign = manager.startFromIdea(ctx, "an orchard game where pears ripen in winter");
     expect(campaign.state).toBe("drafting-gdd");
+    expect(campaign.startedFrom).toBe("idea");
     expect(tasks.submitted).toHaveLength(1);
     expect(tasks.submitted[0]!.prompt).toContain("pears ripen in winter");
 
@@ -4285,6 +4292,23 @@ describe("CampaignManager", () => {
     // …while a message that named nothing still discovers.
     const discovered = manager.startFromGddFromDocs({ ...ctx, chatId: "chat-discover" });
     expect(discovered?.gddPath).toBeDefined();
+  });
+
+  it("records the door a gated design came through, so it is not read as a drafted idea later", async () => {
+    // A gate on a document the user named keeps the request as the idea text,
+    // which is what the store used to be read by — so a confirmed design and
+    // a drafted one were the same two columns afterwards (north-star rung 2).
+    mkdirSync(join(projectRoot, "docs"), { recursive: true });
+    writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "z".repeat(400));
+    const msg = {
+      channelType: "cli", chatId: "chat-gated-door", userId: "u1",
+      text: "Build the game following docs/android-signing.md",
+      timestamp: new Date(),
+    } as unknown as IncomingMessage;
+    expect(await manager.tryHandleIncoming(msg)).toBe(true);
+    const held = storage.findAwaitingApproval("chat-gated-door")!;
+    expect(held.gddToConfirm).toBe(true);
+    expect(held.startedFrom).toBe("confirmed-design");
   });
 
   it("a message naming a GDD that cannot be read gets told so, and no other design is built (audit 06.4)", async () => {

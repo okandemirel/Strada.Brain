@@ -703,11 +703,14 @@ describe("W03 migrations: an older database gains the ledger columns and the two
     try {
       const db = rawDb(storage);
       const columns = (db.prepare("PRAGMA table_info(campaigns)").all() as Array<{ name: string }>).map((c) => c.name);
-      expect(columns).toEqual(expect.arrayContaining(["requirements_json", "scope_gate_since"]));
+      expect(columns).toEqual(expect.arrayContaining(["requirements_json", "scope_gate_since", "started_from"]));
       const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name);
       expect(tables).toEqual(expect.arrayContaining(["campaign_acceptance", "campaign_judgements"]));
 
       const old = storage.get("c_old")!;
+      // A campaign from before the door was recorded says nothing about it,
+      // which is not the same as having come through no door.
+      expect(old.startedFrom).toBeUndefined();
       expect(old.requirements).toBeUndefined();
       expect(old.requirementsUnreadable).toBeUndefined();
       expect(old.checkFaults).toBeUndefined();
@@ -716,7 +719,12 @@ describe("W03 migrations: an older database gains the ledger columns and the two
       expect(storage.listJudgements("c_old")).toEqual([]);
 
       // …and the migrated database takes everything W03 stores.
-      storage.save({ ...old, requirements: makeLedger([makeRow("r1", "open")]), scopeGateSince: 7 });
+      storage.save({ ...old, requirements: makeLedger([makeRow("r1", "open")]), scopeGateSince: 7, startedFrom: "named-design" });
+      expect(storage.get("c_old")!.startedFrom).toBe("named-design");
+      // …and a later save that does not carry it keeps what was recorded: the
+      // door a campaign came through cannot change after it started.
+      storage.save({ ...storage.get("c_old")!, startedFrom: undefined });
+      expect(storage.get("c_old")!.startedFrom).toBe("named-design");
       storage.putAcceptance("c_old", makeAcceptance(), 8);
       storage.appendJudgement({ campaignId: "c_old", attemptKey: "m1#1", atMs: 9, input: makeInput(), judgement: RED });
       expect(storage.get("c_old")!.scopeGateSince).toBe(7);

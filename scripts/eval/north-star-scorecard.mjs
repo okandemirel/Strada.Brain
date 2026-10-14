@@ -234,6 +234,7 @@ function toCampaign(row) {
     state: row.state,
     ideaText: typeof row.idea_text === "string" && row.idea_text.trim() !== "" ? row.idea_text : null,
     gddPath: row.gdd_path ?? null,
+    startedFrom: typeof row.started_from === "string" && row.started_from !== "" ? row.started_from : null,
     // The approved GDD the ledger was read from: criterion G's platform claims.
     gddText: typeof row.gdd_text === "string" && row.gdd_text.trim() !== "" ? row.gdd_text : null,
     milestones,
@@ -1093,10 +1094,39 @@ function rung2(ctx) {
   const cause = campaignsCause(ctx);
   if (cause) return blocked(2, title, cause);
   const all = ctx.store.campaigns;
-  const fromIdea = all.filter((c) => c.ideaText !== null);
-  const planned = fromIdea.filter((c) => c.milestones.length > 0);
-  const text = `${fromIdea.length} of ${all.length} campaigns started from idea_text; ${planned.length} of them reached a plan`;
-  return item(2, title, [planned.length > 0 ? pass(text) : fail(text)], { measured: { campaigns: all.length, fromIdea: fromIdea.length, planned: planned.length } });
+  // THE DOOR IS RECORDED, NOT INFERRED. A campaign started from a design the
+  // message named carries gdd_path — and so does one whose design was drafted
+  // from an idea and approved, so this rung could not be read from the
+  // columns it used to read: it counted idea_text alone and reported the
+  // protocol's own first line ("Build this game: docs/<name>.md") as a
+  // failure of the rung it satisfies. `started_from` says which door, and is
+  // absent on every campaign from before it was recorded.
+  const byDoor = (door) => all.filter((c) => c.startedFrom === door);
+  const fromIdea = byDoor("idea");
+  const fromNamed = [...byDoor("named-design"), ...byDoor("confirmed-design")];
+  const started = [...fromIdea, ...fromNamed];
+  const unrecorded = all.filter((c) => c.startedFrom === null);
+  const planned = started.filter((c) => c.milestones.length > 0);
+  const text =
+    `${planned.length} of ${started.length} campaigns that started from one message reached a plan `
+    + `(${fromIdea.length} from an idea, ${fromNamed.length} from a design the message named)`;
+  const checks = [planned.length > 0 ? pass(text) : fail(text)];
+  if (unrecorded.length > 0) {
+    checks.push(
+      unmeasured(
+        `${unrecorded.length} of ${all.length} campaigns predate started_from, so which door they came through cannot be told`,
+      ),
+    );
+  }
+  return item(2, title, checks, {
+    measured: {
+      campaigns: all.length,
+      fromIdea: fromIdea.length,
+      fromNamedDesign: fromNamed.length,
+      unrecorded: unrecorded.length,
+      planned: planned.length,
+    },
+  });
 }
 
 function ledgerCounts(campaign) {

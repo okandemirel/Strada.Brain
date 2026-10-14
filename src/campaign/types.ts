@@ -386,6 +386,18 @@ export interface Campaign {
   state: CampaignState;
   /** Raw idea text (idea mode). */
   ideaText?: string;
+  /**
+   * WHICH DOOR THIS CAMPAIGN CAME THROUGH, as intake decided: an idea the
+   * system drafts a design for, a design the message named plainly, or one it
+   * named in any other form and so confirmed at the gate first.
+   *
+   * Recorded because it could not be inferred: a campaign started from a
+   * named design carries `gddPath`, and so does one whose design was drafted
+   * and approved, so "one message was enough" was unanswerable from the store
+   * (measured 2026-10-14 against the north-star scorecard's rung 2). Absent on
+   * every campaign from before it was recorded.
+   */
+  startedFrom?: "idea" | "named-design" | "confirmed-design";
   /** Project-relative path to the GDD once known (drafted or supplied). */
   gddPath?: string;
   /**

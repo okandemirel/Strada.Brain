@@ -1406,7 +1406,7 @@ export class CampaignManager {
 
   /** Idea mode: draft the GDD first, then stop at the single approval gate. */
   startFromIdea(ctx: CampaignContext, ideaText: string): Campaign {
-    const campaign = this.newCampaign(ctx, { ideaText });
+    const campaign = this.newCampaign(ctx, { ideaText, startedFrom: "idea" });
     this.submitDraft(campaign);
     return campaign;
   }
@@ -1417,7 +1417,11 @@ export class CampaignManager {
    * ladder and start building immediately.
    */
   startFromGdd(ctx: CampaignContext, gddText: string, gddPath?: string): Campaign {
-    const campaign = this.newCampaign(ctx, { gddText, gddPath: gddPath === undefined ? undefined : this.keepGddText(gddText, gddPath) });
+    const campaign = this.newCampaign(ctx, {
+      gddText,
+      gddPath: gddPath === undefined ? undefined : this.keepGddText(gddText, gddPath),
+      startedFrom: "named-design",
+    });
     void this.planAndLaunch(campaign.id);
     return campaign;
   }
@@ -1434,7 +1438,7 @@ export class CampaignManager {
   holdAtApprovalGate(ctx: CampaignContext, request: string, gddText: string, gddPath: string | undefined): Campaign {
     const kept = gddPath === undefined ? undefined : this.keepGddText(gddText, gddPath);
     const held = kept === undefined ? { gddText } : { gddPath: kept };
-    const campaign = this.newCampaign(ctx, { ideaText: request, ...held, gddToConfirm: true });
+    const campaign = this.newCampaign(ctx, { ideaText: request, ...held, gddToConfirm: true, startedFrom: "confirmed-design" });
     campaign.state = "awaiting-approval";
     if (this.persist(campaign)) this.armApprovalExpiry(campaign.id);
     return campaign;
@@ -2768,7 +2772,7 @@ export class CampaignManager {
 
   private newCampaign(
     ctx: CampaignContext,
-    seed: { ideaText?: string; gddText?: string; gddPath?: string; gddToConfirm?: boolean },
+    seed: { ideaText?: string; gddText?: string; gddPath?: string; gddToConfirm?: boolean; startedFrom?: Campaign["startedFrom"] },
   ): Campaign {
     const now = Date.now();
     const campaign: Campaign = {

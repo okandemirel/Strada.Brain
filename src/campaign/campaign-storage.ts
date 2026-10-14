@@ -127,6 +127,7 @@ interface CampaignRow {
   requirements_json?: string | null;
   scope_gate_since?: number | null;
   gdd_to_confirm?: number | null;
+  started_from?: string | null;
 }
 
 /**
@@ -271,6 +272,9 @@ function rowToCampaign(row: CampaignRow): Campaign {
     })(),
     scopeGateSince: row.scope_gate_since ?? undefined,
     ...(row.gdd_to_confirm === 1 ? { gddToConfirm: true } : {}),
+    ...(row.started_from === "idea" || row.started_from === "named-design" || row.started_from === "confirmed-design"
+      ? { startedFrom: row.started_from }
+      : {}),
   };
 }
 
@@ -462,6 +466,9 @@ const ADDED_COLUMNS: ReadonlyArray<{ readonly name: string; readonly type: strin
   // A gate on a document the user named: confirmed or cancelled, never
   // redrafted over the user's own file. NULL is an idea's draft gate.
   { name: "gdd_to_confirm", type: "INTEGER" },
+  // Which door the campaign came through (Campaign.startedFrom): NULL on every
+  // campaign from before it was recorded, which is not the same as unknown.
+  { name: "started_from", type: "TEXT" },
 ];
 
 export class CampaignStorage {
@@ -535,8 +542,8 @@ export class CampaignStorage {
           unmeasurable_revives, implementation_revives, pending_coverage_gaps,
           delivery_revives, delivery_proofs_signature, delivery_rounds_total,
           stop_requested_at, stop_generation, gdd_sha256, gdd_revision,
-          requirements_json, scope_gate_since, gdd_to_confirm
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          requirements_json, scope_gate_since, gdd_to_confirm, started_from
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           state = excluded.state,
           gdd_path = excluded.gdd_path,
@@ -567,6 +574,7 @@ export class CampaignStorage {
           gdd_revision = excluded.gdd_revision,
           scope_gate_since = excluded.scope_gate_since,
           gdd_to_confirm = excluded.gdd_to_confirm,
+          started_from = COALESCE(excluded.started_from, campaigns.started_from),
           requirements_json = CASE WHEN ? = 1 THEN campaigns.requirements_json ELSE excluded.requirements_json END`,
       )
       .run(
@@ -612,6 +620,7 @@ export class CampaignStorage {
         campaign.requirements !== undefined ? JSON.stringify(campaign.requirements) : null,
         campaign.scopeGateSince ?? null,
         campaign.gddToConfirm === true ? 1 : null,
+        campaign.startedFrom ?? null,
         // Binds the `?` in the CASE above, which follows every VALUES placeholder.
         keepStoredLedger ? 1 : 0,
       );

@@ -327,6 +327,7 @@ function seedProof(memory: string, opts: ProofOptions = {}): void {
         state: "done",
         ideaText: "make a calm orchard game where you drag a cart between rows, 3 levels",
         gddPath: "docs/Orchard_GDD.md",
+        startedFrom: "idea",
         deliveryReported: true,
         scopeGateSince: T0,
         updatedAt: T0 + 30 * HOUR,
@@ -562,7 +563,9 @@ describe("north-star scorecard: a run that did everything", () => {
     expect(card.rungs.map((r) => [r.id, r.verdict, r.cause])).toEqual(
       Array.from({ length: 10 }, (_, i) => [i + 1, VERDICT.PASS, null]),
     );
-    expect(rung(card, 2).checks[0]!.text).toBe("1 of 1 campaigns started from idea_text; 1 of them reached a plan");
+    expect(rung(card, 2).checks[0]!.text).toBe(
+      "1 of 1 campaigns that started from one message reached a plan (1 from an idea, 0 from a design the message named)",
+    );
     expect(rung(card, 3).checks[1]!.text).toBe(`${PROOF_ID}: 2 of 2 in-scope rows owned by a milestone of its plan`);
     expect(rung(card, 5).checks[0]!.text).toContain("2 of 2 green milestones in 1 campaign since the scope gate first decided were judged green on a proven basis by the scope gate in mode on");
     expect(rung(card, 9).checks.map((c) => c.text)).toEqual([
@@ -982,7 +985,12 @@ describe("north-star scorecard: the measured state", () => {
     const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
     expect(card.score.rungs).toEqual({ pass: 0, fail: 10, notMeasured: 0 });
     expect(rung(card, 1).checks.map((c) => c.ok)).toEqual([true, false, false]);
-    expect(rung(card, 2).checks[0]!.text).toBe("0 of 2 campaigns started from idea_text; 0 of them reached a plan");
+    // They predate started_from, so the door cannot be told — and a rung
+    // nobody can read is not a rung that passed.
+    expect(rung(card, 2).checks.map((c) => [c.ok, c.text])).toEqual([
+      [false, "0 of 0 campaigns that started from one message reached a plan (0 from an idea, 0 from a design the message named)"],
+      [null, "2 of 2 campaigns predate started_from, so which door they came through cannot be told"],
+    ]);
     expect(rung(card, 3).checks[0]!.text).toBe("0 of 2 campaigns carry a requirement ledger");
     expect(rung(card, 5).checks[0]!.text).toBe(
       "no campaign ran under the scope gate in mode on (scope_gate_since is unset on all 2 campaigns); 0 of 2 green milestones were judged green on a proven basis by the scope gate in mode on (judgements: off 0, shadow 2, on 0)",
