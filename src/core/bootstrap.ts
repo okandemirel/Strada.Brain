@@ -6,6 +6,7 @@
  */
 
 import { parseChannelSpec } from "../channels/channel-spec.js";
+import { describeProjectInventory } from "../agents/autonomy/project-inventory.js";
 import { indexFrameworkDocs } from "./bootstrap-docrag.js";
 import { withNodeScope } from "../supervisor/node-scope.js";
 import { describeEvidenceShortfall, missingRequiredEvidence } from "../supervisor/required-evidence.js";
@@ -1457,6 +1458,16 @@ async function bootstrapImpl(
     // Planning gets the same live framework API the orchestrator already had.
     getFrameworkKnowledge: () =>
       getFrameworkPromptGenerator()?.buildFrameworkKnowledgeSection() ?? null,
+    // …and what the project itself already holds, measured when the plan is
+    // written rather than when the daemon booted: the sprint that just ran
+    // added the modules this plan must extend (M6).
+    getProjectInventory: () => {
+      try {
+        return describeProjectInventory(config.unityProjectPath);
+      } catch {
+        return null;
+      }
+    },
     config,
     logger,
     providerManager,

@@ -97,6 +97,33 @@ describe("planning a game", () => {
     expect(prompt).toContain("builder.RegisterService<T>");
   });
 
+  /**
+   * M6 of the drift audit (2026-10-11): each campaign planned as if the
+   * project were empty and added another implementation beside the one that
+   * existed — three parallel simulations in one measured game.
+   */
+  it("carries what the project already holds into the plan, when there is something to carry", async () => {
+    const { provider, prompts } = recordingProvider();
+    const decomposer = new GoalDecomposer(provider, 3);
+    decomposer.setDecompositionContext({
+      projectInventory: () =>
+        "WHAT THIS PROJECT ALREADY HAS (measured from the tree just now, not claimed):\n- modules: Harbor",
+    });
+    await decomposer.decomposeProactive("s", "Build the game described in docs/design.md");
+
+    expect(prompts()).toContain("WHAT THIS PROJECT ALREADY HAS");
+    expect(prompts()).toContain("- modules: Harbor");
+  });
+
+  it("says nothing about an inventory it has none of", async () => {
+    const { provider, prompts } = recordingProvider();
+    const decomposer = new GoalDecomposer(provider, 3);
+    decomposer.setDecompositionContext({ projectInventory: () => null });
+    await decomposer.decomposeProactive("s", "Build the game described in docs/design.md");
+
+    expect(prompts()).not.toContain("WHAT THIS PROJECT ALREADY HAS");
+  });
+
   it("treats a design document plus 'build it' as a complete instruction", async () => {
     const prompt = await decompositionPrompt();
 

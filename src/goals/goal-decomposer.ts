@@ -64,6 +64,14 @@ export interface DecompositionContext {
   /** Live healthy-provider count, consulted at decomposition time (falls back
    *  to the static providerCount when absent). */
   readonly liveProviderCount?: () => number;
+  /**
+   * What the project already holds, measured at decomposition time.
+   *
+   * A getter for the same reason as the framework knowledge, and because the
+   * answer CHANGES between sprints: the sprint that just ran added the
+   * modules this one must extend. Null when there is nothing to say.
+   */
+  readonly projectInventory?: () => string | null;
 }
 
 export function buildProactivePrompt(ctx?: DecompositionContext): string {
@@ -71,6 +79,12 @@ export function buildProactivePrompt(ctx?: DecompositionContext): string {
   const frameworkHint = frameworkSection
     ? `\n\nThe frameworks below were read from their own source at startup. Plan against what they actually provide, not against what a similar framework would:\n\n${frameworkSection}`
     : "";
+  // WHAT IS ALREADY THERE. M6 of the drift audit: a campaign plans as if the
+  // project were empty and adds a rival implementation beside the one that
+  // exists. Measured at decomposition time, because the previous sprint's
+  // work is part of the answer.
+  const inventorySection = ctx?.projectInventory?.();
+  const inventoryHint = inventorySection ? `\n\n${inventorySection}` : "";
   // LIVE count when the wiring provides one: the static bootstrap count told
   // the planner "2 providers — parallelize" while one sat in a multi-day
   // quota cooldown, shaping plans for parallelism the fleet could not deliver.
@@ -120,7 +134,7 @@ When the task is to build or extend a GAME — a GDD, a design document, "make t
 - A READY MODULE IS NOT REWRITTEN. When Strada.Modules is installed, a requirement it already covers (the project's note above says which modules are there, and their source may be read) is planned as "use <that module> for <this requirement>", never as a module of your own that does the same thing. Say in the plan which ready module each such requirement uses; if none fits, that is a finding worth one line, not a silent hand-roll. Measured: a plan declared its own modules for work a ready module already did, and the delivered project referenced none of them.
 - NOTHING IS FOUND BY NAME AT RUN TIME. A dependency is resolved through the container (builder.RegisterService<T> then constructor injection) and a view is reached through the registries Strada.Core.Sync provides; GameObject.Find, FindObjectOfType and FindObjectsByType are not how this framework wires anything, and a service the container never heard of is reachable only that way. Plan the registration with the service, in the owning module's ModuleConfig.Configure. Measured live 2026-10-14: a sprint wrote nine services, registered one, and reached for GameObject.Find in the file that needed another.
 - Strada.MCP is how the project is built and checked: scene assembly, prefab work, compile verification and play-mode runs all have tools. A plan that ends at "write the code" has not verified anything.
-- Every visible thing the design names — characters, props, obstacles, backgrounds, interface pieces — needs its own ART, planned as work: first unity_my_assets (local cache) or unity_my_assets_cloud (the account's full purchased library) for what the user already owns, then the generator that fits how the design draws it — unity_generate_sprite for what the design calls 2D, unity_generate_mesh for what it calls 3D, unity_prerender_frames to turn a 3D prefab into 2D angle frames in the project's own style when the design wants 2D rendered from 3D — and always the binding of that asset into the thing's prefab. A plan can deliver prefab structures and green tests while nothing the design names has any asset at all, and the scenes are empty because no goal ever produced the art.${providerHint}${budgetHint}${behavioralHint}${frameworkHint}
+- Every visible thing the design names — characters, props, obstacles, backgrounds, interface pieces — needs its own ART, planned as work: first unity_my_assets (local cache) or unity_my_assets_cloud (the account's full purchased library) for what the user already owns, then the generator that fits how the design draws it — unity_generate_sprite for what the design calls 2D, unity_generate_mesh for what it calls 3D, unity_prerender_frames to turn a 3D prefab into 2D angle frames in the project's own style when the design wants 2D rendered from 3D — and always the binding of that asset into the thing's prefab. A plan can deliver prefab structures and green tests while nothing the design names has any asset at all, and the scenes are empty because no goal ever produced the art.${providerHint}${budgetHint}${behavioralHint}${inventoryHint}${frameworkHint}
 
 Respond ONLY with JSON — start your reply with "{" and write no <reasoning> block, no analysis and no prose before it (a reasoning block spends the whole output budget before the plan, measured 2026-09-07: 8192 tokens, no JSON):
 {"nodes": [{"id": "s1", "task": "description", "dependsOn": [], "needsFurtherDecomposition": false}, ...]}`;

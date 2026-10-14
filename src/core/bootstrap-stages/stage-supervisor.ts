@@ -185,6 +185,8 @@ export function initializeSupervisorStage(
     /** Live framework API, read from Strada.Core / Modules / MCP themselves.
      *  A getter because the generator is wired asynchronously after this runs. */
     getFrameworkKnowledge?: () => string | null;
+    /** What the project already holds, measured when a plan is written. */
+    getProjectInventory?: () => string | null;
     /**
      * Called when the supervisor was ENABLED but could not be built. The
      * notice reaches the boot report and the user's first message; a
@@ -273,6 +275,7 @@ export function initializeSupervisorStage(
       contextWindow,
       providerStrengths,
       frameworkKnowledge: params.getFrameworkKnowledge,
+      projectInventory: params.getProjectInventory,
     });
 
     // 6. Create SupervisorBrain

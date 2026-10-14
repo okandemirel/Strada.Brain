@@ -89,6 +89,15 @@ function walk(dir: string, match?: (file: string) => boolean, budget = SCENE_WAL
 }
 
 /** What each rule reads, so the walk budget is spent on exactly that. */
+/**
+ * The same bounded walk, for a reader outside this module (the project
+ * inventory). Exported rather than re-implemented: a second walk with its own
+ * budget would report a different project than the gates measure.
+ */
+export function walkFilesForInventory(dir: string, budget: number, match?: (file: string) => boolean): string[] {
+  return walk(dir, match, budget);
+}
+
 const WIRING_FILE_RE = /\.(?:unity|asset)$/iu;
 const isWiringFile = (f: string): boolean => WIRING_FILE_RE.test(f) || f.endsWith("ModuleConfig.cs");
 const RENDER_FILE_RE = /\.(?:prefab|cs|unity)$/iu;
