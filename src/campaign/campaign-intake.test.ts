@@ -611,6 +611,9 @@ describe("a build the message turns down or asks about", () => {
     ["Can you build the game in docs/quillmoor.md?", "docs/quillmoor.md"],
     ["Could you please build this game: docs/Quillmoor_GDD.md?", "docs/Quillmoor_GDD.md"],
     ["Please build the game in docs/quillmoor.md", "docs/quillmoor.md"],
+    // A polite word makes the question mark a request, in either language.
+    ["Please build this game: docs/Quillmoor_GDD.md?", "docs/Quillmoor_GDD.md"],
+    ["Lütfen bu oyunu yap: docs/Quillmoor_GDD.md?", "docs/Quillmoor_GDD.md"],
     ["Build the game in docs/quillmoor.md. Can you keep me posted?", "docs/quillmoor.md"],
     ["Build the game in docs/quillmoor.md, okay?", "docs/quillmoor.md"],
     ["If you can, build the game in docs/quillmoor.md", "docs/quillmoor.md"],
@@ -678,6 +681,18 @@ describe("a build aimed only at a document that sits beside the design", () => {
     "Build the game per docs/art-style.md, not docs/Old_GDD.md",
     "Build the game per docs/art-style.md; docs/Old_GDD.md is outdated",
     "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md'yi kullanma",
+    // …by every word the turned-away lists hold: with any one of them gone, the GDD the message rules out was built.
+    "Build the game per docs/art-style.md, ignore docs/Old_GDD.md",
+    "Build the game per docs/art-style.md, skip docs/Old_GDD.md",
+    "Build the game per docs/art-style.md, except docs/Old_GDD.md",
+    "Build the game per docs/art-style.md, excluding docs/Old_GDD.md",
+    "Build the game per docs/art-style.md, without docs/Old_GDD.md",
+    "Build the game per docs/art-style.md; docs/Old_GDD.md is obsolete",
+    "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md değil",
+    "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md yerine",
+    "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md hariç",
+    "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md geçersiz",
+    "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md'yi görmezden gel",
     // …or there are two, and the message does not say which.
     "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md or docs/Fernwick_GDD.md",
     "Build the game per docs/art-style.md, see docs/quillmoor.md and docs/fernwick.md",
