@@ -2,10 +2,9 @@
  * Procedural low-poly MESH generation — the 3D counterpart of the sprite tool.
  *
  * Measured 2026-08-27 (user: "iyi de oyun 3d idi"): the test game's GDD asks
- * for a two-layer look — flat 2D puzzle pieces (covered by unity_generate_sprite)
- * on rendered 3D stages, with 3D-feel characters. Everything the pipeline had
- * produced was flat 2D; nothing could
- * originate a mesh. The user's Asset Store cache holds exactly one 3D package
+ * for 3D elements as well as 2D ones (the 2D ones are covered by
+ * unity_generate_sprite). Everything the pipeline had produced was flat 2D;
+ * nothing could originate a mesh. The user's Asset Store cache holds exactly one 3D package
  * (an off-theme racing car), so the procedural floor matters here too.
  *
  * Writes Wavefront OBJ with smooth per-vertex normals (Unity imports .obj
@@ -237,7 +236,7 @@ function cone(radius: number, height: number, segments: number): Mesh {
   return mesh;
 }
 
-/** Capsule (cylinder + hemispherical caps) along Y — the "plump" body shape. */
+/** Capsule (cylinder + hemispherical caps) along Y — the pill-shaped body. */
 function capsule(radius: number, height: number, segments: number, rings: number): Mesh {
   const seg = Math.max(4, Math.min(48, Math.round(segments)));
   const rng = Math.max(2, Math.min(24, Math.round(rings)));
@@ -285,7 +284,7 @@ export interface OrganicField {
  * Wyvill metaball potential: (1 - D²)² inside the ellipsoid, 0 outside, where
  * D is the normalized ellipsoid distance. Sum of these over the field list is
  * what the iso surface wraps — blobs fuse where their fields overlap, which is
- * exactly the soft "plump" look primitives can't give.
+ * exactly the fused, organic silhouette primitives can't give.
  */
 function makeField(fields: readonly OrganicField[]): (p: Vec3) => number {
   return (p) => {
@@ -305,7 +304,7 @@ function makeField(fields: readonly OrganicField[]): (p: Vec3) => number {
 }
 
 /**
- * Field gradient via central differences — the glossy smooth-shading normals.
+ * Field gradient via central differences — the smooth-shading normals.
  *
  * NEGATED: the Wyvill potential DECREASES outward (max at each blob centre),
  * so the raw gradient points INTO the surface. Shipping it as the vertex
@@ -527,11 +526,11 @@ export class MeshGenerateTool implements ITool {
     private readonly opts: import("./sprite-generate.js").GeneratorOptions = { localAvailable: realLocalAvailability() },
   ) {}
   readonly name = "unity_generate_mesh";
-  // NO GAME'S STYLE IS ASSUMED HERE. This description asserted "the GDD's
-  // two-layer style needs pixel sprites for puzzles" to every model that read
-  // it — one project's art direction stated as a system fact (Codex
-  // 2026-09-12 AE#13). What the project wants comes from its own style
-  // profile and its GDD.
+  // NO GAME'S STYLE IS ASSUMED HERE. This description once told every model
+  // that read it which kinds of element one project drew as sprites — that
+  // project's art direction stated as a system fact (Codex 2026-09-12
+  // AE#13). What the project wants comes from its own style profile and its
+  // GDD.
   readonly description =
     "Generate a 3D mesh (OBJ + import .meta, no Editor needed) for a game element that needs DIMENSION — " +
     "a prop, a body, a block. Use unity_generate_sprite for flat art, and this for elements the project " +
@@ -554,7 +553,7 @@ export class MeshGenerateTool implements ITool {
       shape: {
         type: "string",
         enum: MESH_SHAPES,
-        description: "Silhouette: rounded-box (soft block), sphere, capsule (plump body), cylinder, cone.",
+        description: "Silhouette: rounded-box (soft block), sphere, capsule (pill-shaped body), cylinder, cone.",
       },
       size: {
         type: "number",
@@ -694,11 +693,11 @@ export class MeshGenerateTool implements ITool {
         input["prompt"] !== undefined
           ? String(input["prompt"])
           : await (async () => {
-              // THE PROJECT'S OWN DIRECTION, or nothing. The fallback said
-              // "casual mobile game character, soft glossy 3d-look" for every
-              // family and every name — a StoneBridge became a character in
-              // one game's art direction (Codex 2026-09-12 T#13). No family
-              // is assumed and no subject type is inferred from a name.
+              // THE PROJECT'S OWN DIRECTION, or nothing. The fallback was one
+              // fixed casual-character prompt for every family and every
+              // name — a StoneBridge became a character in one game's art
+              // direction (Codex 2026-09-12 T#13). No family is assumed and
+              // no subject type is inferred from a name.
               let look = "";
               try {
                 const { loadStyleProfile, describeStyleForPrompt } = await import("../../style/style-profile.js");

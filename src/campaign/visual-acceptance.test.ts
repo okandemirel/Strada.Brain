@@ -47,7 +47,7 @@ function checked(matches: boolean | undefined, detail = "the frame shows a flat 
 
 describe("the verdict", () => {
   it("a look the model accepted is ACCEPTED, with the frame and provider it was judged from", () => {
-    const a = visualAcceptance(checked(true, "cut-paper lanterns, as described"), FRAME);
+    const a = visualAcceptance(checked(true, "low-poly cliffs in grey-blue, as described"), FRAME);
     expect(a.status).toBe("accepted");
     expect(a.framePath).toBe(FRAME.path);
     expect(a.provider).toBe("anthropic");
@@ -243,7 +243,7 @@ describe("the delivery report the user reads", () => {
   });
 
   it("an accepted look neither hides nor caveats itself", () => {
-    const report = reportFor([{ visualVerdict: visualAcceptance(checked(true, "cut-paper lanterns, as described"), FRAME) }]);
+    const report = reportFor([{ visualVerdict: visualAcceptance(checked(true, "low-poly cliffs in grey-blue, as described"), FRAME) }]);
     expect(report).toContain("VISUAL ACCEPTANCE: MATCH");
     expect(report).not.toContain("NOT MEASURED");
     expect(report).not.toContain("REFUSED");

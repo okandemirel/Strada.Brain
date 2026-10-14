@@ -17,7 +17,7 @@ describe("styleProfileSchema", () => {
       family: "toon-casual",
       pipeline: "prerendered-frames",
       proportions: { plump: 1.2, headScale: 1.22 },
-      palette: ["#f89eb8"],
+      palette: ["#6a8caf"],
       outline: { width: 1.0, color: "#1f1418" },
       shading: "glossy",
     });
@@ -89,7 +89,7 @@ describe("StyleAnalysis keyword fallback", () => {
   it("reads pixel-art docs as pixel, cartoon docs as toon, military as realistic", async () => {
     const analysis = new StyleAnalysis(undefined);
     expect((await analysis.analyze("A crisp pixel-art puzzle, 16-bit sprites everywhere.")).profile.family).toBe("pixel");
-    expect((await analysis.analyze("Plump, glossy cartoon animals with thick outlines.")).profile.family).toBe("toon-casual");
+    expect((await analysis.analyze("Stubby cartoon robots with inked outlines.")).profile.family).toBe("toon-casual");
     expect((await analysis.analyze("A realistic military shooter with PBR materials.")).profile.family).toBe("realistic");
   });
 

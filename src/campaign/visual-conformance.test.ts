@@ -17,36 +17,36 @@ describe("look description", () => {
   it("a Markdown '## Art Direction' section is prose, not a contents listing (Codex 2026-09-11 B#23)", () => {
     const gdd = [
       "# Game", "## 1. Overview", "Some overview text.", "",
-      "## Art Direction", "### Palette", "Warm ochre and deep indigo, high contrast, no pastels anywhere.",
-      "### Shapes", "Chunky silhouettes with thick outlines; every element reads at 64 px on a phone screen.",
-      "### Motion", "Snappy 2-frame anticipation, no easing longer than 120 ms, and a soft screen shake on impact.",
+      "## Art Direction", "### Palette", "Grey-blue ink washes with a single rust accent for ropes and anchors, nothing else saturated.",
+      "### Shapes", "Angular low-poly cliffs and climbers, no outlines; every handhold stays visible at 48 px on a phone screen.",
+      "### Motion", "Stiff, weighty climbing: each reach holds for 200 ms before the weight shifts, and the camera dips on a fall.",
     ].join("\n");
     const look = extractLookDescription(gdd);
     expect(look.found).toBe(true);
-    expect(look.text).toContain("Warm ochre");
+    expect(look.text).toContain("Grey-blue ink washes");
     expect(look.text).not.toContain("### Palette");
   });
 
   it("takes the art-direction PROSE, never the table of contents", () => {
-    // The shape that sank the earlier attempt: a TOC entry ~1100 lines above
-    // the real section, both matching the same heading.
+    // The shape that sank the earlier attempt: a TOC entry far above the real
+    // section, both matching the same heading.
     const gdd = [
       "CONTENTS",
-      "7.  ECONOMY",
-      "8.  ART DIRECTION",
-      "9.  AUDIO DESIGN",
+      "2.  CLIMBING",
+      "3.  LOOK AND FEEL",
+      "4.  ROUTE EDITOR",
       ...Array.from({ length: 40 }, (_, i) => `filler line ${i}`),
-      "8.  ART DIRECTION",
-      "8.1 Visual Style",
-      "Two-layer look: flat cut-paper lanterns drifting over a painted, softly lit lake, ",
-      "plus round lacquered shrine figures with springy hand-drawn motion that stand out against ",
-      "the dark water, in warm amber light with strong contrast for readability.",
+      "3.  LOOK AND FEEL",
+      "3.2 Art Style",
+      "Ink-wash woodblock print: matte low-poly cliffs lit by a single cold sun, ",
+      "a grey-blue palette with one rust accent kept for ropes and anchors, and angular ",
+      "low-poly climbers with no outlines whose stiff, weighty movement makes every reach look costly.",
     ].join("\n");
 
     const look = extractLookDescription(gdd);
     expect(look.found).toBe(true);
-    expect(look.text).toContain("cut-paper lanterns");
-    expect(look.text).not.toContain("AUDIO DESIGN");
+    expect(look.text).toContain("matte low-poly cliffs");
+    expect(look.text).not.toContain("ROUTE EDITOR");
   });
 
   it("says what is missing rather than guessing", () => {
@@ -100,13 +100,13 @@ describe("frame selection", () => {
 });
 
 describe("the judgement", () => {
-  const look = { found: true, text: "cut-paper lanterns on a painted lake and lacquered shrine figures" };
+  const look = { found: true, text: "ink-wash cliffs in grey-blue and angular low-poly climbers on a rust rope" };
 
   it("asks the provider and reports its one-line answer", async () => {
     const root = tmp();
     const frame = join(root, "f.png");
     writeFileSync(frame, "x".repeat(64));
-    const chat = vi.fn(async () => ({ text: "No — the frame shows a plain grid of flat squares with no lanterns." }));
+    const chat = vi.fn(async () => ({ text: "No — the frame shows a plain grid of flat squares with no cliffs." }));
 
     const result = await judgeVisualConformance({
       look, frame: { path: frame },
@@ -122,7 +122,7 @@ describe("the judgement", () => {
     const root = tmp();
     const frame = join(root, "f.jpg");
     writeFileSync(frame, Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]));
-    const chat = vi.fn(async (_system: string, _messages: unknown) => ({ text: "Lanterns, as described.\nMATCH: yes" }));
+    const chat = vi.fn(async (_system: string, _messages: unknown) => ({ text: "Cliffs, as described.\nMATCH: yes" }));
     await judgeVisualConformance({
       look, frame: { path: frame },
       visionProvider: { provider: { chat, capabilities: { vision: true } } as never, name: "claude" },
@@ -142,7 +142,7 @@ describe("the judgement", () => {
     const bytes = Buffer.alloc(limit + 1);
     bytes.set([0x89, 0x50, 0x4e, 0x47]);
     writeFileSync(frame, bytes);
-    const chat = vi.fn(async () => ({ text: "Lanterns.\nMATCH: yes" }));
+    const chat = vi.fn(async () => ({ text: "Cliffs.\nMATCH: yes" }));
     const result = await judgeVisualConformance({
       look, frame: { path: frame },
       visionProvider: { provider: { chat, capabilities: { vision: true } } as never, name: "claude" },
@@ -166,15 +166,15 @@ describe("the judgement", () => {
     writeFileSync(frame, "x".repeat(64));
     const no = await judgeVisualConformance({
       look, frame: { path: frame },
-      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "The frame shows a flat grid, no lanterns.\nMATCH: no" })), capabilities: { vision: true } } as never, name: "claude" },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "The frame shows a flat grid, no climbers.\nMATCH: no" })), capabilities: { vision: true } } as never, name: "claude" },
     });
-    expect(no).toMatchObject({ status: "checked", matches: false, detail: "The frame shows a flat grid, no lanterns." });
+    expect(no).toMatchObject({ status: "checked", matches: false, detail: "The frame shows a flat grid, no climbers." });
     expect(renderVisualConformance(no, { path: frame })).toContain("NO MATCH — The frame shows a flat grid");
     const yes = await judgeVisualConformance({
       look, frame: { path: frame },
-      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "MATCH: yes\nLacquered shrines on a painted lake, as described." })), capabilities: { vision: true } } as never, name: "claude" },
+      visionProvider: { provider: { chat: vi.fn(async () => ({ text: "MATCH: yes\nLow-poly climbers on a grey-blue cliff, as described." })), capabilities: { vision: true } } as never, name: "claude" },
     });
-    expect(yes).toMatchObject({ status: "checked", matches: true, detail: "Lacquered shrines on a painted lake, as described." });
+    expect(yes).toMatchObject({ status: "checked", matches: true, detail: "Low-poly climbers on a grey-blue cliff, as described." });
     const none = await judgeVisualConformance({
       look, frame: { path: frame },
       visionProvider: { provider: { chat: vi.fn(async () => ({ text: "Looks about right." })), capabilities: { vision: true } } as never, name: "claude" },

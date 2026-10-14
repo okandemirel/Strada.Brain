@@ -1,14 +1,14 @@
 /**
  * unity_prerender_frames — the prerendered-frames pipeline as a tool.
  *
- * A GDD that asks for 3D-feel characters animated like snappy 2D describes
- * the casual-game industry standard: render a 3D character once, ship glossy
- * 2D frames. This tool runs the proven pipeline
- * against any prefab the agent points at: instantiate in a tuned 3-point-lit
- * scene, stylize for the game's look (chibi proportions + pastel toon-glossy
- * material + inverted-hull outline — measured on an animal cub: realistic
- * model in, cartoon character out), and capture N angles synchronously through
- * an offscreen RenderTexture (CaptureScreenshot never lands in batchmode).
+ * A GDD that wants 2D frames of elements modelled in 3D describes a common
+ * production route: render the 3D model once from several angles and ship the
+ * frames as sprites. This tool runs that pipeline against any prefab the agent
+ * points at: instantiate in a tuned 3-point-lit scene, stylize for the
+ * project's own look (proportions, material and inverted-hull outline from its
+ * style profile — measured on a realistic rigged model, which came out in the
+ * profile's style), and capture N angles synchronously through an offscreen
+ * RenderTexture (CaptureScreenshot never lands in batchmode).
  *
  * The editor script is written into the TARGET project for the run and
  * removed afterwards — the user's repo is not polluted.
@@ -100,7 +100,7 @@ export function resolvePrerenderStyle(
     plump: (() => {
       // No style profile means NO styling: the squash was a fixed 0.86 for
       // every character and the plumpness default 1.2, so a realistic model
-      // was squashed like a chibi (Codex 2026-09-11 B#21). The Y factor now
+      // was squashed into a cartoon (Codex 2026-09-11 B#21). The Y factor now
       // preserves volume, which is 1.0 when nothing asked for plumpness.
       const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (profile.plump ?? 1.0);
       // Both horizontal axes are scaled by p, so the vertical compensation
@@ -347,7 +347,7 @@ export class PrerenderFramesTool implements ITool {
 
     // `?? 1.0` here silently defeated the style profile: an ABSENT input
     // became a finite number, so the profile branch below was unreachable and
-    // every project got the stock chibi/toon defaults regardless of its GDD.
+    // every project got one stock toon preset regardless of its GDD.
     // Absent must stay NaN so the profile (then the stock default) can win.
     const outlineRaw = Number(input["outlineWidth"]);
     const plumpRaw = Number(input["plumpness"]);
@@ -513,8 +513,8 @@ export class PrerenderFramesTool implements ITool {
       return {
         content:
           `${frames.length} frames rendered to ${outRel} (+ sprite .meta each): ${frames.join(", ")}. ` +
-          "These are the glossy game-ready angles — use them as the element's view sprites, and animate " +
-          "between them when the design asks for snappy 2D-style motion." +
+          "These are game-ready angles in the project's own style — use them as the element's view sprites, and " +
+          "animate between them when the design asks for frame-by-frame 2D motion." +
           (retemplated.length > 0 ? ` Existing frame .meta re-templated (guid kept) — ${retemplated.join("; ")}.` : ""),
       };
     } catch (err) {
