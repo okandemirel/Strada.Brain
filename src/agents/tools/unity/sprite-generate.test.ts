@@ -80,69 +80,69 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("refuses names that would escape or collide weirdly", async () => {
-    for (const bad of ["../evil", "", "1startsWithDigit", "sp ace", "Status/../../evil"]) {
+    for (const bad of ["../evil", "", "1startsWithDigit", "sp ace", "SaltRoad/../../evil"]) {
       const result = await tool.execute({ name: bad }, makeContext(dir));
       expect(result.isError, `name ${bad}`).toBe(true);
     }
   });
 
-  it("a name carrying a directory, a whole Assets/ path, or a .png suffix lands where it says (measured 2026-09-09: 'Status/ClaimFeedback' lost a turn)", async () => {
-    const a = await tool.execute({ name: "Status/ClaimFeedback", path: "Assets/Modules/LiveOpsModule/Art" }, makeContext(dir));
+  it("a name carrying a directory, a whole Assets/ path, or a .png suffix lands where it says (measured 2026-09-09: a 'Folder/Name' tail lost a turn)", async () => {
+    const a = await tool.execute({ name: "SaltRoad/Stall_4", path: "Assets/Art/Routes" }, makeContext(dir));
     expect(a.isError, String(a.content)).toBeFalsy();
-    expect(existsSync(join(dir, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Routes/SaltRoad/Stall_4.png"))).toBe(true);
     const b = await tool.execute({ name: "Assets/Art/Generated/SpiceJar.png" }, makeContext(dir));
     expect(b.isError, String(b.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Art/Generated/SpiceJar.png"))).toBe(true);
-    const c = await tool.execute({ path: "Assets/Art/Generated", batch: [{ name: "SaltBlock.png" }, { name: "Icons/Compass" }] }, makeContext(dir));
+    const c = await tool.execute({ path: "Assets/Art/Generated", batch: [{ name: "SaltBlock.png" }, { name: "Charts/Compass" }] }, makeContext(dir));
     expect(c.isError, String(c.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Art/Generated/SaltBlock.png"))).toBe(true);
-    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Compass.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Charts/Compass.png"))).toBe(true);
   });
 
   it("a bare name that names an existing placeholder elsewhere under Assets/ overwrites THAT placeholder (measured 2026-09-09 19:24: 12 new files beside 12 untouched placeholders)", async () => {
     const flat = new Uint8Array(16 * 16 * 4).fill(200);
-    const placeholder = join(dir, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png");
-    mkdirSync(join(dir, "Assets/Modules/LiveOpsModule/Art/Status"), { recursive: true });
+    const placeholder = join(dir, "Assets/Art/Routes/SilkRoad/Waystone.png");
+    mkdirSync(join(dir, "Assets/Art/Routes/SilkRoad"), { recursive: true });
     writeFileSync(placeholder, encodePng(16, 16, flat));
     const before = readFileSync(placeholder);
 
-    const result = await tool.execute({ name: "ClaimFeedback", acceptPlaceholder: true }, makeContext(dir));
+    const result = await tool.execute({ name: "Waystone", acceptPlaceholder: true }, makeContext(dir));
     expect(result.isError, String(result.content)).toBeFalsy();
-    expect(String(result.content)).toContain("Redirected to Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png");
-    expect(existsSync(join(dir, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+    expect(String(result.content)).toContain("Redirected to Assets/Art/Routes/SilkRoad/Waystone.png");
+    expect(existsSync(join(dir, "Assets/Art/Generated/Waystone.png"))).toBe(false);
     expect(readFileSync(placeholder).equals(before)).toBe(false);
 
     // Two placeholders with the stem: refused with both paths, nothing written.
-    const second = join(dir, "Assets/Art/Other/ClaimFeedback.png");
+    const second = join(dir, "Assets/Art/Other/Waystone.png");
     mkdirSync(join(dir, "Assets/Art/Other"), { recursive: true });
     writeFileSync(second, encodePng(16, 16, flat));
-    const ambiguous = await tool.execute({ name: "ClaimFeedback", acceptPlaceholder: true }, makeContext(dir));
+    const ambiguous = await tool.execute({ name: "Waystone", acceptPlaceholder: true }, makeContext(dir));
     expect(ambiguous.isError).toBe(true);
-    expect(String(ambiguous.content)).toContain("Assets/Art/Other/ClaimFeedback.png");
-    expect(existsSync(join(dir, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+    expect(String(ambiguous.content)).toContain("Assets/Art/Other/Waystone.png");
+    expect(existsSync(join(dir, "Assets/Art/Generated/Waystone.png"))).toBe(false);
 
     // Batch items are redirected the same way.
     rmSync(second);
-    const batch = await tool.execute({ batch: [{ name: "ClaimFeedback" }, { name: "Fresh" }], acceptPlaceholder: true }, makeContext(dir));
+    const batch = await tool.execute({ batch: [{ name: "Waystone" }, { name: "Fresh" }], acceptPlaceholder: true }, makeContext(dir));
     expect(batch.isError, String(batch.content)).toBeFalsy();
-    expect(existsSync(join(dir, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Waystone.png"))).toBe(false);
     expect(existsSync(join(dir, "Assets/Art/Generated/Fresh.png"))).toBe(true);
   });
 
   it("finds the same-stem placeholder in a native Windows path too", () => {
-    // The walk lists C:\...\ClaimFeedback.png on Windows; a "/<name>.png"
+    // The walk lists C:\...\Waystone.png on Windows; a "/<name>.png"
     // suffix never matched it, so the redirect above never happened there.
-    expect(isPngNamed("C:\\Game\\Assets\\Modules\\LiveOpsModule\\Art\\Status\\ClaimFeedback.png", "ClaimFeedback")).toBe(true);
-    expect(isPngNamed("/game/Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png", "ClaimFeedback")).toBe(true);
-    expect(isPngNamed("C:\\Game\\Assets\\Art\\OldClaimFeedback.png", "ClaimFeedback")).toBe(false);
-    expect(isPngNamed("C:\\Game\\Assets\\ClaimFeedback.png\\Other.png", "ClaimFeedback")).toBe(false);
+    expect(isPngNamed("C:\\Game\\Assets\\Art\\Routes\\SilkRoad\\Waystone.png", "Waystone")).toBe(true);
+    expect(isPngNamed("/game/Assets/Art/Routes/SilkRoad/Waystone.png", "Waystone")).toBe(true);
+    expect(isPngNamed("C:\\Game\\Assets\\Art\\OldWaystone.png", "Waystone")).toBe(false);
+    expect(isPngNamed("C:\\Game\\Assets\\Waystone.png\\Other.png", "Waystone")).toBe(false);
   });
 
   it("a batch item may name its target as path/file, and one malformed item does not cost the rest their turn (measured 2026-09-09 21:21)", async () => {
-    const r = await tool.execute({ batch: [{ path: "Assets/Art/Generated/SaltBlock.png" }, { name: "" }, { file: "Icons/Compass" }], acceptPlaceholder: true }, makeContext(dir));
+    const r = await tool.execute({ batch: [{ path: "Assets/Art/Generated/SaltBlock.png" }, { name: "" }, { file: "Charts/Compass" }], acceptPlaceholder: true }, makeContext(dir));
     expect(r.isError, String(r.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Art/Generated/SaltBlock.png"))).toBe(true);
-    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Compass.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Charts/Compass.png"))).toBe(true);
     expect(String(r.content)).toContain("1 item(s) skipped");
     const none = await tool.execute({ batch: [{ name: "" }, { name: "1bad" }] }, makeContext(dir));
     expect(none.isError).toBe(true);

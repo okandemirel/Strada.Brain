@@ -41,8 +41,8 @@ function installModel(root: string, id: string): void {
  * Measured 2026-09-06: sd15 and TripoSR were installed (6.7 GB of weights
  * under ~/.strada/assets-local) and across a whole campaign `provider:
  * "local"` was requested zero times. Every sprite the game shipped was a
- * procedural blob — a character sprite was a coloured disc with two white dots —
- * because "procedural" was the default and nothing told the sprint otherwise.
+ * procedural blob, because "procedural" was the default and nothing told the
+ * sprint otherwise.
  */
 /** A runner that is "installed" but refuses to draw — exercises the local branch without a model. */
 const refusing = {
@@ -121,7 +121,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
   });
 
   it("sprite: a knowing 'procedural' is refused while a local model is installed — unless accepted", async () => {
-    // Measured 2026-09-07 12:21: eight character sprites regenerated procedurally
+    // Measured 2026-09-07 12:21: a batch of sprites regenerated procedurally
     // (335 → 170 bytes) with sd15 installed; the delivery gate then counted
     // them as placeholder art.
     const { ctx } = project();
@@ -173,7 +173,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
   });
 
   it("sprite: a blank draw is retried once with another seed, and reported ✗ when still blank", async () => {
-    // Measured 2026-09-07 15:02: rembg wiped a green character off its green
+    // Measured 2026-09-07 15:02: rembg cut the subject away with its
     // background — 19 KB of alpha specks reported as ✓.
     const { root, ctx } = project();
     // A flat square reads as blank; drawn noise is real.
@@ -541,8 +541,8 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
 
   it("the local batch job is aimed at the placeholder's real path, not the default directory", async () => {
     const { root, ctx } = project();
-    mkdirSync(join(root, "Assets/Modules/LiveOpsModule/Art/Status"), { recursive: true });
-    writeFileSync(join(root, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png"), pngFixture("flat"));
+    mkdirSync(join(root, "Assets/Art/Routes/SilkRoad"), { recursive: true });
+    writeFileSync(join(root, "Assets/Art/Routes/SilkRoad/Waystone.png"), pngFixture("flat"));
     const outs: string[] = [];
     const runner = {
       isModelInstalled: () => true,
@@ -554,17 +554,17 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
       }),
     } as unknown as LocalRunnerLike;
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
-      { batch: [{ name: "ClaimFeedback" }, { name: "Brand" }] },
+      { batch: [{ name: "Waystone" }, { name: "Waterskin" }] },
       ctx,
     );
     expect(r.isError, String(r.content)).toBeFalsy();
     // validatePath hands back REAL native paths (/private/var…, C:\…), so
     // compare by suffix in one separator.
     expect(outs).toHaveLength(2);
-    const [claim, brand] = outs.map((o) => o.replace(/\\/g, "/"));
-    expect(claim!.endsWith("/Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png")).toBe(true);
-    expect(brand!.endsWith("/Assets/Art/Generated/Brand.png")).toBe(true);
-    expect(existsSync(join(root, "Assets/Art/Generated/ClaimFeedback.png"))).toBe(false);
+    const [waystone, waterskin] = outs.map((o) => o.replace(/\\/g, "/"));
+    expect(waystone!.endsWith("/Assets/Art/Routes/SilkRoad/Waystone.png")).toBe(true);
+    expect(waterskin!.endsWith("/Assets/Art/Generated/Waterskin.png")).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/Waystone.png"))).toBe(false);
   });
 });
 

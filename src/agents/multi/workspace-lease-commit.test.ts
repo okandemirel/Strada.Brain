@@ -4,7 +4,7 @@
  * A lease used to be write-only: createTempCopy() seeded it, the agent wrote
  * into it, and release() deleted the directory. Measured on a live run — a task
  * that asked for one C# file called file_write successfully against
- * `<tmp>/strada-workspaces/task-<id>/Assets/Scripts/Board.cs`, read it back,
+ * `<tmp>/strada-workspaces/task-<id>/Assets/Scripts/<File>.cs`, read it back,
  * ran quality checks on it, reported success, and the user's project never
  * received a byte. The agent was doing the work and throwing it away, which
  * presented to the user as "the agent produces nothing".
@@ -128,14 +128,14 @@ function makeUnreadable(target: string): () => void {
 describe("workspace lease commit", () => {
   it("copies a file the agent created back into the project", async () => {
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace SampleGame { }", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "namespace Caravan { }", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(result.written).toContain(join("Assets", "Scripts", "Board.cs"));
-    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe(
-      "namespace SampleGame { }",
+    expect(result.written).toContain(join("Assets", "Scripts", "Route.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "Route.cs"), "utf8")).toBe(
+      "namespace Caravan { }",
     );
   });
 
@@ -214,21 +214,21 @@ describe("workspace lease commit", () => {
     // git project is a worktree — seeded from HEAD, not the working tree. Every
     // file the user had modified-but-uncommitted therefore differed from the
     // lease, read as agent work, and was overwritten with its committed
-    // contents. Measured before the fix: an agent that created only an
-    // unrelated Board.cs reported written:[Board.cs, Player.cs] and reverted
-    // Player.cs.
+    // contents. Measured before the fix: an agent that created only one
+    // unrelated file reported the user's modified Player.cs as written too,
+    // and reverted Player.cs.
     makeGitRepo();
     writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "user uncommitted work", "utf8");
 
     const lease = await gitManager().acquireLease({ label: "task-42", workerId: "42" });
     expect(lease.kind).toBe("git-worktree");
     // The agent touches only an unrelated file.
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "class Board {}", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "class Route {}", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Route.cs")]);
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe(
       "user uncommitted work",
     );
@@ -623,7 +623,7 @@ describe("workspace lease commit", () => {
 
   it("leaves no quarantine behind when there are no conflicts", async () => {
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "fresh", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "fresh", "utf8");
 
     const result = await lease.commit();
     await lease.release();
@@ -649,11 +649,11 @@ describe("seed snapshot resilience", () => {
     chmodSync(join(source, "Assets", "Sealed"), 0o444);
     try {
       const lease = await gitManager().acquireLease({ label: "seed-walk" });
-      writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace SampleGame { }", "utf8");
+      writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "namespace Caravan { }", "utf8");
       const result = await lease.commit();
       await lease.release();
-      expect(result.written).toContain(join("Assets", "Scripts", "Board.cs"));
-      expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("namespace SampleGame { }");
+      expect(result.written).toContain(join("Assets", "Scripts", "Route.cs"));
+      expect(readFileSync(join(source, "Assets", "Scripts", "Route.cs"), "utf8")).toBe("namespace Caravan { }");
     } finally {
       chmodSync(join(source, "Assets", "Sealed"), 0o755);
     }
@@ -716,7 +716,7 @@ describe("orphaned lease salvage at construction", () => {
   });
 
   it("with the seed maps the lease persisted, salvage COMMITS the crashed owner's work and quarantines only real conflicts", async () => {
-    // Measured 2026-09-08 08:19: a restart mid-task quarantined five real
+    // Measured 2026-09-08 08:19: a restart mid-task quarantined several real
     // sprites (186 KB each, drawn over 274-byte placeholders) and three
     // prefab edits; the project kept the placeholders because salvage had no
     // seed maps and could only quarantine. The lease now writes its seed maps
@@ -913,33 +913,34 @@ describe("capture retention rides the commit", () => {
 });
 
 describe("deletions of the system's own files are applied; the user's stay", () => {
-  // Measured 2026-09-07: every attempt deleted Assets/Scripts/BoardBuilder.cs
-  // (a duplicate the conformance gate forbids editing) and the InitTestScene
-  // scaffolding the hygiene gate demands removed; every commit put them back.
+  // Measured 2026-09-07: every attempt deleted a loose script under
+  // Assets/Scripts/ (a duplicate the conformance gate forbids editing) and
+  // the InitTestScene scaffolding the hygiene gate demands removed; every
+  // commit put them back.
   it("does not delete a file someone CHANGED while the worker ran, nor split its pair (Codex 2026-09-11 N#7)", async () => {
     // The deletion rule asks whose file it is; it never asked whether the file
     // is still the one the worker decided about. A scene rewritten in the
     // project while the worker ran was deleted with its newer bytes.
     mkdirSync(join(source, "Assets"), { recursive: true });
-    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
-    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"), "meta", "utf8");
-    commitAll("campaign: Sprint 1 — foundations");
+    writeFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"), "scene", "utf8");
+    writeFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity.meta"), "meta", "utf8");
+    commitAll("campaign: Sprint 1 — project setup");
     const lease = await gitManager().acquireLease({ label: "t" });
-    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
-    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity.meta"));
+    rmSync(join(lease.path, "Assets", "InitTestScene0e93b2d6.unity"));
+    rmSync(join(lease.path, "Assets", "InitTestScene0e93b2d6.unity.meta"));
     // New scene work lands in the project while the worker runs.
-    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "NEW SCENE WORK, much longer than before", "utf8");
+    writeFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"), "NEW SCENE WORK, much longer than before", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity"))).toBe(true);
-    expect(readFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "utf8")).toContain("NEW SCENE WORK");
+    expect(existsSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"))).toBe(true);
+    expect(readFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"), "utf8")).toContain("NEW SCENE WORK");
     // …and its .meta is not left behind without it.
-    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"))).toBe(true);
+    expect(existsSync(join(source, "Assets", "InitTestScene0e93b2d6.unity.meta"))).toBe(true);
     expect(result.deleted).toEqual([]);
     expect(result.removed).toEqual(
-      expect.arrayContaining([join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "InitTestScene4abd18f9.unity.meta")]),
+      expect.arrayContaining([join("Assets", "InitTestScene0e93b2d6.unity"), join("Assets", "InitTestScene0e93b2d6.unity.meta")]),
     );
   });
 
@@ -948,74 +949,74 @@ describe("deletions of the system's own files are applied; the user's stay", () 
     // because the .meta's "is the partner unchanged?" check stat'ed a file the
     // same loop had just removed. The project kept an orphaned .meta.
     mkdirSync(join(source, "Assets"), { recursive: true });
-    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
-    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"), "meta", "utf8");
-    commitAll("campaign: Sprint 1 — foundations");
+    writeFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"), "scene", "utf8");
+    writeFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity.meta"), "meta", "utf8");
+    commitAll("campaign: Sprint 1 — project setup");
     const lease = await gitManager().acquireLease({ label: "t" });
-    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
-    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity.meta"));
+    rmSync(join(lease.path, "Assets", "InitTestScene0e93b2d6.unity"));
+    rmSync(join(lease.path, "Assets", "InitTestScene0e93b2d6.unity.meta"));
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity"))).toBe(false);
-    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity.meta"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "InitTestScene0e93b2d6.unity.meta"))).toBe(false);
     expect(result.deleted.map((d) => d.split(" — ")[0]).sort()).toEqual(
-      [join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "InitTestScene4abd18f9.unity.meta")].sort(),
+      [join("Assets", "InitTestScene0e93b2d6.unity"), join("Assets", "InitTestScene0e93b2d6.unity.meta")].sort(),
     );
     expect(result.removed).toEqual([]);
   });
 
   it("removes a scaffolding scene and a campaign-authored duplicate, keeps a user file", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
-    writeFileSync(join(source, "Assets", "InitTestScene4abd18f9.unity"), "scene", "utf8");
-    writeFileSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"), "dup", "utf8");
+    writeFileSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"), "scene", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "StallSpawner.cs"), "dup", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "mine", "utf8");
-    commitAll("campaign: Sprint 1 — foundations");
+    commitAll("campaign: Sprint 1 — project setup");
     appendFileSync(join(source, "Assets", "Scripts", "UserNotes.cs"), "more\n");
     gitAt(source, "add", "-A");
     gitAt(source, "commit", "-qm", "my own tweak");
     const lease = await gitManager().acquireLease({ label: "t" });
-    rmSync(join(lease.path, "Assets", "InitTestScene4abd18f9.unity"));
-    rmSync(join(lease.path, "Assets", "Scripts", "BoardBuilder.cs"));
+    rmSync(join(lease.path, "Assets", "InitTestScene0e93b2d6.unity"));
+    rmSync(join(lease.path, "Assets", "Scripts", "StallSpawner.cs"));
     rmSync(join(lease.path, "Assets", "Scripts", "UserNotes.cs"));
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.deleted.map((d) => d.split(" — ")[0])).toEqual(
-      expect.arrayContaining([join("Assets", "InitTestScene4abd18f9.unity"), join("Assets", "Scripts", "BoardBuilder.cs")]),
+      expect.arrayContaining([join("Assets", "InitTestScene0e93b2d6.unity"), join("Assets", "Scripts", "StallSpawner.cs")]),
     );
     expect(result.deleted.join("\n")).toContain("scaffolding scene");
     expect(result.deleted.join("\n")).toContain("every commit that touched it was the system's own");
     expect(result.removed).toEqual([join("Assets", "Scripts", "UserNotes.cs")]);
-    expect(existsSync(join(source, "Assets", "InitTestScene4abd18f9.unity"))).toBe(false);
-    expect(existsSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "InitTestScene0e93b2d6.unity"))).toBe(false);
+    expect(existsSync(join(source, "Assets", "Scripts", "StallSpawner.cs"))).toBe(false);
     expect(existsSync(join(source, "Assets", "Scripts", "UserNotes.cs"))).toBe(true);
   });
 });
 
 describe("a loose script with a module twin is the system's own duplicate", () => {
-  // Measured 2026-09-07 15:58: Assets/Scripts/BoardBuilder.cs, with a
+  // Measured 2026-09-07 15:58: a loose script under Assets/Scripts/, with a
   // user-worded history, came back on every attempt while the module copy
   // held the real one and the framework-paths refusal said "delete it".
   it("applies the deletion even when the history is not campaign-only", async () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
-    mkdirSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts"), { recursive: true });
+    mkdirSync(join(source, "Assets", "Modules", "TradeModule", "Scripts"), { recursive: true });
     // Byte-identical: a duplicate by content, whatever its history says.
-    writeFileSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"), "module copy", "utf8");
-    writeFileSync(join(source, "Assets", "Modules", "PresentationModule", "Scripts", "BoardBuilder.cs"), "module copy", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "StallSpawner.cs"), "module copy", "utf8");
+    writeFileSync(join(source, "Assets", "Modules", "TradeModule", "Scripts", "StallSpawner.cs"), "module copy", "utf8");
     writeFileSync(join(source, "Assets", "Scripts", "Solo.cs"), "no twin", "utf8");
-    commitAll("feat: construct BoardBuilder runtime");
+    commitAll("feat: add the stall spawner");
     const lease = await gitManager().acquireLease({ label: "t" });
-    rmSync(join(lease.path, "Assets", "Scripts", "BoardBuilder.cs"));
+    rmSync(join(lease.path, "Assets", "Scripts", "StallSpawner.cs"));
     rmSync(join(lease.path, "Assets", "Scripts", "Solo.cs"));
 
     const result = await lease.commit();
     await lease.release();
 
-    expect(result.deleted.join("\n")).toContain("BoardBuilder.cs — loose duplicate of Assets/Modules/PresentationModule/Scripts/BoardBuilder.cs");
-    expect(existsSync(join(source, "Assets", "Scripts", "BoardBuilder.cs"))).toBe(false);
+    expect(result.deleted.join("\n")).toContain("StallSpawner.cs — loose duplicate of Assets/Modules/TradeModule/Scripts/StallSpawner.cs");
+    expect(existsSync(join(source, "Assets", "Scripts", "StallSpawner.cs"))).toBe(false);
     expect(result.removed).toEqual([join("Assets", "Scripts", "Solo.cs")]); // no twin: stays, reported
   });
 });
@@ -1031,10 +1032,10 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     // working tree does not have.
     makeGitRepo();
     const lease = await gitManager().acquireLease({ label: "t" });
-    const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
+    const inLease = join(lease.path, "Assets", "Scripts", "Route.cs");
     writeFileSync(inLease, "version B", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board B");
+    git(lease.path, "commit", "-q", "-m", "feat: route B");
     writeFileSync(inLease, "version A", "utf8"); // taken back, never committed
 
     const result = await lease.commit();
@@ -1042,10 +1043,10 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
 
     // Whatever the commit says, it may not claim B.
     const headTree = git(source, "show", "--name-only", "--format=", "HEAD");
-    if (headTree.includes("Board.cs")) {
-      expect(git(source, "show", "HEAD:Assets/Scripts/Board.cs")).toBe("version A");
+    if (headTree.includes("Route.cs")) {
+      expect(git(source, "show", "HEAD:Assets/Scripts/Route.cs")).toBe("version A");
     }
-    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("version A");
+    expect(readFileSync(join(source, "Assets", "Scripts", "Route.cs"), "utf8")).toBe("version A");
     expect(result.commitsReplayed?.replayed ?? 0).toBeLessThanOrEqual(1);
   });
 
@@ -1058,10 +1059,10 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const inLease = join(lease.path, "Assets", "Scripts", "Existing.cs");
     writeFileSync(inLease, "version B", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board B");
+    git(lease.path, "commit", "-q", "-m", "feat: route B");
     writeFileSync(inLease, "version C", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board C");
+    git(lease.path, "commit", "-q", "-m", "feat: route C");
     writeFileSync(inLease, "original", "utf8"); // taken back to the seed, never committed
 
     const result = await lease.commit();
@@ -1152,10 +1153,10 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
       }) as never,
     });
     const lease = await mgr.acquireLease({ label: "t" });
-    const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
+    const inLease = join(lease.path, "Assets", "Scripts", "Route.cs");
     writeFileSync(inLease, "v1", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board v1");
+    git(lease.path, "commit", "-q", "-m", "feat: route v1");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Other.cs"), "v2", "utf8");
     git(lease.path, "add", "-A");
     git(lease.path, "commit", "-q", "-m", "feat: other");
@@ -1217,13 +1218,13 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
       }) as never,
     });
     const lease = await mgr.acquireLease({ label: "t" });
-    const inLease = join(lease.path, "Assets", "Scripts", "Board.cs");
+    const inLease = join(lease.path, "Assets", "Scripts", "Route.cs");
     writeFileSync(inLease, "v1", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board v1");
+    git(lease.path, "commit", "-q", "-m", "feat: route v1");
     writeFileSync(inLease, "v2", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board v2");
+    git(lease.path, "commit", "-q", "-m", "feat: route v2");
 
     const result = await lease.commit();
     await lease.release();
@@ -1232,7 +1233,7 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     // and no commit claims a version of them that is not the final one.
     expect(git(source, "rev-parse", "HEAD")).toBe(before);
     expect(result.commitsReplayed?.replayed).toBe(0);
-    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("v2");
+    expect(readFileSync(join(source, "Assets", "Scripts", "Route.cs"), "utf8")).toBe("v2");
   });
 
   it("a path whose current content cannot be read is held, not replayed (Codex 2026-09-12 P#10)", async () => {
@@ -1277,25 +1278,25 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     const before = git(source, "rev-parse", "HEAD");
     const lease = await gitManager().acquireLease({ label: "t" });
     expect(lease.kind).toBe("git-worktree");
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "v1", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board v1");
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v2", "utf8");
+    git(lease.path, "commit", "-q", "-m", "feat: route v1");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "v2", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "edited", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board v2");
+    git(lease.path, "commit", "-q", "-m", "feat: route v2");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.commitsReplayed).toEqual({ replayed: 2, skipped: 0, shas: expect.any(Array) });
-    expect(git(source, "log", "--format=%s", "-n", "3")).toBe("feat: board v2\nfeat: board v1\ninit");
+    expect(git(source, "log", "--format=%s", "-n", "3")).toBe("feat: route v2\nfeat: route v1\ninit");
     expect(git(source, "log", "--format=%an", "-n", "1")).toBe("worker");
     expect(git(source, "log", "--format=%B", "-n", "1")).toContain("Strada-Lease-Commit:");
-    expect(git(source, "show", `${before}..HEAD~1`, "--format=", "--name-only")).toBe("Assets/Scripts/Board.cs");
-    expect(git(source, "show", "HEAD~1:Assets/Scripts/Board.cs")).toBe("v1");
-    expect(git(source, "show", "HEAD:Assets/Scripts/Board.cs")).toBe("v2");
-    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("v2");
+    expect(git(source, "show", `${before}..HEAD~1`, "--format=", "--name-only")).toBe("Assets/Scripts/Route.cs");
+    expect(git(source, "show", "HEAD~1:Assets/Scripts/Route.cs")).toBe("v1");
+    expect(git(source, "show", "HEAD:Assets/Scripts/Route.cs")).toBe("v2");
+    expect(readFileSync(join(source, "Assets", "Scripts", "Route.cs"), "utf8")).toBe("v2");
     // The replayed paths read as committed; the user's own WIP is still theirs, uncommitted.
     expect(git(source, "status", "--porcelain", "--", "Assets")).toBe("?? Assets/Scripts/Wip.cs");
     // Nothing is stranded, so no salvage branch is needed.
@@ -1330,22 +1331,22 @@ describe("lease commit replay (measured 2026-09-10: three worker commits danglin
     writeFileSync(join(source, "Assets", "Scripts", "Staged.cs"), "staged by user", "utf8");
     git(source, "add", "Assets/Scripts/Staged.cs");
     const lease = await gitManager().acquireLease({ label: "t" });
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "v1", "utf8");
     git(lease.path, "add", "-A");
-    git(lease.path, "commit", "-q", "-m", "feat: board");
+    git(lease.path, "commit", "-q", "-m", "feat: route");
 
     await lease.commit();
     await lease.release();
 
-    expect(git(source, "log", "--format=%s", "-n", "1")).toBe("feat: board");
-    expect(git(source, "show", "HEAD", "--format=", "--name-only")).toBe("Assets/Scripts/Board.cs");
+    expect(git(source, "log", "--format=%s", "-n", "1")).toBe("feat: route");
+    expect(git(source, "show", "HEAD", "--format=", "--name-only")).toBe("Assets/Scripts/Route.cs");
     expect(git(source, "status", "--porcelain", "--", "Assets")).toBe("A  Assets/Scripts/Staged.cs");
   });
 
   it("makes no project commit when the agent committed nothing", async () => {
     makeGitRepo();
     const lease = await gitManager().acquireLease({ label: "t" });
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "v1", "utf8"); // written, not committed
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "v1", "utf8"); // written, not committed
     const result = await lease.commit();
     await lease.release();
     expect(result.commitsReplayed).toBeUndefined();
@@ -1598,23 +1599,23 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
 
 describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () => {
   it("does not carry, publish or conflict on bin/obj build output", async () => {
-    // Measured live 2026-09-12 11:26 and 12:03: thirteen files under
-    // Tools/GameCoreBuild/{bin,obj}/Debug differed between the lease and
-    // the project — both had built them — so every one came back a CONFLICT,
+    // Measured live 2026-09-12 11:26 and 12:03: thirteen files in a tool
+    // project's {bin,obj}/Debug folders under Tools/ differed between the
+    // lease and the project — both had built them — so every one came back a CONFLICT,
     // the commit published nothing, and the whole node failed.
-    mkdirSync(join(source, "Tools", "CoreBuild", "obj", "Debug"), { recursive: true });
-    mkdirSync(join(source, "Tools", "CoreBuild", "bin", "Debug"), { recursive: true });
+    mkdirSync(join(source, "Tools", "RouteSim", "obj", "Debug"), { recursive: true });
+    mkdirSync(join(source, "Tools", "RouteSim", "bin", "Debug"), { recursive: true });
     mkdirSync(join(source, "bin"), { recursive: true });
-    writeFileSync(join(source, "Tools", "CoreBuild", "obj", "Debug", "Core.cache"), "project build", "utf8");
-    writeFileSync(join(source, "Tools", "CoreBuild", "bin", "Debug", "Core.dll"), "project build", "utf8");
+    writeFileSync(join(source, "Tools", "RouteSim", "obj", "Debug", "RouteSim.cache"), "project build", "utf8");
+    writeFileSync(join(source, "Tools", "RouteSim", "bin", "Debug", "RouteSim.dll"), "project build", "utf8");
     writeFileSync(join(source, "bin", "tools.sh"), "#!/bin/sh\necho hi\n", "utf8"); // a repository's own bin/
 
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     // The worker builds too, and its outputs differ.
-    mkdirSync(join(lease.path, "Tools", "CoreBuild", "obj", "Debug"), { recursive: true });
-    mkdirSync(join(lease.path, "Tools", "CoreBuild", "bin", "Debug"), { recursive: true });
-    writeFileSync(join(lease.path, "Tools", "CoreBuild", "obj", "Debug", "Core.cache"), "lease build", "utf8");
-    writeFileSync(join(lease.path, "Tools", "CoreBuild", "bin", "Debug", "Core.dll"), "lease build", "utf8");
+    mkdirSync(join(lease.path, "Tools", "RouteSim", "obj", "Debug"), { recursive: true });
+    mkdirSync(join(lease.path, "Tools", "RouteSim", "bin", "Debug"), { recursive: true });
+    writeFileSync(join(lease.path, "Tools", "RouteSim", "obj", "Debug", "RouteSim.cache"), "lease build", "utf8");
+    writeFileSync(join(lease.path, "Tools", "RouteSim", "bin", "Debug", "RouteSim.dll"), "lease build", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Real.cs"), "the actual work", "utf8");
     writeFileSync(join(lease.path, "bin", "tools.sh"), "#!/bin/sh\necho edited\n", "utf8");
 
@@ -1624,8 +1625,8 @@ describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () =
     expect(result.conflicts).toEqual([]);
     expect(result.written).toContain(join("Assets", "Scripts", "Real.cs"));
     // The project keeps its own compiler output, untouched…
-    expect(readFileSync(join(source, "Tools", "CoreBuild", "obj", "Debug", "Core.cache"), "utf8")).toBe("project build");
-    expect(readFileSync(join(source, "Tools", "CoreBuild", "bin", "Debug", "Core.dll"), "utf8")).toBe("project build");
+    expect(readFileSync(join(source, "Tools", "RouteSim", "obj", "Debug", "RouteSim.cache"), "utf8")).toBe("project build");
+    expect(readFileSync(join(source, "Tools", "RouteSim", "bin", "Debug", "RouteSim.dll"), "utf8")).toBe("project build");
     // …and a repository's own bin/ of scripts is not compiler output.
     expect(readFileSync(join(source, "bin", "tools.sh"), "utf8")).toBe("#!/bin/sh\necho edited\n");
   });

@@ -526,10 +526,10 @@ export interface GeneratorOptions {
 
 /**
  * Where a sprite goes, from what the model wrote. Measured 2026-09-09 16:46:
- * unity_delivery_measure lists placeholders as paths ("Assets/Modules/
- * LiveOpsModule/Art/Status/ClaimFeedback.png"); the worker handed the tail
- * back as name "Status/ClaimFeedback" and lost a 3-minute turn to "name must
- * start with a letter". A name carrying directories, or a whole Assets/ path,
+ * unity_delivery_measure lists placeholders as paths ("Assets/Modules/<Module>/
+ * Art/<Folder>/<Name>.png"); the worker handed the tail back as name
+ * "<Folder>/<Name>" and lost a 3-minute turn to "name must start with a
+ * letter". A name carrying directories, or a whole Assets/ path,
  * or a trailing ".png", means what it obviously means: the directory part
  * joins the path, the file stem is the name. Traversal is still refused by
  * validatePath on the joined result.
@@ -587,10 +587,10 @@ export type SameStemPlaceholder =
 /**
  * A bare name that names an EXISTING placeholder elsewhere under Assets/
  * means that placeholder. Measured 2026-09-09 19:24: a 12-sprite batch
- * asked for "ClaimFeedback", "StatusLocked", … and wrote twelve new files
- * into Assets/Art/Generated while the placeholders it was sent to replace
- * sat untouched in Assets/Modules/LiveOpsModule/Art/Status — the count the
- * mission is judged by cannot move that way. When `<dirRel>/<name>.png`
+ * asked for twelve bare names and wrote twelve new files into
+ * Assets/Art/Generated while the placeholders it was sent to replace sat
+ * untouched in a module's own Art folder — the count the mission is judged
+ * by cannot move that way. When `<dirRel>/<name>.png`
  * does not exist and exactly one placeholder-grade `<name>.png` exists
  * under Assets/, the sprite goes there; several matches are refused with
  * the list, so the caller passes the path.
@@ -705,7 +705,7 @@ export class SpriteGenerateTool implements ITool {
     }
     // A KNOWING placeholder while real art is one flag away. Measured
     // 2026-09-07 12:21 (campaign mcov1, attempt 4): the sprint regenerated
-    // eight character sprites with provider "procedural" — 335 → 170 bytes each —
+    // a batch of sprites with provider "procedural" — 335 → 170 bytes each —
     // while the installed model draws a real one in ~45 s. The tool's own
     // description had called itself "placeholder-grade" and the procedural
     // branch "always works"; the delivery gate then counts every one of
@@ -861,7 +861,7 @@ export class SpriteGenerateTool implements ITool {
       }
       // The model can return a blank (a filtered or empty draw; after
       // background removal, a field of specks). Measured 2026-09-07 15:02: a
-      // 512² green character came back as 19 KB of alpha noise and the tool said
+      // 512² draw came back as 19 KB of alpha noise and the tool said
       // ✓. The draw is measured (pixels: flat shape, or nearly all
       // transparent), with one differently-seeded retry before giving up.
       // A RUNNER THAT EXITED 0 WITHOUT WRITING leaves the previous image in

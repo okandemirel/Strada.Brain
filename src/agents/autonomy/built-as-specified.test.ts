@@ -96,12 +96,12 @@ describe("readEnabledBuildScenes", () => {
 
 describe("isScaffoldingScene", () => {
   it("recognises Unity's generated test scene and Tests/Editor folders only", () => {
-    expect(isScaffoldingScene("Assets/InitTestScene4abd18f9-8be4.unity")).toBe(true);
+    expect(isScaffoldingScene("Assets/InitTestScene0e93b2d6-71fa.unity")).toBe(true);
     expect(isScaffoldingScene("Assets/Tests/Runtime/Boot.unity")).toBe(true);
     expect(isScaffoldingScene("Assets/Editor/Bake.unity")).toBe(true);
     // Never a name list: renaming an empty scene must not excuse it.
-    expect(isScaffoldingScene("Assets/Scenes/AssembledGame.unity")).toBe(false);
-    expect(isScaffoldingScene("Assets/Scenes/TargetedLevel42Verification.unity")).toBe(false);
+    expect(isScaffoldingScene("Assets/Scenes/AutoComposed.unity")).toBe(false);
+    expect(isScaffoldingScene("Assets/Scenes/RouteSmokeCheck.unity")).toBe(false);
   });
 });
 
@@ -109,23 +109,23 @@ describe("assessBuiltAsSpecified — refusal", () => {
   it("refuses the real delivery shape: nothing placed, primitives in code, art unbound", () => {
     const root = project();
     buildSettings(root, [
-      { path: "Assets/Scenes/ProductionMain.unity" },
-      { path: "Assets/InitTestScene4abd18f9.unity" },
+      { path: "Assets/Scenes/TradeHub.unity" },
+      { path: "Assets/InitTestScene0e93b2d6.unity" },
     ]);
     // The entry scene: a camera, a bootstrapper pointing at a config asset,
-    // and not one renderer — exactly ProductionMain.unity.
+    // and not one renderer — exactly the measured entry scene's shape.
     put(
       root,
-      "Assets/Scenes/ProductionMain.unity",
+      "Assets/Scenes/TradeHub.unity",
       `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _config: {fileID: 11400000, guid: c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0, type: 2}\n`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/InitTestScene4abd18f9.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
+    put(root, "Assets/InitTestScene0e93b2d6.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
     // A config the scene references, pointing at a prefab that IS art — but
     // the scene never places it.
     put(
       root,
-      "Assets/Settings/PresentationPrefabConfig.asset",
+      "Assets/Settings/StallPrefabConfig.asset",
       `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _stallPrefab: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n`,
       "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
     );
@@ -148,7 +148,7 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toBeDefined();
     expect(report.refusal).toContain("render NOTHING");
     // Names the scene…
-    expect(report.refusal).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(report.refusal).toContain("Assets/Scenes/TradeHub.unity");
     // …the counts…
     expect(report.refusal).toContain("0 world renderer components");
     // …and the unbound assets it found.
@@ -159,7 +159,7 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toContain("unity_place_prefab");
     expect(report.shippedRenderers).toBe(0);
     // The scaffolding scene is measured but not judged as shipped work.
-    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/ProductionMain.unity"]);
+    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/TradeHub.unity"]);
     // The prefab the config points at is NOT called unbound…
     expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Stall.prefab");
     // …but its 1 renderer is reported as referenced-only, never as shipped.
@@ -234,7 +234,7 @@ describe("assessBuiltAsSpecified — passes", () => {
     const root = project();
     buildSettings(root, [
       { path: "Assets/Scenes/Main.unity" },
-      { path: "Assets/InitTestScene4abd18f9-8be4-4a53.unity" },
+      { path: "Assets/InitTestScene0e93b2d6-71fa-4c08.unity" },
       { path: "Assets/Tests/Runtime/BootFixture.unity" },
     ]);
     put(
@@ -243,7 +243,7 @@ describe("assessBuiltAsSpecified — passes", () => {
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/InitTestScene4abd18f9-8be4-4a53.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
+    put(root, "Assets/InitTestScene0e93b2d6-71fa-4c08.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
     put(root, "Assets/Tests/Runtime/BootFixture.unity", `${HEADER}${CAMERA(0)}`, "5cd5d5d5d5d5d5d5d5d5d5d5d5d5d5d5");
     put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
     put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
@@ -267,7 +267,7 @@ describe("assessBuiltAsSpecified — passes", () => {
 
     expect(report.refusal).toBeUndefined();
     expect(report.scenes.filter((s) => s.scaffolding).map((s) => s.scene)).toEqual([
-      "Assets/InitTestScene4abd18f9-8be4-4a53.unity",
+      "Assets/InitTestScene0e93b2d6-71fa-4c08.unity",
       "Assets/Tests/Runtime/BootFixture.unity",
     ]);
     expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/Main.unity"]);
@@ -504,13 +504,13 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
   });
 
   it("names the placeholders a shipped scene binds FIRST, and says to replace those before wiring more", () => {
-    // Measured 2026-09-07 22:40: a sprint wired six backdrop prefabs to
-    // placeholder PNGs while the refusal's examples were unbound LiveOps icons.
+    // Measured 2026-09-07 22:40: a sprint wired several prefabs to
+    // placeholder PNGs while the refusal's examples were icons nothing bound.
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000"); // Stall.prefab placed, sprite a000… bound
     putBytes(root, "Assets/Art/stall.png", png(64, 64, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
     for (let i = 1; i <= 11; i++) {
-      putBytes(root, `Assets/Art/LiveOps/Icon_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+      putBytes(root, `Assets/Art/Waybills/Icon_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
     }
     const report = assessBuiltAsSpecified(root);
     expect(report.boundPlaceholderSprites).toBe(1);
@@ -580,8 +580,8 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
     putBytes(root, "Assets/Art/Real/Stall.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/music_caravan.wav", wav(3, 7), "d1000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/music_dunes.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
+    putBytes(root, "Assets/Audio/caravan_bells.wav", wav(3, 7), "d1000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/dune_wind.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
     putBytes(root, "Assets/Audio/ui_select.wav", wav(0.15, 3), "d3000000000000000000000000000000");
     putBytes(root, "Assets/Audio/sale.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
 
@@ -592,7 +592,7 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
     expect(report.artInventory.shortAudio).toBe(1);
     const line = report.disclosures.find((d) => d.startsWith("Project audio"))!;
     expect(line).toContain("4 clips, 3 distinct by content");
-    expect(line).toContain("music_dunes.wav = Assets/Audio/music_caravan.wav");
+    expect(line).toContain("dune_wind.wav = Assets/Audio/caravan_bells.wav");
     expect(line).toContain("1 shorter than 0.5s");
     expect(line).toContain("ui_select.wav");
   });
