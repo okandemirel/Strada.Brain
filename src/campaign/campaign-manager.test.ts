@@ -10819,7 +10819,7 @@ describe("CampaignManager", () => {
      * as text was the PDF itself.
      */
     describe("a named document in a rich format", () => {
-      const PROSE = "Quillmoor: the keeper lights one lantern per night and the fog retreats from every lit street.";
+      const PROSE = "Quillmoor: the baker opens one new recipe every morning and every loaf sold buys another oven.";
       /** A one-page PDF whose content stream shows `shown` (FlateDecode, as exporters write it). */
       const pdf = (shown: string): Buffer => {
         const content = deflateSync(Buffer.from(`BT /F1 12 Tf 72 712 Td ${shown} Tj ET`, "latin1"));

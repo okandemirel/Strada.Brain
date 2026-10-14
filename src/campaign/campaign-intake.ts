@@ -606,7 +606,7 @@ function buildIsAsked(prose: string, at: number, end: number): boolean {
   }
   // A question mark that closes the build's own clause asks about it ("Build
   // the game in P?", "Bu oyunu yap: P mı?"); one past a comma belongs to
-  // another clause ("…, okay?", "…, can the fog roll back?").
+  // another clause ("…, okay?", "…, can the swarms grow slowly?").
   const ends = matchesOf(prose, SENTENCE_BREAK_RE).at;
   const close = ends[countBelow(ends, end)];
   if (close === undefined || prose[close] !== "?" || matchesInside(prose, PAUSE_RE, end, close)) return true;

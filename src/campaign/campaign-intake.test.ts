@@ -295,8 +295,8 @@ describe("a message that names the design document by its path", () => {
     ["Build the game following the GDD/TDD split", { kind: "gdd-to-confirm" }],
     // A link beside an idea is a reference, like a path.
     [
-      "Build this game from scratch: a lantern city where the fog retreats from every lit street; mood board at https://example.com/board",
-      { kind: "idea", ideaText: "Build this game from scratch: a lantern city where the fog retreats from every lit street; mood board at https://example.com/board" },
+      "Build this game from scratch: a bakery town where every loaf sold buys another oven; mood board at https://example.com/board",
+      { kind: "idea", ideaText: "Build this game from scratch: a bakery town where every loaf sold buys another oven; mood board at https://example.com/board" },
     ],
   ])("%s → no named document", (text, intent) => {
     expect(detectCampaignIntent(msg(text))).toEqual(intent);
@@ -415,7 +415,7 @@ describe("a Turkish word that only begins like a build verb", () => {
   it("…while the build verb itself, plain or polite, still is one", () => {
     expect(detectCampaignIntent(msg("Bu oyunu yap: docs/Quillmoor_GDD.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/Quillmoor_GDD.md" });
     expect(detectCampaignIntent(msg("Bu oyunu yapın: docs/Quillmoor_GDD.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/Quillmoor_GDD.md" });
-    const polite = "Şu oyunu yapınız: fener bekçisi her gece bir sokağı aydınlatır, sis aydınlanan sokaklardan çekilir.";
+    const polite = "Şu oyunu yapınız: bir fırıncı her sabah yeni bir tarif açar, satılan her somun yeni bir fırın getirir.";
     expect(detectCampaignIntent(msg(polite))).toEqual({ kind: "idea", ideaText: polite });
   });
 });
@@ -488,10 +488,10 @@ describe("a named document is the design only when the build is aimed at it", ()
 
   it.each([
     "Build this game from scratch: a cozy farming sim where you grow glowing mushrooms; follow the art direction in docs/art-style.md.",
-    "Sıfırdan bir oyun yap: fener bekçisi her gece bir sokağı aydınlatır ve sis geri çekilir; görseller docs/art-style.md'deki gibi olsun.",
-    "Build this game: a lantern keeper lights one street per night and the fog retreats from it. Put the notes into docs/notes.md.",
-    "Build this game from scratch: a city of lanterns where every lit street pushes the fog back; keep docs/Old_GDD.md only as a tone reference.",
-    "Build the game from scratch: a lantern keeper writes every street she lights into log.txt, and the fog retreats from those streets.",
+    "Sıfırdan bir oyun yap: bir fırıncı her sabah yeni bir tarif açar ve satılan her somun yeni bir fırın getirir; görseller docs/art-style.md'deki gibi olsun.",
+    "Build this game: a baker opens one new recipe every morning and every loaf sold buys another oven. Put the notes into docs/notes.md.",
+    "Build this game from scratch: a town of bakeries where every loaf sold buys another oven; keep docs/Old_GDD.md only as a tone reference.",
+    "Build the game from scratch: a baker writes every recipe she unlocks into log.txt, and each loaf sold buys another oven.",
   ])("%s → the idea it carries, not the document it mentions", (text) => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
   });
@@ -536,7 +536,7 @@ describe("a named document is the design only when the build is aimed at it", ()
 describe("the build verbs and the GDD reference, word by word", () => {
   const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
     ({ chatId: "c", text, attachments: [] }) as never;
-  const IDEA = "fener bekçisi her gece bir sokağı aydınlatır, sis aydınlanan sokaklardan çekilir.";
+  const IDEA = "bir fırıncı her sabah yeni bir tarif açar, satılan her somun yeni bir fırın getirir.";
 
   it.each([
     `Bana şöyle bir oyun yazın: ${IDEA}`,
