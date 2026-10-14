@@ -495,6 +495,18 @@ const booted = (at: string): string => logEntry("Bootstrapping Strada Brain", at
 /** tool-registry.ts: the line a boot writes once Strada.MCP's tools are registered. */
 const mcpLoaded = (at: string, fields: Record<string, unknown> = {}): string =>
   logEntry("Loaded Strada.MCP tools into main toolchain", at, { sourcePath: "/invented/Strada.MCP", registered: 111, bridgeState: "connected", ...fields });
+/**
+ * provider-call-log.ts: one line per LLM call, naming the chat it served when
+ * it had one — the campaign planner's own asks and the daemon's housekeeping
+ * do not.
+ */
+const providerCall = (at: string, chatId?: string, ok = true): string =>
+  logEntry(ok ? "Provider call" : "Provider call failed", at, {
+    label: "turn",
+    provider: "invented",
+    ms: 1200,
+    ...(chatId === undefined ? {} : { chatId }),
+  });
 /** stage-finalization.ts: the last line of a boot that finished. */
 const bootReport = (at: string): string => logEntry("Boot report", at, { summary: "Boot report clean." });
 /** One boot that loaded Strada.MCP: its marker, the load, its report. */
@@ -538,7 +550,21 @@ describe("north-star scorecard: a run that did everything", () => {
     const memory = join(home, ".strada-memory");
     mkdirSync(memory, { recursive: true });
     seedProof(memory, opts);
-    writeFileSync(join(home, "strada-brain.log"), goodBoot("2099-01-01"));
+    // The campaign's own LLM calls, and one before its window, and one that
+    // named no chat: criterion A counts what it spent and says whose.
+    writeFileSync(
+      join(home, "strada-brain.log"),
+      [
+        goodBoot("2099-01-01"),
+      // Mid-window on purpose: the logger writes LOCAL wall time, so a stamp
+      // near an edge would leave the window on a machine in another zone.
+      providerCall("2027-01-15 23:00:00", "chat-invented"),
+      providerCall("2027-01-16 00:00:00", "chat-invented"),
+      providerCall("2027-01-16 01:00:00", "chat-invented", false),
+      providerCall("2027-01-16 02:00:00"),
+      providerCall("2027-01-14 02:00:00", "chat-invented"),
+      ].join(""),
+    );
     const project = join(work, "BeaconKeeper");
     cleanProject(project);
     seedVault(project, [
@@ -616,10 +642,52 @@ describe("north-star scorecard: a run that did everything", () => {
     });
     expect(criterion(card, "C").checks.map((c) => c.ok)).toEqual([true, false, true]);
     expect(criterion(card, "A").cause).toBe(
-      "LLM calls per campaign are in no database this scorecard reads; restarts during gate work and their re-measurement are not recorded",
+      "restarts during gate work and their re-measurement are not recorded",
+    );
+    // Its own calls, counted in its own chat and window: the one before the
+    // campaign started and the one that named no chat are not its own.
+    expect(criterion(card, "A").checks.map((c) => c.text)).toContain(
+      "3 provider calls in chat-invented between the campaign's start and its last update (1 of them failed); 1 more calls in that window named no chat (a planner ask, the daemon's own work)",
     );
     // Every check F can answer from the tree held; only the unanalysed ones remain.
     expect(criterion(card, "F").checks.filter((c) => c.ok === false)).toEqual([]);
+  });
+
+  /**
+   * A SPRINT'S HOURS ARE ON ITS TASK, NOT ON THE CAMPAIGN ROW. Measured
+   * 2026-10-14: a campaign in flight had `updated_at` three minutes after its
+   * creation — the row stops being written once a milestone starts — so
+   * everything counted inside its window read as zero while the run had made
+   * hundreds of calls.
+   */
+  it("counts the calls of a campaign whose row stopped updating before its sprint did", () => {
+    const { home, project, upstream } = proofHome();
+    const memory = join(home, ".strada-memory");
+    // The campaign's row ends an hour in; its linked task works for twenty.
+    const campaigns = new CampaignStorage(join(memory, "campaigns.db"));
+    try {
+      const run = campaigns.get(PROOF_ID)!;
+      campaigns.save({ ...run, updatedAt: T0 + HOUR, milestones: run.milestones.map((m) => ({ ...m, startedAtMs: T0 + HOUR })) });
+    } finally {
+      campaigns.close();
+    }
+    const tasks = new TaskStorage(join(memory, "tasks.db"));
+    tasks.initialize();
+    try {
+      // Another task of the same campaign, still working twenty hours in: the
+      // window reaches the sprints' own hours, not only the campaign row's.
+      tasks.save(task("t-m1-late", T0 + HOUR, { campaignId: PROOF_ID, updatedAt: T0 + 20 * HOUR }));
+    } finally {
+      tasks.close();
+    }
+    writeFileSync(
+      join(home, "strada-brain.log"),
+      [goodBoot("2099-01-01"), providerCall("2027-01-15 23:00:00", "chat-invented")].join(""),
+    );
+
+    const card = scoreNorthStar({ home, project, upstream, brainRoot }) as Card;
+    const texts = criterion(card, "A").checks.map((c) => c.text);
+    expect(texts.find((x) => x.includes("provider calls"))).toContain("1 provider calls in chat-invented");
   });
 
   it("fails rung 10 when the owner wrote to the campaign's chat while it ran", () => {

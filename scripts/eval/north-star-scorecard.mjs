@@ -431,7 +431,18 @@ const BOOT_STARTED = "Bootstrapping Strada Brain";
 const MCP_LOADED = "Loaded Strada.MCP tools into main toolchain";
 const MCP_NOT_LOADED = new Set(["Failed to load Strada.MCP tools", "Refused to load Strada.MCP from inside the Unity project"]);
 const BOOT_REPORT = "Boot report";
-const LOG_MESSAGES = new Set([BOOT_STARTED, MCP_LOADED, ...MCP_NOT_LOADED, BOOT_REPORT]);
+// provider-call-log.ts writes one of these per provider call, with the chat it
+// served when it had one: that is where a campaign's LLM calls are recorded.
+const PROVIDER_CALL = "Provider call";
+const PROVIDER_CALL_FAILED = "Provider call failed";
+const LOG_MESSAGES = new Set([
+  BOOT_STARTED,
+  MCP_LOADED,
+  ...MCP_NOT_LOADED,
+  BOOT_REPORT,
+  PROVIDER_CALL,
+  PROVIDER_CALL_FAILED,
+]);
 
 function parseLogTime(raw) {
   if (typeof raw !== "string") return NaN;
@@ -468,6 +479,7 @@ function readLog(path) {
   if (!existsSync(path)) return { cause: `daemon log not found at ${path}` };
   const files = [];
   const boots = [];
+  const providerCalls = [];
   let boot = null;
   for (const file of logFiles(path)) {
     let text;
@@ -483,6 +495,14 @@ function readLog(path) {
       const parsed = parseJson(line.trim());
       const entry = parsed.value;
       if (!isRecord(entry) || !LOG_MESSAGES.has(entry.message)) continue;
+      if (entry.message === PROVIDER_CALL || entry.message === PROVIDER_CALL_FAILED) {
+        providerCalls.push({
+          at: parseLogTime(entry.timestamp),
+          chatId: typeof entry.chatId === "string" ? entry.chatId : null,
+          ok: entry.message === PROVIDER_CALL,
+        });
+        continue;
+      }
       if (entry.message === BOOT_STARTED) {
         boot = { at: entry.timestamp ?? null, file: files.length - 1, loads: [], refusals: [], reported: false };
         boots.push(boot);
@@ -494,7 +514,7 @@ function readLog(path) {
       else boot.refusals.push(entry);
     }
   }
-  return { files, boots };
+  return { files, boots, providerCalls };
 }
 
 /** Why rung 1 cannot name the newest boot, or null when it can. */
@@ -1503,13 +1523,75 @@ function chooseProofCampaign(ctx) {
   return { campaign: store.all.at(-1), chosenBy: "the newest campaign in campaigns.db" };
 }
 
+/**
+ * HOW FAR THE CAMPAIGN'S OWN WINDOW REACHES. `updated_at` is the campaign
+ * ROW's last write, and a sprint's hours update its task, not the row — so a
+ * campaign in flight has a window of minutes and anything counted inside it
+ * reads as zero (measured 2026-10-14: 0 provider calls for a campaign that had
+ * made hundreds). The window ends at the latest thing the campaign itself
+ * recorded: its row, or a milestone's start or attempt.
+ */
+function campaignWindowEnd(campaign, tasksSrc) {
+  const stamps = [campaign.updatedAt];
+  for (const m of campaign.milestones) {
+    for (const key of ["startedAtMs", "attemptStartedAtMs"]) {
+      const at = m[key];
+      if (typeof at === "number" && Number.isFinite(at)) stamps.push(at);
+    }
+  }
+  // …AND ITS SPRINTS' OWN HOURS. A sprint updates its task, not the campaign
+  // row, so a campaign in flight reaches only as far as the milestone it
+  // started; its tasks are where the work's last minute is recorded.
+  const db = tasksSrc?.db;
+  if (db && hasTable(db, "tasks") && columnsOf(db, "tasks").has("campaign_id")) {
+    try {
+      const row = db.prepare("SELECT max(updated_at) AS at FROM tasks WHERE campaign_id = ?").get(campaign.id);
+      const at = Number(row?.at ?? NaN);
+      if (Number.isFinite(at)) stamps.push(at);
+    } catch {
+      /* an unreadable tasks.db leaves the window where the campaign's own records put it */
+    }
+  }
+  return Math.max(...stamps);
+}
+
+/**
+ * THE CAMPAIGN'S OWN LLM CALLS, counted from the log that records them.
+ *
+ * provider-call-log.ts writes one line per call and names the chat it served
+ * when it had one — the campaign planner's own asks and the daemon's
+ * housekeeping do not. So this counts the calls of the campaign's chat inside
+ * its window and says, beside that, how many calls in the same window named no
+ * chat: an unmanned run is judged by what it spent, and a number whose scope
+ * is unstated is not a measurement (it used to read "LLM calls per campaign
+ * are in no database this scorecard reads", which was true of the databases
+ * and false of the log).
+ */
+function campaignProviderCalls(log, campaign, endMs) {
+  if (log.cause) return unmeasured(`LLM calls: ${log.cause}`);
+  const inWindow = (log.providerCalls ?? []).filter((c) => Number.isFinite(c.at) && c.at >= campaign.createdAt && c.at <= endMs);
+  const undated = (log.providerCalls ?? []).filter((c) => !Number.isFinite(c.at));
+  if (inWindow.length === 0 && undated.length > 0) {
+    return unmeasured(`LLM calls: ${undated.length} provider-call lines carry no readable timestamp, so none can be placed in this campaign's window`);
+  }
+  const mine = inWindow.filter((c) => c.chatId === campaign.chatId);
+  const unnamed = inWindow.filter((c) => c.chatId === null);
+  const failed = mine.filter((c) => !c.ok).length;
+  const text =
+    `${mine.length} provider calls in ${campaign.chatId} between the campaign's start and its last update`
+    + `${failed > 0 ? ` (${failed} of them failed)` : ""}`
+    + `; ${unnamed.length} more calls in that window named no chat (a planner ask, the daemon's own work)`;
+  return mine.length > 0 ? pass(text) : fail(text);
+}
+
 function criterionA(ctx, run) {
   const checks = [];
+  const endMs = campaignWindowEnd(run, ctx.tasksSrc);
   checks.push(run.deliveryReported && run.state === "done" ? pass(`${run.id} was delivered (state done)`) : fail(`${run.id} is ${run.state}, not delivered`));
-  checks.push(ownerMessages(ctx.tasksSrc, run, run.updatedAt));
-  checks.push(unmeasured("LLM calls per campaign are in no database this scorecard reads"));
+  checks.push(ownerMessages(ctx.tasksSrc, run, endMs));
+  checks.push(campaignProviderCalls(ctx.log, run, endMs));
   checks.push(unmeasured("restarts during gate work and their re-measurement are not recorded"));
-  const hours = (run.updatedAt - run.createdAt) / 3_600_000;
+  const hours = (endMs - run.createdAt) / 3_600_000;
   return item("A", CRITERION_TITLES.A, checks, { notes: [`wall time ${hours.toFixed(1)} h (start → last update)`], measured: { wallHours: Number(hours.toFixed(2)) } });
 }
 
