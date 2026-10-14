@@ -30,6 +30,31 @@ export interface PublicationVerdict {
   readonly note?: string;
 }
 
+/**
+ * What the TOOLCHAIN writes under `Recordings/`: a play-mode result, a
+ * play-through verdict, a captured frame.
+ *
+ * This is a CONFLICT-SEVERITY rule only, and deliberately not part of
+ * `isDerivedBuildOutput`: that predicate also decides whether a file travels
+ * back from the lease at all, and recordings MUST travel — they are the run's
+ * evidence that the game rendered. What they must not do is fail a goal when
+ * both copies are the same machine's output.
+ *
+ * Measured live 2026-10-14 23:17: `Recordings/tests/playmode-last.json`
+ * conflicted with the project's own copy, the publication called it work that
+ * did not reach the project, and the goal that had written 22 other files
+ * FAILED — taking three dependent goals with it, twice, on the same file.
+ *
+ * Names in their place, never the bare directory: something a person put
+ * under Recordings/ by hand is still authored work.
+ */
+const RECORDING_ARTIFACT = /^(?:playmode-last\.json|playthrough-verdict\.json|frame[-_]?\d+\.(?:png|jpg)|capture-manifest\.json)$/i;
+
+export function isRecordingArtifact(rel: string): boolean {
+  const parts = rel.split(/[/\\]/);
+  return parts[0] === "Recordings" && parts.length >= 3 && RECORDING_ARTIFACT.test(parts[parts.length - 1] ?? "");
+}
+
 /** At most this many file names in a message a person reads. */
 const NAMED = 8;
 
@@ -59,12 +84,13 @@ export function judgePublication(raw: LeaseCommitResult): PublicationVerdict {
     // had done the real work was failed over it — twice, on the same generated
     // file (measured live 2026-09-16 19:03). Derived output is disclosed; it is
     // not work that was lost.
-    const lost = conflicts.filter((path) => !isDerivedBuildOutput(path));
+    const lost = conflicts.filter((path) => !isDerivedBuildOutput(path) && !isRecordingArtifact(path));
     if (lost.length === 0) {
       return {
         note:
-          `${conflicts.length} generated file(s) conflicted and were kept aside — the project builds these for itself, so `
-          + `nothing the run authored was lost: ${conflicts.slice(0, NAMED).join(", ")}`,
+          `${conflicts.length} generated file(s) conflicted and were kept aside — the project writes these for itself `
+          + `(build output, or this run's own recordings), so nothing the run authored was lost: `
+          + `${conflicts.slice(0, NAMED).join(", ")}`,
       };
     }
     return {

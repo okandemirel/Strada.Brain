@@ -49,7 +49,7 @@ describe("a conflict on generated output", () => {
       quarantined: 1,
     });
     expect(verdict.loss).toBeUndefined();
-    expect(verdict.note).toContain("the project builds these for itself");
+    expect(verdict.note).toContain("the project writes these for itself");
     expect(verdict.note).toContain("Ledger.Host.csproj.nuget.dgspec.json");
   });
 
@@ -87,7 +87,7 @@ describe("a conflict on generated output", () => {
       quarantined: 1,
     });
     expect(verdict.loss).toBeUndefined();
-    expect(verdict.note).toContain("the project builds these for itself");
+    expect(verdict.note).toContain("the project writes these for itself");
   });
 
   it("and a generated file that could not even be preserved is still a loss", () => {
@@ -96,5 +96,46 @@ describe("a conflict on generated output", () => {
       quarantined: 0,
     });
     expect(gone.loss).toContain("exist ONLY in the workspace");
+  });
+});
+
+/**
+ * Measured live 2026-10-14 23:17 on the proof run: the play-mode result the
+ * run itself writes conflicted with the project's own copy, the publication
+ * called it work that did not reach the project, and the goal that had
+ * written 22 other files FAILED — taking three dependent goals with it. The
+ * same thing happened twice on the same file.
+ */
+describe("a conflict on the run's own recording", () => {
+  it("is disclosed, not counted as work that was lost", () => {
+    const verdict = judgePublication({
+      written: Array.from({ length: 22 }, (_, i) => `Assets/Scripts/File${i}.cs`),
+      conflicts: ["Recordings/tests/playmode-last.json"],
+      quarantined: 1,
+    });
+
+    expect(verdict.loss).toBeUndefined();
+    expect(verdict.note).toContain("this run's own recordings");
+    expect(verdict.note).toContain("Recordings/tests/playmode-last.json");
+  });
+
+  it("still fails on authored work that conflicted beside it", () => {
+    const verdict = judgePublication({
+      written: ["Assets/Scripts/Other.cs"],
+      conflicts: ["Recordings/tests/playmode-last.json", "Assets/Scripts/Rules.cs"],
+      quarantined: 2,
+    });
+
+    expect(verdict.loss).toContain("Assets/Scripts/Rules.cs");
+    expect(verdict.loss).toContain("1 file(s)");
+  });
+
+  it("keeps a hand-written file under Recordings as authored work", () => {
+    const verdict = judgePublication({
+      conflicts: ["Recordings/reference/art-direction.png"],
+      quarantined: 1,
+    });
+
+    expect(verdict.loss).toContain("art-direction.png");
   });
 });
