@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 
-import { assessUnregisteredServices } from "./scene-wiring.js";
+import { SCENE_WALK_BUDGET, assessUnregisteredServices } from "./scene-wiring.js";
 import { StradaConformanceGuard } from "./strada-conformance.js";
 
 function io(files: Record<string, string>) {
@@ -209,5 +209,17 @@ describe("the path a finding names", () => {
     );
     expect(found[0]?.file).toBe("Assets/Modules/Harbor/Scripts/BeamService.cs");
     expect(found[0]?.file).not.toContain("\\");
+  });
+});
+
+describe("a walk that may have stopped early", () => {
+  it("accuses nobody when the listing hit its budget", () => {
+    // The file that registers the service may be the one the walk never
+    // reached, and this rule's whole claim is that NO file registers it.
+    const files: Record<string, string> = {};
+    for (let i = 0; i < SCENE_WALK_BUDGET; i++) files[`/p/Assets/Filler${i}.cs`] = "public class Filler { }";
+    files["/p/Assets/BeamService.cs"] = "public class BeamService { }";
+
+    expect(assessUnregisteredServices("/p", io(files))).toEqual([]);
   });
 });

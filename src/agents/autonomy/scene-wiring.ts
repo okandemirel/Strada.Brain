@@ -467,6 +467,11 @@ export function assessUnregisteredServices(
   if (!io.exists(assets)) return [];
   const scripts = io.listFiles(assets, isSourceFile).filter((f) => isSourceFile(f));
   if (scripts.length === 0) return [];
+  // A TRUNCATED WALK CANNOT ACCUSE. At the budget the listing may have
+  // stopped before the file that holds the registration, and this rule's
+  // whole claim is that no file registers the service (the same reasoning as
+  // the asset census, audited 2026-09-02).
+  if (scripts.length >= SCENE_WALK_BUDGET) return [];
 
   const declared: Array<{ name: string; file: string }> = [];
   const registered = new Set<string>();
