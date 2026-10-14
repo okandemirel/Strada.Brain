@@ -231,7 +231,8 @@ describe("a message that names the design document by its path", () => {
     ["docs/quillmoor.pdf dosyasındaki oyunu geliştir", confirm("docs/quillmoor.pdf")],
     // Called the GDD outside the build's own clause, it is confirmed first.
     ["GDD'li dosya docs/quillmoor.txt, bu oyunu yap", confirm("docs/quillmoor.txt")],
-    ["Bu oyunu yap: docs/Kuşkonmaz_Tasarımı.md", now("docs/Kuşkonmaz_Tasarımı.md")],
+    // A word before "tasarımı" other than "oyun" may name a part as well as the game: confirmed first.
+    ["Bu oyunu yap: docs/Kuşkonmaz_Tasarımı.md", confirm("docs/Kuşkonmaz_Tasarımı.md")],
     ["Quillmoor_GDD.md’deki oyunu baştan sona yap", now("Quillmoor_GDD.md")],
     // Beside a style sheet or a changelog, the design — wherever it stands.
     ["Build the game in docs/art-style.md and docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
@@ -1072,14 +1073,30 @@ describe("a document the build names, read to the end of its clause", () => {
     expect(detectCampaignIntent(msg(text))).toEqual(confirm(path));
   });
 
-  // What says design is the name's own word for it — never a part's design.
+  /**
+   * What says design is the name's own word for the game's design: "design"
+   * alone, or after "game" — never a part's design. Any other word before it
+   * may name a part as well as the game ("hud-design", "menu-design"), and
+   * one after it makes it notes or a library ("design-notes",
+   * "design_system"): each started at once, and is confirmed first.
+   */
   it.each([
-    ["Build this game: docs/Quillmoor-Design.md", now("docs/Quillmoor-Design.md")],
     ["Build the game in docs/game-design.docx", now("docs/game-design.docx")],
+    ["Build the game following docs/GameDesign.md", now("docs/GameDesign.md")],
+    ["Build the game following docs/design.md", now("docs/design.md")],
+    ["Build this game: docs/Game_Design_v2.md", now("docs/Game_Design_v2.md")],
+    ["Build this game: docs/design-doc.md", now("docs/design-doc.md")],
     ["Bu oyunu yap: docs/Oyun_Tasarımı.md", now("docs/Oyun_Tasarımı.md")],
+    ["Bu oyunu yap: docs/Tasarım.md", now("docs/Tasarım.md")],
+    ["Bu oyunu yap: docs/Oyun_Tasarım_Belgesi.md", now("docs/Oyun_Tasarım_Belgesi.md")],
     ["Build this game: docs/ui-design.md", confirm("docs/ui-design.md")],
     ["Build this game: docs/level-design.md", confirm("docs/level-design.md")],
     ["Bu oyunu yap: docs/Arayüz_Tasarımı.md", confirm("docs/Arayüz_Tasarımı.md")],
+    ["Build the game following docs/hud-design.md", confirm("docs/hud-design.md")],
+    ["Build the game from docs/design_system.md", confirm("docs/design_system.md")],
+    ["Build the game from docs/design-notes.md", confirm("docs/design-notes.md")],
+    ["Build this game: docs/Quillmoor-Design.md", confirm("docs/Quillmoor-Design.md")],
+    ["Bu oyunu yap: docs/Menü_Tasarımı.md", confirm("docs/Menü_Tasarımı.md")],
   ])("%s → %j", (text, intent) => {
     expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });

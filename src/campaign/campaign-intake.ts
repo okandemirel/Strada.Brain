@@ -961,21 +961,24 @@ function aimAt(text: string, prose: string, doc: Span, request: Request | undefi
 }
 
 /**
- * The words a document's name says it is the game's design by — unless a
- * word before makes it one part's design ("ui-design", "Arayüz_Tasarımı").
+ * The words a document's name says it is the game's design by: alone, or
+ * after "game" — "design.md", "Game_Design_v2.md", "Oyun_Tasarımı.md". A
+ * denylist of the parts a design may be of let every other word through:
+ * "hud-design.md", "design_system.md" (a component library) and
+ * "design-notes.md" each started at once. Any other word before it may name
+ * a part as well as the game, and one after it notes or a library, so those
+ * are confirmed first.
  */
 const DESIGN_WORDS = new Set(["design", "gamedesign", "tasarım", "tasarımı", "tasarim", "tasarimi"]);
-const PART_WORDS = new Set([
-  "art", "ui", "ux", "level", "levels", "sound", "audio", "visual", "technical", "tech", "system", "systems", "software", "api", "data",
-  "database", "network", "interface", "graphic", "graphics", "logo", "web", "character",
-  "sanat", "arayüz", "seviye", "ses", "görsel", "teknik", "sistem", "karakter", "veri",
-]);
+const GAME_WORDS = new Set(["game", "oyun", "oyunun"]);
+const DOCUMENT_WORDS = new Set(["doc", "document", "belge", "belgesi", "doküman", "dokümanı"]);
 
 /** A document whose own name says it is the game's design: GDD, game design, tasarım. */
 function nameSaysDesign(path: string): boolean {
   if (refersToGdd(path.split(/[\\/]/).pop()!)) return true;
-  const words = documentWords(path);
-  return words.some((word, i) => DESIGN_WORDS.has(word) && !PART_WORDS.has(words[i - 1] ?? ""));
+  const words = documentWords(path).filter((word) => !/^v?\p{N}+$/u.test(word));
+  const at = words.findIndex((word) => DESIGN_WORDS.has(word));
+  return at >= 0 && words.slice(0, at).every((word) => GAME_WORDS.has(word)) && words.slice(at + 1).every((word) => DOCUMENT_WORDS.has(word));
 }
 
 /** The document a build is to be made from, whether it starts at once, and the others the message offered. */
