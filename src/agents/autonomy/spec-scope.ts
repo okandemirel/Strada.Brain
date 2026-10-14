@@ -7,8 +7,8 @@
  * against the SPEC. The decomposition could not carry this either — a
  * one-shot planner sees a summary, not every section of the document.
  *
- * This module makes the spec itself the checklist: scheduled elements are
- * parsed from the document's element-schedule table, then each is searched
+ * This module makes the spec itself the checklist: the document's table of
+ * when each element arrives is read row by row, then each element is searched
  * for in the delivered source. What the spec promises and the code lacks is
  * named, verbatim, at delivery time.
  */
@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { stripCsComments } from "./csharp-source.js";
 
 export interface ScheduledElement {
-  /** Unlock tag from the schedule table, e.g. "Cave 38". */
+  /** When the element arrives, as the schedule table writes it, e.g. "Cave 38". */
   readonly unlock: string;
   /** Element name as the spec spells it, e.g. "Gas Vent". */
   readonly name: string;
@@ -50,11 +50,11 @@ export function elementCodeTokens(name: string): string[] {
 }
 
 /**
- * Parse an element-introduction schedule out of a design document.
+ * Parse a table listing when each feature arrives out of a design document.
  *
- * Recognizes markdown pipe tables whose rows start with an unlock tag
- * (e.g. `E3` or `Cave 47`) followed by an element name — the shape many GDDs
- * use for their element schedule.
+ * Recognizes markdown pipe tables whose rows start with an arrival id
+ * (e.g. `Ch33` or `Cave 47`) followed by an element name — a common way for a
+ * GDD to say when each piece of content first appears.
  */
 // The walker lives in csharp-source.ts, shared by every C# rule; re-exported
 // here for the callers that import it from this module.
@@ -65,7 +65,7 @@ const NOT_AN_ELEMENT_RE = /\((?:producer|designer|artist|engineer|programmer|lea
 
 /** Blank lines a converter may leave between two rows of one table. */
 const MAX_ROW_SEPARATORS = 3;
-/** An unlock id in a schedule's first cell: "47", "E3", "W1-3", "Cave 47". */
+/** An arrival id in a schedule's first cell: "47", "Ch33", "37-39", "Cave 47". */
 const UNLOCK_CELL_RE = /^(?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?$/;
 /** A header cell naming WHEN an element arrives, and one naming the element. */
 const UNLOCK_HEADER_RE = /^(?:unlock(?:s|ed)?(?:\s+at)?|level|levels|introduced(?:\s+at)?|when|from|stage|arrives?)$/i;
@@ -77,7 +77,7 @@ const ELEMENT_HEADER_RE = /^(?:element|elements|name|mechanic|blocker|feature|it
  * Documents converted out of Google Docs, Notion or PDF arrive as one cell per
  * LINE: a header block ("Stage", "Feature", "Effect") and then rows of
  * that many lines. The pipe-table reader found nothing in the real vehicle
- * document, so its whole element schedule read as ZERO scheduled elements,
+ * document, so its whole schedule read as ZERO scheduled elements,
  * and zero suppresses the coverage check entirely (Codex 2026-09-12 W#12).
  */
 export function extractFlattenedSchedule(
@@ -113,8 +113,8 @@ export function extractFlattenedSchedule(
     // blank-separated, a blank line is a separator and never a cell.
     const cells = spaced ? lines.filter((cell) => cell.trim() !== "") : lines;
     const here = spaced ? lines.slice(0, at).filter((cell) => cell.trim() !== "").length : at;
-    // THE HEADER BLOCK, which may begin BEFORE the unlock column: a document
-    // whose table starts with Element then Unlock read nothing at all (Y#4).
+    // THE HEADER BLOCK, which may begin BEFORE the arrival column: a document
+    // whose table puts the name column first read nothing at all (Y#4).
     const short = (cell: string): boolean => cell !== "" && cell.length <= 30 && !/[.;:!?]$/.test(cell);
     let first = here;
     while (first > 0 && short(cells[first - 1] ?? "") && !UNLOCK_CELL_RE.test(cells[first - 1] ?? "")) {
@@ -202,9 +202,9 @@ export function extractScheduledElements(docText: string, out?: { partial?: bool
   const found = new Map<string, ScheduledElement>();
   const lines = docText.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    // Any unlock id in the first cell: 47, E3, W1-3, "Cave 47",
-    // "Depth 58" — a single letter-and-number shape was the only one
-    // recognized (Codex 2026-09-11 B#18, C#29).
+    // Any arrival id in the first cell: 47, Ch33, 37-39, "Cave 47",
+    // "Depth 58" — one fixed id shape was the only one recognized
+    // (Codex 2026-09-11 B#18, C#29).
     const m = /^\s*\|\s*((?:[A-Za-z][A-Za-z ]{0,9}\s*)?\d{1,4}(?:[.-]\d{1,4})?)\s*\|\s*([^|]+?)\s*\|/.exec(lines[i]!);
     if (!m) continue;
     const name = m[2]!.trim();

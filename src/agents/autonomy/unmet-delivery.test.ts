@@ -131,7 +131,7 @@ describe("what blocks delivery", () => {
     ]);
   });
 
-  it("says nothing once the frames actually differ AND a playfield exists", () => {
+  it("says nothing once the frames actually differ AND the scene holds renderers", () => {
     const root = assembled();
     framesOf(root, ["one", "two", "three"]);
 
@@ -207,7 +207,7 @@ describe("the ask budget does not silence it", () => {
  *
  * The acceptance bar for the rejected 2026-09-02 attempt: it mirrored
  * elementAssetCoverageReason() into the delivery claim, and that reason
- * measures the WHOLE GDD element schedule. A sprint asked for one module and
+ * measures the GDD's WHOLE schedule. A sprint asked for one module and
  * nothing else then could not deliver, because elements planned for later
  * sprints had no art yet.
  */

@@ -14,7 +14,7 @@ const GDD_SNIPPET = `
 `;
 
 describe("spec scope — the design document is the checklist", () => {
-  it("word-prefixed unlocks are read, a staffing table is not a schedule, strings survive comment stripping (Codex 2026-09-11 C#29, C#30)", () => {
+  it("word-prefixed arrival ids are read, a staffing table is not a schedule, strings survive comment stripping (Codex 2026-09-11 C#29, C#30)", () => {
     const gdd = [
       "| Stage | Feature | Notes |",
       "| --- | --- | --- |",
@@ -31,20 +31,20 @@ describe("spec scope — the design document is the checklist", () => {
     expect(stripCsComments("void M() { retry:// TODO GasVent\n }")).not.toContain("GasVent");
   });
 
-  it("an unlock id in any shape, and a comment is not an implementation (Codex 2026-09-11 B#18)", () => {
+  it("an arrival id in any shape, and a comment is not an implementation (Codex 2026-09-11 B#18)", () => {
     const gdd = [
       "| Stage | Feature | Notes |",
       "| --- | --- | --- |",
       "| 47 | Teleporter | bends the path |",
-      "| E33 | Magnet | pulls items |",
-      "| W37-39 | Springboard | launches |",
+      "| Ch33 | Magnet | pulls items |",
+      "| Rm37-39 | Springboard | launches |",
     ].join("\n");
     expect(extractScheduledElements(gdd).map((e) => e.name)).toEqual(["Teleporter", "Magnet", "Springboard"]);
     expect(stripCsComments("// TODO Teleporter Magnet\nclass A { /* Springboard */ int x; }")).not.toContain("Teleporter");
     expect(stripCsComments("class Teleporter { }")).toContain("Teleporter");
   });
 
-  it("extracts the element schedule from a GDD-style table", () => {
+  it("extracts the schedule from a GDD-style table", () => {
     const els = extractScheduledElements(GDD_SNIPPET);
     expect(els.map((e) => e.name)).toEqual(["Gas Vent", "Echo-Shaft", "Crystal Seam", "Glow Moss", "Rockfall"]);
     expect(els[0]?.unlock).toBe("Cave 23");
@@ -121,7 +121,7 @@ describe("short element names count as whole words (measured 2026-09-10: a 4-let
 
 /**
  * A schedule table that lost its pipes. Measured by Codex 2026-09-12 (W#12)
- * on the real vehicle document: its whole element schedule read as ZERO
+ * on the real vehicle document: its whole schedule read as ZERO
  * scheduled elements, because a document converted out of Google Docs
  * arrives as one cell per LINE. Zero suppresses the coverage check entirely,
  * so none of that content was ever compared to the code.

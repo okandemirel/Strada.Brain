@@ -1235,7 +1235,7 @@ export class StradaConformanceGuard {
     //   1. HUD-only variation — sixty frames differed ONLY in one HUD element
     //      changing over an empty sky (8 distinct of 60 = 13%).
     //   2. Scene-census gaming — a runtime-construction project keeps the scene
-    //      YAML minimal by design (the playfield spawns from code), so a bare
+    //      YAML minimal by design (the game world spawns from code), so a bare
     //      renderer census false-flags the architecture itself.
     // The rule that survives both: sampled frames must differ SUBSTANTIVELY
     // (>= 25% distinct digests) AND, when the scene is too sparse to explain
@@ -1248,7 +1248,7 @@ export class StradaConformanceGuard {
       `frames vary too little to prove drawing: ${digests.size}/${sampled} distinct ` +
       `(${Math.round(distinctRatio * 100)}%); the scene instantiates ` +
       `${census.gameObjects} GameObject(s) and ${census.renderers} renderer(s) — ` +
-      `the GDD's playfield objects were never added to what the camera sees`
+      `whatever the game is meant to show was never added to what the camera sees`
     );
   }
 
@@ -1257,7 +1257,7 @@ export class StradaConformanceGuard {
    *
    * Counts MeshRenderer/SpriteRenderer occurrences and top-level GameObjects
    * in scene YAML. Cheap text census, not a Unity import — enough to tell a
-   * playfield from a skybox with a HUD on it.
+   * populated scene from a skybox with a HUD on it.
    */
 
   private danglingAssetReferences(): string[] {
@@ -1624,7 +1624,7 @@ export class StradaConformanceGuard {
   }
 
   /**
-   * Per-element art coverage against the design document's element schedule.
+   * Per-element art coverage against the elements the design document schedules.
    *
    * For every scheduled element: (1) an art source file under Assets/ whose
    * name matches the element, (2) a prefab/asset/scene file that references
@@ -1692,10 +1692,10 @@ export class StradaConformanceGuard {
       const matchIdx = artNames.findIndex((n) => tokens.some((t) => n.includes(t)));
       if (matchIdx === -1) {
         // No art file NAMED after the element — but sourced (purchased) art
-        // rarely is: an element "Frog" satisfied by Toad_cub_IP.fbx matches no
-        // token. Before accusing, check whether a prefab/scene NAMED after the
-        // element references ANY art guid: bound art under a different name
-        // is coverage, not a gap.
+        // rarely is: an element "Gas Vent" drawn by a bought pack's
+        // SteamJet_B.fbx matches no token. Before accusing, check whether a
+        // prefab/scene NAMED after the element references ANY art guid: bound
+        // art under a different name is coverage, not a gap.
         const elementBindTargets = bindTargets.filter((f) => {
           const base = norm((f.replace(/\\/g, "/").split("/").pop() ?? f).replace(/\.[^.]+$/, ""));
           return tokens.some((t) => base.includes(t));
@@ -1768,7 +1768,7 @@ export class StradaConformanceGuard {
     //
     // Every condition below is scoped to THIS sprint's own artifacts — the
     // scene it assembled, whether it started the game, whether that scene has a
-    // camera. Deliberately nothing here reads the GDD element schedule: an
+    // camera. Deliberately nothing here reads the GDD's schedule: an
     // earlier attempt mirrored elementAssetCoverageReason(), which measures the
     // whole schedule, and a sprint that correctly built only its own elements
     // could no longer deliver because later sprints' elements had no art yet.
@@ -1979,10 +1979,10 @@ export class StradaConformanceGuard {
 
     // A test assembly that contains no test satisfies every rule above: the
     // .asmdef exists, its name matches its module, and the coverage rule is
-    // looking for exactly that name. Measured on two full runs: thirty-two of
-    // thirty-two test assembly directories held zero .cs files. The headless
-    // PlayMode run over one of them executed 0 tests and Unity still wrote
-    // result="Passed", because nothing failed.
+    // looking for exactly that name. Measured on two full runs: every test
+    // assembly directory held zero .cs files. The headless PlayMode run over
+    // one of them executed 0 tests and Unity still wrote result="Passed",
+    // because nothing failed.
     //
     // Counting the container rather than its contents is the same mistake as
     // counting compile errors without checking that anything compiled.
@@ -2068,12 +2068,11 @@ export class StradaConformanceGuard {
       const lastAsk = coverageAsk.last;
       return (
         `[STRADA ELEMENT ASSETS MISSING] ${coverage}. ` +
-        "The design's element schedule is the contract for what must be VISIBLE, not only " +
-        "implemented. For each named element: first run unity_my_assets_cloud for art the user " +
-        "already owns; when nothing fits, generate with the tool that matches the element's " +
-        "layer — unity_generate_sprite for the pieces the design draws in 2D, unity_generate_mesh " +
-        "for the pieces THIS design describes as 3D (those are not sprites; the " +
-        "design's own words decide which is which) — then bind the asset into the element's prefab " +
+        "Every element the design document schedules must be VISIBLE, not only implemented. " +
+        "For each named element: first run unity_my_assets_cloud for art the user already owns; " +
+        "when nothing fits, generate it — unity_generate_sprite makes an image, unity_generate_mesh " +
+        "makes a model, and the design's own description of the element decides which it needs " +
+        "(a model is not a sprite) — then bind the asset into the element's prefab " +
         "(a SpriteRenderer's sprite field, a MeshFilter's mesh, a config asset's reference). " +
         "An asset on disk that nothing references is the same as no asset." +
         (lastAsk
@@ -2158,7 +2157,7 @@ function isInsideFrameworkPath(filePath: string, deps?: StradaDepsStatus): boole
   return frameworkPaths.some((fp) => normalized.includes(fp));
 }
 
-/** A believable playfield instantiates at least this many renderers. */
+/** A believable game scene instantiates at least this many renderers. */
 export const MIN_PLAYFIELD_RENDERERS = 6;
 
 /** Text census of renderers across a project's scenes. Exported for tests. */

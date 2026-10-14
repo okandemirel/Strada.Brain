@@ -125,10 +125,10 @@ describe("element asset coverage", () => {
     // game's art direction to every game the system builds (Codex 2026-09-12
     // R#10, and the standing rule that no vehicle's wording belongs in system
     // behaviour). This GDD states no look, so the prompt may carry none: no
-    // style word appears unless the design wrote it, and the 2D/3D split is
-    // left to the design's own words.
+    // style word appears unless the design wrote it, and which generator fits
+    // an element is left to the design's own description of it.
     expect(prompt).not.toMatch(/cartoon|cel-shaded|low-poly|hand-painted|painterly|watercolou?r|photoreal|voxel|isometric/i);
-    expect(prompt).toContain("THIS design describes as 3D");
+    expect(prompt).toContain("the design's own description of the element decides which it needs");
   });
 
   it("names elements whose art exists but is bound to nothing", () => {
@@ -172,7 +172,7 @@ describe("element asset coverage", () => {
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });
 
-  it("stays silent when the project has no element schedule", () => {
+  it("stays silent when the design document schedules nothing", () => {
     const { root, codePath } = assembledProject();
     writeFileSync(join(root, "docs", "GDD.md"), "# Notes\n\nNo schedule table here.\n");
     const guard = guardFor(root);

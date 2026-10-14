@@ -39,7 +39,7 @@ function schedule(title: string, rows: Array<[string, string]>): string {
     "",
     "| Stage | Feature | Effect |",
     "| ----- | ------- | ------ |",
-    ...rows.map(([unlock, name]) => `| ${unlock} | ${name} | scheduled |`),
+    ...rows.map(([stage, name]) => `| ${stage} | ${name} | scheduled |`),
     "",
   ].join("\n");
 }
