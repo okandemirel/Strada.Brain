@@ -60,39 +60,38 @@
     "lastError": "Coverage completion 1 — close the GDD gaps blocked after 2 attempts: The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.",
     "coverageAuditNote": "coverage audit could not run: coverage audit returned malformed JSON",
     "deliveryReported": true,
-    "projectName": "SyntheticPuzzle"
+    "projectName": "SyntheticObservatory"
   },
   "gdd": {
     "path": "docs/GDD.md",
-    "chars": 1706,
-    "sha256": "7fb9667a8334433aa58e9e11c75b6cabc424a95142fbca0233e4a4742df8739b",
+    "chars": 1625,
+    "sha256": "2ad7fea259bb940c01200763988e735d687a8e3a1663f58a9d54969ac0da1d5b",
     "storedSha256": null,
     "revision": null
   },
   "milestones": [
     {
       "id": "m1",
-      "title": "Sprint 1 — engine foundations and an empty board shell",
+      "title": "Sprint 1 — the observatory shell and an empty sky dome",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a001",
-      "resultExcerpt": "ntly verified\n\nI got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
+      "resultExcerpt": "dently verified\n\nI got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
       "reconcileDeferred": false,
       "sectionRefs": [
-        "§2.5",
-        "§3.1–§3.2",
-        "§15",
-        "§16"
+        "§1",
+        "§2",
+        "§7"
       ],
-      "promptChars": 60,
-      "promptSha256": "2e0090d3d49ba2b6ed1a086b37a511aaa917eb3f2fcad754c167327870e0d7ce",
+      "promptChars": 45,
+      "promptSha256": "b497236766b4f9248a9511507915f95beaf289a31b2d1d4bfa04f792e66f2043",
       "tip": {
         "id": "task_0000a001",
         "status": "completed",
         "createdAt": 1700036000000,
         "completedAt": 1700043200000,
-        "resultChars": 1439,
-        "resultSha256": "4e02211d24240f211d8b00151080f41095c2c060aacf92ab2f125e343bc06a55",
+        "resultChars": 1435,
+        "resultSha256": "34c0f7600d14f396bdd06039f6ea86ccdaa2f561dbabfd5e9045c2a6142664ba",
         "stamps": {
           "task_stuck": 3
         },
@@ -103,7 +102,7 @@
           },
           {
             "line": 3,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 5,
@@ -119,7 +118,7 @@
           },
           {
             "line": 10,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
           },
           {
             "line": 12,
@@ -135,7 +134,7 @@
           },
           {
             "line": 17,
-            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 19,
@@ -151,25 +150,25 @@
     },
     {
       "id": "m2",
-      "title": "Sprint 2 — core rules and the drift loop",
+      "title": "Sprint 2 — catalogue rules and the confirmation check",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a002",
-      "resultExcerpt": "ress note 46: the worker kept describing the drift beat instead of changing it\nprogress note 47: the worker kept describing the drift beat instead of changing it\nprogress note 48: the worker kept describing the drift beat instead of changing it\nprogress note 49: the worker kept describing the drift beat instead of changing it\nprogress note 50: the worker kept describing the drift beat instead of changing it\nprogress note 51: the worker kept describing the drift beat instead of ch\n... (truncated)",
+      "resultExcerpt": "pt describing the confirmation check instead of changing it\nprogress note 43: the worker kept describing the confirmation check instead of changing it\nprogress note 44: the worker kept describing the confirmation check instead of changing it\nprogress note 45: the worker kept describing the confirmation check instead of changing it\nprogress note 46: the worker kept describing the confirmation check instead of changing it\nprogress note 47: the worker kept describing the confirmatio\n... (truncated)",
       "reconcileDeferred": false,
       "sectionRefs": [
-        "§3.3–§3.11",
-        "§12"
+        "§4.1–§4.2",
+        "§1"
       ],
-      "promptChars": 53,
-      "promptSha256": "354a094821dca838850f3cc01a9515864fd102c54bba70b055515f8ec44a454d",
+      "promptChars": 51,
+      "promptSha256": "0f87fd95ab6dab518bf902d9195685075c2ecb3fcb5501ef25949e9296c21af6",
       "tip": {
         "id": "task_0000a002",
         "status": "completed",
         "createdAt": 1700072000000,
         "completedAt": 1700079200000,
         "resultChars": 8208,
-        "resultSha256": "10b25be6ef5325f90c73a2864c3c985f999b751137dd20b1cbabf79a16464253",
+        "resultSha256": "4b23ec5813d21f46413efba85591eaa9fe60573a0a791ea659958454bcb8e1d9",
         "resultCutInStorage": true,
         "stamps": {
           "task_stuck": 6
@@ -185,7 +184,7 @@
           },
           {
             "line": 11,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 13,
@@ -205,7 +204,7 @@
           },
           {
             "line": 24,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
           },
           {
             "line": 26,
@@ -225,7 +224,7 @@
           },
           {
             "line": 37,
-            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 39,
@@ -265,7 +264,7 @@
           },
           {
             "line": 63,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 65,
@@ -285,7 +284,7 @@
           },
           {
             "line": 76,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
           },
           {
             "line": 78,
@@ -296,11 +295,11 @@
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           },
           {
-            "line": 132,
-            "text": "progress note 51: the worker kept describing the drift beat instead of ch"
+            "line": 128,
+            "text": "progress note 47: the worker kept describing the confirmatio"
           },
           {
-            "line": 133,
+            "line": 129,
             "text": "... (truncated)"
           }
         ],
@@ -309,7 +308,7 @@
     },
     {
       "id": "m3",
-      "title": "Sprint 3 — obstacles and power-ups",
+      "title": "Sprint 3 — mirror segments and the mount",
       "status": "green",
       "attempts": 2,
       "taskId": "task_0000a003",
@@ -318,11 +317,11 @@
       "visualEvidenceBounced": true,
       "noWorkBounced": false,
       "sectionRefs": [
-        "§4",
-        "§5"
+        "§2.1",
+        "§2.2"
       ],
-      "promptChars": 20,
-      "promptSha256": "877768773ad40fc0ed42ed300f4e597c48c6e4bbbf656b06ddde333f8d68c97d",
+      "promptChars": 24,
+      "promptSha256": "52e0e8490a58997612d85db5e5545cd827f7c67d173db2a76302a59357cf9e70",
       "tip": {
         "id": "task_0000a013",
         "status": "completed",
@@ -350,26 +349,25 @@
     },
     {
       "id": "m4",
-      "title": "Sprint 4 — level data, the solver and launch content",
+      "title": "Sprint 4 — weather windows and the booking calendar",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a004",
-      "resultExcerpt": "hange to Assets/Scripts/Levels/LevelCatalog.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** the catalog loader was rewritten but never compiled.\n3. **Check the tests:** none ran; the build failed before them.\n4. **Verdict:** not verified.",
+      "resultExcerpt": "to Assets/Scripts/Bookings/BookingCalendar.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** the calendar loader was rewritten but never compiled.\n3. **Check the tests:** none ran; the build failed before them.\n4. **Verdict:** not verified.",
       "visualEvidenceBounced": true,
       "sectionRefs": [
-        "§6",
-        "§3.5",
-        "§16.1–§16.2"
+        "§3",
+        "§5"
       ],
-      "promptChars": 35,
-      "promptSha256": "601cc84dfb16ed0eda10d5204682e946d447bfeb05ff49a428882bf239dd3967",
+      "promptChars": 38,
+      "promptSha256": "dde93489810588e24022a8b4393394f4774778e366793017030e9afb0d3d8d38",
       "tip": {
         "id": "task_0000a004",
         "status": "completed",
         "createdAt": 1700144000000,
         "completedAt": 1700151200000,
-        "resultChars": 658,
-        "resultSha256": "1db0b7eed710a2a226ca364b9af8646fc6f21271840a4ccfc3939b53b82b0776",
+        "resultChars": 664,
+        "resultSha256": "d9ac948a4cde61efe1cc09a734e9e41dca9abb90b416d4654ac109b39b9dec22",
         "stamps": {
           "task_stuck": 1
         },
@@ -380,7 +378,7 @@
           },
           {
             "line": 3,
-            "text": "**Make a targeted code change to Assets/Scripts/Levels/LevelCatalog.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**"
+            "text": "**Make a targeted code change to Assets/Scripts/Bookings/BookingCalendar.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**"
           },
           {
             "line": 5,
@@ -396,19 +394,18 @@
     },
     {
       "id": "m5",
-      "title": "Sprint 5 — screens, onboarding and progression",
+      "title": "Sprint 5 — the screens and the catalogue view",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a005",
       "resultExcerpt": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.",
       "visualEvidenceBounced": true,
       "sectionRefs": [
-        "§7",
-        "§8.1–§8.4",
-        "§12"
+        "§5",
+        "§4.1"
       ],
-      "promptChars": 32,
-      "promptSha256": "0740411e98a8d7f3debe6fc61c71fc6ae248ed11fcbeadc85a15fc3a2db31148",
+      "promptChars": 22,
+      "promptSha256": "e32cd56511f8b5e68c667232ad199f296d1c871aa01be14bbceba1e46d4cf539",
       "tip": {
         "id": "task_0000a005",
         "status": "completed",
@@ -438,7 +435,7 @@
     },
     {
       "id": "m6",
-      "title": "Sprint 6 — cloud saves and weekly events",
+      "title": "Sprint 6 — archive upload and conflicts",
       "status": "green",
       "attempts": 2,
       "taskId": "task_0000a006",
@@ -449,18 +446,17 @@
       "startedAtMs": 1700216000000,
       "reconcileDeferredSince": 1700208800000,
       "sectionRefs": [
-        "§8.5–§8.9",
-        "§15.3–§15.8"
+        "§6.1–§6.2"
       ],
-      "promptChars": 36,
-      "promptSha256": "d49ac5c9aa657b0675fec42125403b08967d8eeb975adfa4030c4e88b49f22fa",
+      "promptChars": 20,
+      "promptSha256": "a109cba291b5905e6fc82eb5d4a0f7c799e38f2e98e0cb97192861453ca8dad3",
       "tip": {
         "id": "task_0000a006",
         "status": "completed",
         "createdAt": 1700216000000,
         "completedAt": 1700223200000,
-        "resultChars": 4587,
-        "resultSha256": "962706ad59a1a3a6bc82744dc97585c329f177829981e454a16cbe11e6818f65",
+        "resultChars": 4577,
+        "resultSha256": "6a043287438a5934abedf74148c73ec84e7e14011a4f063d523ab68b1e394f1b",
         "stamps": {
           "task_stuck": 10,
           "provider_abort": 1
@@ -472,7 +468,7 @@
           },
           {
             "line": 3,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 5,
@@ -488,7 +484,7 @@
           },
           {
             "line": 10,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
           },
           {
             "line": 12,
@@ -504,7 +500,7 @@
           },
           {
             "line": 17,
-            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 19,
@@ -536,7 +532,7 @@
           },
           {
             "line": 31,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 33,
@@ -552,7 +548,7 @@
           },
           {
             "line": 38,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
           },
           {
             "line": 40,
@@ -568,7 +564,7 @@
           },
           {
             "line": 45,
-            "text": "**Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 47,
@@ -600,7 +596,7 @@
           },
           {
             "line": 59,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 61,
@@ -616,7 +612,7 @@
           },
           {
             "line": 66,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
           },
           {
             "line": 68,
@@ -652,7 +648,7 @@
       "status": "green",
       "attempts": 2,
       "taskId": "task_0000a007",
-      "resultExcerpt": " bootstrapper and the input adapter in the saved scene\",\n  \"note 60\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 61\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 62\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 63\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 64\": \"keep the camera, the bootstrapper and the input a\n... (truncated)",
+      "resultExcerpt": "in the saved scene\",\n  \"note 60\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 61\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 62\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 63\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 64\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note \n... (truncated)",
       "visualEvidenceBounced": false,
       "noWorkBounced": false,
       "timeBoxEscalations": 0,
@@ -666,24 +662,24 @@
       "structureFindings": [
         "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Main.unity and the prefabs it places.",
         "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Main.unity",
-        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Scripts/Board/BoardShell.cs, Assets/Scripts/LanternSpawner.cs, +1 more",
+        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Scripts/Dome/DomeShell.cs, Assets/Scripts/CometSpawner.cs, +1 more",
         "GDD says: …<GDD passage omitted>…"
       ],
-      "visualConformance": "**Does it look like the GDD?**\n- Partly: the board and its lanterns read, but the painted lake backdrop is missing.\n- Judged from `<project>/Recordings/verification-final/frame_00119.png` by openai.",
+      "visualConformance": "**Does it look like the GDD?**\n- Partly: the dome and its star field read, but the coordinate grid over them is missing.\n- Judged from `<project>/Recordings/verification-final/frame_00119.png` by openai.",
       "sectionRefs": [
-        "§2.5",
-        "§15",
-        "§16"
+        "§1",
+        "§6",
+        "§7"
       ],
-      "promptChars": 42,
-      "promptSha256": "194ae4dddc998795e6beba0e2da3636f35a47e5bf1795ac0e430a96a8368836d",
+      "promptChars": 38,
+      "promptSha256": "1c16b2a2794a88bec3c070a37881abb350797021a88f3f2d11fc9e77c2c84781",
       "tip": {
         "id": "task_0000a007",
         "status": "completed",
         "createdAt": 1700252000000,
         "completedAt": 1700259200000,
         "resultChars": 8208,
-        "resultSha256": "895d47f27896813071476545398fb803f09d0f743701c06a9cc914ff862e677a",
+        "resultSha256": "66a5eaeff270a39edd6cf8924f9759bd1a3f4b0746ecb4617902641a64f580ae",
         "resultCutInStorage": true,
         "stamps": {
           "task_stuck": 1,
@@ -743,11 +739,11 @@
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           },
           {
-            "line": 121,
-            "text": "  \"note 64\": \"keep the camera, the bootstrapper and the input a"
+            "line": 122,
+            "text": "  \"note "
           },
           {
-            "line": 122,
+            "line": 123,
             "text": "... (truncated)"
           }
         ],

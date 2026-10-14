@@ -22,43 +22,51 @@ import { TaskStatus, type Task, type TaskId } from "../../../src/tasks/types.js"
 
 export const SYNTHETIC_CAMPAIGN_ID = "campaign_1700000000000_a1b2c";
 export const SYNTHETIC_HOME = "/Users/sample";
-const PROJECT_ROOT = `${SYNTHETIC_HOME}/Games/SyntheticPuzzle`;
+const PROJECT_ROOT = `${SYNTHETIC_HOME}/Games/SyntheticObservatory`;
 const T0 = 1_700_000_000_000;
 const HOUR = 3_600_000;
 
 /** Quoted by the structure findings below, so the export has a GDD passage to leave out. */
-const GDD_STYLE = "Lanterns glow softly over a painted lake at dusk, drawn in loose watercolour with warm paper grain.";
+const GDD_STYLE = "The sky is drawn in deep ink blues with chalk-white stars and a faint pencilled grid of right ascension.";
 
 export const SYNTHETIC_GDD = [
-  "# Lantern Drift — Game Design Document (synthetic test fixture)",
+  "# Comet Watch — Game Design Document (synthetic test fixture)",
   "",
-  "## 2.5 Platforms",
-  "Phones and tablets in portrait orientation; a desktop build for internal playtests.",
-  "",
-  "## 3.1 Board",
-  "A hex board of still water. Lanterns drift in from the left edge, one cell per beat.",
-  "## 3.2 Lanterns",
-  "Each lantern carries one of five glow colours and a wick count from one to four.",
-  "## 3.3 Core Rules",
-  "Tapping a shrine pulls the nearest lantern of its colour; a matched lantern burns one wick.",
-  ...Array.from({ length: 8 }, (_, i) => `## 3.${i + 4} Rule set ${i + 4}\nRule ${i + 4} keeps the drift readable at every board size.`),
-  "",
-  "## 4 Obstacles",
-  "Reeds slow a lantern for one beat; ice holds it until a neighbour clears.",
-  "## 5 Power-ups",
-  "A gust moves every lantern one cell; a spark lights a whole row.",
-  "## 6 Levels",
-  "Levels are authored as JSON and validated by a solver before release.",
-  "## 7 Screens",
-  "Title, map, level, results and settings.",
-  "## 8 Progression",
-  "Stars unlock new ponds; events rotate weekly.",
-  "## 12 Art Direction",
+  "## 1 Night Sky",
+  "The sky turns with the season; comets cross it on orbits an almanac publishes a week ahead.",
   GDD_STYLE,
-  "## 15 Technology",
-  "Unity with the Strada.Core module layout; saves sync through a cloud service.",
-  "## 16 Production",
-  "Seven sprints, then a coverage pass against this document.",
+  "",
+  "## 2 Telescope",
+  "### 2.1 Mirrors",
+  "The primary mirror is eighteen segments that sag out of true as the dome cools; the player trims each one by hand.",
+  "### 2.2 Mount",
+  "The mount slews between booked targets, and every slew spends minutes of dark time.",
+  "",
+  "## 3 Weather",
+  "A cloud forecast opens and closes observing windows; a night lost to cloud returns its booked hours.",
+  "",
+  "## 4 Catalogue",
+  "### 4.1 Naming",
+  "A confirmed comet carries its first observer's name and the year it was sighted.",
+  "### 4.2 Catalogue rules",
+  "C-1 A sighting needs two exposures taken at least forty minutes apart.",
+  "C-2 A comet is confirmed by a second clear night within nine days of the first.",
+  "C-3 A sighting closer than ten degrees to the Moon is held until the Moon sets.",
+  "C-4 Observers who confirm the same comet on the same night share its entry.",
+  "C-5 An entry records position, brightness and tail length.",
+  "C-6 A withdrawn sighting stays in the catalogue, marked withdrawn.",
+  "",
+  "## 5 Screens",
+  "Observatory, sky chart, booking calendar, catalogue and settings.",
+  "",
+  "## 6 Archive sync",
+  "### 6.1 Upload",
+  "Entries upload to a shared archive whenever the observatory is online.",
+  "### 6.2 Conflicts",
+  "When two entries disagree, the earlier sighting stands and the later one is attached to it as a note.",
+  "",
+  "## 7 Delivery",
+  "Unity with the Strada.Core module layout; seven sprints, then a coverage pass against this document.",
   "",
 ].join("\n");
 
@@ -87,17 +95,17 @@ function storedCut(lines: string[], filler: (i: number) => string): string {
 }
 
 const NUDGES = [
-  "Stop reflecting and make a concrete edit to Assets/Scripts/Board/BoardShell.cs, then run the PlayMode verification again.",
-  "Stop further reflection and inspect Assets/Prefabs/Generated/ShrinePanel.prefab before the next edit.",
-  "Stop reflecting and make the next concrete mutation in LanternSpawner.cs, then run the Unity PlayMode verification again.",
+  "Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.",
+  "Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.",
+  "Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.",
   "Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.",
 ];
 
 const planStep = (i: number): string[] => [
   "{",
   `  "step": ${i},`,
-  `  "goal": "wire the lantern board into scene ${i}",`,
-  `  "actions": ["open Assets/Scenes/Main.unity", "place the board prefab", "save the scene"]`,
+  `  "goal": "wire the sky dome into scene ${i}",`,
+  `  "actions": ["open Assets/Scenes/Main.unity", "place the dome prefab", "save the scene"]`,
   "}",
   "",
 ];
@@ -106,11 +114,11 @@ const RESULTS: Record<string, string> = {
   m1: [...attempt(STUCK, NUDGES[0]!), ...attempt(STUCK, NUDGES[1]!), ...attempt(STUCK, NUDGES[2]!)].join("\n").trimEnd(),
   m2: storedCut(
     [
-      "The rule engine compiles; wiring the drift beat next.",
+      "The catalogue rules compile; wiring the confirmation check next.",
       "",
       ...Array.from({ length: 6 }, (_, i) => [...planStep(i + 1), ...attempt(STUCK, NUDGES[i % NUDGES.length]!)]).flat(),
     ],
-    (i) => `progress note ${i}: the worker kept describing the drift beat instead of changing it`,
+    (i) => `progress note ${i}: the worker kept describing the confirmation check instead of changing it`,
   ),
   m3: [
     "Let me take the workspace path the system redirected me to and run the build from there:",
@@ -122,11 +130,11 @@ const RESULTS: Record<string, string> = {
   m4: [
     STUCK,
     "",
-    "**Make a targeted code change to Assets/Scripts/Levels/LevelCatalog.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**",
+    "**Make a targeted code change to Assets/Scripts/Bookings/BookingCalendar.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**",
     "",
     FLAGS,
     ...REASONING,
-    "2. **Check the diff:** the catalog loader was rewritten but never compiled.",
+    "2. **Check the diff:** the calendar loader was rewritten but never compiled.",
     "3. **Check the tests:** none ran; the build failed before them.",
     "4. **Verdict:** not verified.",
   ].join("\n"),
@@ -190,19 +198,21 @@ function milestones(): CampaignMilestone[] {
       ...fields,
     }) as CampaignMilestone;
   return [
-    green("m1", 1, "engine foundations and an empty board shell", "Read docs/GDD.md and implement §2.5, §3.1–§3.2, §15 and §16.", {
+    green("m1", 1, "the observatory shell and an empty sky dome", "Read docs/GDD.md and implement §1, §2 and §7.", {
       reconcileDeferred: false,
     }),
-    green("m2", 2, "core rules and the drift loop", "Implement §3.3–§3.11 completely, with the art of §12.", { reconcileDeferred: false }),
-    green("m3", 3, "obstacles and power-ups", "Implement §4 and §5.", {
+    green("m2", 2, "catalogue rules and the confirmation check", "Implement §4.1–§4.2 completely, with the sky of §1.", {
+      reconcileDeferred: false,
+    }),
+    green("m3", 3, "mirror segments and the mount", "Implement §2.1 and §2.2.", {
       attempts: 2,
       reconcileDeferred: false,
       visualEvidenceBounced: true,
       noWorkBounced: false,
     }),
-    green("m4", 4, "level data, the solver and launch content", "Implement §6, §3.5 and §16.1–§16.2.", { visualEvidenceBounced: true }),
-    green("m5", 5, "screens, onboarding and progression", "Implement §7, §8.1–§8.4 and §12.", { visualEvidenceBounced: true }),
-    green("m6", 6, "cloud saves and weekly events", "Implement §8.5–§8.9 and §15.3–§15.8.", {
+    green("m4", 4, "weather windows and the booking calendar", "Implement §3, then the calendar of §5.", { visualEvidenceBounced: true }),
+    green("m5", 5, "the screens and the catalogue view", "Implement §5 and §4.1.", { visualEvidenceBounced: true }),
+    green("m6", 6, "archive upload and conflicts", "Implement §6.1–§6.2.", {
       attempts: 2,
       visualEvidenceBounced: true,
       noWorkBounced: false,
@@ -210,7 +220,7 @@ function milestones(): CampaignMilestone[] {
       startedAtMs: T0 + 60 * HOUR,
       reconcileDeferredSince: T0 + 58 * HOUR,
     }),
-    green("m7", 7, "integration and delivery", "Integrate §2.5, §15 and §16, then deliver.", {
+    green("m7", 7, "integration and delivery", "Integrate §1, §6 and §7, then deliver.", {
       attempts: 2,
       visualEvidenceBounced: false,
       noWorkBounced: false,
@@ -225,13 +235,13 @@ function milestones(): CampaignMilestone[] {
       structureFindings: [
         "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Main.unity and the prefabs it places.",
         "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Main.unity",
-        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Scripts/Board/BoardShell.cs, Assets/Scripts/LanternSpawner.cs, +1 more",
+        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Scripts/Dome/DomeShell.cs, Assets/Scripts/CometSpawner.cs, +1 more",
         GDD_SAYS,
       ],
       visualConformance: [
         "**Does it look like the GDD?**",
-        "- Partly: the board and its lanterns read, but the painted lake backdrop is missing.",
-        "- Judged from `~/Games/SyntheticPuzzle/Recordings/verification-final/frame_00119.png` by openai.",
+        "- Partly: the dome and its star field read, but the coordinate grid over them is missing.",
+        "- Judged from `~/Games/SyntheticObservatory/Recordings/verification-final/frame_00119.png` by openai.",
       ].join("\n"),
     }),
     {
@@ -288,7 +298,7 @@ export function seedSyntheticCampaign(campaignsDb: string, tasksDb: string): voi
       userId: "user-synthetic",
       projectRoot: PROJECT_ROOT,
       state: "done",
-      ideaText: "a calm lantern-matching puzzle",
+      ideaText: "a quiet observatory-scheduling sim",
       gddPath: "docs/GDD.md",
       gddText: SYNTHETIC_GDD,
       draftAttempts: 0,
