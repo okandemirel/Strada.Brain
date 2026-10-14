@@ -48,12 +48,12 @@ A mechanism with no store at all is a **fail**, not `not measured`. Assumption r
 | 1 | daemon log and its rotated archives (`strada-brain1.log.gz` … `strada-brain4.log.gz`), the newest `Bootstrapping Strada Brain` line and the Strada.MCP line that follows it | that boot registered at least 1 Unity tool, the bridge was connected, and the boot is not older than HEAD. A newer boot that logged `Failed to load…`, `Refused to load…` or no Strada.MCP line at all fails, whatever an older boot loaded. No boot marker in any file, or an unreadable archive that may hold the newest boot, is `not measured`. |
 | 2 | `campaigns.idea_text` | a campaign started from one sentence reached a plan |
 | 3 | `campaigns.requirements_json` | a ledger exists, and every in-scope row is owned by a milestone of the plan |
-| 4 | the ledger's `owner` and `construct` fields | every in-scope row names an owner and a framework construct. A row counts as owned only by its `owner`, as production reads it; a queued row has none, whatever its `ownership` history names. No production code writes `construct` yet, so this rung fails today: no architecture map is stored. |
+| 4 | the ledger's `owner` field and the constructs its acceptance check names | every in-scope row names an owner and a framework construct. A row counts as owned only by its `owner`, as production reads it; a queued row has none, whatever its `ownership` history names. Since `5c12d384` the construct is read from the row's own acceptance check (`constructsNamedBy`), not from a field a planner could claim — so a row whose check has not been written yet still names none, and the rung says which half is missing. |
 | 5 | `campaign_judgements`, `campaigns.scope_gate_since`, each milestone's `judgementBasis` | every counted green milestone has a green judgement on a `proven` basis in mode `on` (a `shadow` judgement counts for nothing). With `--campaign`, every green of that campaign counts. Without it, two kinds of green are left out and counted in a note: those of campaigns created before the gate first decided anywhere (the earliest `scope_gate_since`) that never ran under it, and those production marked `legacy` (green before the ledger was built). Every other green counts, including one in a later campaign run with the gate off. No campaign under the gate fails the rung. |
 | 6 | project `Assets/` (game code: excludes Tests, Editor, Strada.Generated, Plugins, StradaAcceptance, and framework copies such as `Assets/Strada.MCP` or a `Strada.Modules` folder at any depth) | ModuleConfig subclasses exist, no type name is declared in two modules, no empty `OnUpdate`, every `Service` subclass is registered, no `FindObject*`, and no `new *Service(` |
 | 7 | the project's `Packages/` and game code (a framework copy's own files never count as a reference) | Strada.Modules is installed and referenced |
 | 8 | milestone build, run and play-through verdicts, plus `unity_build_player` / `unity_run_player` observations | a player was built and run, a play-through was ok, Won and Lost were both observed, and the input route was real input. No production code records the input route yet, so this check is `not measured` today. |
-| 9 | `retrieval_metrics` (and its rollup), `instinct_exposure_log`, `instincts.origin_session_id` | a retrieval returned something, and a lesson reached a later run than the one that learned it. Only a recorded origin session can show that. No production code writes one yet, so an exposure of a lesson with no origin makes the check `not measured: lesson provenance not recorded`, never a pass. |
+| 9 | `retrieval_metrics` (and its rollup), `instinct_exposure_log`, `instincts.origin_session_id` | a retrieval returned something, and a lesson reached a later run than the one that learned it. Only a recorded origin session can show that. Since `10953e5d` the pipeline records the task that learned an instinct and tags its campaign, so the pair is linkable (origin = the task that learned it, `task_run_id` = the task that saw it); an exposure of a lesson learned before that commit still has no origin and reads `not measured: lesson provenance not recorded`, never a pass. |
 | 10 | campaigns, judgements and `tasks.db` | a campaign was delivered with every milestone gate-proven, with 0 owner messages in its chat during the run |
 
 How the rung 6 terms are defined:
@@ -65,14 +65,19 @@ How the rung 6 terms are defined:
 
 Criteria A–L measure the same sources for one campaign: `--campaign`, or else the newest campaign on `--project`. Some parts no record holds today:
 
-- LLM calls per campaign
 - per-mode test counts
 - named play-through scenarios
 - DI and bus closure
 - Core's ArchitectureValidator
-- negative controls
+- negative controls, as a STORE the scorecard can read. Since `f3a53e95` a delivery runs them over the delivered tree and prints the count in its report, but nothing records the result where this scorecard looks.
 
 These print as `not measured`, with the reason.
+
+Criterion H reads whether a store for assumption records exists at all. Since
+`02904ec8` it does (`campaign_assumptions`, append-only beside
+`campaign_judgements`), and a delivery records what it chose where the document
+was silent — so the criterion is `not measured` rather than `fail` until this
+scorecard reads the rows themselves.
 
 Criterion K reads the **vault indexes**, which is what retrieval can return. It does not read a log of what reached a prompt. A file indexed by two vaults is counted once.
 
@@ -84,4 +89,4 @@ A WAL-mode database with no `-wal` or `-shm` file beside it is read from a copy 
 
 The project tree and the log are only read, so the scorecard is safe to run against a live home.
 
-**Do not commit its output on real data.** The output names a private project's paths, types and campaigns. The tests run it only on invented databases and an invented project tree: `tests/eval/north-star-scorecard.test.ts`. Their main fixture holds only what production writes. The ten-rung pass is a separate fixture that adds the three records no production code writes yet: `construct`, the input route and the lesson's origin session.
+**Do not commit its output on real data.** The output names a private project's paths, types and campaigns. The tests run it only on invented databases and an invented project tree: `tests/eval/north-star-scorecard.test.ts`. Their main fixture holds only what production writes. The ten-rung pass is a separate fixture that adds the records production did not write when it was built: the construct (now derived from a row's acceptance check, `5c12d384`), the input route (still unwritten) and the lesson's origin session (now written, `10953e5d`).
