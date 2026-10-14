@@ -53,7 +53,7 @@ const FLAGS = "[VERIFIER FLAGS — unresolved; this node was NOT positively veri
 const FAKE_KEY = `sk-proj-${"A1b2C3d4".repeat(4)}`;
 const FAKE_HOME = "/Users/alice";
 const GDD_TEXT =
-  "# Sentinel GDD\n\nArt questions: art@example.org\n\n## 4.2 Catalogue rules\nC-1 GDD-BODY-SENTINEL a comet is confirmed on a second clear night.\n";
+  "# Sentinel GDD\n\nArt questions: art@example.org\n\n## 2 Dome\nThe dome GDD-BODY-SENTINEL turns on a toothed rail.\n";
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
@@ -78,7 +78,7 @@ const M1_TIP_RESULT = [
   // A result that starts mid-stamp, the way a measured m1 excerpt did.
   STUCK.slice(STUCK.indexOf("fter multiple")),
   "",
-  "**Stop reflecting and edit Assets/Scripts/DomeBuilder.cs.**",
+  "**Stop reflecting and edit Assets/Observatory/Shutter/ShutterMotor.cs.**",
   "",
   FLAGS,
   `- verification_skipped: the reviewer quoted ${FAKE_KEY} from ${FAKE_HOME}/Games/.env`,
@@ -102,8 +102,8 @@ const M1_TIP_RESULT = [
  * m2's tip: one stamp at the top, then more worker prose than the excerpt
  * keeps, stored cut by the sanitizer the way a measured campaign's m2 and m7 tips were.
  */
-const M2_FILLER = Array.from({ length: 30 }, (_, i) => `filler line ${i} — the worker kept talking about the dome`);
-const M2_TIP_RESULT = `${[STUCK, "", "**Make a targeted change to NightPlan.cs.**", "", ...M2_FILLER].join("\n")}\n... (truncated)`;
+const M2_FILLER = Array.from({ length: 30 }, (_, i) => `filler line ${i} — the worker restated its plan`);
+const M2_TIP_RESULT = `${[STUCK, "", "**Change the shutter timer, then rerun the dome checks.**", "", ...M2_FILLER].join("\n")}\n... (truncated)`;
 
 function milestone(fields: Partial<CampaignMilestone> & Pick<CampaignMilestone, "id">): CampaignMilestone {
   return { title: `Sprint ${fields.id}`, prompt: "", status: "green", attempts: 1, ...fields } as CampaignMilestone;
@@ -126,21 +126,21 @@ function seedCampaign(path: string): void {
       milestones: [
         milestone({
           id: "m1",
-          prompt: "Read docs/GDD.md and implement §1, §2.1–§2.2, §6.2 and §4.1–§4.2. PROMPT-SENTINEL",
+          prompt: "Read docs/GDD.md, then build §2 and §5.1–§5.3 before §6. PROMPT-SENTINEL",
           taskId: "task_m1_root",
           timeBoxEscalations: 2,
           resultExcerpt: M1_TIP_RESULT.slice(-500),
         }),
         milestone({
           id: "m2",
-          prompt: "Implement §4.1–§4.2 completely. PROMPT-SENTINEL",
+          prompt: "Finish §3 and log what it changed. PROMPT-SENTINEL",
           taskId: "task_m2",
           visualEvidenceBounced: true,
           resultExcerpt: M2_TIP_RESULT.slice(-500),
           // The runtime writes the project root home-relative; a measured m7 did.
-          visualConformance: "Judged from `~/Games/SentinelGame/Recordings/frame_00119.png` by openai.",
+          visualConformance: "Judged from `~/Games/SentinelGame/Recordings/frame_00342.png` by openai.",
         }),
-        milestone({ id: "m3", prompt: "Implement §3 and §5: weather and screens.", taskId: "task_never_written" }),
+        milestone({ id: "m3", prompt: "Implement §1.2: the shutter.", taskId: "task_never_written" }),
       ],
       currentMilestone: 3,
       createdAt: 1_000,
@@ -245,7 +245,7 @@ describe("export-campaign-fixture", () => {
     expect(m2.tip.stamps).toEqual({ task_stuck: 1 });
     const kept = m2.tip.evidenceLines.map((l: { text: string }) => l.text);
     expect(kept).toContain(STUCK);
-    expect(kept).toContain("**Make a targeted change to NightPlan.cs.**");
+    expect(kept).toContain("**Change the shutter timer, then rerun the dome checks.**");
     // Only the line the cut mark follows survives of the filler.
     expect(kept.filter((t: string) => t.startsWith("filler line"))).toEqual([M2_FILLER[29]]);
     expect(kept.at(-1)).toBe("... (truncated)");
@@ -276,14 +276,14 @@ describe("export-campaign-fixture", () => {
     const fixture = await exportSynthetic();
     const m1 = fixture.milestones[0];
     expect(m1).not.toHaveProperty("prompt");
-    expect(m1.sectionRefs).toEqual(["§1", "§2.1–§2.2", "§6.2", "§4.1–§4.2"]);
+    expect(m1.sectionRefs).toEqual(["§2", "§5.1–§5.3", "§6"]);
     expect(m1.promptSha256).toBe(
-      sha256("Read docs/GDD.md and implement §1, §2.1–§2.2, §6.2 and §4.1–§4.2. PROMPT-SENTINEL"),
+      sha256("Read docs/GDD.md, then build §2 and §5.1–§5.3 before §6. PROMPT-SENTINEL"),
     );
     expect(m1.timeBoxEscalations).toBe(2);
     expect(m1.status).toBe("green");
     expect(fixture.milestones[1].visualEvidenceBounced).toBe(true);
-    expect(fixture.milestones[2].sectionRefs).toEqual(["§3", "§5"]);
+    expect(fixture.milestones[2].sectionRefs).toEqual(["§1.2"]);
   });
 
   // Included, the text is the replay's extraction input: the approved bytes, its address untouched.
@@ -315,7 +315,7 @@ describe("export-campaign-fixture", () => {
     expect(fixture.campaign.projectName).toBe("SentinelGame");
     expect(fixture.campaign.lastError).toBe("ask <email> why m3 never ran");
     expect(fixture.milestones[1].visualConformance).toBe(
-      "Judged from `<project>/Recordings/frame_00119.png` by openai.",
+      "Judged from `<project>/Recordings/frame_00342.png` by openai.",
     );
     expect(json).not.toContain("~/Games/SentinelGame");
     expect(fixture.redaction.secretsFound).toBeGreaterThanOrEqual(1);
@@ -348,11 +348,11 @@ describe("export-campaign-fixture", () => {
   });
 
   it("reads § references the way prompts write them", () => {
-    expect(sectionRefsOf("implement §5, Annex C, §2.2, §6.1–§6.12. and §4.1 - §4.2; again §5")).toEqual([
-      "§5",
-      "§2.2",
-      "§6.1–§6.12",
-      "§4.1–§4.2",
+    expect(sectionRefsOf("build §9, the star table, §2.3, §5.10–§5.14. and §1.1 - §1.3; again §9")).toEqual([
+      "§9",
+      "§2.3",
+      "§5.10–§5.14",
+      "§1.1–§1.3",
     ]);
     expect(sectionRefsOf(undefined)).toEqual([]);
   });
@@ -426,7 +426,7 @@ describe("the committed synthetic fixture", () => {
     expect(byId("mcov1").status).toBe("failed");
     expect(byId("mcov1").tip.status).toBe("cancelled");
     expect(byId("m6").timeBoxEscalations).toBe(2);
-    expect(byId("m2").sectionRefs).toContain("§4.1–§4.2");
+    expect(byId("m2").sectionRefs).toContain("§5.1–§5.3");
     // m3's newest task is a retry, not the task the milestone recorded.
     expect(byId("m3").tip.id).not.toBe(byId("m3").taskId);
     // m2's six are what tasks.db kept: its result, like m7's, was stored cut.

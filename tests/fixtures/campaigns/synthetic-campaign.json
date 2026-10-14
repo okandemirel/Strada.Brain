@@ -64,34 +64,33 @@
   },
   "gdd": {
     "path": "docs/GDD.md",
-    "chars": 1625,
-    "sha256": "2ad7fea259bb940c01200763988e735d687a8e3a1663f58a9d54969ac0da1d5b",
+    "chars": 1623,
+    "sha256": "1da7050919ecb93d6f5029ec31d9c80601c687738e43a7d6eadd1858064ed13c",
     "storedSha256": null,
     "revision": null
   },
   "milestones": [
     {
       "id": "m1",
-      "title": "Sprint 1 — the observatory shell and an empty sky dome",
+      "title": "Sprint 1 — the dome, the sky and the mirror segments",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a001",
-      "resultExcerpt": "dently verified\n\nI got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
+      "resultExcerpt": "dently verified\n\nI got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified",
       "reconcileDeferred": false,
       "sectionRefs": [
         "§1",
-        "§2",
-        "§7"
+        "§2.1"
       ],
-      "promptChars": 45,
-      "promptSha256": "b497236766b4f9248a9511507915f95beaf289a31b2d1d4bfa04f792e66f2043",
+      "promptChars": 43,
+      "promptSha256": "800ec02de32f1688925b083f865bd5daf6d70755d0c83293e3a7fafd712f4816",
       "tip": {
         "id": "task_0000a001",
         "status": "completed",
         "createdAt": 1700036000000,
         "completedAt": 1700043200000,
-        "resultChars": 1435,
-        "resultSha256": "34c0f7600d14f396bdd06039f6ea86ccdaa2f561dbabfd5e9045c2a6142664ba",
+        "resultChars": 1445,
+        "resultSha256": "addc0b50c0378c96a1bd0280509c09c0e5f28ab108054bf17c7aa0972af3c159",
         "stamps": {
           "task_stuck": 3
         },
@@ -102,7 +101,7 @@
           },
           {
             "line": 3,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 5,
@@ -118,7 +117,7 @@
           },
           {
             "line": 10,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 12,
@@ -134,7 +133,7 @@
           },
           {
             "line": 17,
-            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 19,
@@ -150,25 +149,24 @@
     },
     {
       "id": "m2",
-      "title": "Sprint 2 — catalogue rules and the confirmation check",
+      "title": "Sprint 2 — the night log",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a002",
-      "resultExcerpt": "pt describing the confirmation check instead of changing it\nprogress note 43: the worker kept describing the confirmation check instead of changing it\nprogress note 44: the worker kept describing the confirmation check instead of changing it\nprogress note 45: the worker kept describing the confirmation check instead of changing it\nprogress note 46: the worker kept describing the confirmation check instead of changing it\nprogress note 47: the worker kept describing the confirmatio\n... (truncated)",
+      "resultExcerpt": "f changing it\nprogress note 45: the worker kept describing the seeing field instead of changing it\nprogress note 46: the worker kept describing the seeing field instead of changing it\nprogress note 47: the worker kept describing the seeing field instead of changing it\nprogress note 48: the worker kept describing the seeing field instead of changing it\nprogress note 49: the worker kept describing the seeing field instead of changing it\nprogress note 50: the worker kept describing \n... (truncated)",
       "reconcileDeferred": false,
       "sectionRefs": [
-        "§4.1–§4.2",
-        "§1"
+        "§5.1–§5.3"
       ],
-      "promptChars": 51,
-      "promptSha256": "0f87fd95ab6dab518bf902d9195685075c2ecb3fcb5501ef25949e9296c21af6",
+      "promptChars": 57,
+      "promptSha256": "7296942c63eb062434351443ea360185b9d28229af2dda4d02ad7423dcc935be",
       "tip": {
         "id": "task_0000a002",
         "status": "completed",
         "createdAt": 1700072000000,
         "completedAt": 1700079200000,
         "resultChars": 8208,
-        "resultSha256": "4b23ec5813d21f46413efba85591eaa9fe60573a0a791ea659958454bcb8e1d9",
+        "resultSha256": "9769c38ce887d709d0cdc623bb87d13b3e826560284d33cc2b3f48ac367e2221",
         "resultCutInStorage": true,
         "stamps": {
           "task_stuck": 6
@@ -184,7 +182,7 @@
           },
           {
             "line": 11,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 13,
@@ -204,7 +202,7 @@
           },
           {
             "line": 24,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 26,
@@ -224,7 +222,7 @@
           },
           {
             "line": 37,
-            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 39,
@@ -244,7 +242,7 @@
           },
           {
             "line": 50,
-            "text": "**Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.**"
+            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
           },
           {
             "line": 52,
@@ -264,7 +262,7 @@
           },
           {
             "line": 63,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 65,
@@ -284,7 +282,7 @@
           },
           {
             "line": 76,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 78,
@@ -295,11 +293,11 @@
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           },
           {
-            "line": 128,
-            "text": "progress note 47: the worker kept describing the confirmatio"
+            "line": 131,
+            "text": "progress note 50: the worker kept describing "
           },
           {
-            "line": 129,
+            "line": 132,
             "text": "... (truncated)"
           }
         ],
@@ -308,7 +306,7 @@
     },
     {
       "id": "m3",
-      "title": "Sprint 3 — mirror segments and the mount",
+      "title": "Sprint 3 — the mount and its slews",
       "status": "green",
       "attempts": 2,
       "taskId": "task_0000a003",
@@ -317,11 +315,10 @@
       "visualEvidenceBounced": true,
       "noWorkBounced": false,
       "sectionRefs": [
-        "§2.1",
         "§2.2"
       ],
-      "promptChars": 24,
-      "promptSha256": "52e0e8490a58997612d85db5e5545cd827f7c67d173db2a76302a59357cf9e70",
+      "promptChars": 15,
+      "promptSha256": "481bdb2c047b81194274e4f688c296508b6a812dfe5f9e5ca6f92ced8f81ad7c",
       "tip": {
         "id": "task_0000a013",
         "status": "completed",
@@ -349,25 +346,24 @@
     },
     {
       "id": "m4",
-      "title": "Sprint 4 — weather windows and the booking calendar",
+      "title": "Sprint 4 — weather windows and bookings",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a004",
-      "resultExcerpt": "to Assets/Scripts/Bookings/BookingCalendar.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** the calendar loader was rewritten but never compiled.\n3. **Check the tests:** none ran; the build failed before them.\n4. **Verdict:** not verified.",
+      "resultExcerpt": "ard together.\n\n**Make one targeted change to Assets/Observatory/Bookings/NightBooking.cs so the build verifies, then run the verification again**\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.\n2. **Check the diff:** the booking table was rewritten but never compiled.\n3. **Check the tests:** none ran; the build failed before them.\n4. **Verdict:** not verified.",
       "visualEvidenceBounced": true,
       "sectionRefs": [
-        "§3",
-        "§5"
+        "§3"
       ],
-      "promptChars": 38,
-      "promptSha256": "dde93489810588e24022a8b4393394f4774778e366793017030e9afb0d3d8d38",
+      "promptChars": 45,
+      "promptSha256": "d1d75646879ff6c130b0ba8e8dc26749283232b04a749ac849f7b73b5d792851",
       "tip": {
         "id": "task_0000a004",
         "status": "completed",
         "createdAt": 1700144000000,
         "completedAt": 1700151200000,
-        "resultChars": 664,
-        "resultSha256": "d9ac948a4cde61efe1cc09a734e9e41dca9abb90b416d4654ac109b39b9dec22",
+        "resultChars": 619,
+        "resultSha256": "0b47376b0f21f5de2966a6088f67fe2beeb3ef77963dcefa6b54f9f93ac4a581",
         "stamps": {
           "task_stuck": 1
         },
@@ -378,7 +374,7 @@
           },
           {
             "line": 3,
-            "text": "**Make a targeted code change to Assets/Scripts/Bookings/BookingCalendar.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**"
+            "text": "**Make one targeted change to Assets/Observatory/Bookings/NightBooking.cs so the build verifies, then run the verification again**"
           },
           {
             "line": 5,
@@ -394,18 +390,18 @@
     },
     {
       "id": "m5",
-      "title": "Sprint 5 — the screens and the catalogue view",
+      "title": "Sprint 5 — the catalogue",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a005",
       "resultExcerpt": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- <reasoning>\nHere is how the review went:\n\n1. **Read the request:** a verification pass over another agent's work.",
       "visualEvidenceBounced": true,
       "sectionRefs": [
-        "§5",
-        "§4.1"
+        "§4.1",
+        "§4.2"
       ],
-      "promptChars": 22,
-      "promptSha256": "e32cd56511f8b5e68c667232ad199f296d1c871aa01be14bbceba1e46d4cf539",
+      "promptChars": 39,
+      "promptSha256": "65a139800e2bb6c69fdcbe0c172989e3cc0dbd8030596ea23b2d107089918398",
       "tip": {
         "id": "task_0000a005",
         "status": "completed",
@@ -435,7 +431,7 @@
     },
     {
       "id": "m6",
-      "title": "Sprint 6 — archive upload and conflicts",
+      "title": "Sprint 6 — funding renewals",
       "status": "green",
       "attempts": 2,
       "taskId": "task_0000a006",
@@ -446,17 +442,18 @@
       "startedAtMs": 1700216000000,
       "reconcileDeferredSince": 1700208800000,
       "sectionRefs": [
-        "§6.1–§6.2"
+        "§6",
+        "§5"
       ],
-      "promptChars": 20,
-      "promptSha256": "a109cba291b5905e6fc82eb5d4a0f7c799e38f2e98e0cb97192861453ca8dad3",
+      "promptChars": 35,
+      "promptSha256": "0d5c216964d10cf2c6215d80e796961228538ae729f462c3978bee3ad9784286",
       "tip": {
         "id": "task_0000a006",
         "status": "completed",
         "createdAt": 1700216000000,
         "completedAt": 1700223200000,
-        "resultChars": 4577,
-        "resultSha256": "6a043287438a5934abedf74148c73ec84e7e14011a4f063d523ab68b1e394f1b",
+        "resultChars": 4589,
+        "resultSha256": "d48a0d9f9be0ad639a34ff806be571914c7b6b4ddf465892e8e9ecd076f71904",
         "stamps": {
           "task_stuck": 10,
           "provider_abort": 1
@@ -468,7 +465,7 @@
           },
           {
             "line": 3,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 5,
@@ -484,7 +481,7 @@
           },
           {
             "line": 10,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 12,
@@ -500,7 +497,7 @@
           },
           {
             "line": 17,
-            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 19,
@@ -516,7 +513,7 @@
           },
           {
             "line": 24,
-            "text": "**Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.**"
+            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
           },
           {
             "line": 26,
@@ -532,7 +529,7 @@
           },
           {
             "line": 31,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 33,
@@ -548,7 +545,7 @@
           },
           {
             "line": 38,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 40,
@@ -564,7 +561,7 @@
           },
           {
             "line": 45,
-            "text": "**Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.**"
+            "text": "**Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.**"
           },
           {
             "line": 47,
@@ -580,7 +577,7 @@
           },
           {
             "line": 52,
-            "text": "**Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.**"
+            "text": "**Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.**"
           },
           {
             "line": 54,
@@ -596,7 +593,7 @@
           },
           {
             "line": 59,
-            "text": "**Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.**"
+            "text": "**Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.**"
           },
           {
             "line": 61,
@@ -612,7 +609,7 @@
           },
           {
             "line": 66,
-            "text": "**Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.**"
+            "text": "**Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.**"
           },
           {
             "line": 68,
@@ -644,11 +641,11 @@
     },
     {
       "id": "m7",
-      "title": "Sprint 7 — integration and delivery",
+      "title": "Sprint 7 — the review build",
       "status": "green",
       "attempts": 2,
       "taskId": "task_0000a007",
-      "resultExcerpt": "in the saved scene\",\n  \"note 60\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 61\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 62\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 63\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note 64\": \"keep the camera, the bootstrapper and the input adapter in the saved scene\",\n  \"note \n... (truncated)",
+      "resultExcerpt": " 77\": \"leave the dome lights and the clock on the scene root\",\n  \"note 78\": \"leave the dome lights and the clock on the scene root\",\n  \"note 79\": \"leave the dome lights and the clock on the scene root\",\n  \"note 80\": \"leave the dome lights and the clock on the scene root\",\n  \"note 81\": \"leave the dome lights and the clock on the scene root\",\n  \"note 82\": \"leave the dome lights and the clock on the scene root\",\n  \"note 83\": \"leave the dome lights and the clock on the scene root\",\n \n... (truncated)",
       "visualEvidenceBounced": false,
       "noWorkBounced": false,
       "timeBoxEscalations": 0,
@@ -660,26 +657,25 @@
       "testVerdict": "PlayMode verification passed: 41 of 42 tests ran clean.",
       "structureRefused": true,
       "structureFindings": [
-        "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Main.unity and the prefabs it places.",
-        "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Main.unity",
-        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Scripts/Dome/DomeShell.cs, Assets/Scripts/CometSpawner.cs, +1 more",
+        "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Observatory.unity and the prefabs it places.",
+        "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "4 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +2 more",
         "GDD says: …<GDD passage omitted>…"
       ],
-      "visualConformance": "**Does it look like the GDD?**\n- Partly: the dome and its star field read, but the coordinate grid over them is missing.\n- Judged from `<project>/Recordings/verification-final/frame_00119.png` by openai.",
+      "visualConformance": "**Does it look like the GDD?**\n- Partly: the dome and its star field read, but the coordinate grid over them is missing.\n- Judged from `<project>/Recordings/night-review/frame_00342.png` by openai.",
       "sectionRefs": [
         "§1",
-        "§6",
-        "§7"
+        "§6"
       ],
-      "promptChars": 38,
-      "promptSha256": "1c16b2a2794a88bec3c070a37881abb350797021a88f3f2d11fc9e77c2c84781",
+      "promptChars": 47,
+      "promptSha256": "1560cb17ee457e236b1ca22ded26e2b2448a7bcb197f0c79c1bdad0816b37c8e",
       "tip": {
         "id": "task_0000a007",
         "status": "completed",
         "createdAt": 1700252000000,
         "completedAt": 1700259200000,
         "resultChars": 8208,
-        "resultSha256": "66a5eaeff270a39edd6cf8924f9759bd1a3f4b0746ecb4617902641a64f580ae",
+        "resultSha256": "2859611c8709e3b4b35cc1b4c6c3686071087cd201e71e786aa2f634bb9873de",
         "resultCutInStorage": true,
         "stamps": {
           "task_stuck": 1,
@@ -739,11 +735,11 @@
             "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
           },
           {
-            "line": 122,
-            "text": "  \"note "
+            "line": 140,
+            "text": "  \"note 83\": \"leave the dome lights and the clock on the scene root\","
           },
           {
-            "line": 123,
+            "line": 142,
             "text": "... (truncated)"
           }
         ],

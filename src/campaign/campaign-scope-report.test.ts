@@ -45,7 +45,7 @@ const REV = "0123456789abcdef0123456789abcdef01234567";
 const sha256 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
 function row(rid: string, fields: Partial<RequirementRow> = {}): RequirementRow {
-  const text = fields.text ?? `The rule ${rid} must hold for every booked night.`;
+  const text = fields.text ?? `Rule ${rid} holds on every observing night.`;
   return {
     rid,
     encoded: encodeRequirement({ id: rid, text, lineage: rid, gddSha256: GDD_SHA, gddRevision: 1 }),
@@ -96,7 +96,7 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
       owner: "m1",
       status: "failing",
       checks: [testCheck("req-2-bbbbbb")],
-      last: { revision: REV, atMs: 5, outcome: "fail", detail: "Expected 12 but was 9" },
+      last: { revision: REV, atMs: 5, outcome: "fail", detail: "Expected 31 but was 29" },
     }),
     row("req-3-cccccc", { label: "C-3", owner: "m1", status: "check-fault" }),
     row("req-4-dddddd", { label: "C-4", owner: "m1", status: "unmeasured" }),
@@ -104,19 +104,25 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
       label: "C-5",
       owner: "m1",
       status: "waived",
-      waiver: { userId: "u1", atMs: 7, reason: "deferred to the second season" },
+      waiver: { userId: "u1", atMs: 7, reason: "deferred until the spectrograph is fitted" },
     }),
-    row("req-6-ffffff", { label: "C-6", owner: "m2", status: "failing", sectionNumber: "6.2", section: "6.2 Conflicts" }),
-    row("req-7-gggggg", { owner: "m3", status: "open", sectionNumber: "5", section: "5 Screens", kind: "screen" }),
+    row("req-6-ffffff", { label: "C-6", owner: "m2", status: "failing", sectionNumber: "5.2", section: "5.2 Dome care" }),
+    row("req-7-gggggg", { owner: "m3", status: "open", sectionNumber: "5.3", section: "5.3 Log viewer", kind: "screen" }),
     row("req-8-hhhhhh", {
       status: "excluded",
       kind: "aspiration",
-      text: "Week-2 return rate must be at least 22%.",
-      excludedBecause: "a business KPI",
-      sectionNumber: "7.1",
-      section: "7.1 Targets",
+      text: "The dome's running cost must stay under 83% of its funding.",
+      excludedBecause: "a funding goal",
+      sectionNumber: "6",
+      section: "6 Funding",
     }),
-    row("req-9-iiiiii", { status: "open", kind: "judgement", text: "The sky must feel still and deep.", sectionNumber: "1", section: "1 Night Sky" }),
+    row("req-9-iiiiii", {
+      status: "open",
+      kind: "judgement",
+      text: "Dawn over the dome should read as cold and quiet.",
+      sectionNumber: "1",
+      section: "1 Night Sky",
+    }),
     row("req-10-jjjjjj", { status: "open", sectionNumber: "2.1", section: "2.1 Mirrors" }),
   ];
   const shadow: ScopeVerdictRecord = {
@@ -127,7 +133,7 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
       {
         reasonClass: "red",
         code: "row-failing",
-        detail: 'C-2 (§4.2, line 10): "The rule req-2-bbbbbb must hold for every booked night." fails on 01234567: Expected 12 but was 9',
+        detail: 'C-2 (§4.2, line 10): "Rule req-2-bbbbbb holds on every observing night." fails on 01234567: Expected 31 but was 29',
         rid: "req-2-bbbbbb",
       },
     ],
@@ -156,7 +162,7 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
       parked: {
         atMs: 11,
         queued: ["req-6-ffffff"],
-        reasons: [{ reasonClass: "red", code: "row-failing", detail: "C-6 (§6.2, line 10): the later sighting is not kept as a note", rid: "req-6-ffffff" }],
+        reasons: [{ reasonClass: "red", code: "row-failing", detail: "C-6 (§5.2, line 10): the shutter stays open after dawn", rid: "req-6-ffffff" }],
       },
     },
     { id: "m3", title: "Sprint 3", prompt: "p3", status: "green", attempts: 1, judgementBasis: "legacy" },
@@ -178,13 +184,13 @@ function ledgerCampaign(root: string, overrides: Partial<Campaign> = {}): Campai
     gddSha256: GDD_SHA,
     gddRevision: 1,
     requirements: ledger(rows, {
-      overflow: { count: 3, sections: ["8 Star tables"] },
+      overflow: { count: 3, sections: ["9 Orbit tables"] },
       numberingGaps: [{ series: "C", missing: ["C-7", "C-8"], detail: "C-1…C-9 named, C-7 and C-8 not defined" }],
       llmAdded: 2,
     }),
     pendingCoverageGaps: [
       row("req-10-jjjjjj").encoded,
-      row("req-6-ffffff", { sectionNumber: "6.2", section: "6.2 Conflicts" }).encoded,
+      row("req-6-ffffff", { sectionNumber: "5.2", section: "5.2 Dome care" }).encoded,
       "a legacy gap with no identity tail",
     ],
     ...overrides,
@@ -273,7 +279,7 @@ describe("the delivery report names each milestone's GDD rows and how its verdic
     const m2 = lineOf(text, "Sprint 2");
     expect(m2.startsWith("• ❌")).toBe(true);
     expect(m2).toContain("PARKED");
-    expect(text).toContain("the later sighting is not kept as a note");
+    expect(text).toContain("the shutter stays open after dawn");
 
     expect(lineOf(text, "Sprint 3")).toContain("basis: legacy");
     const m4 = lineOf(text, "Sprint 4");
@@ -287,7 +293,7 @@ describe("the delivery report names each milestone's GDD rows and how its verdic
     expect(text).toContain("1 look-and-feel row(s)");
     expect(text).toContain("3 row(s) past the extraction cap were NOT checked");
     expect(text).toContain("C-7, C-8");
-    expect(text).toContain('waived by a person: C-5 (§4.2) — "deferred to the second season"');
+    expect(text).toContain('waived by a person: C-5 (§4.2) — "deferred until the spectrograph is fitted"');
   });
 
   it("with the gate off and no ledger the report gains no line", () => {
@@ -353,8 +359,8 @@ describe("/campaign rows (W14)", () => {
     expect(m1).toContain("C-2");
     expect(m1).toContain("failing");
     expect(m1).toContain(testCheck("req-2-bbbbbb").testName);
-    expect(m1).toContain("Expected 12 but was 9");
-    expect(m1).toContain("waived by u1: deferred to the second season");
+    expect(m1).toContain("Expected 31 but was 29");
+    expect(m1).toContain("waived by u1: deferred until the spectrograph is fitted");
     expect(m1).not.toContain("C-6");
 
     expect(manager.describeRows("chat-1", "m9")).toContain("no milestone m9");
@@ -388,14 +394,14 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
   it("the owner's waiver is recorded, disclosed, dequeued, and the row no longer blocks the judge", async () => {
     const { manager, storage, root, messages } = build({ extra: { scopeGateMode: "shadow" } });
     storage.save(ledgerCampaign(root));
-    expect(await manager.waiveByCommand("chat-1", "u1", "C-6", "conflict notes are cut from the MVP")).toBe(true);
+    expect(await manager.waiveByCommand("chat-1", "u1", "C-6", "dome care is cut from the MVP")).toBe(true);
     expect(messages.at(-1)!.text).toContain("Waived 1 GDD row");
     expect(messages.at(-1)!.text).toContain("C-6");
 
     const stored = storage.get("campaign_scope_1")!;
     const waived = stored.requirements!.rows.find((r) => r.rid === "req-6-ffffff")!;
     expect(waived.status).toBe("waived");
-    expect(waived.waiver).toMatchObject({ userId: "u1", reason: "conflict notes are cut from the MVP" });
+    expect(waived.waiver).toMatchObject({ userId: "u1", reason: "dome care is cut from the MVP" });
     // A queued requirement holds delivery; a waived one must not.
     expect(stored.pendingCoverageGaps).toEqual([row("req-10-jjjjjj").encoded, "a legacy gap with no identity tail"]);
 
@@ -437,7 +443,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
     expect(judgeMilestone(input([waived, other])).green).toBe(true);
 
     // Disclosed in the report.
-    expect(report(manager, stored)).toContain('waived by a person: C-6 (§6.2) — "conflict notes are cut from the MVP"');
+    expect(report(manager, stored)).toContain('waived by a person: C-6 (§5.2) — "dome care is cut from the MVP"');
   });
 
   it("waives a whole GDD section by its number", async () => {
@@ -449,7 +455,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
     for (const rid of ["req-1-aaaaaa", "req-2-bbbbbb", "req-3-cccccc", "req-4-dddddd"]) {
       expect(rows.find((r) => r.rid === rid)!.status, rid).toBe("waived");
     }
-    expect(rows.find((r) => r.rid === "req-5-eeeeee")!.waiver!.reason).toBe("deferred to the second season");
+    expect(rows.find((r) => r.rid === "req-5-eeeeee")!.waiver!.reason).toBe("deferred until the spectrograph is fitted");
     expect(rows.find((r) => r.rid === "req-6-ffffff")!.status).toBe("failing");
     expect(messages.at(-1)!.text).toContain("Waived 4 GDD row");
   });
@@ -469,7 +475,7 @@ describe("/campaign waive is a person's decision, for the campaign's owner only 
     (manager as unknown as { persist(c: Campaign): boolean }).persist(stale);
     const stored = storage.get("campaign_scope_1")!;
     expect(stored.requirements!.rows.find((r) => r.rid === "req-6-ffffff")!.status).toBe("waived");
-    expect(stored.pendingCoverageGaps).not.toContain(row("req-6-ffffff", { sectionNumber: "6.2", section: "6.2 Conflicts" }).encoded);
+    expect(stored.pendingCoverageGaps).not.toContain(row("req-6-ffffff", { sectionNumber: "5.2", section: "5.2 Dome care" }).encoded);
   });
 
   it("a waived row is not among the rows the next acceptance file is written for", async () => {

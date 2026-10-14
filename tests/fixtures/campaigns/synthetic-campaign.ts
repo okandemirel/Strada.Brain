@@ -33,12 +33,12 @@ export const SYNTHETIC_GDD = [
   "# Comet Watch — Game Design Document (synthetic test fixture)",
   "",
   "## 1 Night Sky",
-  "The sky turns with the season; comets cross it on orbits an almanac publishes a week ahead.",
+  "The sky turns through the year; comets cross it on orbits the almanac prints a month ahead.",
   GDD_STYLE,
   "",
   "## 2 Telescope",
   "### 2.1 Mirrors",
-  "The primary mirror is eighteen segments that sag out of true as the dome cools; the player trims each one by hand.",
+  "The primary mirror is thirty-one segments that sag out of true as the dome cools; the player trims them one at a time.",
   "### 2.2 Mount",
   "The mount slews between booked targets, and every slew spends minutes of dark time.",
   "",
@@ -49,24 +49,23 @@ export const SYNTHETIC_GDD = [
   "### 4.1 Naming",
   "A confirmed comet carries its first observer's name and the year it was sighted.",
   "### 4.2 Catalogue rules",
-  "C-1 A sighting needs two exposures taken at least forty minutes apart.",
-  "C-2 A comet is confirmed by a second clear night within nine days of the first.",
-  "C-3 A sighting closer than ten degrees to the Moon is held until the Moon sets.",
+  "C-1 A sighting needs two plates taken at least thirty-eight minutes apart.",
+  "C-2 A comet is confirmed by a second clear night within twenty-three days of the first.",
+  "C-3 A sighting made close to the Moon is held until the Moon sets.",
   "C-4 Observers who confirm the same comet on the same night share its entry.",
   "C-5 An entry records position, brightness and tail length.",
   "C-6 A withdrawn sighting stays in the catalogue, marked withdrawn.",
   "",
-  "## 5 Screens",
-  "Observatory, sky chart, booking calendar, catalogue and settings.",
+  "## 5 Night log",
+  "### 5.1 Plates",
+  "Every plate is logged with its start time, its filter and the seeing the observer measured.",
+  "### 5.2 Dome care",
+  "A night that ends with the shutter still open costs the next night its first hour.",
+  "### 5.3 Log viewer",
+  "The log opens on the newest night and pages back one night at a time.",
   "",
-  "## 6 Archive sync",
-  "### 6.1 Upload",
-  "Entries upload to a shared archive whenever the observatory is online.",
-  "### 6.2 Conflicts",
-  "When two entries disagree, the earlier sighting stands and the later one is attached to it as a note.",
-  "",
-  "## 7 Delivery",
-  "Unity with the Strada.Core module layout; seven sprints, then a coverage pass against this document.",
+  "## 6 Funding",
+  "A research council pays for observing nights and rereads the night log before it renews.",
   "",
 ].join("\n");
 
@@ -95,17 +94,17 @@ function storedCut(lines: string[], filler: (i: number) => string): string {
 }
 
 const NUDGES = [
-  "Stop reflecting and make a concrete edit to Assets/Scripts/Dome/DomeShell.cs, then run the PlayMode verification again.",
-  "Stop further reflection and inspect Assets/Prefabs/Generated/MirrorPanel.prefab before the next edit.",
-  "Stop reflecting and make the next concrete mutation in CometSpawner.cs, then run the Unity PlayMode verification again.",
-  "Stop inspecting and use a mutation tool now to implement the planned change in the relevant ModuleConfig.asset under Assets/Modules.",
+  "Stop reflecting and make a concrete edit to Assets/Observatory/Dome/DomeRotator.cs, then run the PlayMode verification again.",
+  "Stop further reflection and inspect Assets/Observatory/Prefabs/MirrorSegment.prefab before the next edit.",
+  "Stop reflecting and make the next concrete mutation in CometTracker.cs, then run the Unity PlayMode verification again.",
+  "Stop inspecting and use a mutation tool now to set the shutter timing in the observatory module's config, then verify once.",
 ];
 
 const planStep = (i: number): string[] => [
   "{",
   `  "step": ${i},`,
   `  "goal": "wire the sky dome into scene ${i}",`,
-  `  "actions": ["open Assets/Scenes/Main.unity", "place the dome prefab", "save the scene"]`,
+  `  "actions": ["open Assets/Scenes/Observatory.unity", "place the dome prefab", "save the scene"]`,
   "}",
   "",
 ];
@@ -114,11 +113,11 @@ const RESULTS: Record<string, string> = {
   m1: [...attempt(STUCK, NUDGES[0]!), ...attempt(STUCK, NUDGES[1]!), ...attempt(STUCK, NUDGES[2]!)].join("\n").trimEnd(),
   m2: storedCut(
     [
-      "The catalogue rules compile; wiring the confirmation check next.",
+      "The plate log compiles; wiring the seeing field next.",
       "",
       ...Array.from({ length: 6 }, (_, i) => [...planStep(i + 1), ...attempt(STUCK, NUDGES[i % NUDGES.length]!)]).flat(),
     ],
-    (i) => `progress note ${i}: the worker kept describing the confirmation check instead of changing it`,
+    (i) => `progress note ${i}: the worker kept describing the seeing field instead of changing it`,
   ),
   m3: [
     "Let me take the workspace path the system redirected me to and run the build from there:",
@@ -130,11 +129,11 @@ const RESULTS: Record<string, string> = {
   m4: [
     STUCK,
     "",
-    "**Make a targeted code change to Assets/Scripts/Bookings/BookingCalendar.cs to resolve the failed build verification, then run the verification pipeline to confirm the fix**",
+    "**Make one targeted change to Assets/Observatory/Bookings/NightBooking.cs so the build verifies, then run the verification again**",
     "",
     FLAGS,
     ...REASONING,
-    "2. **Check the diff:** the calendar loader was rewritten but never compiled.",
+    "2. **Check the diff:** the booking table was rewritten but never compiled.",
     "3. **Check the tests:** none ran; the build failed before them.",
     "4. **Verdict:** not verified.",
   ].join("\n"),
@@ -165,7 +164,7 @@ const RESULTS: Record<string, string> = {
       "",
       ...Array.from({ length: 4 }, (_, i) => planStep(i + 3)).flat(),
     ],
-    (i) => `  "note ${i}": "keep the camera, the bootstrapper and the input adapter in the saved scene",`,
+    (i) => `  "note ${i}": "leave the dome lights and the clock on the scene root",`,
   ),
   mcov1: "Cancelled: the coverage pass stalled twice without changing a file, so the campaign stopped it before a third try.",
 };
@@ -198,21 +197,21 @@ function milestones(): CampaignMilestone[] {
       ...fields,
     }) as CampaignMilestone;
   return [
-    green("m1", 1, "the observatory shell and an empty sky dome", "Read docs/GDD.md and implement §1, §2 and §7.", {
+    green("m1", 1, "the dome, the sky and the mirror segments", "Read docs/GDD.md and implement §1 and §2.1.", {
       reconcileDeferred: false,
     }),
-    green("m2", 2, "catalogue rules and the confirmation check", "Implement §4.1–§4.2 completely, with the sky of §1.", {
+    green("m2", 2, "the night log", "Implement §5.1–§5.3 and keep every plate the log records.", {
       reconcileDeferred: false,
     }),
-    green("m3", 3, "mirror segments and the mount", "Implement §2.1 and §2.2.", {
+    green("m3", 3, "the mount and its slews", "Implement §2.2.", {
       attempts: 2,
       reconcileDeferred: false,
       visualEvidenceBounced: true,
       noWorkBounced: false,
     }),
-    green("m4", 4, "weather windows and the booking calendar", "Implement §3, then the calendar of §5.", { visualEvidenceBounced: true }),
-    green("m5", 5, "the screens and the catalogue view", "Implement §5 and §4.1.", { visualEvidenceBounced: true }),
-    green("m6", 6, "archive upload and conflicts", "Implement §6.1–§6.2.", {
+    green("m4", 4, "weather windows and bookings", "Implement §3 and the booked hours it returns.", { visualEvidenceBounced: true }),
+    green("m5", 5, "the catalogue", "Implement §4.1, then the rules of §4.2.", { visualEvidenceBounced: true }),
+    green("m6", 6, "funding renewals", "Implement §6 against the log of §5.", {
       attempts: 2,
       visualEvidenceBounced: true,
       noWorkBounced: false,
@@ -220,7 +219,7 @@ function milestones(): CampaignMilestone[] {
       startedAtMs: T0 + 60 * HOUR,
       reconcileDeferredSince: T0 + 58 * HOUR,
     }),
-    green("m7", 7, "integration and delivery", "Integrate §1, §6 and §7, then deliver.", {
+    green("m7", 7, "the review build", "Assemble §1 to §6 into one build, then deliver.", {
       attempts: 2,
       visualEvidenceBounced: false,
       noWorkBounced: false,
@@ -233,15 +232,15 @@ function milestones(): CampaignMilestone[] {
       testVerdict: "PlayMode verification passed: 41 of 42 tests ran clean.",
       structureRefused: true,
       structureFindings: [
-        "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Main.unity and the prefabs it places.",
-        "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Main.unity",
-        "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Scripts/Dome/DomeShell.cs, Assets/Scripts/CometSpawner.cs, +1 more",
+        "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Observatory.unity and the prefabs it places.",
+        "1 scene enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "4 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +2 more",
         GDD_SAYS,
       ],
       visualConformance: [
         "**Does it look like the GDD?**",
         "- Partly: the dome and its star field read, but the coordinate grid over them is missing.",
-        "- Judged from `~/Games/SyntheticObservatory/Recordings/verification-final/frame_00119.png` by openai.",
+        "- Judged from `~/Games/SyntheticObservatory/Recordings/night-review/frame_00342.png` by openai.",
       ].join("\n"),
     }),
     {
