@@ -482,7 +482,10 @@ export function assessUnregisteredServices(
     for (const m of text.matchAll(SERVICE_DECL_RE)) {
       if (/\babstract\b/u.test(m[1] ?? "")) continue;
       if (AUTO_REGISTER_RE.test(m[1] ?? "")) continue;
-      declared.push({ name: m[2]!, file: relative(projectPath, script) || script });
+      // Forward slashes, on every platform: Windows' relative() answers with
+      // backslashes and the path is read by people and matched by tests
+      // (CI windows-test, 2026-10-14).
+      declared.push({ name: m[2]!, file: (relative(projectPath, script) || script).replace(/\\/gu, "/") });
     }
   }
   return declared.filter((d) => !registered.has(d.name));

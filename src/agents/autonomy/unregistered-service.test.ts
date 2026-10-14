@@ -198,3 +198,16 @@ describe("the gate the guard raises for an unregistered service", () => {
     expect(guard.getPrompt() ?? "").not.toContain("[STRADA SERVICE UNREGISTERED]");
   });
 });
+
+describe("the path a finding names", () => {
+  it("is written with forward slashes, whatever the platform separates with", () => {
+    // CI windows-test 2026-10-14: relative() answers with backslashes there,
+    // and the path is both read by a person and matched by the gate's message.
+    const found = assessUnregisteredServices(
+      "/p",
+      io({ "/p/Assets/Modules/Harbor/Scripts/BeamService.cs": "public class BeamService { }" }),
+    );
+    expect(found[0]?.file).toBe("Assets/Modules/Harbor/Scripts/BeamService.cs");
+    expect(found[0]?.file).not.toContain("\\");
+  });
+});

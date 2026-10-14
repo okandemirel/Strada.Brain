@@ -67,4 +67,20 @@ describe("the delivery gate reads the project's identity", () => {
     expect(verdict.lines.join("\n")).toContain("com.harborworks.harborlight");
     expect(verdict.lines.join("\n")).toContain("Orientation: portrait");
   });
+
+  it("adds no line at all when the project has no settings file to read", () => {
+    // An empty structural findings list means "nothing was measured" to the
+    // report and to the planner's gap context; a line saying only that this
+    // tree has no ProjectSettings would make an unmeasured delivery look
+    // measured (measured 2026-10-14: it lengthened a live bounce loop).
+    const root = mkdtempSync(join(tmpdir(), "identity-wiring-"));
+    dirs.push(root);
+    mkdirSync(join(root, "Assets", "Scripts"), { recursive: true });
+    writeFileSync(join(root, "Assets", "Scripts", "Beam.cs"), "public class Beam {}");
+
+    const verdict = gate(root, HANDHELD_GDD);
+
+    expect(verdict.refusal ?? "").not.toContain("handheld");
+    expect(verdict.lines.join("\n")).not.toContain("app identity");
+  });
 });

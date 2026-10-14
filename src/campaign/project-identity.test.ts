@@ -121,9 +121,22 @@ describe("identityAnswersSpec", () => {
     expect(verdict.lines.join("\n")).toContain("assumption");
   });
 
-  it("refuses nothing it could not measure", () => {
+  it("refuses nothing it could not measure, and says the measurement did not happen", () => {
+    // `measured` is what lets the caller keep an empty findings list empty: a
+    // delivery whose only structural line is "there is no settings file"
+    // reads downstream as a measured delivery (campaign-manager's "newest
+    // milestone with structural findings").
     const verdict = identityAnswersSpec({ read: false, bundleIds: {}, why: "no file" }, "Portrait only.", true);
     expect(verdict.refusal).toBeUndefined();
+    expect(verdict.measured).toBe(false);
     expect(verdict.lines[0]).toContain("NOT measured");
+  });
+
+  it("says it measured whenever the file was read, refusal or not", () => {
+    expect(identityAnswersSpec(read({ orientation: "portrait" }), "Portrait only.", true).measured).toBe(true);
+    expect(
+      identityAnswersSpec(read({ companyName: "W", bundleIds: { Android: "a.b" }, orientation: "landscape" }), "Portrait only.", true)
+        .measured,
+    ).toBe(true);
   });
 });

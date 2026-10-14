@@ -108,6 +108,12 @@ export function specOrientation(gddText: string | undefined): ScreenOrientation 
 }
 
 export interface IdentityVerdict {
+  /**
+   * False when ProjectSettings.asset was not read: the caller decides whether
+   * a project with no settings file is worth a line of its own, because an
+   * empty findings list carries meaning downstream.
+   */
+  readonly measured: boolean;
   /** What a person is told, measured or not. */
   readonly lines: string[];
   /** Set only when the delivery must not go out as it is. */
@@ -132,7 +138,7 @@ export function identityAnswersSpec(
   handheld: boolean,
 ): IdentityVerdict {
   if (!identity.read) {
-    return { lines: [`NOT measured: app identity — ${identity.why ?? `${PROJECT_SETTINGS_PATH} was not read`}`] };
+    return { measured: false, lines: [`NOT measured: app identity — ${identity.why ?? `${PROJECT_SETTINGS_PATH} was not read`}`] };
   }
   const lines: string[] = [];
   const missing: string[] = [];
@@ -157,6 +163,7 @@ export function identityAnswersSpec(
     lines.push(`Orientation: the document asks for ${asked} and the project sets no orientation Unity defines`);
   } else if (identity.orientation !== asked && !(asked === "portrait" && identity.orientation === "auto")) {
     return {
+      measured: true,
       lines,
       refusal:
         `The document asks for ${asked} and the project is set to ${identity.orientation} ` +
@@ -169,6 +176,7 @@ export function identityAnswersSpec(
 
   if (handheld && missing.length > 0) {
     return {
+      measured: true,
       lines,
       refusal:
         `This is a handheld game and ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} unset in ` +
@@ -179,5 +187,5 @@ export function identityAnswersSpec(
   if (missing.length > 0) {
     lines.push(`App identity: ${missing.join(" and ")} — unset, and this document asks for no handheld platform`);
   }
-  return { lines };
+  return { measured: true, lines };
 }

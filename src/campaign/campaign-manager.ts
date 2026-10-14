@@ -9635,12 +9635,18 @@ export class CampaignManager {
       // carried Unity's DefaultCompany, no application identifier and an
       // orientation nothing had compared with the document — a handheld build
       // nobody could install, and the gate had never looked.
+      // Only when the file was READ. An empty findings list is itself read
+      // downstream ("the newest milestone with structural findings", the
+      // delivery report's own section), so a line saying this project has no
+      // ProjectSettings at all — the shape of a fixture or of a tree that is
+      // not a Unity project, where every other line already says more — would
+      // make an empty measurement look like a measured one.
       const identity = identityAnswersSpec(
         readProjectIdentity(this.projectRoot),
         gddText,
         gddPlatform(gddText).handheld,
       );
-      lines.push(...identity.lines);
+      if (identity.measured) lines.push(...identity.lines);
       let refusal = report.refusal ?? media.refusal ?? identity.refusal;
       // …OF THE DOCUMENT EVERY OTHER LINE HERE WAS JUDGED AGAINST. With no path
       // the check discovered one, the largest markdown under docs/: for a
