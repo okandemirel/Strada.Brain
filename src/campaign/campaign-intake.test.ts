@@ -676,6 +676,56 @@ describe("a build the message turns down or asks about", () => {
     expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
+  /**
+   * A request put as a wish, or as a question about whether it can be done,
+   * started nothing: the "if", "what" and question-opener rules read "I was
+   * wondering if you could build a game where…", "Is it possible to…?" and
+   * "Can we build the game in P?" as a build asked about. Main drafted them at
+   * the gate. They are requests, but tentative ones: an idea is drafted at
+   * the gate as any idea is, and a document is confirmed there first, never
+   * built at once.
+   */
+  const IDEA = "the beekeeper moves her hives between meadows as the seasons turn";
+  it.each([
+    `I was wondering if you could build a game where ${IDEA}`,
+    `Hi, I was wondering if you could build this game: ${IDEA}`,
+    `I'm wondering whether you could make a game where ${IDEA}`,
+    `Is it possible to build a game where ${IDEA}?`,
+    `Would it be possible to make a game where ${IDEA}?`,
+    `Would it be possible for you to build a game where ${IDEA}?`,
+    `What I want is to build a game where ${IDEA}`,
+    `What I'd like is for you to build a game where ${IDEA}`,
+    `Can we build a game where ${IDEA}?`,
+  ])("%s → the idea, drafted at the gate (a tentative request)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  it.each([
+    ["Can we build the game in docs/Quillmoor_GDD.md?", confirm("docs/Quillmoor_GDD.md")],
+    ["Could we build this game: docs/Quillmoor_GDD.md?", confirm("docs/Quillmoor_GDD.md")],
+    ["Is it possible to build the game in docs/Quillmoor_GDD.md?", confirm("docs/Quillmoor_GDD.md")],
+    ["I was wondering if you could build the game in docs/Quillmoor_GDD.md", confirm("docs/Quillmoor_GDD.md")],
+    ["Can we build the game in the GDD?", { kind: "gdd-to-confirm" }],
+  ])("%s → %j (a tentative request is confirmed first)", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
+  });
+
+  it.each([
+    "I was wondering how to build the game in docs/Quillmoor_GDD.md",
+    "What I want to know is how to build the game in docs/Quillmoor_GDD.md",
+    "Can we not build the game in docs/Quillmoor_GDD.md yet?",
+  ])("%s → no campaign (a question about the build is still none)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  // "Yapar mısın?" asks for the build with an adverb beside it too: only the adverb was read, and the request was lost.
+  it.each([
+    ["docs/Quillmoor_GDD.md'deki oyunu baştan sona yapar mısın?", "docs/Quillmoor_GDD.md"],
+    ["Quillmoor_GDD.md'deki oyunu sıfırdan yazar mısın?", "Quillmoor_GDD.md"],
+  ])("%s → %s, at once (a polite Turkish request)", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now(path));
+  });
+
   it("an idea whose own sentence carries a question further on is still the idea", () => {
     const text = "Build this game: a beekeeper moves her hives between meadows each season, can the swarms grow slowly?";
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });

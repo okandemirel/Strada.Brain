@@ -151,7 +151,7 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
       // …AND AN ADVERB BESIDE THAT WORK IS NO BUILD: "Read it end to end",
       // "Rewrite this from scratch" and "bunu baştan sona oku" built the game
       // from the document they asked to have read or rewritten.
-      const buildsGame = asksForWholeGame(prose) || (!asksForWork && asksToBuild(prose));
+      const buildsGame = wholeGameRequest(prose) === "firm" || (!asksForWork && buildRequest(prose) === "firm");
       // …NOR IS A BUILD THE CAPTION TURNS DOWN OR ASKS ABOUT: "Don't build the
       // game from this yet" built it, through the GDD in the file's name.
       const declined = !buildsGame && BUILD_INTENT_RE.test(prose);
@@ -179,7 +179,7 @@ function intentFromText(text: string): CampaignIntent | undefined {
   const plain = withoutMarkup(text);
   const named = namedDocumentsIn(plain);
   const prose = proseOf(plain, named);
-  if (!asksToBuild(prose)) return undefined;
+  if (!buildRequest(prose)) return undefined;
 
   // 2. "Build the game in the GDD" — the design already lives in the repo.
   // BEFORE the idea-length minimum: that minimum exists because an IDEA has
@@ -200,8 +200,8 @@ function intentFromText(text: string): CampaignIntent | undefined {
   // built the game from the README, and an idea that mentioned its style sheet
   // was thrown away for the style sheet. A document named without a
   // whole-game build is the user's task, not a campaign.
-  const wholeGame = asksForWholeGame(prose);
-  if (named.length > 0 && !wholeGame) return undefined;
+  const request = wholeGameRequest(prose);
+  if (named.length > 0 && !request) return undefined;
   // …AND AT ONCE ONLY IN THE PLAIN FORM (designAmong). "Build the game
   // following docs/android-signing.md" and "Build the game
   // (docs/troubleshooting.md has the fix) and send me the APK" started an
@@ -224,8 +224,8 @@ function intentFromText(text: string): CampaignIntent | undefined {
     // whole-game build is the user's task, not an idea to draft from either.
     // …AND IS HELD TO ITS CLAUSE AS A PATH IS: "Build the game and fix the
     // GDD typo" built whatever docs/ held, at once.
-    if (!wholeGame) return undefined;
-    return aimsAtTheGdd(rest) ? { kind: "gdd-from-docs" } : { kind: "gdd-to-confirm" };
+    if (!request) return undefined;
+    return aimAtTheGdd(rest, request) === "firm" ? { kind: "gdd-from-docs" } : { kind: "gdd-to-confirm" };
   }
 
   if (rest.trim().length < MIN_IDEA_LENGTH) return undefined;
@@ -556,17 +556,54 @@ function sentenceBefore(prose: string, at: number): string {
   return prose.slice(start, at);
 }
 
+/**
+ * A request put as a wish, or as a question about whether it can be done:
+ * "I was wondering if you could build…", "Is it possible to build…?", "What
+ * I want is to build…", "Can we build…?". The "if", "what" and question
+ * rules read each as a build asked about, and it started nothing — main
+ * drafted them at the gate. A request, but a tentative one: an idea is
+ * drafted at the gate as any idea is, and a document is confirmed there
+ * first, never built at once.
+ */
+const TENTATIVE_REQUEST_RE =
+  /^\s*(?:(?:hey|hi|hello|so|ok(?:ay)?|well|also|now)[\s,!]+)*(?:i(?:\s+was|\s+am|['’]m)?\s+wonder(?:ing)?\s+(?:if|whether)\s+(?:you|u|we)\s+(?:could|can|would|might)|(?:is|would)\s+it\s+(?:be\s+)?possible\s+(?:for\s+(?:you|us|me)\s+)?to|what\s+i(?:['’]d|\s+would)?\s+(?:want|like)\s+is\s+(?:for\s+(?:you|us)\s+)?to|(?:can|could)\s+we)(?:\s+(?:please|maybe|perhaps))?\s*$/iu;
+
+/** How firmly a build is asked for: plainly, or tentatively (see TENTATIVE_REQUEST_RE). */
+type Request = "firm" | "tentative";
+
+function requestAt(prose: string, at: number, end: number): Request | undefined {
+  if (TENTATIVE_REQUEST_RE.test(sentenceBefore(prose, at))) return "tentative";
+  return buildIsAsked(prose, at, end) ? "firm" : undefined;
+}
+
 const WHOLE_GAME_BUILDS_RE = new RegExp(WHOLE_GAME_BUILD_RE.source, "giu");
 const BUILD_INTENTS_RE = new RegExp(BUILD_INTENT_RE.source, "gi");
 
-/** A whole-game build the message asks for (see buildIsAsked). */
-function asksForWholeGame(prose: string): boolean {
-  return [...prose.matchAll(WHOLE_GAME_BUILDS_RE)].some((m) => buildIsAsked(prose, m.index, m.index + m[0].length));
+/** The firmest request among the builds `re` finds in the prose. */
+function strongestRequest(prose: string, re: RegExp): Request | undefined {
+  let found: Request | undefined;
+  for (const m of prose.matchAll(re)) {
+    const request = requestAt(prose, m.index, m.index + m[0].length);
+    if (request === "firm") return request;
+    found ??= request;
+  }
+  return found;
 }
 
-/** Any build intent — an adverb included — the message asks for. */
-function asksToBuild(prose: string): boolean {
-  return [...prose.matchAll(BUILD_INTENTS_RE)].some((m) => buildIsAsked(prose, m.index, m.index + m[0].length));
+/** A whole-game build the message asks for (see buildIsAsked). */
+function wholeGameRequest(prose: string): Request | undefined {
+  return strongestRequest(prose, WHOLE_GAME_BUILDS_RE);
+}
+
+/**
+ * Any build intent — an adverb included — the message asks for. The
+ * whole-game builds count in their own right: in "P'deki oyunu baştan sona
+ * yapar mısın?" the first build intent is the adverb alone, its question
+ * mark read as a question, and the polite request was lost.
+ */
+function buildRequest(prose: string): Request | undefined {
+  const any = strongestRequest(prose, BUILD_INTENTS_RE);
+  return any === "firm" ? any : (wholeGameRequest(prose) ?? any);
 }
 
 /**
@@ -693,6 +730,8 @@ interface Span {
 }
 
 interface Aim {
+  /** How firmly the build aimed at the document is asked for. */
+  request: Request;
   /** The message calls the document the design ("the GDD at P", "design: P"), whatever its name. */
   called: boolean;
 }
@@ -702,23 +741,28 @@ interface Aim {
  * `doc.at`..`doc.end`, when it is — and only when the document ends its
  * clause. A build aimed at a document counts only when it is asked for:
  * "Don't build the game in docs/Old_GDD.md; build the game in
- * docs/New_GDD.md".
+ * docs/New_GDD.md". `request` is the message's whole-game request, which a
+ * document the message calls the design is aimed at by.
  */
-function aimAt(text: string, prose: string, doc: Span, wholeGame: boolean): Aim | undefined {
+function aimAt(text: string, prose: string, doc: Span, request: Request | undefined): Aim | undefined {
   const after = text.slice(doc.end);
   const before = BUILDS_FROM_NEXT_RE.exec(text.slice(0, doc.at));
-  if (before && buildIsAsked(prose, before.index, doc.at) && documentEndsItsClause(text, doc)) {
-    return { called: before.groups?.gdd !== undefined || before.groups?.design !== undefined };
+  const beforeAsked = before && requestAt(prose, before.index, doc.at);
+  if (beforeAsked && documentEndsItsClause(text, doc)) {
+    return { request: beforeAsked, called: before.groups?.gdd !== undefined || before.groups?.design !== undefined };
   }
   const game = GAME_IN_PREVIOUS_RE.exec(after);
-  if (game && buildIsAsked(prose, doc.at, doc.end + game[0].length) && endsItsClause(after.slice(game[0].length))) return { called: false };
+  const gameAsked = game && requestAt(prose, doc.at, doc.end + game[0].length);
+  if (gameAsked && endsItsClause(after.slice(game[0].length))) return { request: gameAsked, called: false };
   const next = BUILDS_FROM_PREVIOUS_RE.exec(after);
-  if (next && buildIsAsked(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length)) return { called: false };
+  const nextAsked = next && requestAt(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length);
+  if (nextAsked) return { request: nextAsked, called: false };
   const object = GAME_BEFORE_RE.exec(text.slice(0, doc.at));
   const verb = object && BY_DOCUMENT_AFTER_RE.exec(after);
-  if (object && verb && buildIsAsked(prose, object.index, doc.end + verb[0].length) && endsItsClause(after.slice(verb[0].length))) return { called: false };
-  const called = wholeGame && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => re.test(text.slice(0, doc.at)));
-  return called && documentEndsItsClause(text, doc) ? { called } : undefined;
+  const verbAsked = object && verb && requestAt(prose, object.index, doc.end + verb[0].length);
+  if (verbAsked && endsItsClause(after.slice(verb[0].length))) return { request: verbAsked, called: false };
+  const called = request !== undefined && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => re.test(text.slice(0, doc.at)));
+  return called && documentEndsItsClause(text, doc) ? { request, called } : undefined;
 }
 
 /**
@@ -778,17 +822,17 @@ function offered(docs: readonly NamedDocument[], design: NamedDocument, now = fa
 function designAmong(text: string, named: readonly NamedDocument[]): Design | null | undefined {
   if (named.length === 0) return undefined;
   const prose = proseOf(text, named);
-  const wholeGame = asksForWholeGame(prose);
-  const aims = named.map((doc) => aimAt(text, prose, doc, wholeGame));
+  const request = wholeGameRequest(prose);
+  const aims = named.map((doc) => aimAt(text, prose, doc, request));
   // "P and Q", "P ve Q": named together, aimed at together — as long as the
   // one the aim spreads to ends its clause too.
   for (let spread = true; spread; ) {
     spread = false;
     for (let i = 1; i < named.length; i++) {
       if (!aims[i - 1] === !aims[i] || !NAMED_TOGETHER_RE.test(text.slice(named[i - 1]!.end, named[i]!.at))) continue;
-      const to = aims[i] ? i - 1 : i;
+      const [to, from] = aims[i] ? [i - 1, i] : [i, i - 1];
       if (!documentEndsItsClause(text, named[to]!)) continue;
-      aims[to] = { called: false };
+      aims[to] = { request: aims[from]!.request, called: false };
       spread = true;
     }
   }
@@ -796,11 +840,12 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
   const designs = aimedDocs.filter((doc) => refersToGdd(doc.path) || !isSupportDocument(doc.path));
   if (designs.length > 0) {
     const design = designs.find((doc) => refersToGdd(doc.path)) ?? designs[0]!;
-    return offered(designs, design, designs.length === 1 && (aims[named.indexOf(design)]!.called || nameSaysDesign(design.path)));
+    const aim = aims[named.indexOf(design)]!;
+    return offered(designs, design, designs.length === 1 && aim.request === "firm" && (aim.called || nameSaysDesign(design.path)));
   }
   const playerBuild = aimedDocs.length > 0 && aimedDocs.every((doc) => isBuildInstructions(doc.path));
   const rest = withoutDocuments(text, named);
-  if (!wholeGame || !(speaksOfTheGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
+  if (!request || !(speaksOfTheGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
   const beside = named.filter((doc) => !aimedDocs.includes(doc));
   const candidates = beside.filter((doc) => !turnedAway(prose, doc));
   const gdds = candidates.filter((doc) => refersToGdd(doc.path));
@@ -816,15 +861,16 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
 
 const BUILDS_THE_GDD_RE = new RegExp(`${BUILD_GDD_EN}|${BUILD_GDD_TR}`, "giu");
 
-/** Whether a build the message asks for is aimed plainly at "the GDD" it speaks of (see aimAt). */
-function aimsAtTheGdd(text: string): boolean {
+/** How firmly a build is aimed plainly at "the GDD" the message speaks of (see aimAt), when one is. */
+function aimAtTheGdd(text: string, request: Request): Request | undefined {
   const words = withoutCodeFiles(text);
   const references = GDD_REFERENCES_RES.flatMap((re) => [...words.matchAll(re)].map((m) => ({ at: m.index, end: m.index + m[0].length })));
-  if (references.some((ref) => !turnedAway(words, ref) && aimAt(words, words, ref, true))) return true;
-  return [...words.matchAll(BUILDS_THE_GDD_RE)].some((m) => {
+  const aimed = references.filter((ref) => !turnedAway(words, ref)).map((ref) => aimAt(words, words, ref, request)?.request);
+  for (const m of words.matchAll(BUILDS_THE_GDD_RE)) {
     const end = m.index + m[0].length;
-    return buildIsAsked(words, m.index, end) && endsItsClause(words.slice(end));
-  });
+    if (endsItsClause(words.slice(end))) aimed.push(requestAt(words, m.index, end));
+  }
+  return aimed.includes("firm") ? "firm" : aimed.find((asked) => asked !== undefined);
 }
 
 /** The design document the message names, when it names one. */

@@ -10437,6 +10437,20 @@ describe("CampaignManager", () => {
         expect(tasks.submitted).toHaveLength(0);
       });
 
+      // "Can we…?" and "I was wondering if you could…" started nothing at all.
+      it("holds the design a question-form request names at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        expect(await say("chat-can-we", "Can we build the game in docs/Quillmoor_GDD.md?")).toBe(true);
+        atTheGate("chat-can-we", "docs/Quillmoor_GDD.md");
+      });
+
+      it("drafts the idea a polite opening carries, at the gate", async () => {
+        const text = "I was wondering if you could build a game where the beekeeper moves her hives between meadows as the seasons turn";
+        expect(await say("chat-wondering", text)).toBe(true);
+        expect(storage.listActive().find((c) => c.chatId === "chat-wondering")?.ideaText).toBe(text);
+        expect(told("chat-wondering")).toContain("Game idea received");
+      });
+
       it("holds a design with a qualifier after its name at the gate", async () => {
         writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
         expect(await say("chat-qualified", "Build the game in docs/Quillmoor_GDD.md for the buttons")).toBe(true);
