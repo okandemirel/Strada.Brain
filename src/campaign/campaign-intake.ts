@@ -75,6 +75,18 @@ function refersToGdd(text: string): boolean {
   return GDD_ACRONYM_RE.test(words) || GDD_SPELLED_RE.test(words);
 }
 
+const GDD_REFERENCES_RES = [GDD_ACRONYM_RE, GDD_SPELLED_RE].map((re) => new RegExp(re.source, `${re.flags}g`));
+
+/**
+ * "The GDD" the text speaks of — not one it says is not there: "I don't have
+ * a GDD, but build a game where…" built whatever design docs/ held, ungated,
+ * in place of the idea the message carried.
+ */
+function speaksOfTheGdd(text: string): boolean {
+  const words = withoutCodeFiles(text);
+  return GDD_REFERENCES_RES.some((re) => [...words.matchAll(re)].some((m) => !turnedAway(words, { at: m.index, end: m.index + m[0].length })));
+}
+
 /**
  * The extensions a document is written in: those a design is read from, and
  * those the manager names back as no format it reads.
@@ -185,7 +197,7 @@ function intentFromText(text: string): CampaignIntent | undefined {
   if (design) return { kind: "gdd-from-docs", path: design };
   // A document the message only mentions is no part of what it asks for.
   const rest = withoutDocuments(plain, named);
-  if (refersToGdd(rest)) {
+  if (speaksOfTheGdd(rest)) {
     // …AND DESIGN TEXT WRITTEN IN THE MESSAGE IS THE DESIGN. "Build this
     // game. GDD: <the design>" was read as a reference to a document in the
     // repository and the supplied design was discarded (AD#6).
@@ -597,13 +609,13 @@ const DESIGN_NAMES_NEXT_RE =
 /** "P and Q", "P, Q", "P ve Q": named together, aimed at together. */
 const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?|\s+(?:and|or|ve|veya|&|\+)\s+)["'`“‘(]?$/iu;
 
-/** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P". */
-const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without)(?![\p{L}])/iu;
-/** …and after it: "P is outdated", "P'yi kullanma", "P değil", "P yerine". */
+/** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P", "no GDD". */
+const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without|no)(?![\p{L}])/iu;
+/** …and after it: "P is outdated", "P'yi kullanma", "P değil", "P yerine", "GDD yok". */
 const TURNS_AWAY_AFTER_RE =
-  /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden)(?![\p{L}])/iu;
+  /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden|yok)(?![\p{L}])/iu;
 
-function turnedAway(prose: string, doc: NamedDocument): boolean {
+function turnedAway(prose: string, doc: Pick<NamedDocument, "at" | "end">): boolean {
   const before = clauseBefore(prose, doc.at);
   if (TURNS_DOWN_RE.test(before) || TURNS_AWAY_BEFORE_RE.test(before)) return true;
   const after = prose.slice(doc.end);
@@ -663,7 +675,7 @@ function designAmong(text: string, named: readonly NamedDocument[]): string | nu
   if (design) return design.path;
   const playerBuild = aimedDocs.length > 0 && aimedDocs.every((doc) => isBuildInstructions(doc.path));
   const rest = withoutDocuments(text, named);
-  if (!wholeGame || !(refersToGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
+  if (!wholeGame || !(speaksOfTheGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
   const beside = named.filter((doc) => !aimedDocs.includes(doc));
   const candidates = beside.filter((doc) => !turnedAway(prose, doc));
   const gdds = candidates.filter((doc) => refersToGdd(doc.path));

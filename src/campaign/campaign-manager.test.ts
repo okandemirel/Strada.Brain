@@ -10400,6 +10400,17 @@ describe("CampaignManager", () => {
       expect(told("chat-idea")).not.toContain("Building from");
     });
 
+    // "I don't have a GDD, but build…" built docs/Game_GDD.md, the design the message said did not exist.
+    it("an idea beside a GDD the message says it does not have is drafted from the idea, not from docs/", async () => {
+      const idea = "I don't have a GDD, but build a game where the beekeeper moves her hives between meadows as the seasons turn";
+      expect(await say("chat-no-gdd", idea)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-no-gdd");
+      expect(campaign?.ideaText).toBe(idea);
+      expect(campaign?.gddPath).toBeUndefined();
+      expect(told("chat-no-gdd")).toContain("Game idea received");
+      expect(told("chat-no-gdd")).not.toContain("Building from");
+    });
+
     /**
      * A GDD named with no extension, as a .pptx or .html, or by a link was a
      * bare "the GDD", and discovery started an immediate build of

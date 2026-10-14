@@ -582,6 +582,27 @@ describe("a bare reference to the GDD needs a whole-game build", () => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
 
+  /**
+   * "The GDD" a message says it does not have is no pointer at one: "I don't
+   * have a GDD, but build a game where…" was a bare gdd-from-docs, and the
+   * manager built whatever design docs/ held — ungated, in place of the idea
+   * the message carried.
+   */
+  it.each([
+    "I don't have a GDD, but build a game where the beekeeper moves her hives between meadows as the seasons turn",
+    "There is no GDD yet, so build a game where the beekeeper moves her hives between meadows as the seasons turn",
+    "We have no game design document — build this game from scratch: a beekeeper moves her hives between meadows",
+    "Without a GDD, build a game where the beekeeper moves her hives between meadows as the seasons turn",
+    "GDD'm yok, şöyle bir oyun yap: arıcı kovanlarını mevsim döndükçe çayırdan çayıra taşır, her çiçek başka bir bal verir.",
+    "Henüz bir GDD yok; sıfırdan bir oyun yap: arıcı kovanlarını mevsim döndükçe çayırdan çayıra taşır.",
+  ])("%s → the idea, not a GDD discovered in docs/", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  it.each(["I don't have a GDD, build the game", "GDD yok, oyunu yap"])("%s → no campaign (nothing to build from)", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
   it.each([
     "Build the game in the GDD from scratch",
     "Implement the GDD end to end",
