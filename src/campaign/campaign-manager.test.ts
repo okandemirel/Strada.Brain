@@ -10669,6 +10669,20 @@ describe("CampaignManager", () => {
         atTheGate("chat-called", path);
       });
 
+      // A GDD the message says is lost was offered from docs/ at the gate, and the idea it carried was not drafted.
+      it.each([
+        "I lost my GDD, build the game where a gardener plants one new bed each season and every harvest buys a bigger greenhouse",
+        "My GDD was deleted, build the game where a gardener plants one new bed each season and every harvest buys a bigger greenhouse",
+      ])("drafts the idea, not the newest GDD in docs/, when the message says its GDD is lost: %s", async (text) => {
+        expect(await say("chat-lost", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-lost");
+        expect(campaign?.ideaText).toBe(text);
+        expect(campaign?.gddToConfirm).toBeFalsy();
+        expect(campaign?.gddPath).toBeUndefined();
+        expect(told("chat-lost")).toContain("Game idea received");
+        expect(told("chat-lost")).not.toContain("Game_GDD.md");
+      });
+
       // "With P" was read only when P was called the design: the build started nothing at all.
       it("holds a document the build is made with at the gate", async () => {
         writeFileSync(join(projectRoot, "docs", "notes.md"), "# Notes\n\n" + "n".repeat(400));

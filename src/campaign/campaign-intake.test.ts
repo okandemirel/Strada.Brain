@@ -661,6 +661,27 @@ describe("a bare reference to the GDD needs a whole-game build", () => {
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
   });
 
+  // …nor one it says is lost or deleted, by every word for it: "I lost my GDD, build the game where…" was offered the newest GDD in docs/.
+  const BAKER = "bir fırıncı her sabah yeni bir tarif açar, satılan her somun yeni bir fırın getirir";
+  it.each([
+    `I lost my GDD, build the game where ${GARDEN}`,
+    `I deleted the GDD; build a game where ${GARDEN}`,
+    `I removed the GDD, so build a game where ${GARDEN}`,
+    `I misplaced the GDD, build a game where ${GARDEN}`,
+    `My GDD was deleted, build the game where ${GARDEN}`,
+    `The GDD got lost, build a game where ${GARDEN}`,
+    `The GDD was removed, so build a game where ${GARDEN}`,
+    `The GDD is missing, build a game where ${GARDEN}`,
+    `The GDD is gone, build a game where ${GARDEN}`,
+    `GDD'yi kaybettim, şöyle bir oyun yap: ${BAKER}`,
+    `GDD kayboldu, şöyle bir oyun yap: ${BAKER}`,
+    `GDD'm kayıp, şöyle bir oyun yap: ${BAKER}`,
+    `GDD silindi, şöyle bir oyun yap: ${BAKER}`,
+    `GDD'yi sildim, şöyle bir oyun yap: ${BAKER}`,
+  ])("%s → the idea, not a GDD discovered in docs/", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
   it.each(["GDD isn't written, build the game", "GDD henüz yazılmadı, oyunu yap"])("%s → no campaign (nothing to build from)", (text) => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
@@ -877,6 +898,7 @@ describe("a build aimed only at a document that sits beside the design", () => {
     "Build the game per docs/art-style.md, except docs/Old_GDD.md",
     "Build the game per docs/art-style.md, excluding docs/Old_GDD.md",
     "Build the game per docs/art-style.md, without docs/Old_GDD.md",
+    "Build the game per docs/art-style.md, I deleted docs/Old_GDD.md",
     "Build the game per docs/art-style.md; docs/Old_GDD.md is obsolete",
     "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md değil",
     "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md yerine",

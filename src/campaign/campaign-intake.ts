@@ -850,20 +850,21 @@ const DESIGN_NAMES_NEXT_RE =
 /** "P and Q", "P, Q", "P ve Q": named together, aimed at together. */
 const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?|\s+(?:and|or|ve|veya|&|\+)\s+)["'`“‘(]?$/iu;
 
-/** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P", "no GDD", "forget the GDD". */
-const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without|no|forget|disregard)(?![\p{L}])/giu;
+/** A word, before a document in its clause, that turns it away: "not P", "don't use P", "ignore P", "no GDD", "forget the GDD", "I lost my GDD". */
+const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|without|no|forget|disregard|lost|deleted|removed|misplaced)(?![\p{L}])/giu;
 /** …and after it: "P is outdated", "P'yi kullanma", "P değil", "P yerine", "GDD yok", "GDD olmadan", "GDD'yi unut", "GDD'siz". */
 const TURNS_AWAY_AFTER_RE =
   /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden|yok|olmadan|unut\p{L}*|(?<=['’])s[ıiuü]z)(?![\p{L}])/giu;
 /**
  * …and, after "the GDD" itself, a verb that says it is not there: "the GDD
  * doesn't exist yet", "has not been written", "was never written", "henüz
- * yazılmadı", "hazırlanmamış". Each was offered at the gate as the newest
+ * yazılmadı", "hazırlanmamış" — or that it was lost: "was deleted", "is
+ * missing", "kayboldu", "silindi". Each was offered at the gate as the newest
  * GDD in docs/, and the idea beside it was not drafted. A named document is
  * not held to these: "P that isn't done" is a caveat, confirmed at the gate.
  */
 const NOT_THERE_AFTER_RE =
-  /(?<![\p{L}])(?:\p{L}+n['’]t|(?:is|are|was|were|has|have|had|does|do|did)\s+not|never|\p{L}+m[ae](?:d[ıi]|m[ıi]ş)\p{L}*)(?![\p{L}])/giu;
+  /(?<![\p{L}])(?:\p{L}+n['’]t|(?:is|are|was|were|has|have|had|does|do|did)\s+not|never|lost|deleted|removed|missing|gone|\p{L}+m[ae](?:d[ıi]|m[ıi]ş)\p{L}*|kayıp|kayb(?:ol|et)\p{L}*|sil(?:in|di)\p{L}*)(?![\p{L}])/giu;
 
 /** Only quotes, brackets and spaces between a name and the colon beside it. */
 const BESIDE_A_COLON_RE = /^[\s"'\x60“”‘’(<>]*$/u;
