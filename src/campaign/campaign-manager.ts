@@ -51,6 +51,7 @@ import { projectRelativeTarget } from "../security/path-guard.js";
 import { assessSceneHygiene, renderSceneHygiene } from "./scene-hygiene.js";
 import { readPlaythroughVerdict, describePlaythrough, playthroughDirective, PLAYER_PLAYTHROUGH_VERDICT_REL } from "./playthrough-verdict.js";
 import { gddPlatform, buildSatisfiesTarget, artifactIsForeign, hostTarget, type BuildTarget } from "./gdd-platform.js";
+import { identityAnswersSpec, readProjectIdentity } from "./project-identity.js";
 import { readPlaymodeRun, suiteDisagreesWithReceipt, PLAYMODE_RUN_RECORD_REL } from "./playmode-run.js";
 import { writtenBefore } from "./file-freshness.js";
 import type { PlayerRunSpec } from "../core/bootstrap-stages/stage-runtime.js";
@@ -9630,7 +9631,17 @@ export class CampaignManager {
       // conformance guard) and the campaign never asked it (audited
       // 2026-09-10). A scheduled element the code never mentions is an
       // objective gap, and delivering without it is delivering another game.
-      let refusal = report.refusal ?? media.refusal;
+      // WHO THE GAME SAYS IT IS. Measured 2026-10-14: the delivered project
+      // carried Unity's DefaultCompany, no application identifier and an
+      // orientation nothing had compared with the document — a handheld build
+      // nobody could install, and the gate had never looked.
+      const identity = identityAnswersSpec(
+        readProjectIdentity(this.projectRoot),
+        gddText,
+        gddPlatform(gddText).handheld,
+      );
+      lines.push(...identity.lines);
+      let refusal = report.refusal ?? media.refusal ?? identity.refusal;
       // …OF THE DOCUMENT EVERY OTHER LINE HERE WAS JUDGED AGAINST. With no path
       // the check discovered one, the largest markdown under docs/: for a
       // text-only campaign that is another game's GDD (or a file outside the
