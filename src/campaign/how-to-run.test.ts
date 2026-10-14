@@ -24,30 +24,33 @@ afterEach(() => {
 
 /** A real GDD's shape (invented text): a flattened table row, its label alone on one line. */
 const REAL_GDD = [
-  "CONTENTS",
-  "1. OVERVIEW",
-  "1.1 The Pitch",
-  "Item",
-  "Detail",
-  "Style",
-  "Calm river crossing — “raft ferrying” sub-genre",
-  "Core mechanic",
-  "Drag a raft across the river to carry each traveller to the dock of their colour before the tide turns. Clear the shore without stranding more than three travellers.",
-  "Round length",
-  "Rounds of 1–2 minutes",
+  "TABLE OF CONTENTS",
+  "1. Slice Goals",
+  "2. Dive Planning",
   "",
-  "11. MAKING IT",
-  "Core loop fun-test: 8 graybox rivers, input latency within budget, testers replay them unprompted",
+  "1. SLICE GOALS",
+  "Core mechanic sign-off: three wreck sites playable end to end before the dive slice ships",
+  "",
+  "2. DIVE PLANNING",
+  "2.3 A Salvage Turn",
+  "Phase",
+  "Rule",
+  "Survey",
+  "Sweep the wreck field with sonar before committing a diver.",
+  "Core loop",
+  "Plot a dive route, then winch salvage aboard before the air runs out. A diver still below when the gauge empties drops the haul.",
+  "Surfacing",
+  "Trim the ballast on the way up, or the next dive starts late.",
 ].join("\n");
 
 describe("core-loop extraction", () => {
   it("takes the labelled field's value, not a heading and not a look-alike line", () => {
     const loop = extractCoreLoop(REAL_GDD);
-    expect(loop).toContain("Drag a raft across the river");
-    expect(loop).toContain("without stranding more than three travellers");
-    // "Core loop fun-test: ..." is a different field; matching it would put a
-    // production checklist in the play instructions.
-    expect(loop).not.toContain("graybox");
+    expect(loop).toContain("Plot a dive route");
+    expect(loop).toContain("when the gauge empties drops the haul");
+    // "Core mechanic sign-off: ..." is a different field, and it comes FIRST;
+    // matching it would put a production checklist in the play instructions.
+    expect(loop).not.toContain("wreck sites");
   });
 
   it("reads the inline `Core loop: ...` form too", () => {
@@ -57,11 +60,11 @@ describe("core-loop extraction", () => {
   });
 
   it("returns nothing when the GDD names no core-mechanic field — it never guesses", () => {
-    expect(extractCoreLoop("# Game\n\nIt is a game about lanterns.\n\n## Levels\n\nThere are many.")).toBeUndefined();
+    expect(extractCoreLoop("# Game\n\nIt is a game about salvage.\n\n## Levels\n\nThere are many.")).toBeUndefined();
   });
 
   it("does not take a heading as the value of a bare label", () => {
-    expect(extractCoreLoop("Core mechanic\n\n## 2. SIMULATION\n\nThe sim runs at 60hz.")).toBeUndefined();
+    expect(extractCoreLoop("Core mechanic\n\n## 2. DIVE PLANNING\n\nEach turn is one minute of dive time.")).toBeUndefined();
   });
 });
 
@@ -71,9 +74,9 @@ describe("unity version", () => {
     mkdirSync(join(root, "ProjectSettings"), { recursive: true });
     writeFileSync(
       join(root, "ProjectSettings", "ProjectVersion.txt"),
-      "m_EditorVersion: 6000.3.22f1\nm_EditorVersionWithRevision: 6000.3.22f1 (1c726e1fb402)\n",
+      "m_EditorVersion: 6000.0.41f1\nm_EditorVersionWithRevision: 6000.0.41f1 (5f2c8e7a91d0)\n",
     );
-    expect(readUnityVersion(root)).toEqual({ version: "6000.3.22f1" });
+    expect(readUnityVersion(root)).toEqual({ version: "6000.0.41f1" });
   });
 
   it("says why it is unknown rather than inventing one", () => {
@@ -92,11 +95,11 @@ describe("unity version", () => {
     });
     try {
       const { readUnityVersion: onWindows } = await import("./how-to-run.js");
-      const unreadable = onWindows("C:\\Games\\Lantern", () => {
+      const unreadable = onWindows("C:\\Games\\TrenchSalvage", () => {
         throw new Error("ENOENT");
       });
       expect(unreadable.note).toBe("ProjectSettings/ProjectVersion.txt could not be read (ENOENT)");
-      const unnamed = onWindows("C:\\Games\\Lantern", () => "m_EditorVersionWithRevision: 6000.3.22f1\n");
+      const unnamed = onWindows("C:\\Games\\TrenchSalvage", () => "m_EditorVersionWithRevision: 6000.0.41f1\n");
       expect(unnamed.note).toBe("ProjectSettings/ProjectVersion.txt names no m_EditorVersion line");
     } finally {
       vi.doUnmock("node:path");
@@ -108,13 +111,13 @@ describe("unity version", () => {
 describe("HOW_TO_RUN.md rendering", () => {
   const measured = {
     projectRoot: "/tmp/SampleGame",
-    unityVersion: "6000.3.22f1",
-    entryScene: "Assets/Scenes/ProductionMain.unity",
-    entryObjects: 17,
-    scaffolding: ["Assets/Scenes/LanternShowcase.unity", "Assets/Scenes/AssembledMain.unity"],
+    unityVersion: "6000.0.41f1",
+    entryScene: "Assets/Scenes/DiveCampaign.unity",
+    entryObjects: 23,
+    scaffolding: ["Assets/Scenes/SonarSandbox.unity", "Assets/Scenes/WinchPrototype.unity"],
     unclassified: ["Assets/Scenes/Main.unity"],
-    otherEnabled: 13,
-    coreLoop: "Tap a shrine to pull the nearest lantern onto the pond.",
+    otherEnabled: 6,
+    coreLoop: "Plot a dive route, then winch salvage aboard before the air runs out.",
     gddPath: "docs/SampleGame_GDD.md",
     suiteVerdict: "PlayMode verification passed: 179 of 179 tests passed (unfiltered — the whole PlayMode suite)",
     suiteUnfiltered: true,
@@ -124,17 +127,17 @@ describe("HOW_TO_RUN.md rendering", () => {
   it("writes only measured facts, each attributed to what measured it", () => {
     const text = renderHowToRun(measured);
 
-    expect(text).toContain("6000.3.22f1");
+    expect(text).toContain("6000.0.41f1");
     expect(text).toContain("ProjectSettings/ProjectVersion.txt");
-    expect(text).toContain("Assets/Scenes/ProductionMain.unity");
+    expect(text).toContain("Assets/Scenes/DiveCampaign.unity");
     expect(text).toContain("EditorBuildSettings.asset");
-    expect(text).toContain("Tap a shrine to pull the nearest lantern");
+    expect(text).toContain("Plot a dive route, then winch salvage aboard");
     expect(text).toContain("docs/SampleGame_GDD.md");
     expect(text).toContain("179 of 179");
     expect(text).toContain("-testPlatform PlayMode");
     // The scaffolding list is the "what can be removed" section.
-    expect(text).toContain("LanternShowcase.unity");
-    expect(text).toContain("AssembledMain.unity");
+    expect(text).toContain("SonarSandbox.unity");
+    expect(text).toContain("WinchPrototype.unity");
     // An unclassified scene is listed, and explicitly NOT called removable.
     expect(text).toContain("Main.unity");
     expect(text).toContain("not classified as scaffolding");

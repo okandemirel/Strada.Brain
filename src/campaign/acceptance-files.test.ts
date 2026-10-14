@@ -233,15 +233,15 @@ describe("renderAcceptanceFile", () => {
   });
 
   it("writes exact values with the row's tolerance and one-sided or exclusive bounds as NUnit constraints", () => {
-    const exact = row({ rid: "req-001-aaaaaaaaaaaa", kind: "constant", text: "Fire rate is 12/s.", bounds: { kind: "exact", value: 12, tolerance: 0.01 } });
-    const atLeast = row({ rid: "req-002-bbbbbbbbbbbb", kind: "range", text: "At least 3 lives.", bounds: { kind: "range", lo: 3 } });
+    const exact = row({ rid: "req-001-aaaaaaaaaaaa", kind: "constant", text: "Sonar ping interval is 4 s.", bounds: { kind: "exact", value: 4, tolerance: 0.01 } });
+    const atLeast = row({ rid: "req-002-bbbbbbbbbbbb", kind: "range", text: "At least 3 divers in the crew.", bounds: { kind: "range", lo: 3 } });
     const below = row({ rid: "req-003-cccccccccccc", kind: "range", text: "Under 2 s, over 1 s.", bounds: { kind: "range", lo: 1, hi: 2, loExclusive: true, hiExclusive: true } });
     const { source } = renderAcceptanceFile("m3", [
-      { row: exact, check: { rid: exact.rid, observe: "Service<global::Game.IRates>().Fire" } },
-      { row: atLeast, check: { rid: atLeast.rid, observe: "Service<global::Game.ILives>().Count" } },
+      { row: exact, check: { rid: exact.rid, observe: "Service<global::Game.ISonar>().PingIntervalSeconds" } },
+      { row: atLeast, check: { rid: atLeast.rid, observe: "Service<global::Game.ICrew>().Divers" } },
       { row: below, check: { rid: below.rid, observe: "Service<global::Game.ITimer>().Seconds" } },
     ]);
-    expect(source).toContain("Is.EqualTo(12d).Within(0.01d)");
+    expect(source).toContain("Is.EqualTo(4d).Within(0.01d)");
     expect(source).toContain("Is.GreaterThanOrEqualTo(3d)");
     expect(source).toContain("Is.GreaterThan(1d).And.LessThan(2d)");
   });

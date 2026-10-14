@@ -298,7 +298,7 @@ describe("re-judging the requirements no sprint closed", () => {
  *
  * Executed by Codex against the real resolver: a ladder carrying only
  * "Committed 1 file(s) as `abcdef`." and a model reply quoting that sentence
- * closed a determinism requirement. The line is a measured fact about a
+ * closed a ballast-trim requirement. The line is a measured fact about a
  * commit and says nothing about WHICH requirement it implements.
  */
 describe("closure needs evidence that names content", () => {
@@ -314,10 +314,10 @@ describe("closure needs evidence that names content", () => {
       '{"verdicts": [{"id": 1, "delivered": true, "evidence": "landed: Committed 1 file(s) as `abcdef`."}]}',
     ]);
 
-    const judged = await planner.resolveCoverageGaps("# GDD", ["R-14 determinism: absent"], ladder);
+    const judged = await planner.resolveCoverageGaps("# GDD", ["S-07 ballast trim: absent"], ladder);
 
     expect(judged.closed).toEqual([]);
-    expect(judged.open).toEqual(["R-14 determinism: absent"]);
+    expect(judged.open).toEqual(["S-07 ballast trim: absent"]);
     // The line is still SHOWN to the auditing model — it is disclosure; it
     // just cannot be the evidence that closes anything.
     expect(JSON.stringify(chat.mock.calls[0])).toContain("Committed 1 file(s)");
@@ -327,14 +327,14 @@ describe("closure needs evidence that names content", () => {
     const ladder = [{
       title: "Sprint A",
       status: "green",
-      commitNote: "Committed 2 file(s) as `abcdef`: Assets/Scripts/Determinism.cs, Assets/Tests/PlayMode/ReplayTests.cs.",
+      commitNote: "Committed 2 file(s) as `abcdef`: Assets/Scripts/BallastTrim.cs, Assets/Tests/PlayMode/TrimTests.cs.",
     }];
     const { planner } = plannerWith([
-      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "Assets/Tests/PlayMode/ReplayTests.cs"}]}',
+      '{"verdicts": [{"id": 1, "delivered": true, "evidence": "Assets/Tests/PlayMode/TrimTests.cs"}]}',
     ]);
 
-    const judged = await planner.resolveCoverageGaps("# GDD", ["R-14 determinism: absent"], ladder);
-    expect(judged.closed).toEqual(["R-14 determinism: absent"]);
+    const judged = await planner.resolveCoverageGaps("# GDD", ["S-07 ballast trim: absent"], ladder);
+    expect(judged.closed).toEqual(["S-07 ballast trim: absent"]);
   });
 
   // STREAMING_ENABLED=false governs every provider call, campaign planning included.
