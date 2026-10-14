@@ -809,8 +809,9 @@ export class CampaignStorage {
    * final sprint still carries the structural refusal. Under the current
    * code such a campaign never reaches `done` (it stops at `failed`, see
    * campaign-manager's NOT DELIVERED path); rows written before that fix
-   * read "delivered" over a game that renders nothing, and "kampanya devam"
-   * on them silently did nothing: the query only looked at failed/cancelled,
+   * read "delivered" although the structural gate had refused the tree, and
+   * "kampanya devam" on them silently did nothing: the query only looked at
+   * failed/cancelled,
    * the user was told nothing, and the only way forward was a hand edit of
    * this database. A plain `done` stays final.
    */

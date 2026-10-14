@@ -490,7 +490,7 @@ export class SupervisorBrain {
             if (externalSignal?.aborted || internalSignal.aborted) {
               return this.makePartialResult([], "Aborted during resume re-verification");
             }
-            // The report travels with the result here too (GDD-drift W02).
+            // The report travels with the result here too.
             const synthesized: SupervisorResult = { ...verifier.synthesize(verified), verification: report };
             // NOBODY LOOKED is not approval (C#4): a resume counts as done
             // only when every saved node was actually approved. A flagged or
@@ -844,8 +844,7 @@ export class SupervisorBrain {
         });
       }
       // The report travels with the result: it was dropped here, so nothing
-      // past the brain could tell a reviewed node from one nobody read
-      // (GDD-drift W02).
+      // past the brain could tell a reviewed node from one nobody read.
       const supervisorResult: SupervisorResult = {
         ...aggregator.synthesize(verifiedResults),
         verification: verificationReport,
@@ -910,8 +909,8 @@ export class SupervisorBrain {
       // execution" swallowed "All providers are in cooldown" — downstream,
       // the campaign's reconcile defers on provider-outage wording and the
       // keep-alive classifies it, so the generic text made a quota outage
-      // count as a failed milestone attempt (measured 2026-08-29 12:36:
-      // Sprint 3 stopped "after 2 attempts" that were both the same quota
+      // count as a failed milestone attempt (measured in a live campaign: a
+      // milestone stopped "after 2 attempts" that were both the same quota
       // wall). Sliced defensively; sanitizeToolResult-level redaction is not
       // needed for provider-chain error strings.
       const cause = (err instanceof Error ? err.message : String(err)).slice(0, 300);
@@ -1024,19 +1023,6 @@ export class SupervisorBrain {
   }
 }
 
-/**
- * A resumed task carries the tree it saved. When every leaf of that tree is
- * already completed, the plan is DONE — not "No sub-tasks after decomposition".
- * Measured 2026-09-10 21:20: the driver mission's three leaves completed at
- * 20:41, the restart re-armed its task, the leaf filter (which drops completed
- * nodes) yielded nothing, the task was blocked twice and a fresh re-plan was
- * started against work that had already landed.
- */
-/**
- * The rejected nodes and everything that depends on them, transitively. A
- * dependent's saved "completed" describes work done against an input that is
- * about to change (Codex 2026-09-11 D#5).
- */
 /** Floor for the resume re-verification deadline. */
 const RESUME_VERIFY_MIN_MS = 120_000;
 
@@ -1128,6 +1114,11 @@ export function effectiveLeafDependencies(tree: GoalTree): Map<string, Set<strin
   return out;
 }
 
+/**
+ * The rejected nodes and everything that depends on them, transitively. A
+ * dependent's saved "completed" describes work done against an input that is
+ * about to change (Codex 2026-09-11 D#5).
+ */
 export function dependentClosure(tree: GoalTree | undefined, rejected: ReadonlySet<string>): string[] {
   if (!tree) return [...rejected];
   const deps = effectiveLeafDependencies(tree);
@@ -1238,6 +1229,14 @@ export function stopAfterDeadline<N, R>(
   };
 }
 
+/**
+ * A resumed task carries the tree it saved. When every leaf of that tree is
+ * already completed, the plan is DONE — not "No sub-tasks after decomposition".
+ * Measured in a live campaign: a restart re-armed a task whose leaves had all
+ * completed, the leaf filter (which drops completed nodes) yielded nothing,
+ * the task was blocked twice and a fresh re-plan started against work that had
+ * already landed.
+ */
 export function completedPlanOnResume(tree: GoalTree | undefined): SupervisorResult | null {
   if (!tree) return null;
   const hasChildren = new Set<string>();

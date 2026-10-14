@@ -1,12 +1,10 @@
 /**
  * The gate between a game and a simulation nobody can see.
  *
- * Measured 2026-08-21 on a delivered project: plenty of C# files and prefabs,
- * a passing play-mode suite, and no MonoBehaviour, no use of Strada.Core's
- * view layer, and nothing in its scenes a player could see. Every service and system was
- * correct and a player would have faced an empty screen. The tests passed
- * because they call services directly and never go through a scene, so no rule
- * that reads code shape or asserts on tests could have caught it.
+ * A project can hold correct services, systems and prefabs and a green
+ * play-mode suite, and still show a player an empty screen: tests that call
+ * services directly never go through a scene, so no rule that reads code shape
+ * or asserts on tests can catch a missing view.
  */
 
 import { describe, expect, it } from "vitest";
@@ -29,19 +27,19 @@ const deps = {
 /** An assembled game: module, config asset, wired scene — and prefabs. */
 function assembledProject(): { root: string; configPath: string; scripts: string } {
   const root = mkdtempSync(join(os.tmpdir(), "view-gate-"));
-  const moduleRoot = join(root, "Assets", "Modules", "QuarryModule");
+  const moduleRoot = join(root, "Assets", "Modules", "ApiaryModule");
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
 
-  const configPath = join(scripts, "QuarryModuleConfig.cs");
-  writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Quarry.asmdef"), JSON.stringify({ name: "Quarry" }));
-  writeFileSync(join(scripts, "QuarryService.cs"), "public class QuarryService : IQuarryService {}");
-  writeFileSync(join(moduleRoot, "QuarryModuleConfig.asset"), "%YAML 1.1");
+  const configPath = join(scripts, "ApiaryModuleConfig.cs");
+  writeFileSync(configPath, "public class ApiaryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Apiary.asmdef"), JSON.stringify({ name: "Apiary" }));
+  writeFileSync(join(scripts, "HiveService.cs"), "public class HiveService : IHiveService {}");
+  writeFileSync(join(moduleRoot, "ApiaryModuleConfig.asset"), "%YAML 1.1");
 
   const prefabs = join(moduleRoot, "Prefabs");
   mkdirSync(prefabs, { recursive: true });
-  writeFileSync(join(prefabs, "Chisel.prefab"), "GameObject:");
+  writeFileSync(join(prefabs, "Smoker.prefab"), "GameObject:");
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
@@ -100,7 +98,7 @@ describe("a game that is assembled and renders nothing", () => {
 
   it("clears once something derives from MonoBehaviour", () => {
     const { root, configPath, scripts } = assembledProject();
-    writeFileSync(join(scripts, "ChiselView.cs"), "public class ChiselView : MonoBehaviour {}");
+    writeFileSync(join(scripts, "SmokerView.cs"), "public class SmokerView : MonoBehaviour {}");
     const guard = guardFor(root);
     guard.trackToolCall("file_write", { path: configPath }, false);
 
@@ -126,6 +124,28 @@ describe("a game that is assembled and renders nothing", () => {
 
     expect(prompt).toContain("[STRADA NO CAMERA]");
     expect(prompt).toContain("Main.unity");
-    expect(prompt).toContain("already");
+    expect(prompt).toContain("unity_scene_build");
+  });
+
+  it("says a cameraless scene draws nothing without claiming the prefabs carry renderers", () => {
+    // The gate reads scenes for a Camera and never opens a prefab, so it knows
+    // nothing about what the prefabs hold. Smoker.prefab here is a bare
+    // GameObject with no renderer component at all — a shape every project is
+    // free to have — and the ask must still be true of it.
+    const { root, configPath } = assembledProject();
+    writeFileSync(
+      join(root, "Assets", "Scenes", "Main.unity"),
+      "GameObject:\n  _gameConfig: {fileID: 11400000, guid: abc}",
+    );
+    const guard = guardFor(root);
+    guard.trackToolCall("file_write", { path: configPath }, false);
+
+    const prompt = guard.getPrompt() ?? "";
+
+    expect(prompt).toContain("[STRADA NO CAMERA]");
+    // The claim the gate is entitled to make: the camera decides, whatever the
+    // prefabs are.
+    expect(prompt).toContain("not the prefabs, whatever they carry");
+    expect(prompt).not.toMatch(/prefab[\s\S]{0,40}carries a renderer/i);
   });
 });

@@ -19,7 +19,7 @@ import { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js"
 import type { Instinct, InstinctId } from "../learning/types.js";
 import type { TimestampMs } from "../types/index.js";
 
-const PROJECT = "/projects/samplegame";
+const PROJECT = "/projects/widget-shop";
 const CHAT = "chat-1";
 const PROMPT = "Fix the pooling compile error and rerun the build";
 

@@ -1,5 +1,5 @@
 /**
- * The scope gate's contracts (GDD-drift plan, M2 + M3).
+ * The scope gate's contracts.
  *
  * A milestone is green only when its own GDD rows, and every row that passed
  * before, pass checks the system owns, in one acceptance run the system

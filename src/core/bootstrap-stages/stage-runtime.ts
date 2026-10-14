@@ -458,7 +458,7 @@ export async function initializeTaskRuntimeStage(
       // the real-tree guardian uses; a missing registry or an unregistered
       // verifier answers `ran: false`, which the gate discloses as NOT
       // MEASURED and never treats as a pass (audited 2026-09-04: a campaign
-      // delivered on a tree carrying 37 compile errors).
+      // declared delivery on a tree that did not compile).
       verifyCompile: params.toolRegistry ? makeVerifyCompile(params.toolRegistry) : undefined,
       // The vendored Strada.MCP stamps a receipt on every ticketed run: a
       // producer that returns none is refused, not read as legacy (round 4 #1).
@@ -499,7 +499,7 @@ export async function initializeTaskRuntimeStage(
       styleAnalysis: new StyleAnalysis(params.providerManager.getProvider(""), {
         streamingEnabled: params.config.streamingEnabled,
       }),
-      // The scope gate (GDD-drift W15). Built whatever the mode: construction
+      // The scope gate. Built whatever the mode: construction
       // calls no provider and no tool, and the manager decides nothing with
       // them while CAMPAIGN_SCOPE_GATE is off, so off stays today's behaviour.
       // Each part was tested alone while this site passed none, and the gate
@@ -1110,7 +1110,7 @@ export interface PlayerRunSpec {
  *
  * A missing registry or an unregistered verifier answers `ran: false`, which
  * the gate discloses as NOT MEASURED and never treats as a pass (audited
- * 2026-09-04: a campaign delivered on a tree carrying 37 compile errors).
+ * 2026-09-04: a campaign declared delivery on a tree that did not compile).
  */
 export function makeVerifyCompile(
   registry: {
@@ -1146,7 +1146,7 @@ export function makeVerifyCompile(
             // read at all, so "Unity Editor executable not found" and
             // "Operation timed out" both reported a zero-error compile (Codex
             // 2026-09-12 R#5) — but reading it first turned a COMPLETED
-            // compile that found 37 errors into "not run", which the non-final
+            // compile that counted real errors into "not run", which the non-final
             // gate does not treat as broken at all (S#2). A counted error is
             // the compiler's answer whatever the flag says; a flag with no
             // count is a tool that did not get to answer.
@@ -1195,7 +1195,7 @@ export const PLAYMODE_SUITE_CONTENT_CAP = 20_000;
  * producer stamps a receipt for it. A red suite is an answer, not a failure of
  * the dispatch: the record it wrote is the verdict, so nothing is thrown.
  *
- * The scope gate's acceptance batch (GDD-drift W08) is the same call narrowed
+ * The scope gate's acceptance batch is the same call narrowed
  * to the exact test names it owns: the filter is forwarded, and the output
  * comes back whole, because acceptance compile errors and failure messages
  * appear only there. A blank filter is no filter, so a caller that passes none

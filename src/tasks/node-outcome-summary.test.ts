@@ -42,11 +42,11 @@ describe("saying which node failed and why", () => {
 
   it("carries the reason, not just the verdict", () => {
     const lines = summariseNodeOutcomes([
-      node({ nodeId: "n2", status: "failed", blockedReason: "needs a decision about scoring" }),
+      node({ nodeId: "n2", status: "failed", blockedReason: "needs a decision about invoice rounding" }),
     ]);
 
     expect(lines[0], "the verdict without the reason is what run 37 already had").toContain(
-      "needs a decision about scoring",
+      "needs a decision about invoice rounding",
     );
   });
 
@@ -64,7 +64,7 @@ describe("saying which node failed and why", () => {
     // no way to tell an error from an agent waiting on a decision — two states
     // that call for opposite responses.
     const lines = summariseNodeOutcomes([
-      node({ nodeId: "n2", status: "failed", blockedReason: "which scoring rule applies?" }),
+      node({ nodeId: "n2", status: "failed", blockedReason: "which tax rounding rule applies?" }),
       node({ nodeId: "n3", status: "failed", output: "CS0246" }),
     ]);
 

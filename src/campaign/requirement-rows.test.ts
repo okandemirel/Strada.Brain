@@ -1,12 +1,11 @@
 /**
- * Requirement rows (GDD-drift plan W04, M3): the approved GDD read into rows
- * by code, and each row given to the milestone that owns it.
+ * Requirement rows: the approved GDD read into rows by code, and each row
+ * given to the milestone that owns it.
  *
- * In a measured campaign nothing turned a GDD rule into a row the system owned:
- * a labelled rule was closed by a worker's prose, and a section of tuning
- * constants was never held against anything. These tests pin the deterministic extraction
- * (no model), the add-only pass (a model may only ADD rows that quote the
- * document), and ownership.
+ * Pins the deterministic extraction of GDD rules into rows (labelled rules,
+ * constants with bounds parsed by code, screens, claims; no model), the
+ * add-only pass (a model may only ADD rows that quote the document) and
+ * ownership.
  */
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -355,10 +354,9 @@ describe("extractRequirementRows — German, Spanish and French documents", () =
 });
 
 /**
- * Tables that lost their pipes in a PDF conversion: every cell on a line of
- * its own, the label alone on one. A converted GDD's numbered rules and
- * coded tables reach the extractor in this shape and no other, so nothing
- * else in this file reads them.
+ * Documents converted from PDF or a word processor often lose their table
+ * pipes: every cell lands on its own line, the label alone on one. labelRuns
+ * is the only reader of that shape, so these tests are its only guard.
  */
 const FLATTENED = [
   "# Orchard Seasons — Game Design Document",
@@ -494,6 +492,16 @@ describe("extractRequirementRows — a business word a game uses too excludes no
     "## 12. Weather",
     "### 12.1 Water Budget",
     "Each tree must receive 4–9 litres of water per turn.",
+    "## 13. Project Scope",
+    "The storefront page must be approved by week 12.",
+    "## 14. Release Plan",
+    "The studio must submit the build 10 days before launch.",
+    "## 15. Risks and Countermeasures",
+    "The outsourcing contract must be signed within 3 weeks.",
+    "## 16. Spell Scope",
+    "A fireball must scorch every tile within 3 metres of the player.",
+    "## 17. Flood Countermeasures",
+    "The player must stack 4 sandbags before the tide rises.",
   ].join("\n");
   const { rows } = extractRequirementRows(MIXED, GDD);
 
@@ -506,6 +514,10 @@ describe("extractRequirementRows — a business word a game uses too excludes no
       "Ten gems must convert to exactly 100 coins.",
       "Frame time must stay under 16 ms.",
       "Each tree must receive 4–9 litres of water per turn.",
+      // A production or risk WORD is not a production section: these two
+      // headings share a word with one and name a player rule.
+      "A fireball must scorch every tile within 3 metres of the player.",
+      "The player must stack 4 sandbags before the tide rises.",
     ]) {
       const row = byText(rows, rule);
       expect({ rule, kind: row.kind, status: row.status }).toEqual({ rule, kind: expect.not.stringMatching(/aspiration/), status: "open" });
@@ -519,10 +531,105 @@ describe("extractRequirementRows — a business word a game uses too excludes no
       "Week-6 returners must be at least 13% of installs.",
       "The studio must hire 3 more animators by June.",
       "The budget must stay under 38,000 EUR.",
+      // …and a production or risk section is one whatever word the document
+      // chose for it: a list of literals excluded one spelling and left the
+      // synonyms open as game rules.
+      "The storefront page must be approved by week 12.",
+      "The studio must submit the build 10 days before launch.",
+      "The outsourcing contract must be signed within 3 weeks.",
     ]) {
       const row = byText(rows, goal);
       expect({ goal, kind: row.kind, status: row.status }).toEqual({ goal, kind: "aspiration", status: "excluded" });
     }
+  });
+});
+
+/**
+ * WHICH HEADINGS ARE SCREENS — decided by the head noun, not by a word's
+ * presence.
+ *
+ * A list of container nouns matched anywhere in a heading threw away every
+ * screen a game calls "Map" or "Inventory", and "Map Screen", "Overview
+ * Screen" and "Level List Screen" with them, while gdd-scope's screen count
+ * read those same words AS screens: one document, two readers, two answers.
+ */
+describe("extractRequirementRows — a screen, or a heading ABOUT the screens", () => {
+  const DIVING = [
+    "# Tide Lantern — Game Design Document",
+    "## 2. Screens",
+    "### 2.1 Map",
+    "The map must mark every vent the diver has surfaced from.",
+    "### 2.2 Inventory",
+    "### 2.3 Logbook",
+    "## 3. Reef Map Screen",
+    "## 4. Gear Inventory Screen",
+    "## 5. Map Menu",
+    "## 6. Level List Screen",
+    "## 7. Screen Map",
+    "## 8. Screen Flow",
+    "## 9. Popup Inventory",
+    "## 10. Übersicht der Bildschirme",
+    "## 11. Liste des écrans",
+    "## 12. Mapa de pantallas",
+  ].join("\n");
+  const { rows } = extractRequirementRows(DIVING, GDD);
+  const screens = rows.filter((r) => r.kind === "screen").map((r) => r.text);
+
+  it("reads a screen the game names after a map or an inventory, and the children of a screen group", () => {
+    expect(screens).toEqual([
+      "Map",
+      "Inventory",
+      "Logbook",
+      "Reef Map Screen",
+      "Gear Inventory Screen",
+      "Map Menu",
+      "Level List Screen",
+    ]);
+  });
+
+  it("leaves a heading whose HEAD is the container: a map OF the screens is not a screen", () => {
+    for (const container of [
+      "Screen Map",
+      "Screen Flow",
+      "Popup Inventory",
+      "Übersicht der Bildschirme",
+      "Liste des écrans",
+      "Mapa de pantallas",
+      "Screens",
+    ]) {
+      expect({ container, read: screens.includes(container) }).toEqual({ container, read: false });
+    }
+  });
+
+  it("keeps the rule under a screen heading as its own row", () => {
+    expect(byText(rows, "The map must mark every vent").kind).toBe("rule");
+  });
+});
+
+/**
+ * A duration table's label, whatever the document qualifies it with. The
+ * reader was fitted to one document's unqualified wording, so "Average stage
+ * time" read as an ordinary constant and nothing held the game to it.
+ */
+describe("extractRequirementRows — a qualified duration label is still a session claim", () => {
+  const TIMING = [
+    "# Tide Lantern — Game Design Document",
+    "## 2. Dive Timing",
+    "Average stage time",
+    "3–8 min",
+    "Expected level length",
+    "90 s; 400 s per player in a relay",
+  ].join("\n");
+  const { rows } = extractRequirementRows(TIMING, GDD);
+
+  it("reads the qualified label as a claim and drops the clause that states a rate", () => {
+    const stage = byText(rows, "Average stage time");
+    expect(stage.kind).toBe("claim");
+    expect(stage.bounds).toEqual({ kind: "range", lo: 3, hi: 8, unit: "min" });
+
+    const level = byText(rows, "Expected level length");
+    expect(level.kind).toBe("claim");
+    expect(level.bounds).toEqual({ kind: "range", lo: 90, hi: 90, unit: "s" });
   });
 });
 

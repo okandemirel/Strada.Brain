@@ -1,5 +1,5 @@
 /**
- * The campaign replay fixture's exporter (GDD-drift plan W16a).
+ * The campaign replay fixture's exporter.
  *
  * The replay tests judge a finished campaign again from what its databases
  * hold, so the fixture has to carry every system stamp the milestone tips
@@ -419,11 +419,11 @@ describe("the committed synthetic fixture", () => {
     expect(byId("m3").tip.stamps).toEqual({ task_stuck: 4 });
     expect(byId("m4").tip.stamps).toEqual({});
     expect(byId("m5").tip.stamps).toEqual({ task_stuck: 3, max_steps_reached: 1 });
-    // A Spanish outage stamp: the counter reads every locale, not only the run's.
-    expect(byId("m6").tip.stamps).toEqual({ task_stuck: 1, provider_abort: 1 });
-    expect(byId("m7").tip.stamps).toEqual({ max_steps_reached: 1 });
+    expect(byId("m6").tip.stamps).toEqual({ max_steps_reached: 1 });
     expect(byId("mcov1").tip.stamps).toEqual({ task_stuck: 2 });
     expect(byId("mcov1-2").tip.stamps).toEqual({});
+    // A Spanish outage stamp: the counter reads every locale, not only the run's.
+    expect(byId("mcov1-3").tip.stamps).toEqual({ task_stuck: 1, provider_abort: 1 });
     // m2's stamp is in its tip only: the stored excerpt never showed it.
     expect(byId("m2").resultExcerpt).not.toContain("I got stuck");
     for (const id of ids.filter((x) => x !== "mcov1-2")) expect(byId(id).status, id).toBe("green");
@@ -437,10 +437,10 @@ describe("the committed synthetic fixture", () => {
     // m3's four are what tasks.db kept: its result was stored cut, and only its.
     expect(byId("m3").tip.resultCutInStorage).toBe(true);
     for (const id of ids.filter((x) => x !== "m3")) expect(byId(id).tip, id).not.toHaveProperty("resultCutInStorage");
-    // m6's and m7's tips carry verification_json, one red and one green; the others say so instead of being absent.
-    for (const id of ids.filter((x) => x !== "m6" && x !== "m7")) expect(byId(id).tip.verification, id).toBeNull();
-    expect(byId("m6").tip.verification).toMatchObject({ testsGreen: false });
-    expect(byId("m7").tip.verification).toMatchObject({ testsGreen: true });
+    // Two tips carry verification_json, one red and one green; the others say so instead of being absent.
+    for (const id of ids.filter((x) => x !== "m6" && x !== "mcov1-3")) expect(byId(id).tip.verification, id).toBeNull();
+    expect(byId("mcov1-3").tip.verification).toMatchObject({ testsGreen: false });
+    expect(byId("m6").tip.verification).toMatchObject({ testsGreen: true });
   });
 
   it("decodes to the same stamps from its kept lines alone", async () => {
@@ -457,7 +457,7 @@ describe("the committed synthetic fixture", () => {
     expect(fixture.gdd.text).toBeUndefined();
     expect(fixture.gdd.chars).toBe(SYNTHETIC_GDD.length);
     expect(fixture.redaction.gddText).toBe("omitted");
-    // m7 and mcov1-2 each quote the GDD in a structure finding, and mcov1-2's
+    // The delivery sprint and mcov1-2 each quote the GDD in a structure finding, and mcov1-2's
     // title, which the campaign's lastError repeats, starts with a GDD sentence.
     expect(fixture.redaction.gddPassages).toBe(4);
     expect(JSON.stringify(fixture)).toContain("GDD says: …<GDD passage omitted>…");
@@ -468,7 +468,7 @@ describe("the committed synthetic fixture", () => {
     for (const m of fixture.milestones) expect(m).not.toHaveProperty("prompt");
     const json = JSON.stringify(fixture);
     expect(json).not.toMatch(/\/Users\/|\/home\/|chat-synthetic|user-synthetic/);
-    // m7's visual verdict names the project home-relative; only <project> may remain.
+    // The delivery sprint's visual verdict names the project home-relative; only <project> may remain.
     expect(json).not.toMatch(new RegExp(`~/[^"\\s]*${fixture.campaign.projectName}`));
     expect(json).toContain("`<project>/Recordings/");
     const { applySecretPatterns, DEFAULT_SECRET_PATTERNS } = await loadProductionModules();

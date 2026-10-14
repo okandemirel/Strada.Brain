@@ -94,11 +94,11 @@ describe("buildCampaignStatus", () => {
     const withClosure = campaign();
     withClosure.milestones[0] = {
       id: "mcov1",
-      title: "Coverage completion 1.1 — Boss",
+      title: "Coverage completion 1.1 — Greenhouse vents",
       prompt: "p",
       status: "failed",
       attempts: 2,
-      coverageGap: "Boss: absent",
+      coverageGap: "Greenhouse vents: absent",
       coverageClosed: true,
       coverageClosedRevision: "a".repeat(40),
     };

@@ -1,10 +1,10 @@
 /**
- * Closure by the ledger (GDD-drift plan W12, M3).
+ * Closure by the ledger.
  *
  * A coverage requirement used to be closed by a model's quote of a measured
  * line plus a word match (`resolveCoverageGaps` → `quoteIsAbout`): a commit
- * that named `LanternSystem.cs` closed "a lantern refills only at a shrine the
- * player has lit" whatever the lantern did. With a readable requirement ledger
+ * that named `SignalSystem.cs` closed "a signal clears to green only after the
+ * block ahead is empty" whatever the signal did. With a readable requirement ledger
  * under the scope gate's `on` mode, a GDD row is closed only by a check of its
  * own that passed on the revision being judged (`closesByLedger`), and the
  * resolver never sees a row. A campaign without a ledger, with an unreadable
@@ -24,11 +24,11 @@ const REV_NOW = "b".repeat(40);
 const REV_OLD = "a".repeat(40);
 
 const GDD_TEXT = [
-  "# Lantern Keeper",
+  "# Signal Box",
   "## 2 Rules",
-  "LR-01 The lantern drains one charge every 5 seconds.",
-  "LR-02 A lantern refills only at a shrine the player has lit.",
-  "LR-03 The player taps a shrine to light it.",
+  "SG-01 A signal turns red when a train enters its block.",
+  "SG-02 A signal clears to green only after the block ahead is empty.",
+  "SG-03 The dispatcher can hold a train at any platform.",
 ].join("\n");
 
 function row(rid: string, text: string, fields: Partial<RequirementRow> = {}): RequirementRow {
@@ -91,11 +91,11 @@ function coverageSprint(id: string, gap: string, fields: Partial<CampaignMilesto
 
 const BUILT: CampaignMilestone = {
   id: "m1",
-  title: "Sprint 1 — Lanterns",
-  prompt: "build the lanterns",
+  title: "Sprint 1 — Signals",
+  prompt: "build the signals",
   status: "green",
   attempts: 1,
-  commitNote: "2 commit(s): Assets/Scripts/Lantern/LanternSystem.cs",
+  commitNote: "2 commit(s): Assets/Scripts/Signals/SignalSystem.cs",
 } as CampaignMilestone;
 
 function campaignWith(fields: Partial<Campaign>): Campaign {
@@ -148,7 +148,7 @@ function plannerReplying(reply: string): { planner: CampaignPlanner; chat: Retur
 
 describe("a ledger row is closed only by its own check passing on this revision (W12)", () => {
   it("a row that passed on the current revision closes with no resolver call", async () => {
-    const refill = row("req-002-aaaa", "A lantern refills only at a shrine the player has lit.", { status: "passing", last: pass(REV_NOW) });
+    const refill = row("req-002-aaaa", "A signal clears to green only after the block ahead is empty.", { status: "passing", last: pass(REV_NOW) });
     const campaign = campaignWith({
       requirements: ledgerOf([refill]),
       milestones: [BUILT, coverageSprint("mcov1", refill.encoded)],
@@ -166,15 +166,15 @@ describe("a ledger row is closed only by its own check passing on this revision 
   });
 
   it("a failing row stays open although a landed line satisfies the word match", async () => {
-    const refill = row("req-002-aaaa", "A lantern refills only at a shrine the player has lit.", {
+    const refill = row("req-002-aaaa", "A signal clears to green only after the block ahead is empty.", {
       status: "failing",
-      last: fail(REV_NOW, "R2: lantern charge after visiting an unlit shrine — Expected: 0 But was: 3"),
+      last: fail(REV_NOW, "R2: signal aspect after the block cleared — Expected: Green But was: Red"),
     });
     // The precondition that made this a false closure: the word matcher finds
-    // a measured line ABOUT the row (they share "lantern").
+    // a measured line ABOUT the row (they share "signal").
     expect(closingFact(refill.text, quotableFactsOf([BUILT]))).toBeDefined();
     const { planner, chat } = plannerReplying(
-      JSON.stringify({ verdicts: [{ id: 1, delivered: true, evidence: "Assets/Scripts/Lantern/LanternSystem.cs" }] }),
+      JSON.stringify({ verdicts: [{ id: 1, delivered: true, evidence: "Assets/Scripts/Signals/SignalSystem.cs" }] }),
     );
     const campaign = campaignWith({
       requirements: ledgerOf([refill]),
@@ -192,13 +192,13 @@ describe("a ledger row is closed only by its own check passing on this revision 
   });
 
   it("a pass on another revision, a superseded check or a weak one closes nothing", async () => {
-    const old = row("req-001-aaaa", "The lantern drains one charge every 5 seconds.", { status: "passing", last: pass(REV_OLD) });
-    const superseded = row("req-002-bbbb", "A lantern refills only at a shrine the player has lit.", {
+    const old = row("req-001-aaaa", "A signal turns red when a train enters its block.", { status: "passing", last: pass(REV_OLD) });
+    const superseded = row("req-002-bbbb", "A signal clears to green only after the block ahead is empty.", {
       status: "passing",
       last: pass(REV_NOW),
       checks: [{ ...testCheck("req-002-bbbb"), kind: "test", supersededAtMs: 9 } as RequirementRow["checks"][number]],
     });
-    const weak = row("req-003-cccc", "The player taps a shrine to light it.", {
+    const weak = row("req-003-cccc", "The dispatcher can hold a train at any platform.", {
       status: "passing",
       last: pass(REV_NOW),
       checks: [{ ...testCheck("req-003-cccc"), kind: "test", weak: "asserts a literal" } as RequirementRow["checks"][number]],
@@ -214,31 +214,31 @@ describe("a ledger row is closed only by its own check passing on this revision 
 
   it("holds every blocking row, not only those a coverage sprint carries; waived, excluded, aspiration and look-and-feel rows never block", async () => {
     const rows = [
-      row("req-001-pass", "The lantern drains one charge every 5 seconds.", { status: "passing", last: pass(REV_NOW) }),
-      row("req-002-fail", "A lantern refills only at a shrine the player has lit.", { status: "failing", last: fail(REV_NOW) }),
-      row("req-003-none", "The player taps a shrine to light it.", { owner: undefined }),
-      row("req-004-fault", "A lit shrine glows until the level ends.", { status: "check-fault", last: pass(REV_NOW) }),
-      row("req-005-waived", "Shrines must never be placed on water.", {
+      row("req-001-pass", "A signal turns red when a train enters its block.", { status: "passing", last: pass(REV_NOW) }),
+      row("req-002-fail", "A signal clears to green only after the block ahead is empty.", { status: "failing", last: fail(REV_NOW) }),
+      row("req-003-none", "The dispatcher can hold a train at any platform.", { owner: undefined }),
+      row("req-004-fault", "A held train shows a hold marker until released.", { status: "check-fault", last: pass(REV_NOW) }),
+      row("req-005-waived", "Signals must never sit inside a tunnel.", {
         status: "waived",
         waiver: { userId: "owner", atMs: 1, reason: "deferred" },
       }),
-      row("req-006-excluded", "Multiplayer shrines are shared.", { status: "excluded", excludedBecause: "excluded by the plan" }),
+      row("req-006-excluded", "Networked dispatch is shared between players.", { status: "excluded", excludedBecause: "excluded by the plan" }),
       row("req-007-kpi", "Week-5 returners must exceed 38% of installs.", { kind: "aspiration" }),
-      row("req-008-look", "The lantern glow should feel warm.", { kind: "judgement" }),
+      row("req-008-look", "The signal lamps should feel vintage.", { kind: "judgement" }),
     ];
     const campaign = campaignWith({ requirements: ledgerOf(rows) });
 
     const result = await coveragePaths("on", { planner: { resolveCoverageGaps: closingResolver() } }).openRequirements(campaign);
 
     expect(result.open.map(requirementText)).toEqual([
-      "A lantern refills only at a shrine the player has lit.",
-      "The player taps a shrine to light it.",
-      "A lit shrine glows until the level ends.",
+      "A signal clears to green only after the block ahead is empty.",
+      "The dispatcher can hold a train at any platform.",
+      "A held train shows a hold marker until released.",
     ]);
   });
 
   it("a coverage sprint that carries no row still goes to the resolver, and only that one", async () => {
-    const refill = row("req-002-aaaa", "A lantern refills only at a shrine the player has lit.", { status: "failing", last: fail(REV_NOW) });
+    const refill = row("req-002-aaaa", "A signal clears to green only after the block ahead is empty.", { status: "failing", last: fail(REV_NOW) });
     const capability = "work no tool was available for: audio generator unavailable";
     const asked: string[] = [];
     const resolveCoverageGaps = vi.fn(async (_gdd: string, reqs: readonly string[]) => {
@@ -258,9 +258,9 @@ describe("a ledger row is closed only by its own check passing on this revision 
   });
 
   it("binds a sprint to its row by the row's lineage, so an older wording of the row is judged by the ledger too", async () => {
-    const current = row("req-002-new", "A lantern refills only at a shrine the player has lit.", { status: "failing", last: fail(REV_NOW) });
+    const current = row("req-002-new", "A signal clears to green only after the block ahead is empty.", { status: "failing", last: fail(REV_NOW) });
     current.encoded = encodeRequirement({ id: "req-002-new", text: current.text, lineage: "req-002-old", gddSha256: GDD_SHA, gddRevision: 2 });
-    const olderWording = encodeRequirement({ id: "req-002-old", text: "Lanterns refill at lit shrines only.", lineage: "req-002-old", gddSha256: GDD_SHA, gddRevision: 1 });
+    const olderWording = encodeRequirement({ id: "req-002-old", text: "A signal clears only when the next block is empty.", lineage: "req-002-old", gddSha256: GDD_SHA, gddRevision: 1 });
     const resolveCoverageGaps = closingResolver();
     const campaign = campaignWith({
       requirements: ledgerOf([current]),
@@ -274,7 +274,7 @@ describe("a ledger row is closed only by its own check passing on this revision 
   });
 
   it("on a tree with uncommitted changes no row closes, and the reason is given", async () => {
-    const refill = row("req-002-aaaa", "A lantern refills only at a shrine the player has lit.", { status: "passing", last: pass(REV_NOW) });
+    const refill = row("req-002-aaaa", "A signal clears to green only after the block ahead is empty.", { status: "passing", last: pass(REV_NOW) });
     const campaign = campaignWith({ requirements: ledgerOf([refill]), milestones: [BUILT, coverageSprint("mcov1", refill.encoded)] });
 
     const result = await coveragePaths("on", { planner: { resolveCoverageGaps: closingResolver() }, projectIsDirty: () => true })
@@ -287,7 +287,7 @@ describe("a ledger row is closed only by its own check passing on this revision 
 });
 
 describe("without an enforced ledger the resolver decides exactly as before (W12)", () => {
-  const refill = row("req-002-aaaa", "A lantern refills only at a shrine the player has lit.", { status: "failing", last: fail(REV_NOW) });
+  const refill = row("req-002-aaaa", "A signal clears to green only after the block ahead is empty.", { status: "failing", last: fail(REV_NOW) });
   const cases: Array<[string, ScopeGateMode | undefined, Partial<Campaign>]> = [
     ["no ledger, gate on", "on", {}],
     ["an unreadable ledger, gate on", "on", { requirementsUnreadable: true }],
@@ -310,10 +310,10 @@ describe("without an enforced ledger the resolver decides exactly as before (W12
 
 describe("a coverage sprint for a ledger row carries the row (W12)", () => {
   it("records the row id and shows the row's words, its check and its last result", () => {
-    const refill = row("req-002-aaaa", "A lantern refills only at a shrine the player has lit.", {
-      label: "LR-02",
+    const refill = row("req-002-aaaa", "A signal clears to green only after the block ahead is empty.", {
+      label: "SG-02",
       status: "failing",
-      last: fail(REV_NOW, "R2: lantern charge after visiting an unlit shrine — Expected: 0 But was: 3"),
+      last: fail(REV_NOW, "R2: signal aspect after the block cleared — Expected: Green But was: Red"),
     });
     const campaign = campaignWith({ requirements: ledgerOf([refill]) });
 
@@ -321,10 +321,10 @@ describe("a coverage sprint for a ledger row carries the row (W12)", () => {
 
     expect(sprint.requirementIds).toEqual([refill.rid]);
     expect(sprint.coverageGap).toBe(refill.encoded);
-    expect(sprint.prompt).toContain("LR-02");
+    expect(sprint.prompt).toContain("SG-02");
     expect(sprint.prompt).toContain(refill.text);
     expect(sprint.prompt).toContain("Strada.Acceptance.M1.Acceptance_M1.R1_req-002-aaaa");
-    expect(sprint.prompt).toContain("Expected: 0 But was: 3");
+    expect(sprint.prompt).toContain("Expected: Green But was: Red");
     expect(sprint.prompt).not.toContain("⟦");
   });
 
@@ -340,12 +340,12 @@ describe("a coverage sprint for a ledger row carries the row (W12)", () => {
 
 describe("the repair budget is counted per row (W12)", () => {
   it("a row two sprints carried has spent its budget, whatever requirement each sprint was named after", () => {
-    const shared = row("req-003-cccc", "The player taps a shrine to light it.");
+    const shared = row("req-003-cccc", "The dispatcher can hold a train at any platform.");
     const milestones = [
-      coverageSprint("mcov1", row("req-001-aaaa", "The lantern drains one charge every 5 seconds.").encoded, {
+      coverageSprint("mcov1", row("req-001-aaaa", "A signal turns red when a train enters its block.").encoded, {
         requirementIds: ["req-001-aaaa", shared.rid],
       }),
-      coverageSprint("mcov2", row("req-002-bbbb", "A lantern refills only at a shrine the player has lit.").encoded, {
+      coverageSprint("mcov2", row("req-002-bbbb", "A signal clears to green only after the block ahead is empty.").encoded, {
         requirementIds: ["req-002-bbbb", shared.rid],
       }),
     ];

@@ -44,7 +44,7 @@ describe("what the pipeline keeps of a teaching or correction", () => {
       minConfidenceForCreation: 0.1,
       batchSize: 5,
     });
-    pipeline.setProjectPath("/projects/samplegame");
+    pipeline.setProjectPath("/projects/widget-shop");
   });
 
   afterEach(() => {

@@ -1,5 +1,5 @@
 /**
- * The pure half of the ledger's life (GDD-drift plan W11): what an amendment
+ * The pure half of the ledger's life: what an amendment
  * keeps, reopens and retires; which queued requirements a row may answer
  * for; a replanned ladder; a model pass that could not run. Invented
  * documents only.

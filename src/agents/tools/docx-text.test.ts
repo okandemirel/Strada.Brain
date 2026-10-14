@@ -54,9 +54,9 @@ describe("recognising the container", () => {
 
 describe("reading the body out of a Word file", () => {
   it("returns the words a person wrote", () => {
-    const text = docxToText(doc("<w:p><w:r><w:t>Lanterns light the harbour</w:t></w:r></w:p>"));
+    const text = docxToText(doc("<w:p><w:r><w:t>Orchard survey notes</w:t></w:r></w:p>"));
 
-    expect(text).toBe("Lanterns light the harbour");
+    expect(text).toBe("Orchard survey notes");
   });
 
   it("keeps paragraphs on separate lines", () => {
@@ -69,7 +69,7 @@ describe("reading the body out of a Word file", () => {
 
   it("turns a tab into a tab, not into nothing", () => {
     // Columns laid out with tabs lose their shape otherwise.
-    expect(docxToText(doc("<w:p><w:t>Lantern</w:t><w:tab/><w:t>Brass</w:t></w:p>"))).toBe("Lantern\tBrass");
+    expect(docxToText(doc("<w:p><w:t>Apple</w:t><w:tab/><w:t>Russet</w:t></w:p>"))).toBe("Apple\tRusset");
   });
 
   it("decodes entities without letting an ampersand re-form one", () => {

@@ -303,7 +303,7 @@ describe("ResultAggregator", () => {
       expect(skipped[0]!.output).not.toContain("NOT VERIFIED");
     });
 
-    it("a review nobody performed is counted not verified and named in the output (GDD-drift W02)", async () => {
+    it("a review nobody performed is counted not verified and named in the output", async () => {
       // The verifier found no healthy reviewer, its reviewer threw, or the
       // reply held no verdict. Those came back as flags, and a flag counts as
       // "verified": the report said flagged 1, notVerified 0 over a node no
@@ -348,7 +348,7 @@ describe("ResultAggregator", () => {
       expect(agg.synthesize(verified).success).toBe(false);
     });
 
-    it("a rejected REPORT does not fail a node whose files landed (measured 2026-09-09 09:18: 26 committed files, 'no node succeeded')", async () => {
+    it("a rejected REPORT does not fail a node whose files landed (measured 2026-09-09: committed files, 'no node succeeded')", async () => {
       const verifyFn = vi.fn().mockResolvedValue({ verdict: "reject", verifierProvider: "deepseek", issues: ["Task output incomplete: only meta-statement"] });
       const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
       const withFiles = { ...makeResult("A", "ok"), artifacts: [{ path: "Assets/Prefabs/Slime.prefab", action: "modify" as const }] };

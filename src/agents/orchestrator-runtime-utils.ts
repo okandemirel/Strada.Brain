@@ -508,7 +508,7 @@ function rewriteToolText(content: string): string {
  * A batch_execute document with each operation's text treated as its own
  * tool's result. Keyed on the outer name alone, a file_read inside a batch got
  * the full rewriter that file_read itself no longer gets — and batches are
- * common (177 calls carrying 1,345 operations over five measured days).
+ * common in live runs.
  * Every other string in the document is still rewritten. Undefined when the
  * text is not a batch document; the caller then rewrites it whole.
  */

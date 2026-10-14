@@ -239,11 +239,11 @@ describe("the checklist and the gaps", () => {
   it("states a repair sprint's requirement as the AUDIT closed it, not as the sprint ended", () => {
     const pkg = assembleDeliveryPackage({
       campaign: campaign({
-        milestones: [milestone({ id: "m9", title: "Repair — frogs", status: "failed", coverageGap: "Frogs must flee the player", coverageClosed: true, coverageClosedRevision: "b".repeat(40) })],
+        milestones: [milestone({ id: "m9", title: "Repair — lighthouse", status: "failed", coverageGap: "The lighthouse lamp turns at dusk", coverageClosed: true, coverageClosedRevision: "b".repeat(40) })],
       }),
     });
     const item = pieceOf(pkg, "checklist").items?.[0];
-    expect(item).toMatchObject({ text: "Frogs must flee the player", state: "met", source: "the evidence audit" });
+    expect(item).toMatchObject({ text: "The lighthouse lamp turns at dusk", state: "met", source: "the evidence audit" });
     expect(item?.cause).toContain("the sprint ended failed");
   });
 
@@ -251,17 +251,17 @@ describe("the checklist and the gaps", () => {
     const encoded = encodeRequirement({
       id: "req-4-abc123",
       lineage: "req-4-abc123",
-      text: "Frogs must flee the player",
+      text: "The lighthouse lamp turns at dusk",
       gddSha256: "c".repeat(64),
       gddRevision: 2,
     });
     const pkg = assembleDeliveryPackage({
       campaign: campaign({
-        milestones: [milestone({ id: "m9", title: "Repair — frogs", status: "completed", coverageGap: encoded, coverageClosed: true })],
+        milestones: [milestone({ id: "m9", title: "Repair — lighthouse", status: "completed", coverageGap: encoded, coverageClosed: true })],
       }),
     });
     const item = pieceOf(pkg, "checklist").items?.[0];
-    expect(item?.text).toBe("Frogs must flee the player");
+    expect(item?.text).toBe("The lighthouse lamp turns at dusk");
     expect(renderDeliveryPackage(pkg)).not.toContain("rid:");
   });
 
@@ -334,7 +334,7 @@ describe("the checklist and the gaps", () => {
   it("drains the audit queue, the missing proofs and the refused structural check into the gaps", () => {
     const pkg = assembleDeliveryPackage({
       campaign: campaign({
-        pendingCoverageGaps: ["Slingshot must aim"],
+        pendingCoverageGaps: ["Ferry timetable must post at dawn"],
         coverageAuditNote: "the audit's round budget was spent",
         milestones: [
           milestone({ id: "m1", structureRefused: true, structureFindings: ["0 world renderers in the shipped scenes"] }),
@@ -343,7 +343,7 @@ describe("the checklist and the gaps", () => {
       }),
     });
     const texts = (pieceOf(pkg, "gaps").items ?? []).map((g) => g.text);
-    expect(texts).toContain("Slingshot must aim");
+    expect(texts).toContain("Ferry timetable must post at dawn");
     expect(texts).toContain("no play-through in the built player");
     expect(texts).toContain("the GDD-coverage audit did not run clean");
     expect(texts).toContain("the shipped scenes are not built the way the GDD specifies");

@@ -228,6 +228,13 @@ exit codes above, so that a repository without the secret shows no red job. In
 
 Nothing in `src/` may carry a game's own names, scene names or defaults. The
 game-facing contracts live in Strada.Core (`Strada.Core.Play.IPlaythroughDriver`,
-`ISessionCatalog`, `GameBootstrapper`), the tools in Strada.MCP; a test vehicle
-(any Unity project) is configured through its own GDD and project, never
+`ISessionCatalog`, `GameBootstrapper`), the tools in Strada.MCP. The game being
+built (any Unity project) is configured through its own GDD and project, never
 through Strada.Brain.
+
+The repository is public and the games built with it are not, so the rule
+covers every published file: tests, fixtures, comments and docs as well as
+code. `src/universality.test.ts` checks every publishable file against the
+product names and confidential design documents that a checkout lists in the
+gitignored `tests/fixtures/local/*.txt`. On a checkout without those lists the
+check is skipped, and the skip reason names the missing file.

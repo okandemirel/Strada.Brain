@@ -1,5 +1,5 @@
 /**
- * The campaign scope gate's settings (GDD-drift plan W00).
+ * The campaign scope gate's settings.
  *
  * CAMPAIGN_SCOPE_GATE decides whether a milestone's green has to come from
  * its own GDD rows passing system-owned checks. Its default is off, which is

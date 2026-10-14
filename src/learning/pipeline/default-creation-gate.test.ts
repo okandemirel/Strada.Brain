@@ -30,8 +30,8 @@ describe("the default creation gate (LRN-20)", () => {
     const pipeline = new LearningPipeline(storage);
     const created = await pipeline.considerInstinctCreation({
       type: "error_fix",
-      triggerPattern: "CS1061: 'Board' does not contain a definition for 'Explode'",
-      action: "Add the Explode method to Board or call the existing Detonate method",
+      triggerPattern: "CS1061: 'Ledger' does not contain a definition for 'Reconcile'",
+      action: "Add the Reconcile method to Ledger or call the existing Balance method",
       toolName: "dotnet_build",
     });
     expect(created).not.toBeNull();

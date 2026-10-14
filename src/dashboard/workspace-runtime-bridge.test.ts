@@ -1,11 +1,10 @@
 /**
  * A goal node's own output reaches its row.
  *
- * Measured 2026-09-07: every goal node marked completed in goals.db had
- * result="" — among them an art-sourcing goal, completed, with nothing to
- * show what was obtained.
- * The bridge wrote the row's previous (empty) result because the event never
- * carried the worker's output.
+ * Measured in a live campaign: every goal node marked completed in goals.db had
+ * result="", so no completed node showed what it had produced. The bridge wrote
+ * the row's previous (empty) result because the event never carried the
+ * worker's output.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -38,6 +37,8 @@ function harness() {
   return { bus, updateNodeStatus };
 }
 
+const NODE_OUTPUT = "Created Assets/Scripts/Weather/WindService.cs and 3 edit-mode tests.";
+
 describe("workspace runtime bridge keeps a completed node's output", () => {
   it("persists the output the event carries", () => {
     const { bus, updateNodeStatus } = harness();
@@ -45,10 +46,10 @@ describe("workspace runtime bridge keeps a completed node's output", () => {
       rootId: "root-1",
       nodeId: "node-1",
       status: "completed",
-      output: "Generated 23 sprites under Assets/Art/Kites (provider local).",
+      output: NODE_OUTPUT,
     });
     expect(updateNodeStatus).toHaveBeenCalledTimes(1);
-    expect(updateNodeStatus.mock.calls[0]?.[2]).toBe("Generated 23 sprites under Assets/Art/Kites (provider local).");
+    expect(updateNodeStatus.mock.calls[0]?.[2]).toBe(NODE_OUTPUT);
   });
 
   it("keeps the row's existing result when the event carries none", () => {

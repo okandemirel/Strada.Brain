@@ -2,8 +2,8 @@
  * A tool whose job is to report failure must not be disabled for reporting it.
  *
  * Measured on a live run: unity_verify_change ran its headless compile three
- * times, each time correctly reporting that the project had 27 compile errors,
- * and the circuit breaker took it away from the conversation as unreliable. The
+ * times, each time correctly reporting that the project did not compile, and
+ * the circuit breaker took it away from the conversation as unreliable. The
  * agent was then writing C# with no way to learn whether it compiles — exactly
  * the state that tool exists to prevent, produced by the safeguard meant to keep
  * the run healthy.
@@ -25,7 +25,7 @@ function tool(name: string) {
     description: name,
     inputSchema: { type: "object" as const, properties: {} },
     metadata: { readOnly: true },
-    execute: vi.fn().mockResolvedValue({ content: "compile failed: 27 errors", isError: true }),
+    execute: vi.fn().mockResolvedValue({ content: "compile failed (CS0103)", isError: true }),
   };
 }
 

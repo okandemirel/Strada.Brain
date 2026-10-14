@@ -111,12 +111,12 @@ export class FileWriteTool implements ITool {
 
       const lineCount = content.split("\n").length;
       const metaMsg = metaGenerated ? " (+.meta)" : "";
-      // Measured 2026-08-21, 12:25: an agent that could not find
-      // IInputService.cs where it looked wrote its own copy, and this tool
-      // said "File written" and nothing else. Twenty-five compile errors
-      // later it grepped, found both, and deleted one. Creating a second file
-      // under a name the project already uses is worth one sentence at the
-      // moment it happens.
+      // Measured in a live campaign: an agent that could not find an existing
+      // file where it looked wrote its own copy under the same name, and this
+      // tool said only "File written". The duplicate type broke the build
+      // until a later search found both. Creating a second file under a name
+      // the project already uses is worth one sentence at the moment it
+      // happens.
       const twin = isNewFile ? await sameNameElsewhere(context.projectPath, pathCheck.fullPath) : [];
       const twinMsg = twin.length > 0 ? ` — note: that filename also exists at: ${twin.join(", ")}` : "";
       return {

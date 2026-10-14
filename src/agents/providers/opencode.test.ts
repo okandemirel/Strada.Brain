@@ -15,7 +15,7 @@ describe("OpencodeProvider", () => {
   it("has correct name and capabilities", () => {
     const provider = new OpencodeProvider("test-key");
     expect(provider.name).toBe("OpenCode (Zen/Go)");
-    // Measured: successful decompositions on nemotron end at 7435-7988 output tokens; 8192 cut nine of them.
+    // Measured: successful decompositions on nemotron end just under 8192 output tokens, and 8192 cut some of them off.
     expect(provider.capabilities.maxTokens).toBe(16_384);
     expect(provider.capabilities.streaming).toBe(true);
     expect(provider.capabilities.toolCalling).toBe(true);

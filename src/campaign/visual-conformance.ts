@@ -2,9 +2,8 @@
  * Does the delivered game LOOK like the GDD says it should?
  *
  * The capture gate proves a frame exists (size + a distinct hash). It cannot
- * say what is in it: every measured frame of a campaign showed untextured
- * placeholder shapes and still satisfied it while the GDD asked for finished,
- * illustrated art (audited 2026-09-03).
+ * say what is in it: a frame of untextured placeholder shapes passes it
+ * exactly as a finished frame does.
  *
  * This is DISCLOSURE, not a gate. A stylised look is a judgement call, the
  * model answering is fallible, and the structural check already refuses the
@@ -14,10 +13,11 @@
  * measured.
  *
  * Two defects sank the earlier attempts and are the contract here:
- *   1. The look description was read from the GDD's TABLE OF CONTENTS,
- *      because the extractor took the first heading match. The real section
- *      sits far below its TOC entry, so the LAST/longest candidate wins and a
- *      block that is mostly numbered headings is rejected.
+ *   1. A document that opens with a contents page names the look heading
+ *      there before it writes the section, so the first heading match can be
+ *      a contents line. Every heading match is a candidate, a block that is
+ *      mostly short numbered lines is rejected as a contents listing, and the
+ *      last usable candidate wins.
  *   2. The vision question was routed through the fallback chain, whose
  *      capability flag is an OR across members and which strips the image for
  *      a text-only member — "yes I can see", answered blind. The caller must
@@ -184,9 +184,8 @@ export function extractLookDescription(gddText: string): LookDescription {
     return { found: false, reason: "the GDD names no art-direction/visual-style section" };
   }
 
-  // Reject a block that is mostly numbered headings: that is the contents
-  // page, and quoting it as the look description is how the previous attempt
-  // asked a model to compare a frame against a list of chapter titles.
+  // Reject a block that is mostly numbered headings: that is a contents page,
+  // not a description.
   const isProse = (body: string): boolean => {
     const rows = body.split("\n").map((l) => l.trim()).filter(Boolean);
     if (rows.length === 0) return false;

@@ -33,8 +33,8 @@ describe("FallbackChainProvider", () => {
   });
 
   it("logs a 'Provider call failed' line for every attempt that did not answer", async () => {
-    // Measured 2026-09-07 19:50: a first call took 4 min 21 s and no line said
-    // where the time went, because only successes were logged.
+    // Measured in a live run: a first call took more than four minutes and no
+    // line said where the time went, because only successes were logged.
     loggerSpies.info.mockClear();
     const p1 = createMockProvider({ text: "unused" });
     (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("API down"));
@@ -47,8 +47,8 @@ describe("FallbackChainProvider", () => {
   });
 
   it("logs one 'Provider call' line per successful call with its duration", async () => {
-    // Measured 2026-09-07: 52 of a sprint's 91 minutes were twelve model waits
-    // and no line said how long any call took.
+    // Without a per-call line, a slow turn could not be put down to the model or
+    // the tool: nothing said how long any call took.
     loggerSpies.info.mockClear();
     const chain = new FallbackChainProvider([createMockProvider({ text: "ok" }), createMockProvider({ text: "unused" })]);
     await chain.chat("sys", [], []);
@@ -458,9 +458,9 @@ describe("FallbackChainProvider", () => {
   // request that will fail identically). Proves the carve-out is scoped to model errors.
   /**
    * This asserted the opposite until 2026-08-23: a genuine auth 401 ended the
-   * chain call without trying siblings. Run 55 showed what that costs. A
+   * chain call without trying siblings. A live run showed what that costs. A
    * provider whose key had been revoked failed preflight, was reported as
-   * failed, and was then tried six more times during the run — each 401 ending
+   * failed, and was then tried again and again during the run — each 401 ending
    * the whole call rather than that provider's turn in it, and one of them
    * blocking the task, while a healthy provider sat untried beside it.
    *

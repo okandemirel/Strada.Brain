@@ -126,7 +126,7 @@ describe("TaskStorage", () => {
     expect(storage.load(root.id)?.verification).toEqual({ detail: "", failedTests: ["Game.Tests.A"] });
   });
 
-  it("the run's integrity comes back through findLatestDescendant, where the campaign reads the tip (GDD-drift W01)", () => {
+  it("the run's integrity comes back through findLatestDescendant, where the campaign reads the tip", () => {
     const root = makeTask(TaskStatus.failed, { createdAt: 1000, updatedAt: 1000 });
     const retry = makeTask(TaskStatus.completed, { parentId: root.id, createdAt: 2000, updatedAt: 2000 });
     storage.save(root);

@@ -17,7 +17,7 @@ const project = (): string => mkdtempSync(join(os.tmpdir(), "dotnet-presence-"))
 describe("finding something for dotnet to build", () => {
   it("finds a solution", () => {
     const root = project();
-    writeFileSync(join(root, "SampleGame.sln"), "");
+    writeFileSync(join(root, "Clockworks.sln"), "");
     expect(hasDotnetProjectFile(root)).toBe(true);
   });
 
@@ -55,13 +55,13 @@ describe("the per-run cache", () => {
     const presence = new DotnetProjectPresence(root);
 
     expect(presence.check()).toBe(false);
-    writeFileSync(join(root, "SampleGame.sln"), "");
+    writeFileSync(join(root, "Clockworks.sln"), "");
     expect(presence.check()).toBe(true);
   });
 
   it("does not re-scan once it has found one", () => {
     const root = project();
-    writeFileSync(join(root, "SampleGame.sln"), "");
+    writeFileSync(join(root, "Clockworks.sln"), "");
     const presence = new DotnetProjectPresence(root);
 
     expect(presence.check()).toBe(true);

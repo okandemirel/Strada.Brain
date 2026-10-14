@@ -1,8 +1,8 @@
 /**
- * The scope gate's judge (GDD-drift plan W08, M2 + M3).
+ * The scope gate's judge.
  *
- * In a measured campaign six of six milestones went green on prose: a worker's
- * report, the verifier's flags, its own tests. Five of their tips carried the
+ * In a measured campaign milestones went green on prose: a worker's report,
+ * the verifier's flags, its own tests, even when their tips carried the
  * system's own "I got stuck" stamp. Here a milestone is green only when two
  * things pass in one acceptance run the system admitted, on the committed
  * revision: its own GDD rows, and every row that passed before.

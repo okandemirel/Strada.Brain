@@ -1399,10 +1399,9 @@ export class LearningPipeline {
 
     // A verdict must name what it measured. The route-level caller reports
     // success as "routeMessage didn't throw" and fires BEFORE the background
-    // run, with zero steps — which minted 213 byte-identical "Verified Clean
-    // Success, Steps: 0, score=0.88" notes on one campaign (the test game,
-    // 2026-08-27) and reinforced pure noise. An empty-step trajectory carries
-    // no evidence of work; it earns no verdict.
+    // run, with zero steps, so it minted byte-identical "Verified Clean
+    // Success, Steps: 0" notes and reinforced pure noise. An empty-step
+    // trajectory carries no evidence of work; it earns no verdict.
     if (params.outcome.success && !params.outcome.hadErrors && params.steps.length > 0) {
       this.autoGenerateVerdict(trajectory);
     }
@@ -2472,10 +2471,11 @@ export class LearningPipeline {
 
   private extractTriggerPattern(output: string): string {
     // Whole-word signals only, with line-number/pipe prefixes stripped: the
-    // old substring test passed JSON metrics ('"compileErrors": 0') and code
-    // listings ('  41 | ... ArgumentNullException...') as "error lines" —
-    // measured 2026-08-30: 75 instincts created, every trigger a raw output
-    // fragment no future task could match and no reader could learn from.
+    // old substring test passed JSON metrics ('"compileErrors": 0') and
+    // numbered code listings ('  12 | … throw new InvalidOperationException(…)')
+    // as "error lines", so the store filled with triggers that were raw output
+    // fragments, which no future task could match and no reader could learn
+    // from.
     const relevantLines = output
       .split("\n")
       .map((l) => l.replace(/^\s*\d+\s*\|\s?/, "").trim())
@@ -2492,7 +2492,8 @@ export class LearningPipeline {
     const s = trigger.trim();
     if (s.length < 12) return false;
     // JSON metric fragment: quoted key, or a bare numeric metric line —
-    // narrow on purpose so error codes ("CS1061: 'Board'…") stay eligible.
+    // narrow on purpose so error codes ("CS1061: 'Ledger' does not contain…")
+    // stay eligible.
     if (/^"[\w.]+"\s*:/.test(s)) return false;
     if (/^[\w.]+\s*:\s*\d+\s*,?\s*$/.test(s)) return false;
     if (/^\s*\d+\s*\|/.test(s)) return false; // code-listing line

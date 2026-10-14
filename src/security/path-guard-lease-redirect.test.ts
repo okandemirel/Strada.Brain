@@ -1,7 +1,7 @@
 /**
- * Measured 2026-09-08 07:17-07:27: five file_read/list_directory calls in
- * ten minutes refused as "outside the project directory" because the model
- * named the real checkout while the run's project was its lease. The lease's
+ * Measured 2026-09-08: file_read/list_directory calls were refused as
+ * "outside the project directory" because the model named the real checkout
+ * while the run's project was its lease. The lease's
  * owner file says which checkout that is; the path is rewritten into the lease.
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -15,7 +15,7 @@ const owner = mkdtempSync(join(tmpdir(), "strada-owner-"));
 const lease = mkdtempSync(join(tmpdir(), "strada-lease-"));
 mkdirSync(join(owner, "Assets", "Scenes"), { recursive: true });
 mkdirSync(join(lease, "Assets", "Scenes"), { recursive: true });
-writeFileSync(join(lease, "Assets", "Scenes", "Main.unity"), "");
+writeFileSync(join(lease, "Assets", "Scenes", "Observatory.unity"), "");
 writeFileSync(join(lease, ".strada-lease-owner.json"), JSON.stringify({ pid: 1, startedAt: 0, projectRoot: owner }));
 
 afterAll(() => {
@@ -25,13 +25,13 @@ afterAll(() => {
 
 describe("the real checkout's path names the lease's twin", () => {
   it("rewrites an absolute path under the owner checkout into the lease", async () => {
-    expect(redirectRealCheckoutPath(lease, join(owner, "Assets", "Scenes", "Main.unity"))).toBe(join("Assets", "Scenes", "Main.unity"));
+    expect(redirectRealCheckoutPath(lease, join(owner, "Assets", "Scenes", "Observatory.unity"))).toBe(join("Assets", "Scenes", "Observatory.unity"));
     expect(redirectRealCheckoutPath(lease, owner)).toBe(".");
-    const result = await validatePath(lease, join(owner, "Assets", "Scenes", "Main.unity"));
+    const result = await validatePath(lease, join(owner, "Assets", "Scenes", "Observatory.unity"));
     expect(result.valid).toBe(true);
     expect(result.fullPath.startsWith(lease) || result.fullPath.includes("strada-lease-")).toBe(true);
     expect(result.fullPath).not.toContain(owner);
-    expect(result.redirectedFrom).toBe(join(owner, "Assets", "Scenes", "Main.unity"));
+    expect(result.redirectedFrom).toBe(join(owner, "Assets", "Scenes", "Observatory.unity"));
   });
 
   it("still refuses an absolute path that is in neither tree, and does nothing outside a lease", async () => {
@@ -45,6 +45,6 @@ describe("the real checkout's path names the lease's twin", () => {
   it("refuses the lease's own sidecars — a forged seed map could make salvage overwrite or delete user files", async () => {
     expect((await validatePath(lease, ".strada-lease-owner.json")).valid).toBe(false);
     expect((await validatePath(lease, ".strada-lease-seed.json")).valid).toBe(false);
-    expect((await validatePath(lease, join("Assets", "Scenes", "Main.unity"))).valid).toBe(true);
+    expect((await validatePath(lease, join("Assets", "Scenes", "Observatory.unity"))).valid).toBe(true);
   });
 });

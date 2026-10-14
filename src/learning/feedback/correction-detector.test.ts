@@ -83,7 +83,7 @@ describe("the correction detector is on the real path (audit 04.cap)", () => {
     it("returns the most recent assistant text", () => {
       expect(
         CorrectionDetector.lastAgentText([
-          { role: "user", content: "write the board" },
+          { role: "user", content: "write the valve scheduler" },
           { role: "assistant", content: "I used a raw delegate for the callback." },
           { role: "user", content: "no, use UnityEvent instead" },
         ]),
@@ -96,13 +96,13 @@ describe("the correction detector is on the real path (audit 04.cap)", () => {
           {
             role: "assistant",
             content: [
-              { type: "text", text: "Wrote Board.cs" },
+              { type: "text", text: "Wrote Valve.cs" },
               { type: "image", source: {} },
-              { type: "text", text: "and Player.cs" },
+              { type: "text", text: "and Sprinkler.cs" },
             ],
           },
         ]),
-      ).toBe("Wrote Board.cs and Player.cs");
+      ).toBe("Wrote Valve.cs and Sprinkler.cs");
     });
 
     it("returns null when the agent has not spoken yet — nothing is being corrected", () => {

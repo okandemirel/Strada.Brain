@@ -5,7 +5,7 @@
  * user's files is not a commit's call. But saying nothing means the project
  * silently diverges from what the agent believes it produced.
  *
- * Measured: a run repaired four malformed .asmdef files, then removed them while
+ * Measured: a run repaired malformed .asmdef files, then removed them while
  * restructuring. The lease ended clean; the project kept the original broken
  * copies, and nothing reported the gap. The next run started from a project the
  * previous one believed it had fixed, and spent its first hour repairing them
@@ -91,15 +91,15 @@ describe("files the agent deleted", () => {
 
   it("does not report a file the agent replaced", async () => {
     // Rewriting a file is not deleting it; only a genuine removal counts.
-    const root = repo({ "Assets/Board.cs": "// old\n" });
+    const root = repo({ "Assets/Route.cs": "// old\n" });
     const leases = manager(root);
     const lease = await leases.acquireLease({ preferGitWorktree: true });
 
-    writeFileSync(join(lease.path, "Assets", "Board.cs"), "// new\n");
+    writeFileSync(join(lease.path, "Assets", "Route.cs"), "// new\n");
     const result = await lease.commit();
 
     expect(result.removed).toEqual([]);
-    expect(readFileSync(join(root, "Assets", "Board.cs"), "utf8")).toBe("// new\n");
+    expect(readFileSync(join(root, "Assets", "Route.cs"), "utf8")).toBe("// new\n");
 
     await lease.release();
   });

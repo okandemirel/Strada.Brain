@@ -25,7 +25,7 @@ describe("derived lease safety", () => {
     mkdirSync(join(parent, "Library"), { recursive: true });
     writeFileSync(join(parent, "Library", "huge.bin"), "x".repeat(1024));
     mkdirSync(join(parent, "Assets"), { recursive: true });
-    writeFileSync(join(parent, "Assets", "Board.cs"), "class Board {}");
+    writeFileSync(join(parent, "Assets", "Compass.cs"), "class Compass {}");
 
     const manager = new WorkspaceLeaseManager({
       projectRoot: project,
@@ -39,7 +39,7 @@ describe("derived lease safety", () => {
       forceTempCopy: true,
     });
 
-    expect(existsSync(join(lease.path, "Assets", "Board.cs"))).toBe(true);
+    expect(existsSync(join(lease.path, "Assets", "Compass.cs"))).toBe(true);
     expect(existsSync(join(lease.path, "Library"))).toBe(false);
     await lease.release();
   });
@@ -78,7 +78,7 @@ describe("derived lease safety", () => {
     // released: nothing reached the project, and the log said it committed.
     const project = tmp("proj-");
     const leaseRoot = tmp("leases-");
-    writeFileSync(join(project, "Tile.cs"), "tile");
+    writeFileSync(join(project, "Sundial.cs"), "sundial");
     const manager = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false });
     const parent = await manager.acquireLease({ label: "task" });
     const child = await manager.acquireLease({ label: "delegate", sourceRoot: parent.path, forceTempCopy: true });
@@ -101,7 +101,7 @@ describe("derived lease safety", () => {
 
 describe("test-isolation guard", () => {
   it("refuses the shared default lease root under vitest", () => {
-    // 2026-09-02 18:09: a test on the default root deleted Sprint 7's live lease.
+    // A test on the default lease root once deleted a running campaign's live lease.
     expect(() => new WorkspaceLeaseManager({ projectRoot: tmp("proj-") })).toThrow(/isolated leaseRoot/);
   });
 });

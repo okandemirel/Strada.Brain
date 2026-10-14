@@ -8,13 +8,10 @@
  * other: every project set up the supported way handed its agent a workspace
  * with no framework in it.
  *
- * Measured on a full test-game build: 295 Strada.Core .cs files in the project,
- * zero in the workspace. The agent looked — `list_directory Packages/Submodules/
- * Strada.Core` answered "directory not found", the source glob found nothing,
- * `shell_exec` there failed on a missing parent — and then wrote its own
- * invention: a GameModuleConfig deriving from ScriptableObject, an .asmdef
- * referencing Unity.ugui rather than Strada.Core, and not one generator call.
- * 42 files that look like a Strada module and are not one.
+ * A worktree seeded this way has every framework source the project holds
+ * missing from the workspace. Without the framework in the workspace the agent
+ * cannot find its sources, so it writes an imitation of a module that
+ * references none of the framework's APIs.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";

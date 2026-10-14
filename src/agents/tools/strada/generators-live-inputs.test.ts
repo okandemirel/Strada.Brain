@@ -1,8 +1,8 @@
 /**
  * What the single-file generators are actually sent, and what they did with it.
  *
- * Measured live: every strada_create_system call that failed — four of four —
- * carried `burst_component_count: 0`. The model fills an optional number with
+ * Measured live: every failed strada_create_system call carried
+ * `burst_component_count: 0`. The model fills an optional number with
  * its zero value; the tool read 0 as "a BurstSystem with no components" and
  * refused the call, when the caller meant no BurstSystem at all.
  *

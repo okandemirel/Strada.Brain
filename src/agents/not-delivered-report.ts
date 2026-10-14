@@ -2,12 +2,11 @@
  * Approved by every verifier, and still not delivered.
  *
  * The conformance gates are asks, and an ask must be able to give up or it turns
- * into a loop. But going quiet was read as satisfied: measured on a live run,
+ * into a loop. But going quiet was read as satisfied: measured in a live run,
  * [STRADA NOTHING DRAWN] fired until it gave up, then fell silent, and the
- * run finished with a one-line success message for a game whose captured
- * frames were all identical. The gate's own last words were "say the game
- * does not render rather than reporting it as delivered" — advice with nothing
- * behind it.
+ * run finished with a one-line success message while the gate's condition was
+ * still unmet. The gate's own last words were "say the game does not render
+ * rather than reporting it as delivered" — advice with nothing behind it.
  *
  * audited 2026-09-02: this lived inside orchestrator-end-turn-handler.ts and
  * was applied only there. The reflection DONE route — the normal completion

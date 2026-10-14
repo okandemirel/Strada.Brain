@@ -1,5 +1,5 @@
 /**
- * The run's outcome as data (GDD-drift plan W00/W01).
+ * The run's outcome as data.
  *
  * A sprint that ended on "loop detected" was settled green, because the only
  * trace of how it ended was a localized sentence in its result, and the gate

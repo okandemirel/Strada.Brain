@@ -1,6 +1,6 @@
 /**
- * A failed tool result is kept whole on disk — measured 2026-09-08, a
- * 1559-error compile verdict survived only as one log line.
+ * A failed tool result is kept whole on disk — a compile verdict once survived
+ * only as one log line.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -15,13 +15,13 @@ const freshRoot = (): string => { const r = mkdtempSync(join(tmpdir(), "tool-fai
 describe("archiveToolFailure", () => {
   it("writes the whole result, with the tool, chat and input, under <root>/<day>/", () => {
     const root = freshRoot();
-    const content = `{"status":"failed","reason":"Headless compile failed with 1559 error(s)"}\n${"x".repeat(20_000)}`;
-    const at = new Date("2026-09-08T03:46:00.123Z");
+    const content = `{"status":"failed","reason":"Headless compile failed with 37 error(s)"}\n${"x".repeat(20_000)}`;
+    const at = new Date("2026-09-08T11:22:33.456Z");
     const file = archiveToolFailure(
       { tool: "unity_verify_change", chatId: "cli-local", input: { runTests: false, scope: "Assets/Scenes" }, content, at },
       root,
     );
-    expect(file).toBe(join(root, "2026-09-08", "034600-123-unity_verify_change.txt"));
+    expect(file).toBe(join(root, "2026-09-08", "112233-456-unity_verify_change.txt"));
     const text = readFileSync(file!, "utf8");
     expect(text).toContain("tool: unity_verify_change");
     expect(text).toContain("chatId: cli-local");

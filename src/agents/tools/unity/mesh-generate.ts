@@ -562,6 +562,12 @@ export class MeshGenerateTool implements ITool {
         type: "number",
         description: "rounded-box only: 0 (sharp cube) to 1 (sphere). Default 0.4 — flat faces, wide bevels.",
       },
+      widthScale: {
+        type: "number",
+        description:
+          "Optional silhouette width factor, 0.5–1.5 (default 1 = the shape as built): widens X/Z and shortens Y " +
+          "by the same amount. Pass it only when the design asks for a wider or narrower body.",
+      },
       detail: {
         type: "number",
         description: "Tessellation hint (segments/subdivisions), 4–48. Default 16.",
@@ -924,20 +930,22 @@ export class MeshGenerateTool implements ITool {
       }
     }
 
-    // The project's style profile scales the silhouette: its body-width
-    // factor widens X/Z and shortens Y by the same amount. An explicit input
-    // of that factor wins; no profile = the shape as built.
+    // THE CALLER ASKS FOR A SILHOUETTE CHANGE; a profile never imposes one.
+    // This widened X/Z and shortened Y on EVERY mesh a project generated
+    // whenever its style profile carried a width factor, so a crate came out
+    // squashed because a character elsewhere was — the factor is applied only
+    // when this call passes `widthScale` (its clamp and the inverse-transpose
+    // normals below are unchanged).
     try {
-      const { loadStyleProfile } = await import("../../style/style-profile.js");
-      const plumpInput = Number(input["plump"]);
-      const plump = Number.isFinite(plumpInput)
-        ? Math.min(1.5, Math.max(0.5, plumpInput))
-        : loadStyleProfile(context.projectPath)?.proportions.plump ?? 1.0;
-      if (plump !== 1.0) {
+      const widthInput = Number(input["widthScale"]);
+      const widthScale = Number.isFinite(widthInput)
+        ? Math.min(1.5, Math.max(0.5, widthInput))
+        : 1.0;
+      if (widthScale !== 1.0) {
         for (const v of mesh!.vertices) {
-          v.x *= plump;
-          v.z *= plump;
-          v.y *= 2 - plump;
+          v.x *= widthScale;
+          v.z *= widthScale;
+          v.y *= 2 - widthScale;
         }
         // Non-uniform scale transforms normals by the INVERSE-TRANSPOSE —
         // dividing each axis by its scale factor, then renormalizing. The old
@@ -945,7 +953,7 @@ export class MeshGenerateTool implements ITool {
         // meshes lit as though unsquashed.
         for (let i = 0; i < mesh!.normals.length; i++) {
           const n = mesh!.normals[i]!;
-          mesh!.normals[i] = normalize({ x: n.x / plump, y: n.y / (2 - plump), z: n.z / plump });
+          mesh!.normals[i] = normalize({ x: n.x / widthScale, y: n.y / (2 - widthScale), z: n.z / widthScale });
         }
       }
     } catch {

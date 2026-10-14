@@ -23,7 +23,7 @@ function setup(): { project: string; outside: string } {
 
   const elsewhere = mkdtempSync(join(os.tmpdir(), "authz-outside-"));
   const outside = join(elsewhere, "gdd.md");
-  writeFileSync(outside, "# Fernbrook\nAn 8x8 match-3 board.");
+  writeFileSync(outside, "# Design notes\nA two-player card duel played over a shared river deck.");
   writeFileSync(join(elsewhere, "secrets.txt"), "do not read me");
   return { project, outside };
 }
@@ -38,7 +38,7 @@ describe("a document the user named", () => {
     const result = await tool.execute({ path: outside }, ctx(project, [outside]));
 
     expect(result.isError).toBeUndefined();
-    expect(result.content).toContain("match-3 board");
+    expect(result.content).toContain("shared river deck");
     expect(result.content).toContain("you named this path");
   });
 
@@ -135,7 +135,7 @@ describe.skipIf(process.platform === "win32")("a document the user named from th
     const { project } = setup();
     const home = mkdtempSync(join(os.tmpdir(), "authz-home-"));
     mkdirSync(join(home, "Desktop"));
-    writeFileSync(join(home, "Desktop", "My GDD.md"), "# Tilde\nA hex board.");
+    writeFileSync(join(home, "Desktop", "My GDD.md"), "# Tilde\nA paper maze drawn by hand.");
     writeFileSync(join(home, "Desktop", "other.md"), "not named");
     mkdirSync(join(home, ".aws"));
     writeFileSync(join(home, ".aws", "credentials"), "aws_secret_access_key = AWSSECRETBODY\n");
@@ -147,9 +147,9 @@ describe.skipIf(process.platform === "win32")("a document the user named from th
 
     const tilde = await tool.execute({ path: "~/Desktop/My GDD.md" }, ctx(project, authorized));
     expect(tilde.isError).toBeUndefined();
-    expect(tilde.content).toContain("A hex board.");
+    expect(tilde.content).toContain("A paper maze");
     const absolute = await tool.execute({ path: join(home, "Desktop", "My GDD.md") }, ctx(project, authorized));
-    expect(absolute.content).toContain("A hex board.");
+    expect(absolute.content).toContain("A paper maze");
 
     // Expansion widens nothing: a neighbour stays unnamed, a named secret stays blocked.
     expect((await tool.execute({ path: "~/Desktop/other.md" }, ctx(project, authorized))).isError).toBe(true);

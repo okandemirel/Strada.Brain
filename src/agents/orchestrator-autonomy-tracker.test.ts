@@ -61,11 +61,10 @@ describe("createAutonomyBundle", () => {
 });
 
 describe("conformanceAppliesTo", () => {
-  // Measured 2026-09-08 14:03: the real-tree guardian's compile repair (one
-  // CS1061, workspacePolicy "none") was handed "[STRADA NO CAMERA] … add a
-  // camera to the scene spec you pass to unity_scene_build" and spent its
-  // next turns on scene analysis and a failed unity_scene_build on the
-  // user's real project.
+  // Measured in a live campaign: a real-tree compile repair (workspacePolicy
+  // "none") was handed "[STRADA NO CAMERA] … add a camera to the scene spec
+  // you pass to unity_scene_build" and spent its next turns on scene work in
+  // the user's checkout.
   it("a real-tree repair runs without the delivery gates", () => {
     expect(conformanceAppliesTo({ workspacePolicy: "none" }, true)).toBe(false);
     expect(conformanceAppliesTo({ workspacePolicy: "none" }, undefined)).toBe(false);

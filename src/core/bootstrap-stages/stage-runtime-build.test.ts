@@ -29,7 +29,7 @@ writeFileSync(join(realArtifact, "Contents", "MacOS", "Game"), machO);
 chmodSync(join(realArtifact, "Contents", "MacOS", "Game"), 0o755);
 
 const built =
-  "PLAYER BUILT (StandaloneOSX).\nTarget StandaloneOSX; 2 scene(s): Assets/Scenes/Main.unity, Assets/Scenes/Level.unity; 118 s; 3 warning(s); 0 error(s).\n" +
+  "PLAYER BUILT (StandaloneOSX).\nTarget StandaloneOSX; 2 scene(s): Assets/Scenes/Orchard.unity, Assets/Scenes/Cellar.unity; 118 s; 3 warning(s); 0 error(s).\n" +
   "Artifact: /p/Builds/StandaloneOSX/Game.app — 83.9 MB on disk.\n\n```json\n" +
   JSON.stringify({
     ok: true, reasons: [],
@@ -82,7 +82,7 @@ describe("makeRunPlaymodeSuite — the campaign's own whole-suite run (CMP-8)", 
   });
 });
 
-describe("makeRunPlaymodeSuite — the scope gate's filtered acceptance batch (GDD-drift W08)", () => {
+describe("makeRunPlaymodeSuite — the scope gate's filtered acceptance batch", () => {
   const recording = (content: string, isError = false) => {
     const asked: Array<Record<string, unknown>> = [];
     return {
@@ -100,7 +100,7 @@ describe("makeRunPlaymodeSuite — the scope gate's filtered acceptance batch (G
   it("forwards the exact test names and the category to unity_playmode_verify, beside the run id", async () => {
     const { asked, registry } = recording("PlayMode verification passed: 2 of 2 tests passed (filter: …)");
     const filter = "Strada.Acceptance.M1.Acceptance_M1.R1_abc123;Strada.Acceptance.M1.Acceptance_M1.R2_def456";
-    // It is the campaign's acceptance runner as W00 typed it.
+    // It is the campaign's acceptance runner, exactly as the gate types it.
     const runner: AcceptanceSuiteRunner = makeRunPlaymodeSuite(registry);
     await runner("/p", "r2", { testFilter: filter, categories: "StradaAcceptance" });
     expect(asked).toEqual([{ evidenceRunId: "r2", testFilter: filter, categories: "StradaAcceptance" }]);
@@ -684,10 +684,10 @@ describe("the compile gate answers from the compiler, not from silence (Codex 20
       .toMatchObject({ ok: false, ran: false });
     // BUT a COMPLETED compile that found errors is an answer, not a silence:
     // MCP sets isError for real compile errors, and reading the flag first
-    // turned 37 errors into "not run" — which the non-final gate does not
-    // treat as broken at all (Codex 2026-09-12 S#2).
-    expect(await makeVerifyCompile(registry({ isError: true, content: '{"status":"failed","compileErrors": 37}' }) as never)("/p"))
-      .toMatchObject({ ok: false, ran: true, errors: 37 });
+    // turned a counted failure into "not run" — which the non-final gate does
+    // not treat as broken at all (Codex 2026-09-12 S#2).
+    expect(await makeVerifyCompile(registry({ isError: true, content: '{"status":"failed","compileErrors": 5}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: true, errors: 5 });
   });
 
   it("a zero from a compile that has not finished is NOT MEASURED", async () => {
@@ -712,8 +712,8 @@ describe("the compile gate answers from the compiler, not from silence (Codex 20
       .toMatchObject({ ok: true, ran: true, errors: 0 });
     expect(await makeVerifyCompile(registry({ content: '{"lastSucceeded": true}' }) as never)("/p"))
       .toMatchObject({ ok: true, ran: true });
-    expect(await makeVerifyCompile(registry({ content: '{"compileErrors": 37}' }) as never)("/p"))
-      .toMatchObject({ ok: false, ran: true, errors: 37 });
+    expect(await makeVerifyCompile(registry({ content: '{"compileErrors": 11}' }) as never)("/p"))
+      .toMatchObject({ ok: false, ran: true, errors: 11 });
     // A "failed" with no counted error says nothing about the code.
     expect(await makeVerifyCompile(registry({ content: '{"status": "failed"}' }) as never)("/p"))
       .toMatchObject({ ok: false, ran: false });

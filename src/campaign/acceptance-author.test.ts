@@ -1,5 +1,5 @@
 /**
- * The acceptance test writer (GDD-drift plan W06, M3).
+ * The acceptance test writer.
  *
  * A milestone is green only when its GDD rows pass checks the system owns.
  * Those checks are worth something only if their writer reads the GDD, not
@@ -356,7 +356,7 @@ describe("lint and the bounded regeneration", () => {
         ? JSON.stringify({
             checks: [
               // The guardrail shape: an assertion on reflection, which cannot fail on behaviour.
-              { rid: rows[0]!.rid, body: `${NUNIT}.Assert.That(typeof(global::Glow.ILives).GetMethods().Length, ${NUNIT}.Is.EqualTo(1));` },
+              { rid: rows[0]!.rid, body: `${NUNIT}.Assert.That(typeof(global::Glow.ILives).GetInterfaces().Length, ${NUNIT}.Is.GreaterThanOrEqualTo(2));` },
               goodCheck(rows[1]!.rid, "range", true),
             ],
             unbound: [],
@@ -370,7 +370,7 @@ describe("lint and the bounded regeneration", () => {
     // Only the refused row is asked again, with what was wrong and what it returned.
     expect(askedRids(calls[1]!.user)).toEqual([rows[0]!.rid]);
     expect(calls[1]!.user).toMatch(/reflection only/);
-    expect(calls[1]!.user).toContain("GetMethods().Length");
+    expect(calls[1]!.user).toContain("GetInterfaces().Length");
     expect(result.checks.map((c) => c.rid).sort()).toEqual(rows.map((r) => r.rid).sort());
     for (const check of result.checks) expect(lintAcceptanceBody(rows.find((r) => r.rid === check.rid)!, check).ok).toBe(true);
     expect(result.faulted).toEqual([]);

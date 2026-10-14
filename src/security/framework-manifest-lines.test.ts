@@ -129,14 +129,14 @@ describe("a lease never publishes a manifest whose Strada lines changed", () => 
       mkdirSync(join(lease.path, "Packages", "Submodules", "Strada.Modules"), { recursive: true });
       writeFileSync(join(lease.path, MODULES_FILE), '{"name":"com.strada.modules"}\n');
       writeFileSync(join(lease.path, MANIFEST), WITH_MODULES);
-      writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "// board\n");
+      writeFileSync(join(lease.path, "Assets", "Scripts", "Weathervane.cs"), "// weathervane\n");
 
       const result = await lease.commit();
       await lease.release();
 
       expect(manifestNow()).toBe(ORIGINAL);
       expect(existsSync(join(project, MODULES_FILE))).toBe(false);
-      expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+      expect(result.written).toEqual([join("Assets", "Scripts", "Weathervane.cs")]);
       expect([...(result.refusedFrameworkPackage ?? [])].sort()).toEqual([MANIFEST, MODULES_FILE].sort());
       expect(readFileSync(join(result.conflictsQuarantinedUnder!, MANIFEST), "utf8")).toBe(WITH_MODULES);
     } finally {

@@ -41,7 +41,7 @@ function status(overrides: Partial<BuildStatus> = {}): BuildStatus {
           startedAtMs: NOW - 2 * HOUR,
           timeBoxEscalations: 1,
           compileVerdict: { ok: false, ran: true, errors: 3 },
-          placeholderArtAtStart: { sprites: 519, placeholders: 394 },
+          placeholderArtAtStart: { sprites: 48, placeholders: 17 },
           structureRefused: false,
         },
         { id: 'm3', title: 'Polish', status: 'pending', attempts: 0, maxAttempts: 2, timeBoxEscalations: 0, structureRefused: false },
@@ -50,7 +50,7 @@ function status(overrides: Partial<BuildStatus> = {}): BuildStatus {
       deliveryReported: false,
       revivable: false,
       currentTask: { id: 'task_9', title: 'T', status: 'executing', createdAt: NOW - HOUR, updatedAt: NOW, lastProgress: 'editing PlayerController.cs', lastProgressAt: NOW - 3 * 60_000 },
-      activeTasks: [{ id: 'task_12', title: 'M', status: 'executing', createdAt: NOW - 30 * 60_000, updatedAt: NOW, lastProgress: 'placeholder mission node 3' }],
+      activeTasks: [{ id: 'task_12', title: 'M', status: 'executing', createdAt: NOW - 30 * 60_000, updatedAt: NOW, lastProgress: 'goal node 3 of 5' }],
     },
     guardian: {
       projectRoot: '/proj',
@@ -89,11 +89,11 @@ describe('CampaignCard', () => {
     expect(m2.textContent).toContain('attempt 1/2')
     expect(m2.textContent).toContain('2h 0m of 6h 0m time box')
     expect(m2.textContent).toContain('compile RED (3 errors)')
-    expect(m2.textContent).toContain('placeholder sprites at start 394/519')
+    expect(m2.textContent).toContain('placeholder sprites at start 17/48')
     expect(m2.textContent).toContain('1 scope narrowing(s)')
     expect(screen.getByTestId('current-task').textContent).toContain('task_9')
     expect(screen.getByTestId('current-task').textContent).toContain('Last progress 3m ago: editing PlayerController.cs')
-    expect(screen.getByText(/task_12/).closest('li')?.textContent).toContain('placeholder mission node 3')
+    expect(screen.getByText(/task_12/).closest('li')?.textContent).toContain('goal node 3 of 5')
     const guardian = screen.getByTestId('guardian-line').textContent ?? ''
     expect(guardian).toContain('tree does not compile')
     expect(guardian).toContain('verified 4m ago')
@@ -147,14 +147,14 @@ describe('CampaignCard', () => {
           measuredAt: new Date(NOW).toISOString(),
           measured: true,
           refusal: 'the shipped scene renders 0 project sprites',
-          shippedScenes: ['Assets/Scenes/Main.unity', 'Assets/Scenes/Menu.unity'],
-          shippedRenderers: 27,
-          shippedWorldRenderers: 20,
-          shippedSpriteRenderers: 22,
-          shippedMeshRenderers: 5,
-          artInventory: { prefabs: 31, models: 0, sprites: 519, placeholderSprites: 394, audio: 29, duplicateAudio: 4, shortAudio: 19 },
-          boundPlaceholderSprites: 12,
-          unbound: { prefabs: 2, models: 0, sprites: 7 },
+          shippedScenes: ['Assets/Scenes/Lobby.unity', 'Assets/Scenes/Observatory.unity'],
+          shippedRenderers: 15,
+          shippedWorldRenderers: 11,
+          shippedSpriteRenderers: 9,
+          shippedMeshRenderers: 6,
+          artInventory: { prefabs: 8, models: 3, sprites: 48, placeholderSprites: 17, audio: 6, duplicateAudio: 1, shortAudio: 2 },
+          boundPlaceholderSprites: 5,
+          unbound: { prefabs: 1, models: 1, sprites: 3 },
           primitiveCallSites: 0,
           incomplete: [],
         },
@@ -166,11 +166,11 @@ describe('CampaignCard', () => {
     expect(fetchJson).toHaveBeenCalledWith('/api/campaign?measure=1')
     const block = screen.getByTestId('measurement').textContent ?? ''
     expect(block).toContain('Structural refusal: the shipped scene renders 0 project sprites')
-    expect(block).toContain('394')
-    expect(block).toContain('of 519 sprites · 12 bound in shipped scenes')
-    expect(block).toContain('20 world · 22 sprite · 5 mesh')
-    expect(block).toContain('2 prefabs · 0 models · 7 sprites')
-    expect(block).toContain('19 short · 4 duplicate')
+    expect(block).toContain('17')
+    expect(block).toContain('of 48 sprites · 5 bound in shipped scenes')
+    expect(block).toContain('11 world · 9 sprite · 6 mesh')
+    expect(block).toContain('1 prefabs · 1 models · 3 sprites')
+    expect(block).toContain('2 short · 1 duplicate')
   })
 
   it('reports a measurement failure instead of stale numbers', async () => {
@@ -189,7 +189,7 @@ describe('CampaignCard', () => {
           latest: {
             schemaVersion: 1,
             campaignId: 'camp_1',
-            title: 'Sprint D',
+            title: 'Stage 4 — Delivery',
             projectRoot: '/proj',
             campaignState: 'done',
             assembledAt: NOW - 60_000,

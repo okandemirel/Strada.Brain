@@ -2,12 +2,11 @@
  * Retention for capture output under <project>/Recordings/.
  *
  * Every PlayMode capture writes a directory of frames into the lease's
- * Recordings/, and every workspace commit copies it into the project. Nothing
- * ever removed one. Measured 2026-09-07: 1.2 GB, 32,760 frames, 441 entries,
- * growing ~250 MB a day — every lease seed logged "8705 uncommitted paths,
- * seeded 2000", every "newest frame" walk ran into its budget, and the
- * "does it look like the GDD" judgment once picked a frame from an earlier
- * run.
+ * Recordings/, and every workspace commit copies it into the project.
+ * Measured in a live campaign: nothing ever removed an entry, so the folder
+ * only grew; every lease seed hit its path cap, every newest-frame walk ran
+ * into its budget, and the visual judgment once picked a frame from an
+ * earlier run.
  *
  * Policy: keep the newest KEEP top-level entries (by mtime) and delete the
  * rest. Only Recordings/ — captures are the system's own output, never the

@@ -8,7 +8,7 @@
  * and re-verified against the live endpoints here on 2026-08-27:
  *
  *   - Store catalog search:  GET kharma.unity3d.com/api/en-US/search/results.json?q=..
- *                            (no auth; verified: one animal name → 1105 results)
+ *                            (no auth; verified live)
  *   - Token:                 POST {identityHost}/v1/oauth2/token
  *                            grant_type=refresh_token, client_id "packman",
  *                            client_secret from the Editor's own UnityConnect
@@ -92,10 +92,10 @@ export class UnityLinkMissingError extends Error {
 
 /**
  * The link authenticates, but this product is not one the account may
- * download. Measured 2026-09-07 10:30 (campaign mcov1): download-info
- * answered 403 directly after a successful token refresh, and the tool told
- * the agent the Unity link had expired — the user had linked the account
- * twelve hours earlier. A 403 with a fresh token is about the product (not
+ * download. Measured in a live campaign: download-info answered 403 directly
+ * after a successful token refresh, and the tool told the agent the Unity link
+ * had expired, hours after the user had linked the account. A 403 with a fresh
+ * token is about the product (not
  * purchased or claimed, or an id the agent made up), not about the link.
  */
 export class UnityNotEntitledError extends Error {

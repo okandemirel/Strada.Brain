@@ -59,8 +59,8 @@ export interface ResolveTierMapParams {
   readonly availableProviders: readonly string[];
   /**
    * The run's provider chain (PROVIDER_CHAIN), when set. A credentialed
-   * provider outside it is not capacity for a sub-agent: measured 2026-09-08
-   * 03:12, the chain was [opencode, opencode2] and the standard/premium tiers
+   * provider outside it is not capacity for a sub-agent: measured in a live
+   * campaign, the chain was [opencode, opencode2] and the standard/premium tiers
    * derived to openai:* — quota-dead and excluded by the operator — so every
    * standard delegation timed out. Empty or absent means no restriction.
    */

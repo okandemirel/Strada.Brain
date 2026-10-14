@@ -115,13 +115,13 @@ describe("codex second opinion", () => {
     expect(onDisk).not.toContain("Three asteroid fields.");
   });
 
-  describe("the review as a gate (GDD-drift W13)", () => {
+  describe("the review as a gate", () => {
     const base = { gddPath: "docs/G.md", measurements: ["0 renderers"], ladder: ["m1 Sprint: green"] };
     const rows = [
-      { rid: "req-1-aa", label: "KP-01", where: "§3", text: "A kite gains one metre per second in an updraft.", test: "Strada.Acceptance.M1.Acceptance_M1.R1_aa" },
+      { rid: "req-1-aa", label: "PP-01", where: "§3", text: "A pelican gains one metre per second in an updraft.", test: "Strada.Acceptance.M1.Acceptance_M1.R1_aa" },
       { rid: "req-2-bb", where: "Towns", text: "Every town has its own post office." },
     ];
-    const checks = [{ path: "Assets/StradaAcceptance/Acceptance_M1.cs", source: "// REQ req-1-aa — KP-01\nAssert.That(true);" }];
+    const checks = [{ path: "Assets/StradaAcceptance/Acceptance_M1.cs", source: "// REQ req-1-aa — PP-01\nAssert.That(true);" }];
 
     it("without rows it is the advisory question it always was, byte for byte", () => {
       expect(deliveryReviewPrompt(base)).toBe(
@@ -145,8 +145,8 @@ describe("codex second opinion", () => {
 
     it("with rows it carries the rows and the stored checks, and asks for a findings tail that can only reopen or add", () => {
       const p = deliveryReviewPrompt({ ...base, rows, checks, platform: "linux" });
-      const tested = p.indexOf("- req-1-aa [KP-01] (§3): \"A kite gains one metre per second in an updraft.\" — test Strada.Acceptance.M1.Acceptance_M1.R1_aa");
-      const file = p.indexOf("// REQ req-1-aa — KP-01\nAssert.That(true);");
+      const tested = p.indexOf("- req-1-aa [PP-01] (§3): \"A pelican gains one metre per second in an updraft.\" — test Strada.Acceptance.M1.Acceptance_M1.R1_aa");
+      const file = p.indexOf("// REQ req-1-aa — PP-01\nAssert.That(true);");
       const untested = p.indexOf("- req-2-bb (Towns): \"Every town has its own post office.\"");
       expect(tested).toBeGreaterThan(0);
       // The checks a finding can call weak travel before the rows that only guard against re-reporting.
@@ -224,14 +224,14 @@ describe("codex second opinion", () => {
       it("on Windows the quotes count as libuv escapes them: the command line stays within 32,767 characters", async () => {
         // Rows and checks dense with quotes, each written onto the command line as \".
         const quoted = Array.from({ length: 600 }, (_, i) => ({ rid: `req-${i}-ee`, where: "§5", text: `Rule ${i}: ${'say "go" or "stop" '.repeat(12)}` }));
-        const csharp = [{ path: "Assets/StradaAcceptance/Acceptance_M2.cs", source: Array.from({ length: 200 }, (_, i) => `Assert.That(Find("Kite${i}"), Is.EqualTo("C:\\\\kites\\\\"));`).join("\n") }];
+        const csharp = [{ path: "Assets/StradaAcceptance/Acceptance_M2.cs", source: Array.from({ length: 200 }, (_, i) => `Assert.That(Find("Pelican${i}"), Is.EqualTo("C:\\\\pelicans\\\\"));`).join("\n") }];
         const prompt = deliveryReviewPrompt({ ...base, rows: quoted, checks: csharp, platform: "win32" });
         expect(windowsQuoted(prompt).length).toBeLessThanOrEqual(WINDOWS_REVIEW_PROMPT_MAX_CHARS);
         expect(prompt).toContain("not shown: the prompt's size cap");
         expect(prompt).toContain('{"weakChecks"');
         // The whole line, as the npm shim's script runs it with Node.
         let args: string[] = [];
-        await runCodexSecondOpinion({ projectRoot: "C:\\Users\\builder\\Projects\\Kite Post Game", prompt }, async (a) => {
+        await runCodexSecondOpinion({ projectRoot: "C:\\Users\\builder\\Projects\\Pelican Post Game", prompt }, async (a) => {
           args = a;
           return { code: 0, stdout: "VERDICT: DELIVERABLE\n", stderr: "", timedOut: false };
         });
@@ -246,12 +246,12 @@ describe("codex second opinion", () => {
         model: "fake-astra",
         text: "VERDICT: DELIVERABLE",
         ms: 2000,
-        gate: { reopened: ["KP-01 (§3) — asserts true"], added: [], disclosed: ['missing "x": quote too short'] },
+        gate: { reopened: ["PP-01 (§3) — asserts true"], added: [], disclosed: ['missing "x": quote too short'] },
       });
       expect(lines[1]).toBe("> VERDICT: DELIVERABLE");
       const shown = lines.join("\n");
       expect(shown).toContain("1 GDD row(s) reopened, 0 added");
-      expect(shown).toContain("reopened, its check called weak: KP-01 (§3) — asserts true");
+      expect(shown).toContain("reopened, its check called weak: PP-01 (§3) — asserts true");
       expect(shown).toContain("its VERDICT decides nothing");
       expect(shown).toContain('disclosed only, changed nothing: missing "x": quote too short');
       // In shadow the same findings are recorded and say they held nothing.
@@ -260,7 +260,7 @@ describe("codex second opinion", () => {
         model: "fake-astra",
         text: "VERDICT: DELIVERABLE",
         ms: 2000,
-        gate: { reopened: ["KP-01 (§3) — asserts true"], added: [], disclosed: [], mode: "shadow" },
+        gate: { reopened: ["PP-01 (§3) — asserts true"], added: [], disclosed: [], mode: "shadow" },
       }).join("\n");
       expect(shadow).toContain("would change (scope gate in shadow: recorded in the rows, delivery not held)");
       // An opinion with no gate record (the gate off, an older row) renders as it always did.

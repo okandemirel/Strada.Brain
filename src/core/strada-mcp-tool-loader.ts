@@ -1167,27 +1167,6 @@ function formatAge(ms: number): string {
 }
 
 /**
- * A `projectPath` argument that points outside this run's project.
- *
- * Three Strada.MCP tools accept an explicit projectPath and honour it over the
- * context's, adding only a note. Measured 2026-09-07 (campaign mcov1, attempt
- * 2): a sub-agent, refused six times by the path guard for reading the real
- * checkout, passed that checkout as projectPath to unity_playmode_verify. The
- * capture ran against a tree WITHOUT the run's edits, wrote 120 frames into
- * the real project (237 workspace conflicts at commit), and the result said
- * "the game renders in the real project path" — verification of the wrong
- * tree, reported as resolution. The file tools' sandbox has to bind the Unity
- * tools too.
- *
- * The real checkout is a special case: the run works in a leased copy of
- * exactly that tree, so the call the agent meant is the same call against the
- * lease. Measured 2026-09-07 (same milestone, resubmitted 15:21): the refusal
- * was answered three times in one run with the same argument (15:25, 15:50,
- * 16:43) — each a verification turn spent on a sentence. The real checkout is
- * therefore REDIRECTED to the lease and the result says so; any other tree is
- * still refused.
- */
-/**
  * The path as the filesystem knows it: symlinks in every EXISTING ancestor
  * resolved, the non-existent remainder appended, and on a case-insensitive
  * platform folded to one case for comparison.
@@ -1229,6 +1208,25 @@ function within(path: string, root: string): boolean {
   return p === r || p.startsWith(r.endsWith(sep) ? r : r + sep);
 }
 
+/**
+ * A `projectPath` argument that points outside this run's project.
+ *
+ * Three Strada.MCP tools accept an explicit projectPath and honour it over the
+ * context's, adding only a note. Measured in a live campaign: a sub-agent
+ * refused by the path guard for reading the real checkout passed that checkout
+ * as projectPath to a Unity verification tool. The capture ran against a tree
+ * WITHOUT the run's edits, wrote its output into the real project (which then
+ * conflicted with the lease at commit), and the result claimed success for the
+ * real project path — verification of the wrong tree, reported as resolution.
+ * The file tools' sandbox has to bind the Unity tools too.
+ *
+ * The real checkout is a special case: the run works in a leased copy of
+ * exactly that tree, so the call the agent meant is the same call against the
+ * lease. The same refusal was answered again and again in one run with the
+ * same argument, each time a verification turn spent on a sentence. The real
+ * checkout is therefore REDIRECTED to the lease and the result says so; any
+ * other tree is still refused.
+ */
 export function projectPathEscape(
   input: Record<string, unknown>,
   context: Pick<ToolContext, "projectPath" | "sourceProjectPath">,
@@ -1263,12 +1261,11 @@ export function projectPathEscape(
  * What to do instead when a scene-composition tool needs an Editor that is not
  * there.
  *
- * Measured 2026-09-07 15:40 (campaign mcov1): unity_create_gameobject was
- * refused twice with "Requires a live Unity bridge connection." — a sentence
- * that names no alternative, in a run whose whole remaining work was putting
- * prefabs and sprites into the scene. Brain's unity_place_prefab and
+ * Measured in a live campaign: a scene-composition tool refused with "Requires
+ * a live Unity bridge connection." — a sentence that names no alternative, so
+ * the agent keeps asking the Editor. Brain's unity_place_prefab and
  * unity_bind_sprite edit the .unity/.prefab YAML directly and need no Editor;
- * the refusal has to say so, or the agent keeps asking the Editor.
+ * the refusal has to say so.
  */
 const FILE_BASED_ALTERNATIVES: Readonly<Record<string, string>> = {
   unity_create_gameobject:

@@ -1,5 +1,5 @@
 /**
- * What the settle path does with a scope verdict (GDD-drift plan W09, M2 + M3).
+ * What the settle path does with a scope verdict.
  *
  * The judge (scope-verdict.ts) says whether a milestone is green and, when it
  * is not, why — every reason with its class. This module turns that into the

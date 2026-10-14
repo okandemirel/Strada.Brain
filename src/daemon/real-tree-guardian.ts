@@ -2,11 +2,10 @@
  * Real-Tree Guardian — the autonomous detect-and-fix loop for the PROJECT,
  * not for leases.
  *
- * Measured 2026-08-27 (user-reported): the real test-game tree sat RED for
- * ~25 hours — a salvage merge had landed two parallel Rocket implementations
- * (CS0101) and a broken EditMode test. Every verification loop in the system
- * runs against workspace leases, so nothing ever looked at the tree the user
- * actually opens. The user's requirement, verbatim: "errorler varmış — detect
+ * Measured 2026-08-27 (user-reported): the real project tree stayed RED for
+ * most of a day after a salvage merge landed a duplicated type (CS0101).
+ * Every verification loop in the system runs against workspace leases, so
+ * nothing ever looked at the tree the user actually opens. The user's requirement, verbatim: "errorler varmış — detect
  * edip çözen otonom bir sistem şart."
  *
  * The guardian is deliberately small: on a slow interval, when no foreground
@@ -71,9 +70,8 @@ const MAX_FIX_ATTEMPTS_PER_FINGERPRINT = 3;
  * Consecutive fix attempts that fail to BEAT the fewest errors seen this
  * episode, before escalating.
  *
- * Measured live 2026-09-04 22:00–22:27, on the user's project:
- *   25 → 40 → 40 → 37 → 40 → 31 → 10 → 22 → 37 → 37
- * Ten rounds, no escalation. The streak counter keys on a hash of the error
+ * Measured live 2026-09-04: ten rounds of autonomous repair, no escalation —
+ * the error count rose and fell but never repeated a list. The streak counter keys on a hash of the error
  * TEXT, so every round that changed which errors exist reset it to zero — and
  * a thrashing repair changes the text every round by definition. The guard
  * fired only on a byte-identical error list, which is the one case a
@@ -109,9 +107,9 @@ const PLAY_MIN_INTERVAL_MS = 20 * 60_000;
  * How long ONE fix task may run, counted from the first tick that sees it out
  * of the queue, before the guardian takes the tree back.
  *
- * Measured live 2026-09-05 09:00–09:50, with a single owner and the
- * convergence guard already in place: one fix task ran 35+ minutes and drove
- * the compile-error count 13 → 4 → 22 → 4 → 17 inside itself. The guard never
+ * Measured live 2026-09-05, with a single owner and the convergence guard
+ * already in place: one fix task ran well past half an hour and drove the
+ * compile-error count up and down inside itself. The guard never
  * bit, because it counts the GUARDIAN's rounds and the guardian was waiting
  * for that one task the whole time. Bounding how many fix tasks are submitted
  * says nothing about what one of them does for an hour.
@@ -121,12 +119,12 @@ const MAX_FIX_TASK_RUNTIME_MS = 45 * 60_000;
 /**
  * The verifier's verdict, reduced to what a fixer can act on.
  *
- * The verdict is the compile tool's whole JSON payload. Measured 2026-09-08
- * 13:42: 10 333 characters for ONE `error CS1061` — twenty entries of which
- * seventeen were stack frames, asmdef notes and reload chatter, plus a warning
- * with a CS code that the count had taken for an error. The fix task read it
- * as "7 errors", decomposed into a node per Rocket file, and spent 25 minutes
- * on grep/scene analysis looking for errors that were not there.
+ * The verdict is the compile tool's whole JSON payload. Measured 2026-09-08:
+ * the payload for a single `error CS1061` ran to thousands of characters,
+ * mostly stack frames, asmdef notes and reload chatter, plus a warning with a
+ * CS code that the count had taken for an error. The fix task read it as
+ * several errors, decomposed it into a node per file, and spent its time on
+ * grep/scene analysis looking for errors that were not there.
  *
  * Non-JSON (or JSON without a diagnostics list, or with no error in it) is
  * returned untouched — nothing is hidden that could have been the cause.
@@ -336,10 +334,10 @@ export class RealTreeGuardian {
 
   /**
    * A lease was just written back into the project: verify it soon, even
-   * while sprint work runs. Measured 2026-09-08: an 8-line edit committed by
-   * a graceful shutdown at 09:28 broke the real tree (7 errors); the sprint
-   * ran nearly continuously, the foreground guard skipped every tick, and the
-   * first verdict came at 13:05 — every lease seeded in between started red.
+   * while sprint work runs. Measured 2026-09-08: a small edit committed by a
+   * graceful shutdown broke the real tree; the sprint ran nearly
+   * continuously, the foreground guard skipped every tick, and the first
+   * verdict came hours later — every lease seeded in between started red.
    */
   noteWriteBack(source: string): void {
     this.playDirty = true;
@@ -497,9 +495,9 @@ export class RealTreeGuardian {
 
       // ESCALATE ON LACK OF PROGRESS, not on identity of the error text. A
       // repair that keeps changing WHICH errors exist resets a text-keyed
-      // streak every round and can loop on the user's project forever — the
-      // measured 25 → 40 → 37 → 31 → 10 → 22 → 37 sequence never repeated a
-      // list, so the fingerprint guard never fired.
+      // streak every round and can loop on the user's project forever — a
+      // thrashing repair never repeats a list, so the fingerprint guard never
+      // fired.
       const errors = countCompileErrors(verdict.detail);
       this.lastVerdict = "red";
       this.lastErrorCount = errors;

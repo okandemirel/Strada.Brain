@@ -239,7 +239,7 @@ export class ResultAggregator {
       // node's output (Codex 2026-09-12 P#8). The same holds for a verifier
       // that found no reviewer, threw, or got an empty or reasoning-only
       // reply: those carry `unanswered`, and their reason travels with the
-      // node now that they no longer arrive as flags (GDD-drift W02).
+      // node now that they no longer arrive as flags.
       if (
         verdict.verdict === "skipped" &&
         (verdict.unanswered !== undefined || UNANSWERED_VERIFIER.has(verdict.verifierProvider))

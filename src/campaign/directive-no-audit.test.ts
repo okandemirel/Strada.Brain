@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
 /**
- * Measured live 2026-09-03 23:30: told to "report the suite's actual pass/fail
- * counts", the sprint answered with a JSON inventory — module counts, prefab
- * counts, a scene list — and changed nothing. Both delivery directives must
- * name the verb and forbid the audit escape.
+ * Measured in a live campaign: told to "report the suite's actual pass/fail
+ * counts", the worker answered with a JSON inventory of the project and
+ * changed nothing. Both delivery directives must name the verb and forbid the
+ * audit escape.
  */
 describe("delivery directives", () => {
   const source = readFileSync(new URL("./campaign-manager.ts", import.meta.url), "utf8");

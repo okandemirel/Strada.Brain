@@ -1,10 +1,9 @@
 /**
  * A run that told the user it could not finish must not be recorded as a success.
  *
- * Measured on two from-scratch runs: each surfaced "Unable to complete this task
- * — the AI provider is not responding" twice, and each closed its episode with
- * failed:false. The settlement call passed no outcome at all, so it took the
- * default, and nothing carried the terminal reason out to it.
+ * A run that surfaced "Unable to complete this task — the AI provider is not
+ * responding" closed its episode with failed:false: the settlement call passed
+ * no outcome, took the default, and nothing carried the terminal reason out to it.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -42,9 +41,8 @@ describe("which terminals are failures", () => {
 });
 
 /**
- * In a measured campaign five of six milestone tips ended on the system's own
- * "task_stuck" notice and all six went green: how a run ended existed only as
- * the sentence it showed the user (GDD-drift plan W01).
+ * How a run ended used to exist only as the sentence it showed the user, so
+ * runs the system had stamped task_stuck could still go green.
  */
 describe("the run's terminal as a key", () => {
   const noQuota = () => false;
@@ -108,11 +106,11 @@ describe("the run's terminal as a key", () => {
 });
 
 /**
- * The mapper as it stood before W01 (orchestrator.ts mapTerminalReasonToMessageKey
- * at 048f17c4), frozen here. Moving the logic must not change one sentence a
- * user reads.
+ * The mapper as it stood before the terminal key was carried (orchestrator.ts
+ * mapTerminalReasonToMessageKey at 048f17c4), frozen here. Moving the logic
+ * must not change one sentence a user reads.
  */
-function mappingBeforeW01(
+function mappingBeforeTerminalKey(
   reason: string | undefined,
   status: "completed" | "failed" | "blocked" | undefined,
   quotaStopped: () => boolean,
@@ -154,14 +152,14 @@ describe("the sentence a user reads is unchanged", () => {
   ];
   const STATUSES = ["completed", "failed", "blocked", undefined] as const;
 
-  it("matches the pre-W01 mapping for every reason, status and quota state", () => {
+  it("matches the mapping that predates the terminal key for every reason, status and quota state", () => {
     for (const reason of REASONS) {
       for (const status of STATUSES) {
         for (const quota of [false, true]) {
           expect(
             terminalMessageKeyOf(reason, status, () => quota),
             `${String(reason)} / ${String(status)} / quota=${quota}`,
-          ).toBe(mappingBeforeW01(reason, status, () => quota));
+          ).toBe(mappingBeforeTerminalKey(reason, status, () => quota));
         }
       }
     }
@@ -196,13 +194,13 @@ describe("the system's own stamps in a stored result", () => {
   it("finds each stamped key in every locale, parameters filled in", () => {
     for (const key of STAMPED) {
       for (const template of renderingsOf(key as MessageKey)) {
-        const text = `Worker report: wired the board.\n\n${fill(template)}`;
+        const text = `Worker report: wired the sprinkler timers.\n\n${fill(template)}`;
         expect(systemStampsIn(text), `${key}: ${template}`).toEqual([key]);
       }
     }
   });
 
-  it("finds a stamp whose start the 500-character excerpt cut off (a measured m1)", () => {
+  it("finds a stamp whose start the 500-character excerpt cut off (an excerpt that begins mid-word)", () => {
     expect(
       systemStampsIn("fter multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."),
     ).toEqual(["task_stuck"]);
@@ -238,10 +236,10 @@ describe("the system's own stamps in a stored result", () => {
 });
 
 describe("a terminal failure report, read with the system's stamps", () => {
-  it("is not read off the stamp by default — W01 changes no decision", () => {
+  it("is not read off the stamp by default — carrying the key changes no decision", () => {
     // campaign-manager settles a completed milestone as failed on this
-    // predicate; reading stamps by default would flip a measured campaign's greens before
-    // the scope gate (W09) decides how to use them.
+    // predicate; reading stamps by default would flip completed milestones to
+    // failed before the scope gate decides how to use them.
     for (const text of renderingsOf("task_stuck")) {
       expect(isTerminalFailureReport(text), text).toBe(false);
     }

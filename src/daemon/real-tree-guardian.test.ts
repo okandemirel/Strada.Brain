@@ -104,7 +104,7 @@ describe("RealTreeGuardian", () => {
     const messages: string[] = [];
     const guardian = new RealTreeGuardian({
       taskManager: manager as unknown as TaskManager,
-      verify: vi.fn().mockResolvedValue({ ok: false, detail: "KiteState.cs(8,17): error CS0101" }),
+      verify: vi.fn().mockResolvedValue({ ok: false, detail: "LedgerEntry.cs(41,9): error CS0101" }),
       projectRoot: "/p",
       messenger: async (_chatId, text) => {
         messages.push(text);
@@ -155,10 +155,9 @@ describe("RealTreeGuardian", () => {
 });
 
 describe("a write-back earns a prompt look, sprint or no sprint", () => {
-  // Measured 2026-09-08: an 8-line edit committed by a graceful shutdown at
-  // 09:28 broke the real tree (7 errors); the sprint ran nearly continuously,
-  // the foreground guard skipped every tick, and the first verdict came at
-  // 13:05 — every lease seeded in between started red.
+  // Measured in a live campaign: a small edit committed by a graceful shutdown
+  // broke the real tree; the foreground guard skipped every tick and the first
+  // verdict came hours later — every lease seeded in between started red.
   it("noteWriteBack verifies despite active foreground work and submits the fix on red", async () => {
     vi.useFakeTimers();
     try {
@@ -209,9 +208,8 @@ describe("a write-back earns a prompt look, sprint or no sprint", () => {
 
 describe("a repair that is not converging", () => {
   /**
-   * Measured live 2026-09-04 22:00–22:27 on the user's project:
-   *   25 → 40 → 40 → 37 → 40 → 31 → 10 → 22 → 37 → 37
-   * Ten rounds, no escalation. The streak keyed on a hash of the error TEXT,
+   * Measured live 2026-09-04: ten rounds of repair, no escalation; the streak
+   * keyed on a hash of the error TEXT,
    * so every round that changed which errors exist reset it — and a thrashing
    * repair changes the text every round by definition.
    */
@@ -221,7 +219,7 @@ describe("a repair that is not converging", () => {
     let i = 0;
     const guardian = new RealTreeGuardian({
       taskManager: manager as unknown as TaskManager,
-      // A distinct error list each round, exactly like the live sequence.
+      // A distinct error list each round, exactly like a thrashing repair.
       verify: vi.fn(async () => ({
         ok: false,
         ran: true,
@@ -236,15 +234,15 @@ describe("a repair that is not converging", () => {
   };
 
   it("escalates instead of looping when the error count never improves", async () => {
-    const { messages } = await runSequence([25, 40, 40, 37, 40, 31]);
+    const { messages } = await runSequence([9, 14, 14, 12, 15, 11]);
     const escalation = messages.find((m) => m.includes("NOT converging"));
     expect(escalation).toBeDefined();
-    expect(escalation).toContain("25 error(s)");
+    expect(escalation).toContain("9 error(s)");
   });
 
   it("keeps working while each attempt beats the last", async () => {
     // Real progress must never be mistaken for thrashing.
-    const { messages } = await runSequence([40, 31, 22, 10, 4]);
+    const { messages } = await runSequence([16, 12, 8, 5, 2]);
     expect(messages.find((m) => m.includes("NOT converging"))).toBeUndefined();
   });
 
@@ -332,9 +330,9 @@ describe("a green tick is not silence", () => {
 
 describe("one fix task cannot hold the tree forever", () => {
   /**
-   * Measured live 2026-09-05 09:00–09:50, with a single owner and the
-   * convergence guard already in place: ONE fix task ran 35+ minutes and drove
-   * the compile-error count 13 → 4 → 22 → 4 → 17 inside itself. The guard
+   * Measured live 2026-09-05, with a single owner and the convergence guard
+   * already in place: ONE fix task ran well past half an hour and drove the
+   * compile-error count up and down inside itself. The guard
    * never bit, because it counts the GUARDIAN's rounds and the guardian spent
    * the whole time waiting for that task.
    */
@@ -739,32 +737,32 @@ describe("the play rung's fix waits in the same queue", () => {
 describe("the fix task is told the errors, not the whole verdict", () => {
   const verdict = JSON.stringify({
     status: "failed",
-    reason: "Headless compile failed with 1 error(s) (46 compile entries including warnings).",
-    summary: { compileErrors: 1, compileIssues: 46 },
+    reason: "Headless compile failed with 1 error(s) (6 compile entries including warnings).",
+    summary: { compileErrors: 1, compileIssues: 6 },
     compile: {
       source: "static_unity_batch",
       diagnostics: {
         errorCount: 1,
         entries: [
-          { type: "error", message: "Assets/Modules/KiteModule/Scripts/Services/KiteService.cs(19,21): warning CS0108: 'KiteService.IsInitialized' hides inherited member 'Base.IsInitialized'." },
-          { type: "error", message: "Assets/Modules/KiteModule/Scripts/KiteModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
-          { type: "error", message: "Assets/Modules/KiteModule/Scripts/KiteModuleConfig.cs(13,17): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
-          { type: "log", message: "## Script Compilation Error for: Csc Library/Bee/artifacts/200b0aE.dag/Game.Modules.Rocket.dll (+2 others)" },
+          { type: "error", message: "Assets/Modules/LedgerModule/Scripts/Services/LedgerService.cs(27,14): warning CS0108: 'LedgerService.IsInitialized' hides inherited member 'Base.IsInitialized'." },
+          { type: "error", message: "Assets/Modules/LedgerModule/Scripts/LedgerModuleConfig.cs(22,9): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
+          { type: "error", message: "Assets/Modules/LedgerModule/Scripts/LedgerModuleConfig.cs(22,9): error CS1061: 'IModuleBuilder' does not contain a definition for 'RegisterSystem'" },
+          { type: "log", message: "## Script Compilation Error for: Csc Library/Bee/artifacts/9f3c1aD.dag/Game.Modules.Ledger.dll (+1 others)" },
           { type: "log", message: "UnityEngine.StackTraceUtility:ExtractStackTrace () (at /Users/bokken/build/output/unity/unity/Runtime/Export/Scripting/StackTrace.cs:35)" },
-          { type: "log", message: "Assembly for Assembly Definition File 'Assets/Modules/CometModule/Tests/Editor/Game.Modules.Comet.Editor.Tests.asmdef' will not be compiled, because it has no scripts associated with it." },
+          { type: "log", message: "Assembly for Assembly Definition File 'Assets/Modules/MailboxModule/Tests/Editor/Game.Modules.Mailbox.Editor.Tests.asmdef' will not be compiled, because it has no scripts associated with it." },
         ],
       },
     },
   });
 
-  it("names each distinct error once, marks the CS warning as a warning, and drops the stack frames (measured 2026-09-08: 10 333 chars for one error)", () => {
+  it("names each distinct error once, marks the CS warning as a warning, and drops the stack frames (measured 2026-09-08: one error arrived buried in thousands of characters)", () => {
     const compact = compactCompileDetail(verdict);
     expect(compact).toContain("1 distinct error(s):");
     expect(compact).toContain("error CS1061");
     expect(compact.split("error CS1061")).toHaveLength(2);
     expect(compact).toMatch(/1 warning\(s\)[^\n]*\n- .*warning CS0108/);
     expect(compact).not.toContain("StackTraceUtility");
-    expect(compact).not.toContain("Comet.Editor.Tests.asmdef");
+    expect(compact).not.toContain("Mailbox.Editor.Tests.asmdef");
     expect(compact.length).toBeLessThan(700);
   });
 
@@ -782,7 +780,7 @@ describe("the fix task is told the errors, not the whole verdict", () => {
   });
 
   it("leaves prose and JSON without an error list untouched", () => {
-    expect(compactCompileDetail("KiteState.cs(8,17): error CS0101")).toBe("KiteState.cs(8,17): error CS0101");
+    expect(compactCompileDetail("LedgerEntry.cs(41,9): error CS0101")).toBe("LedgerEntry.cs(41,9): error CS0101");
     const noList = JSON.stringify({ status: "failed", reason: "Headless compile failed with 2 error(s)" });
     expect(compactCompileDetail(noList)).toBe(noList);
     const noErrors = JSON.stringify({ reason: "x", compile: { diagnostics: { entries: [{ type: "log", message: "Mono: reloaded" }] } } });

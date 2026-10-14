@@ -86,9 +86,9 @@ describe("buildCanvas edge/node fidelity", () => {
   });
 });
 
-// Audit 2026-09-02: on the live index (2,826 files / 57,630 edges, all with
-// unresolved targets) one canvas regeneration took ~76 s, and it ran
-// synchronously on every 800 ms watcher batch. 99.9% of that was
+// Audit 2026-09-02: on a large live project index (every edge with an
+// unresolved target) one canvas regeneration took over a minute, and it ran
+// synchronously on every 800 ms watcher batch. Almost all of it was
 // guessFileFromUnresolved: a linear scan of every file — with three regex
 // replaces each — per edge. The mapping must be built once per canvas.
 describe("buildCanvas file-graph maps unresolved targets without rescanning every file per edge", () => {

@@ -410,7 +410,7 @@ describe("ControlLoopTracker", () => {
     expect(tracker.readOnlyStall()).toBeNull();
   });
 
-  it("a streak of DISTINCT read-only calls is reported at READ_ONLY_STREAK_LIMIT and re-arms for the next streak (measured 2026-09-08: 14 turns of reads, no gate)", () => {
+  it("a streak of DISTINCT read-only calls is reported at READ_ONLY_STREAK_LIMIT and re-arms for the next streak (measured 2026-09-08: a long streak of distinct reads raised no gate)", () => {
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
     for (let i = 0; i < ControlLoopTracker.READ_ONLY_STREAK_LIMIT - 1; i++) {
       tracker.markToolExecution("vault_search", `vault_search:{"query":"q${i}"}`);
@@ -430,7 +430,7 @@ describe("ControlLoopTracker", () => {
     expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(ControlLoopTracker.READ_ONLY_STREAK_LIMIT);
   });
 
-  it("a read-only streak is also a stall by TIME: 15 minutes of reads at a slow pace, well under the count limit (measured 2026-09-09: 60 min, ~24 calls, no gate)", () => {
+  it("a read-only streak is also a stall by TIME: 15 minutes of reads at a slow pace, well under the count limit (measured 2026-09-09: a slow run read for an hour and no gate fired)", () => {
     let clock = 1_000_000;
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, now: () => clock });
     // Three distinct reads over ~14 minutes (a slow provider: ~5 min per turn): not yet.
@@ -465,7 +465,7 @@ describe("ControlLoopTracker", () => {
     clock += 40 * 60_000;
     tracker.markToolExecution("file_read", "file_read:{\"path\":\"a.cs\"}");
     expect(tracker.takeUnreportedReadOnlyStall()).toBeNull();
-    // The third read after 15+ minutes is the floor (measured 2026-09-09: 2 reads per 10 min for 20 min, unreported at a floor of 6).
+    // The third read after 15+ minutes is the floor (measured 2026-09-09: slow reads went unreported under the old floor).
     tracker.markToolExecution("file_read", "file_read:{\"path\":\"b.cs\"}");
     expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(3);
   });
@@ -619,10 +619,10 @@ describe("ControlLoopTracker", () => {
 });
 
 describe("a run that only reads", () => {
-  // Measured 2026-08-20: 565 tool calls, 171 of them to one stats tool, a
-  // longest read-only streak of 108 against a threshold of 8 — and no gate
-  // raised the whole time. The check for this lives inside recordGate(), so it
-  // was never reached. The counter was right; nothing asked it.
+  // Measured 2026-08-20: a run spent most of its calls repeating one stats
+  // tool and no gate was raised the whole time. The check for this lives
+  // inside recordGate(), so it was never reached. The counter was right;
+  // nothing asked it.
   /** The same call, over and over — what a spin looks like. */
   function readOnly(tracker: ControlLoopTracker, times: number): void {
     for (let i = 0; i < times; i++) tracker.markToolExecution("learning_stats", "learning_stats:{}");
@@ -687,10 +687,10 @@ describe("reading a document is not a stall", () => {
     for (let i = 0; i < times; i++) tracker.markToolExecution("file_read", `file_read:{"path":"p${i}"}`);
   }
 
-  // Measured 2026-08-20. Run 7 spent 42 minutes making 171 calls to one stats
-  // tool and reported nothing. Run 8, four minutes in, read the design document
-  // in 39 separate pieces — and the first version of this check called that a
-  // stall too. Both are read-only and only one of them is stuck.
+  // Measured 2026-08-20: one run repeated a stats call for a long time and
+  // reported nothing; another read a design document in many separate pieces,
+  // and the first version of this check called that a stall too. Both are
+  // read-only and only one of them is stuck.
   it("stays quiet while distinct targets are being read", () => {
     const tracker = new ControlLoopTracker();
 
@@ -750,11 +750,11 @@ describe("verifier gate fingerprints name the gate, not the generic summary (AUT
   // same generic summary as its reason.
   const verifierGate = (buildGate: string | null, conformanceGate: string | null): string => {
     const plan = planVerifierPipeline({
-      prompt: "Build the board game",
+      prompt: "Build the apiary game",
       draft: "All done.\nDONE",
       state: {
         phase: AgentPhase.EXECUTING,
-        taskDescription: "Build the board game",
+        taskDescription: "Build the apiary game",
         iteration: 2,
         plan: "Implement the modules",
         stepResults: [],
@@ -766,8 +766,8 @@ describe("verifier gate fingerprints name the gate, not the generic summary (AUT
       } as unknown as AgentState,
       task: { type: "implementation", complexity: "moderate", criticality: "medium" },
       verificationState: {
-        pendingFiles: new Set(buildGate ? ["Assets/Scripts/Board.cs"] : []),
-        touchedFiles: new Set(["Assets/Scripts/Board.cs"]),
+        pendingFiles: new Set(buildGate ? ["Assets/Scripts/Hive.cs"] : []),
+        touchedFiles: new Set(["Assets/Scripts/Hive.cs"]),
         hasCompilableChanges: buildGate !== null,
         lastBuildOk: null,
         lastVerificationAt: null,
@@ -787,9 +787,9 @@ describe("verifier gate fingerprints name the gate, not the generic summary (AUT
     const tracker = new ControlLoopTracker();
     const gates = [
       verifierGate("[VERIFICATION REQUIRED] Compile the changed scripts.", null),
-      verifierGate(null, "[STRADA MODULE INCOMPLETE] The Board module has no system."),
+      verifierGate(null, "[STRADA MODULE INCOMPLETE] The Hive module has no system."),
       verifierGate(null, "[STRADA TEST ASSEMBLY EMPTY] The test assembly holds no tests."),
-      verifierGate(null, "[STRADA FILE TOO LONG] BoardSystem.cs is over the limit."),
+      verifierGate(null, "[STRADA FILE TOO LONG] HiveSystem.cs is over the limit."),
     ];
     let iteration = 1;
     for (const gate of gates) {
@@ -801,7 +801,7 @@ describe("verifier gate fingerprints name the gate, not the generic summary (AUT
 
   it("the same gate three times is still a loop, whatever happened between", () => {
     const tracker = new ControlLoopTracker();
-    const gate = verifierGate(null, "[STRADA MODULE INCOMPLETE] The Board module has no system.");
+    const gate = verifierGate(null, "[STRADA MODULE INCOMPLETE] The Hive module has no system.");
     let trigger = null;
     for (let iteration = 1; iteration <= 9; iteration += 4) {
       trigger = tracker.recordGate({ kind: "verifier_continue", reason: SUMMARY, gate, iteration });

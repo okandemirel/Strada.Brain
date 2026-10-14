@@ -1,6 +1,6 @@
 // The lookbehind is load-bearing: without it, the substring "sk-" inside an
 // ordinary word matches — measured 2026-08-26: a workspace-lease path like
-// "…/strada-workspaces/task-2b4261e9f03c17f4/Assets" redacted to "ta[REDACTED]",
+// "…/strada-workspaces/task-<id>/Assets" redacted to "ta[REDACTED]",
 // hiding the lease root from the agent in the very error meant to redirect it,
 // which looped until the circuit breaker disabled git_status and shell_exec.
 const API_KEY_PATTERN =
@@ -934,9 +934,9 @@ function looksLikeFilePath(match: string, after: string): boolean {
   // An ABSOLUTE path starts with "/", so its first segment is empty — and
   // the every-segment-non-empty rule below called every absolute path base64.
   // Measured 2026-09-08 05:46: unity_bind_sprite's error reached the model as
-  // "[base64:<n>ch]-workspaces/task-…/Pulley.prefab holds no GameObject" —
-  // the lease root "/private/var/folders/fd/<30 chars>/T/strada" eaten, the
-  // one part of the line that said where the file was.
+  // "[base64:<n>ch]-workspaces/task-…/<asset>.prefab holds no GameObject" —
+  // the lease root "/private/var/folders/…/T/strada" eaten, the one part of
+  // the line that said where the file was.
   const segments = (match.startsWith("/") ? match.slice(1) : match).split("/");
   if (segments.length < 3) return false;
   if (!segments.every((segment) => segment.length > 0 && segment.length <= 32)) return false;

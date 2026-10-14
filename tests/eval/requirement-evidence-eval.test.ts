@@ -211,7 +211,7 @@ describe("the measured rates", () => {
   });
 });
 
-describe("the ledger arm (GDD-drift W12): a row closes only on its own check passing on this revision", () => {
+describe("the ledger arm: a row closes only on its own check passing on this revision", () => {
   const PROBES = [
     "probe-labelled-rule-by-rules-file",
     "probe-feature-by-service-file",
@@ -231,7 +231,7 @@ describe("the ledger arm (GDD-drift W12): a row closes only on its own check pas
     expect(falseOpen.value).toBe(0);
     expect(arm.exitCode).toBe(EXIT.MEASURED_GOOD);
 
-    // The trace's four probes are in the arm, every one of them not proven
+    // The four ledger probes are in the arm, every one of them not proven
     // and left open by the ledger rule…
     const probes = arm.rows.filter((r: { id: string }) => PROBES.includes(r.id));
     expect(probes.map((p: { id: string }) => p.id)).toEqual(PROBES);
@@ -239,9 +239,8 @@ describe("the ledger arm (GDD-drift W12): a row closes only on its own check pas
       expect(p.expected, p.id).toBe(ORACLE.NOT_PROVEN);
       expect(p.matcher, p.id).toBe("open");
     }
-    // …while today's word matcher closes three of the four (the input row
-    // shares no word with its input-service file), as measured on the trace
-    // itself.
+    // …while the word matcher closes three of the four (the input row shares
+    // no word with its input-service file).
     expect(probes.filter((p: { wordMatcher: string }) => p.wordMatcher === "closed").map((p: { id: string }) => p.id)).toEqual([
       "probe-labelled-rule-by-rules-file",
       "probe-feature-by-service-file",

@@ -1,22 +1,21 @@
 /**
  * Reflection is a model round-trip, so it has to be spent where it pays.
  *
- * The trigger was: any tool error, or every third step. Measured on a
- * from-scratch run — 33 minutes, 131 model calls, 62 tool executions, five C#
- * files. 99% of the wall clock was model time and 1% was tools; roughly every
- * other turn produced no action at all, each costing 17–51 seconds against a
- * conversation that kept growing.
+ * The trigger was: any tool error, or every third step. Measured on a live
+ * from-scratch run: nearly all of the wall clock was model time and almost
+ * none of it was tools; roughly every other turn produced no action at all,
+ * each costing tens of seconds against a conversation that kept growing.
  *
  * Two things made that worse than it needed to be.
  *
  * A single failed tool call spent a whole round-trip on reflection, and the
  * failure was already in the tool result the model reads on its very next turn.
- * There were eleven such errors, most of them one-offs the agent recovered from
- * immediately — a missing .csproj, a path it re-tried correctly.
+ * Most tool errors were one-offs the agent recovered from immediately — a
+ * missing project file, a path it re-tried correctly.
  *
  * And the interval counted every step alike, so three directory listings bought
- * the same reflection as three file writes. Of the 62 executions, the large
- * majority were lookups.
+ * the same reflection as three file writes. The large majority of executions
+ * were lookups.
  *
  * So: reflect when a failure persists or blocks, and count only steps that
  * changed something or verified something. Nothing here removes reflection from
@@ -34,7 +33,7 @@ const REFLECT_INTERVAL = 3;
 function state(overrides: Partial<AgentState> = {}): AgentState {
   return {
     phase: AgentPhase.EXECUTING,
-    plan: "build the board",
+    plan: "wire the greenhouse irrigation schedule",
     stepResults: [],
     iteration: 0,
     consecutiveErrors: 0,
@@ -138,8 +137,8 @@ describe("the reflection interval", () => {
 // fix), and the cadence counted consequential steps inside that window. Once
 // a long run saturated it, the count stopped growing — pinned at whatever the
 // read/write mix of the last 50 steps happened to be — so the modulo either
-// fired on every batch or never again. The reference run in this file's own
-// docblock had 62 tool executions, above the cliff.
+// fired on every batch or never again. A long from-scratch run passes the
+// 50-step window easily.
 describe("on a run longer than the step window", () => {
   it("keeps the cadence going after the window saturates", () => {
     let s = state();

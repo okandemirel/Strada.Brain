@@ -76,7 +76,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
     });
 
     await bridge(
-      { id: "node-1", task: "Run unity_create_scene for the playfield and verify with unity_verify_change.", assignedProvider: "p", assignedModel: "m" } as any,
+      { id: "node-1", task: "Run unity_create_scene for the kitchen and verify with unity_verify_change.", assignedProvider: "p", assignedModel: "m" } as any,
       { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
       new AbortController().signal,
     );
@@ -98,7 +98,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
     // running, until the mission's retry budget was gone. Nobody could have
     // passed that gate.
     const runWorkerEnvelope = vi.fn().mockResolvedValue({
-      output: "the simulation module is written and compiles",
+      output: "the recipe catalogue is written and compiles",
       workerResult: { status: "completed", toolTrace: [{ toolName: "unity_verify_change", success: true, summary: "compiled", timestamp: 0 }] },
     });
     const bridge = createSupervisorExecuteNodeBridge({
@@ -113,7 +113,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
     });
 
     const offered = await bridge(
-      { id: "node-1", task: "Build the model, then run unity_create_scene for the playfield.", assignedProvider: "p", assignedModel: "m" } as any,
+      { id: "node-1", task: "Write the recipe catalogue, then run unity_create_scene for the kitchen.", assignedProvider: "p", assignedModel: "m" } as any,
       { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
       new AbortController().signal,
     );
@@ -131,7 +131,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
       defaultChannelType: "cli",
     });
     const rejected = await withdrawn(
-      { id: "node-2", task: "Build the model, then run unity_create_scene for the playfield.", assignedProvider: "p", assignedModel: "m" } as any,
+      { id: "node-2", task: "Write the recipe catalogue, then run unity_create_scene for the kitchen.", assignedProvider: "p", assignedModel: "m" } as any,
       { chatId: "chat-1", taskRunId: "taskrun_parent" } as any,
       new AbortController().signal,
     );
@@ -625,7 +625,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
   });
 });
 
-describe("the node bridge carries how the worker's run ended (GDD-drift W01)", () => {
+describe("the node bridge carries how the worker's run ended", () => {
   // In a measured campaign a node whose run stopped on "loop detected" came back as
   // a plain `status: "ok"`: the ok return carried no reason, so the only trace
   // of the stop was the localized sentence in its output.

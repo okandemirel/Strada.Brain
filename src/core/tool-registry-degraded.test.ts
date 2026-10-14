@@ -1,12 +1,12 @@
 /**
  * What a session says when it comes up without its Unity tools.
  *
- * Measured 2026-08-23: a Unity project whose vendored Strada.MCP had never had
- * `npm install` run in it threw "Cannot find package 'zod'" during registry
- * initialization. The run continued with none of the 108 Unity tools — no scene
- * build, no play-mode verification, no Asset Store lookup — and the only record
- * was a single logger.warn among 847 info lines. Two runs died that way before
- * anyone read the line.
+ * Measured in a live campaign: a Unity project whose vendored Strada.MCP had
+ * never had `npm install` run in it threw "Cannot find package 'zod'" during
+ * registry initialization. The run continued with none of its Unity tools — no
+ * scene build, no play-mode verification, no Asset Store lookup — and the only
+ * record was a single logger.warn among the info lines; runs died that way
+ * before anyone read it.
  *
  * A capability the user is entitled to expect cannot go missing quietly. The
  * notice is the mechanism that already carries "daemon disabled" and "provider

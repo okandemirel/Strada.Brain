@@ -1,10 +1,9 @@
 /**
  * The path the user named has to be remembered where the message arrives.
  *
- * Measured 2026-08-20 across four runs. The request said
- * "/Users/okan/Downloads/SampleGame_GDD.docx" and every read of that file came
- * back "Path resolves outside the project directory" — the document the whole
- * task was about, refused to the agent doing the task.
+ * Measured live: a path the user named in the message that started a run was
+ * refused on every read with "Path resolves outside the project directory" —
+ * the file the request pointed at, refused to the agent doing the work.
  *
  * Three fixes missed it, each one layer too deep: the extractor was fine, the
  * seeding in handleMessage was fine, sharing the store between orchestrators
@@ -20,22 +19,22 @@ import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js
 
 describe("what the wiring must remember before routing", () => {
   const REQUEST =
-    "Continue building the game described in /Users/okan/Downloads/SampleGame_GDD.docx in this Unity project.";
+    "Summarise the brief at /srv/inbox/orchard-irrigation-brief.pdf and draft tasks from it.";
 
   it("finds the path in the request that starts a run", () => {
     // Resolved: on Windows a rooted path lands on the current drive.
     expect(extractUserAuthorizedPaths(REQUEST)).toEqual([
-      resolve("/Users/okan/Downloads/SampleGame_GDD.docx"),
+      resolve("/srv/inbox/orchard-irrigation-brief.pdf"),
     ]);
   });
 
   it("finds nothing in a request that names no path", () => {
-    expect(extractUserAuthorizedPaths("carry on with the game")).toEqual([]);
+    expect(extractUserAuthorizedPaths("carry on with the task")).toEqual([]);
   });
 
   it("is called before routing, not inside handleMessage", async () => {
     // The regression this guards: moving the seeding back into a method the
-    // CLI does not reach would restore the four-run failure.
+    // CLI does not reach would restore the refused-read failure.
     const { readFileSync } = await import("node:fs");
     const wiring = readFileSync("src/core/bootstrap-wiring.ts", "utf8");
     const seedAt = wiring.indexOf("seedUserAuthorizedPaths");

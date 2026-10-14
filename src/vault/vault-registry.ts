@@ -178,8 +178,8 @@ export class VaultRegistry {
     const byPrefix = all.filter((v) => v.id.startsWith(`${requested}:`));
     if (byPrefix.length === 1) return byPrefix[0];
 
-    // A bare hash. Measured 2026-09-06: every vault_search an agent ever
-    // issued in the test game's campaign failed with
+    // A bare hash. Measured live 2026-09-06: every vault_search an agent
+    // issued in a whole campaign failed with
     // "vault not found: <hash> — registered: unity:<hash>, …": the agent
     // copied the id it saw in a log line without its kind prefix, the exact
     // match missed, and the indexed project vault answered nothing. An

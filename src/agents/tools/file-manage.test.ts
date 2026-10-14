@@ -88,11 +88,11 @@ describe("FileDeleteTool GUID reference check", () => {
   async function referencedPrefab(): Promise<string> {
     await mkdir(join(tempDir, "Assets", "Prefabs"), { recursive: true });
     await mkdir(join(tempDir, "Assets", "Scenes"), { recursive: true });
-    const prefab = join(tempDir, "Assets", "Prefabs", "Board.prefab");
-    await writeFile(prefab, "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Board\n");
+    const prefab = join(tempDir, "Assets", "Prefabs", "Trellis.prefab");
+    await writeFile(prefab, "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Trellis\n");
     await writeFile(`${prefab}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
     await writeFile(
-      join(tempDir, "Assets", "Scenes", "Main.unity"),
+      join(tempDir, "Assets", "Scenes", "Overworld.unity"),
       `%YAML 1.1\nPrefabInstance:\n  m_SourcePrefab: {fileID: 100100000, guid: ${guid}, type: 3}\n`,
     );
     return prefab;
@@ -100,7 +100,7 @@ describe("FileDeleteTool GUID reference check", () => {
 
   it("blocks a referenced prefab named by relative path (control)", async () => {
     const prefab = await referencedPrefab();
-    const result = await tool.execute({ path: "Assets/Prefabs/Board.prefab" }, ctx);
+    const result = await tool.execute({ path: "Assets/Prefabs/Trellis.prefab" }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain("referenced by 1 file(s)");
     await expect(stat(prefab)).resolves.toBeDefined();
@@ -116,7 +116,7 @@ describe("FileDeleteTool GUID reference check", () => {
 
   it("blocks the same referenced prefab named with a ./ prefix", async () => {
     const prefab = await referencedPrefab();
-    const result = await tool.execute({ path: "./Assets/Prefabs/Board.prefab" }, ctx);
+    const result = await tool.execute({ path: "./Assets/Prefabs/Trellis.prefab" }, ctx);
     expect(result.isError).toBe(true);
     expect(result.content).toContain("referenced by 1 file(s)");
     await expect(stat(prefab)).resolves.toBeDefined();

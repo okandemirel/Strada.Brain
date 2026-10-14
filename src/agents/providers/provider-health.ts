@@ -162,7 +162,7 @@ export class ProviderHealthRegistry {
    * ProviderAssigner canonicalizes before it asks ("kimi"); a 403 arrives under
    * whatever the provider calls itself ("Kimi (Moonshot)"). Keying on the raw
    * string let those two miss each other, and a miss reads as healthy — which
-   * is how a quota-blocked provider kept being handed goals for five runs.
+   * is how a quota-blocked provider kept being handed goals run after run.
    * Unknown names still get their own entry via the lowercase fallback.
    *
    * "anthropic" folds into "claude", where ClaudeProvider records: a chain
@@ -201,9 +201,9 @@ export class ProviderHealthRegistry {
    * has to be remembered.
    *
    * It was remembered in four of the five record methods. The fifth,
-   * recordFailure, is the one the chain's recovery probe calls — so run 37
-   * learned at 23:02 that Kimi was refusing, skipped it correctly for the rest
-   * of the hour, wrote none of that down, and run 38 booted free to hand it
+   * recordFailure, is the one the chain's recovery probe calls — so a run
+   * learned that a provider was refusing, skipped it correctly for the rest of
+   * the hour, wrote none of that down, and the next run booted free to hand it
    * goals again. Hanging the write off the state change means the next record
    * method added cannot forget.
    *
@@ -339,12 +339,12 @@ export class ProviderHealthRegistry {
   /**
    * Record a rejected credential (HTTP 401, or a 403 that is not about quota).
    *
-   * Measured 2026-08-23 on run 55: a provider whose key had been revoked failed
-   * preflight, was reported as failed, and was then tried six more times during
-   * the run. Each 401 was classified non-retryable, which ended the whole chain
-   * call rather than the provider's turn in it, and one of them blocked the
-   * task. Nothing ever recorded that the provider was unusable, so every call
-   * rediscovered it.
+   * Measured 2026-08-23: a provider whose key had been revoked failed
+   * preflight, was reported as failed, and was then tried again and again
+   * during the run. Each 401 was classified non-retryable, which ended the
+   * whole chain call rather than the provider's turn in it, and one of them
+   * blocked the task. Nothing ever recorded that the provider was unusable, so
+   * every call rediscovered it.
    *
    * The cooldown is long because the fix is a human action, not a wait.
    */

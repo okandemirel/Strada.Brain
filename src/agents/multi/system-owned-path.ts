@@ -1,14 +1,12 @@
 /**
  * Whether a file the agent deleted in its workspace was the system's own.
  *
- * A commit declines every deletion — removing a user's file is not its call.
- * Measured 2026-09-07: again and again in one day the declined list was the
- * campaign's own leftovers — a loose <Name>.cs outside Assets/Modules/ (a
- * duplicate of its module copy, which the conformance gate forbids editing),
- * InitTestScene*.unity and Assembled*.unity (scaffolding the scene-hygiene
- * gate demands removed). Every attempt deleted them; every commit put them
- * back; the next attempt met the same duplicate definitions and the same
- * "NO ENTRY SCENE" refusal. Two gates demanded deletions a third refused.
+ * A commit declines every deletion, since removing a user's file is not its
+ * call. But two gates can demand a deletion that a third refuses: a loose
+ * script that duplicates its module copy (which the conformance gate forbids
+ * editing), and a scaffolding scene the scene-hygiene gate wants gone. If the
+ * commit refuses the deletion, the next attempt hits the same duplicate and
+ * the same refusal.
  *
  * The evidence that a file is the system's own is measured, not assumed:
  * the delivery gate's scaffolding rule, or a git history in which every
@@ -92,9 +90,9 @@ export async function systemOwnedDeletionReason(
   rel: string,
 ): Promise<string | undefined> {
   const bare = rel.replace(/\.meta$/i, "");
-  // A check the campaign judges the worker by is never the worker's to delete
-  // (GDD-drift plan W07). Every commit that touched one IS a campaign: commit,
-  // so on a project without the ledger the history rule below applied it.
+  // A check the campaign judges the worker by is never the worker's to delete.
+  // Every commit that touched one IS a campaign: commit, so on a project
+  // without the ledger the history rule below applied it.
   if (isSystemOwnedCheckPath(bare, sourceRoot)) return undefined;
   // Nor is a file in a Strada framework package, even one an earlier lease
   // wrote there: upstream's folder is not the worker's to change (WP-1.2).
@@ -113,12 +111,10 @@ export async function systemOwnedDeletionReason(
   // user's own build pipeline, their own tests) a scaffolding scene and
   // deleted it from the project.
   if (/\.unity$/i.test(bare) && isScaffoldingScene(bare)) return "scaffolding scene by the delivery gate's own rule";
-  // A loose script the framework-paths wall itself calls non-canonical,
-  // with its module twin in place. Measured 2026-09-07 15:58: after the
-  // "campaign commits only" rule, a loose <Name>.cs whose history held one
-  // ordinary feature commit came back on every attempt while its twin under
-  // Assets/Modules/<Module>/ held the real one and the refusal told the
-  // agent to delete the loose copy.
+  // A loose script that the framework-paths wall itself calls non-canonical,
+  // whose twin sits under Assets/Modules/<Module>/: the refusal tells the
+  // agent to delete the loose copy, so a commit that puts it back loops
+  // forever, even when the loose file's history has an ordinary commit.
   const normalized = bare.replace(/\\/g, "/");
   if (/\.cs$/i.test(normalized) && /^Assets\//i.test(normalized) && !/^Assets\/(Modules|Editor|Tests|Plugins)\//i.test(normalized)) {
     const twin = findModuleTwin(sourceRoot, normalized);
@@ -164,7 +160,7 @@ const ACCEPTANCE_SEGMENTS = ACCEPTANCE_DIR.toLowerCase().split("/");
 /**
  * Whether `path` is one of the campaign's acceptance checks: the folder, a
  * file under it, or the folder's .meta. A worker's lease may read and run
- * them, never write or delete them (GDD-drift plan W07).
+ * them, never write or delete them.
  *
  * A project-relative path is judged by its spelling — separators, `..` and
  * letter case do not change the answer, since APFS and NTFS are

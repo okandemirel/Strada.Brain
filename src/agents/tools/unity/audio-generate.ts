@@ -19,8 +19,15 @@ import { outsideAssetsError } from "./generated-asset-guard.js";
 
 export const SAMPLE_RATE = 44_100;
 
+/**
+ * Cues named by the SOUND, not by a game's own vocabulary: a cue list of
+ * coins, wins and merges belongs to one kind of game and says nothing about
+ * what a project's own document calls its cues. The caller picks the shape it
+ * wants and names the clip whatever its design names it.
+ */
 export const SFX_PRESETS = [
-  "click", "select", "pop", "coin", "hit", "thump", "whoosh", "jump", "win", "fail", "warn", "explosion",
+  "blip", "chirp", "drop", "two-tone-up", "noise-hit", "thump",
+  "noise-sweep", "sweep-up", "arpeggio-up", "arpeggio-down", "double-beep", "noise-burst",
 ] as const;
 export type SfxPreset = (typeof SFX_PRESETS)[number];
 
@@ -150,19 +157,19 @@ export function synthesizeSfx(preset: SfxPreset, seed: number): { samples: Float
   let seconds: number;
   let cutoff = 8000;
   switch (preset) {
-    case "click":
+    case "blip":
       seconds = 0.06;
       voices = [{ osc: "square", startHz: jitter(1800, 0.1), endHz: 900, seconds, a: 0.001, d: 0.03, s: 0.2, r: 0.02, gain: 0.8 }];
       break;
-    case "select":
+    case "chirp":
       seconds = 0.12;
       voices = [{ osc: "triangle", startHz: jitter(880, 0.05), endHz: 1320, seconds, a: 0.005, d: 0.05, s: 0.4, r: 0.05, gain: 0.8 }];
       break;
-    case "pop":
+    case "drop":
       seconds = 0.15;
       voices = [{ osc: "sine", startHz: jitter(600, 0.1), endHz: 150, seconds, a: 0.002, d: 0.08, s: 0.1, r: 0.05, gain: 1 }];
       break;
-    case "coin":
+    case "two-tone-up":
       seconds = 0.35;
       voices = [
         { osc: "square", startHz: 988, endHz: 988, seconds: 0.09, a: 0.002, d: 0.05, s: 0.6, r: 0.03, gain: 0.5 },
@@ -170,7 +177,7 @@ export function synthesizeSfx(preset: SfxPreset, seed: number): { samples: Float
       ];
       cutoff = 6000;
       break;
-    case "hit":
+    case "noise-hit":
       seconds = 0.2;
       voices = [
         { osc: "noise", startHz: 1, endHz: 1, seconds: 0.12, a: 0.001, d: 0.08, s: 0.1, r: 0.03, gain: 0.7 },
@@ -183,38 +190,38 @@ export function synthesizeSfx(preset: SfxPreset, seed: number): { samples: Float
       voices = [{ osc: "sine", startHz: jitter(120, 0.1), endHz: 40, seconds, a: 0.002, d: 0.2, s: 0.1, r: 0.08, gain: 1 }];
       cutoff = 1500;
       break;
-    case "whoosh":
+    case "noise-sweep":
       seconds = 0.45;
       voices = [{ osc: "noise", startHz: 1, endHz: 1, seconds, a: 0.12, d: 0.1, s: 0.6, r: 0.2, gain: 0.8 }];
       cutoff = 2500;
       break;
-    case "jump":
+    case "sweep-up":
       seconds = 0.25;
       voices = [{ osc: "square", startHz: jitter(300, 0.1), endHz: 900, seconds, a: 0.005, d: 0.1, s: 0.5, r: 0.1, gain: 0.7 }];
       cutoff = 5000;
       break;
-    case "win": {
+    case "arpeggio-up": {
       seconds = 0.9;
       const notes = [523, 659, 784, 1047];
       voices = notes.map((hz, i) => ({ osc: "square" as const, startHz: hz, endHz: hz, seconds: i === 3 ? 0.45 : 0.16, a: 0.005, d: 0.06, s: 0.6, r: 0.08, gain: 0.45, startAt: i * 0.15 }));
       cutoff = 6000;
       break;
     }
-    case "fail": {
+    case "arpeggio-down": {
       seconds = 0.7;
       const notes = [392, 349, 311];
       voices = notes.map((hz, i) => ({ osc: "saw" as const, startHz: hz, endHz: hz * 0.97, seconds: i === 2 ? 0.35 : 0.2, a: 0.01, d: 0.08, s: 0.6, r: 0.1, gain: 0.5, startAt: i * 0.18 }));
       cutoff = 2500;
       break;
     }
-    case "warn":
+    case "double-beep":
       seconds = 0.5;
       voices = [
         { osc: "triangle", startHz: 660, endHz: 660, seconds: 0.18, a: 0.005, d: 0.05, s: 0.7, r: 0.05, gain: 0.7 },
         { osc: "triangle", startHz: 660, endHz: 660, seconds: 0.18, a: 0.005, d: 0.05, s: 0.7, r: 0.05, gain: 0.7, startAt: 0.28 },
       ];
       break;
-    case "explosion":
+    case "noise-burst":
       seconds = 0.8;
       voices = [
         { osc: "noise", startHz: 1, endHz: 1, seconds, a: 0.005, d: 0.3, s: 0.3, r: 0.4, gain: 0.9 },
@@ -311,8 +318,8 @@ export class AudioGenerateTool implements ITool {
   readonly name = "unity_generate_audio";
   readonly description =
     "Generate an audio clip for a game cue and write it into the project as a WAV + AudioImporter .meta " +
-    "(no Editor needed). kind 'sfx': one of the presets, a short synthesized cue that a casual/retro game " +
-    "can ship. kind 'music': a seamless seeded chiptune loop in a key and tempo — a procedural stand-in for " +
+    "(no Editor needed). kind 'sfx': one of the presets — a short synthesized cue, each named by the sound " +
+    "it makes so any design can pick the one its own cue needs. kind 'music': a seamless seeded chiptune loop in a key and tempo — a procedural stand-in for " +
     "composed music, and it says so. Deterministic per seed. Use when the GDD names a cue or a loop and " +
     "unity_my_assets_cloud has nothing the user already owns; bind the clip to an AudioSource afterwards.";
 
@@ -321,7 +328,7 @@ export class AudioGenerateTool implements ITool {
     properties: {
       name: { type: "string", description: "Clip name, e.g. 'door_creak' or 'wind_bed' (letters, digits, _ or -)." },
       kind: { type: "string", enum: ["sfx", "music"], description: "'sfx' (default) or 'music'." },
-      preset: { type: "string", enum: [...SFX_PRESETS], description: `sfx only: ${SFX_PRESETS.join(", ")} (default 'pop').` },
+      preset: { type: "string", enum: [...SFX_PRESETS], description: `sfx only: ${SFX_PRESETS.join(", ")} (default 'blip').` },
       bpm: { type: "number", description: "music only: tempo, 60-200 (default 110)." },
       key: { type: "string", description: "music only: C, C#, D … B (default C)." },
       mode: { type: "string", enum: ["major", "minor"], description: "music only (default major)." },
@@ -353,7 +360,7 @@ export class AudioGenerateTool implements ITool {
     let seconds: number;
     let what: string;
     if (kind === "sfx") {
-      const preset = String(input["preset"] ?? "pop") as SfxPreset;
+      const preset = String(input["preset"] ?? "blip") as SfxPreset;
       if (!SFX_PRESETS.includes(preset)) {
         return { content: `Error: preset must be one of ${SFX_PRESETS.join(", ")} (got "${preset}")`, isError: true };
       }

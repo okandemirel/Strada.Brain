@@ -135,7 +135,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelSpec[] = [
     id: "sd15",
     kind: "text-to-image",
     label: "Stable Diffusion 1.5 — light sprite/art generator",
-    blurb: "Fast on small machines; pixel-art LoRAs galore.",
+    blurb: "Fast on small machines; the widest choice of community fine-tunes and LoRAs.",
     license: "OpenRAIL",
     minRamGb: 8,
     diskGb: 6,

@@ -13,10 +13,10 @@ import type { IAIProvider, ProviderResponse } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
- * How much of the request the tool schemas are. Measured 2026-09-08 03:40
- * on a test-game sprint turn: 121k prompt chars + 104 tools = 57-64k input
- * tokens, and the prompt alone accounts for roughly 30k of them — the rest
- * is tools and messages, and only a measurement says which.
+ * How much of the request the tool schemas are. Measured in a live campaign:
+ * with a large tool set the input tokens far exceeded what the system prompt
+ * alone accounts for — the rest is tools and messages, and only a
+ * measurement says how much of it is which.
  */
 export function toolDefinitionChars(tools: ReadonlyArray<unknown> | undefined): number {
   if (!tools || tools.length === 0) return 0;
@@ -25,10 +25,10 @@ export function toolDefinitionChars(tools: ReadonlyArray<unknown> | undefined): 
 
 /**
  * The measured pace of the agent loop's turns, newest TURN_PACE_WINDOW.
- * Measured 2026-09-08 15:43-16:45 on the OpenCode free tier: median 162 s per
- * turn, so a 60-minute node budget bought eleven turns of inventory and the
- * node died before its first generation call; eleven dependents were skipped.
- * A budget that does not know the pace is a turn count nobody chose.
+ * Measured in a live campaign on a slow free tier: a fixed wall-clock node
+ * budget bought too few turns for the node to get past orientation, it was
+ * killed, and its dependents were skipped with it. A budget that does not
+ * know the pace is a turn count nobody chose.
  */
 const TURN_PACE_WINDOW = 20;
 const recentTurnMs: number[] = [];

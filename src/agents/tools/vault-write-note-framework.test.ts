@@ -39,7 +39,7 @@ let vaults: FakeVault[];
 beforeEach(() => {
   // The lexical tmpdir form on purpose: /var/... on macOS, /private/var/... real.
   base = mkdtempSync(join(tmpdir(), "strada-vwn-framework-"));
-  project = join(base, "SampleGame");
+  project = join(base, "WidgetShop");
   mkdirSync(join(project, "Packages", "Submodules", "Strada.Core", "Runtime"), { recursive: true });
   mkdirSync(join(project, ".strada", "knowledge"), { recursive: true });
   writeFileSync(

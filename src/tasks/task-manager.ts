@@ -194,9 +194,9 @@ export class TaskManager extends EventEmitter {
     // A BLOCKED task is not finished — it is parked, waiting for a
     // continuation (the mission keep-alive, the goal auto-resume) that will
     // revive it. Refusing to cancel it made every retirement a silent no-op:
-    // measured live 2026-09-03, a delivered campaign's sweep logged 33
-    // cancellations while the database recorded 9, and its sprint work came
-    // back seven times. Cancelling a parked task is exactly how a deliberate
+    // measured in a live campaign, a retirement sweep logged far more
+    // cancellations than the database recorded, and the retired work kept
+    // coming back. Cancelling a parked task is exactly how a deliberate
     // stop is expressed; a task that already reached completed/failed/
     // cancelled is left alone.
     const retirable = ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.blocked;
@@ -656,8 +656,8 @@ export class TaskManager extends EventEmitter {
    * recoverOnStartup marks them paused-and-recoverable, and the only things
    * that ever resumed one were a human's `/resume` or the monitor: the
    * keep-alive re-arm reads listRecoverable, which excludes `paused`.
-   * Measured 2026-09-10: five boots, each pausing the mission in flight
-   * (task_d526df85 11:44, task_eee999a6 14:32 …), each waiting for a hand.
+   * Measured 2026-09-10: across several boots the mission in flight was
+   * paused each time, and each time waited for a hand.
    */
   listPausedByRestart(limit = 20): Task[] {
     return this.storage
@@ -912,11 +912,11 @@ export class TaskManager extends EventEmitter {
     logger.info("Recovering incomplete tasks on startup", { count: incomplete.length });
 
     for (const task of incomplete) {
-      // A task THIS process submitted is live, not interrupted. Measured
-      // 2026-09-08 04:18: the campaign's reconcile fired 16 s before this pass,
-      // cancelled the old lineage and submitted attempt 2 (8918 chars, delivery
-      // gate attached); this pass then paused it as an orphan and the campaign
-      // "resumed" it as a replay whose prompt had lost the gate block.
+      // A task THIS process submitted is live, not interrupted. Measured in a
+      // live campaign: the campaign's reconcile fired seconds before this pass,
+      // cancelled the old lineage and submitted a fresh attempt with its
+      // delivery gate attached; this pass then paused it as an orphan and the
+      // campaign "resumed" it as a replay whose prompt had lost the gate block.
       if (submittedHere.has(task.id)) {
         logger.info("Recovery left a task alone — it was submitted by this process", {
           taskId: task.id,
@@ -1057,11 +1057,11 @@ export class TaskManager extends EventEmitter {
     // instruction at nesting depth 3, and the bloat then polluted vault
     // retrieval because the query contained the failure boilerplate).
     //
-    // The NEAREST non-replay ancestor, not the lineage root. Measured
-    // 2026-09-08 04:18: a campaign lineage 30 tasks deep — every resubmission
-    // a fresh prompt with the latest measurement and delivery gate, each with
-    // parentId on the last — replayed from its root, a 4584-char prompt from
-    // 29 sprints earlier with no gate block at all.
+    // The NEAREST non-replay ancestor, not the lineage root. Measured in a
+    // live campaign: a lineage many tasks deep — every resubmission a fresh
+    // prompt with the latest measurement and delivery gate, each with parentId
+    // on the last — replayed from its root, a prompt from many sprints earlier
+    // with no gate block at all.
     const originalPrompt = this.originalPromptFor(task);
 
     const lines = [preface, "", `Original request: ${originalPrompt}`];

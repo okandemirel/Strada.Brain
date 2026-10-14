@@ -10,13 +10,13 @@
  * one), and turns it into the sentences the delivery gate and the delivery
  * report use.
  *
- * Measured 2026-09-10 on the test vehicle: the campaign delivered "green" on
- * compile, PlayMode tests and art counts while no scene had gone Home → play →
+ * Measured in a live campaign: delivery went green on compile, PlayMode tests
+ * and art counts while no session had been played from the entry scene to an
  * outcome under observation, and the entry scene idled after boot because
- * nothing at runtime starts a session. A verdict that says "the game reported
- * Won after 12 actions and the frames moved" is the evidence those gates never
- * had. Nothing here knows a game's own names: the driver contract is the only
- * vocabulary.
+ * nothing at runtime started a session. A verdict that reports an observed
+ * outcome after a counted number of actions, with frames that moved, is the
+ * evidence those gates never had. Nothing here knows a game's own names: the
+ * driver contract is the only vocabulary.
  */
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";

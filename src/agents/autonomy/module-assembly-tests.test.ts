@@ -6,10 +6,9 @@
  * layer can reach every other, no layer can be tested in isolation, and a change
  * in any layer rebuilds and reruns everything.
  *
- * Measured on a live run: a module split into several layer assemblies carried
- * a single catch-all Tests assembly at the module root whose references listed
- * every one of them. Most of those assemblies had no test of their own, and
- * nothing in the system said so. The names below are invented.
+ * A module with several layer assemblies can carry a single catch-all Tests
+ * assembly at its root that references all of them; most layers then have no
+ * test of their own and nothing reports it. The names below are invented.
  */
 
 import { resolve } from "node:path";
@@ -49,12 +48,11 @@ function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
 
 describe("per-assembly test coverage", () => {
   it("names every assembly that nothing tests", () => {
-    // The measured shape: several layer assemblies, one catch-all test assembly.
+    // Several layer assemblies, one catch-all test assembly.
     const guard = guardSeeing([
       "Sowing/Hothouse.Nursery.Sowing.asmdef",
       "Potting/Hothouse.Nursery.Potting.asmdef",
       "Misting/Hothouse.Nursery.Misting.asmdef",
-      "Compost/Hothouse.Nursery.Compost.asmdef",
       "Tests/Runtime/Hothouse.Nursery.Tests.asmdef",
       "Tests/Editor/Hothouse.Nursery.Editor.Tests.asmdef",
     ]);
@@ -67,7 +65,7 @@ describe("per-assembly test coverage", () => {
     // "contains multiple assembly definition files" and nothing compiled.
     expect(prompt).toMatch(/ONE \.asmdef per folder/i);
     expect(prompt).toMatch(/its own directory/i);
-    for (const layer of ["Sowing", "Potting", "Misting", "Compost"]) {
+    for (const layer of ["Sowing", "Potting", "Misting"]) {
       expect(prompt, `${layer} was not reported as untested`).toContain(
         `Hothouse.Nursery.${layer}`,
       );

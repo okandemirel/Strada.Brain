@@ -46,11 +46,10 @@ observations) and consensus being advisory-only.
 
 ## Addendum — 2026-08-28/30 campaign-autonomy hardening
 
-The test game's campaign (GDD → milestone ladder → autonomous sprints) ran
-continuously across these two days as the live proving ground: Sprints 1–2
-delivered green (453-file and 12-file envelope commits `69bb0c1`/`3fd5258`,
-1110 verification frames), Sprint 3 in flight. The run surfaced — and closed,
-each with a mutation-verified test — the following defect classes:
+A long-running autonomous campaign (GDD → milestone ladder → autonomous
+sprints) ran continuously across these two days as the live proving ground. It
+surfaced, and closed with a mutation-verified test each, the following defect
+classes:
 
 | Date | Change | Evidence |
 |---|---|---|
@@ -64,11 +63,11 @@ each with a mutation-verified test — the following defect classes:
 | 2026-08-29 | Unity asset chain: organic meshes were generated inside-out (negated field gradient); token rotation self-triggered every call; prerender stopped on the first frame and deleted the shader mid-render; style profile was dead code; owned-asset gate named a nonexistent tool; failing PlayMode leaves an open in-run gate (`9643e7b6`, `5de6d0b9`) | unity tool suites |
 | 2026-08-29 | GDD fidelity: windowing is format-agnostic (a .docx/.pdf-converted GDD no longer loses its entire middle silently); the coverage audit uses a 400k window so it cannot share the planner's blind spot; audit output clamps instead of failing open; a skipped audit is stamped on the delivery report (`e777c357`) | `campaign-planner.test.ts` (first tests on the truncation layer) |
 | 2026-08-29/30 | Settle deferral is time-bounded (doubled emissions can no longer burn attempts); boot re-arm keeps one keep-alive per mission/chat (duplicate sprint missions eliminated) (`46675095`, `779ce09c`, `5501b38b`) | executor + campaign suites |
-| 2026-08-30 | Provider resilience: opencode fallback pinned to the zen free tier (`laguna-s-2.1-free`, live tool-call-verified) so an OpenAI quota window no longer halts the campaign | live probe 2026-08-30 |
+| 2026-08-30 | Provider resilience: opencode fallback pinned to the zen free tier (`laguna-s-2.1-free`, live tool-call-verified) so an OpenAI quota window no longer halts a campaign | live probe 2026-08-30 |
 
-Honest residuals, same doctrine as below: the full GDD→delivered-game arc has
-**not yet completed once** (2/7 sprints green at time of writing); one agent
-plateau required an operator note; suite count now 8797.
+Honest residuals, same doctrine as below: **no end-to-end GDD-to-delivered-game
+run had completed** at time of writing; one agent plateau required an operator
+note; suite count now 8797.
 
 ## Addendum — 2026-08-26 reliability hardening
 
@@ -79,7 +78,7 @@ by unit/integration tests plus live observation:
 
 | Date | Change | Evidence |
 |---|---|---|
-| 2026-08-26 | Vault watchers no longer attach per-file `fs.watch` to non-indexable files (`src/vault/watcher.ts`) — on macOS each pinned an FSEvents fd for process lifetime; a Unity project vault reached ~11.4K fds within minutes of boot and spawn failed with EBADF | `watcher-scope.test.ts`; live fd trace 11,414 → 1,523 |
+| 2026-08-26 | Vault watchers no longer attach per-file `fs.watch` to non-indexable files (`src/vault/watcher.ts`) — on macOS each pinned an FSEvents fd for process lifetime; a large Unity project vault exhausted the process fd budget within minutes of boot and spawn failed with EBADF | `watcher-scope.test.ts`; live fd trace before/after the fix |
 | 2026-08-26 | Duplicate whole-repo Strada.Brain framework vault skipped while SelfVault covers the same tree (`src/core/bootstrap.ts`) — removes ~1.7K duplicate watchers + generated `.d.ts` noise from results | same live trace |
 | 2026-08-26 | Lease commit: per-file failure resilience (`failed[]` reported), conflicted agent versions quarantined under `.strada/lease-conflicts/<lease>/` instead of destroyed with the workspace | `workspace-lease-commit.test.ts` |
 | 2026-08-26 | Startup salvage of orphaned workspaces from crashed predecessors (`workspace-lease-manager.ts` constructor) — restores new files, quarantines conflicts, prunes stale worktree registrations; replaces the external watchdog rsync workaround | `workspace-lease-commit.test.ts` (salvage block) |

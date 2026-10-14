@@ -749,7 +749,7 @@ export interface VaultConfig {
   };
 }
 
-/** The campaign scope gate (GDD-drift plan M2/M3). */
+/** The campaign scope gate. */
 export interface CampaignConfig {
   /** CAMPAIGN_SCOPE_GATE: off (default, today's behaviour), shadow (recorded only) or on. */
   readonly scopeGate: ScopeGateMode;

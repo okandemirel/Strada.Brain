@@ -77,7 +77,7 @@ describe("resolveTierMap — pins", () => {
 
 describe("resolveTierMap — derivation", () => {
   it("derives only from the run's chain when one is declared", () => {
-    // Measured 2026-09-08 03:12: chain [opencode, opencode2], yet standard and
+    // Measured in a live campaign: chain [opencode, opencode2], yet standard and
     // premium derived to openai:* — quota-dead and excluded by the operator.
     const { tiers, derivations } = resolveTierMap({
       configured: { cheap: "", standard: "", premium: "", local: "" } as never,

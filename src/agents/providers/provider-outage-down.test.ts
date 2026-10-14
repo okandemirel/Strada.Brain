@@ -6,7 +6,7 @@ import { allProvidersCoolingDownMs, setLiveChainMemberNames } from "./provider-o
  * Measured live 2026-09-03 18:39: three OpenCode accounts were holding
  * FreeUsageLimitError 429s, their short cooldowns lapsed between the failing
  * recovery probe and the campaign's settle, the outage measure read 0 — so
- * the settle looked like the sprint's own failure and charged Sprint 7 its
+ * the settle looked like the sprint's own failure and charged that sprint a
  * second attempt for a wall it never got to work behind.
  */
 const names = ["od-a", "od-b"];

@@ -1,6 +1,6 @@
 /**
  * The independent delivery review's findings, as data the scope gate acts on
- * (GDD-drift plan W13).
+ *.
  *
  * The review was prose a person read: a reviewer that saw a system check
  * asserting a literal, or a GDD rule no row states, changed nothing — the weak

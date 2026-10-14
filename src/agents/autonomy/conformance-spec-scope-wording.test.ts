@@ -1,6 +1,6 @@
 /**
  * The spec-scope gate speaks for any game, not the one it was written on
- * (GDD-drift trace M4, 2026-10-11).
+ *.
  *
  * Its instruction once carried one project's own vocabulary and structure and
  * sent them to every game, whose document may say none of it. A worker told to

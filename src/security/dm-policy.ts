@@ -409,8 +409,9 @@ function flagProgram(
   // counterpart of mkdir and cannot destroy data. Refusing it outright meant
   // the conformance gate could tell a worker "move this code under
   // Assets/Modules/<Name>Module/" and this gate would then forbid removing the
-  // empty directory it had just left behind: measured live 2026-09-18, 14
-  // refusals of `rmdir Assets/SampleGame/Core/Sim/Data …` in ten minutes.
+  // empty directory it had just left behind (measured live 2026-09-18: a run
+  // spent its turns on refusals of a plain rmdir of the folder it had just
+  // emptied).
   // What stays refused: a RECURSIVE rmdir, which on Windows (`rmdir /s`, or
   // PowerShell's `-Recurse`) really is rm -rf.
   if (name === "rmdir" || name === "rd") {

@@ -7,8 +7,8 @@
  * filed include_tests among the optional extras (Views/, Data/), defaulted it
  * off, and described it as "a Tests/ folder".
  *
- * Measured on a from-scratch run: three well-chosen modules — Board, Input,
- * Presentation — and not one Tests folder between them. The agent had no reason
+ * Measured on a from-scratch run: the agent created sound modules and not one
+ * Tests folder between them. The agent had no reason
  * to pass a flag it was never told it needed, so every module it generated was
  * born untestable, and the conformance guard's untestedAssemblies check then
  * had to report the tool's own output as non-conformant.
@@ -39,7 +39,7 @@ const create = async (input: Record<string, unknown>) => {
 
 describe("a generated module's tests", () => {
   it("carries Tests/Runtime and Tests/Editor without being asked", async () => {
-    const base = await create({ name: "Board" });
+    const base = await create({ name: "Weather" });
 
     expect(existsSync(join(base, "Tests", "Runtime"))).toBe(true);
     expect(existsSync(join(base, "Tests", "Editor"))).toBe(true);
@@ -48,7 +48,7 @@ describe("a generated module's tests", () => {
   it("gives each test folder its own assembly", async () => {
     // Two assemblies, not one: an edit-mode test cannot live in a runtime
     // assembly, and a runtime test assembly must not be Editor-constrained.
-    const base = await create({ name: "Board" });
+    const base = await create({ name: "Weather" });
 
     const runtime = readdirSync(join(base, "Tests", "Runtime"));
     const editor = readdirSync(join(base, "Tests", "Editor"));
@@ -58,7 +58,7 @@ describe("a generated module's tests", () => {
   });
 
   it("still omits them when explicitly told to", async () => {
-    const base = await create({ name: "Board", include_tests: false });
+    const base = await create({ name: "Weather", include_tests: false });
 
     expect(existsSync(join(base, "Tests"))).toBe(false);
   });

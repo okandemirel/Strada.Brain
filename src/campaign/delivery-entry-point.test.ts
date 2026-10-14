@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { CampaignManager } from "./campaign-manager.js";
 
 /**
- * Measured 2026-09-03: the delivered project carried many scenes, most of the
- * enabled ones single-purpose verification scaffolding — and the report never
- * said which one is the game.
+ * A delivery report that names no entry scene leaves the reader to guess which
+ * enabled scene is the game, and single-purpose verification scaffolding
+ * scenes are often enabled beside it.
  */
 const dirs: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), "proj-")); dirs.push(d); return d; }

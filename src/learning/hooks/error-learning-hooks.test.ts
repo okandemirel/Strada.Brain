@@ -384,7 +384,7 @@ describe("recovery guidance respects who owns a rule", () => {
   let storage: LearningStorage;
   let hooks: ErrorLearningHooks;
   let tempDir: string;
-  const PROJECT = "/projects/samplegame";
+  const PROJECT = "/projects/greenhouse-controller";
 
   function rule(id: string, action: string, scope: "user" | "project", owner?: string): void {
     storage.createInstinct({
@@ -408,7 +408,7 @@ describe("recovery guidance respects who owns a rule", () => {
   function context(userId?: string): ErrorContext {
     return {
       toolName: "dotnet_build",
-      errorOutput: "Assets/Board.cs(3,7): error CS0246: The type or namespace name 'Tile' could not be found",
+      errorOutput: "Assets/Irrigation/Valve.cs(3,7): error CS0246: The type or namespace name 'Sprinkler' could not be found",
       analysis: { hasErrors: true, errorCount: 1, summary: "1 missing_type", recoveryInjection: "" },
       sessionId: `session-${userId ?? "anon"}`,
       timestamp: new Date(),
@@ -456,13 +456,13 @@ describe("recovery guidance respects who owns a rule", () => {
 
   it("carries the run's user from the autonomy bundle through the recovery engine", () => {
     const failing = {
-      content: "\n### Errors\n  Assets/Board.cs(3,7): CS0246 — The type or namespace name 'Tile' could not be found\n",
+      content: "\n### Errors\n  Assets/Irrigation/Valve.cs(3,7): CS0246 — The type or namespace name 'Sprinkler' could not be found\n",
       isError: true,
     };
     const forUser = (userId: string) =>
       createAutonomyBundle({
         errorLearning: { hooks, sessionId: `chat-${userId}`, userId },
-        prompt: "build the board",
+        prompt: "build the valve scheduler",
         iterationBudget: 10,
       }).errorRecovery.analyze("dotnet_build", failing as never)?.learnedSolutions ?? "";
 

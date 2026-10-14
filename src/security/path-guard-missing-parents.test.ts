@@ -7,9 +7,9 @@
  * regardless. The loop's own comment says the path "is valid (just missing
  * parent)"; the code disagreed with the comment.
  *
- * Measured cost: file_write could not create a file in a directory that did not
- * already exist. An agent asked to lay out a layered set of C# scripts made 42
- * write attempts, 38 were refused, and it ended up cramming 21 types into the
+ * Measured cost: file_write could not create a file in a directory that did
+ * not already exist. An agent asked to lay out a layered set of C# scripts had
+ * nearly every write refused, and ended up cramming type after type into the
  * single file that happened to live in an existing directory.
  *
  * The option is opt-in so read paths keep their existing semantics, and these
@@ -44,9 +44,9 @@ const allow = { allowMissingParents: true };
 
 describe("allowMissingParents", () => {
   it("accepts a target several directories below an existing one", async () => {
-    const result = await validatePath(project, "Assets/Scripts/SampleGame/Core/Models/GameState.cs", allow);
+    const result = await validatePath(project, "Assets/Scripts/Inventory/Models/StockState.cs", allow);
     expect(result.valid).toBe(true);
-    expect(result.fullPath).toBe(join(project, "Assets/Scripts/SampleGame/Core/Models/GameState.cs"));
+    expect(result.fullPath).toBe(join(project, "Assets/Scripts/Inventory/Models/StockState.cs"));
   });
 
   it("still rejects it without the option", async () => {

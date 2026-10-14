@@ -589,7 +589,7 @@ const COMMAND_PRIVILEGE: Readonly<Record<TaskCommand, CommandRule>> = {
   autonomous: { kind: "when-write", surface: "instance:control", writes: ["on", "off"] },
   model: { kind: "unless-read", surface: "instance:control", reads: ["list", "listele", "info", "bilgi"] },
   // Waiving a GDD row takes it out of the scope gate's judgement: a person's
-  // decision, never a guest's (GDD-drift W14). `rows` and `rejudge` only read.
+  // decision, never a guest's. `rows` and `rejudge` only read.
   campaign: {
     kind: "when-write",
     surface: "instance:control",

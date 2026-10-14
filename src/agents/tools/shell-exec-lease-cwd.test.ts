@@ -6,9 +6,10 @@ import { ShellExecTool } from "./shell-exec.js";
 
 /**
  * Under a workspace lease the agent knows the project by its REAL path (the
- * GDD and every user message name it), but projectPath is the lease copy.
- * Measured 2026-09-02 on Sprint 7: six shell_exec calls were refused with
- * "working directory must be within the project", each costing a turn.
+ * task's documents and every user message name it), but projectPath is the
+ * lease copy. Measured in a live campaign: shell_exec calls aimed at the real
+ * path were refused with "working directory must be within the project", each
+ * costing a turn.
  */
 const dirs: string[] = [];
 function tmp(prefix: string): string {

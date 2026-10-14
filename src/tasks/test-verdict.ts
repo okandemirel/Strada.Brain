@@ -35,10 +35,8 @@ export interface TaskTestVerdict {
    * filter. The Unity MCP prints "(unfiltered — the whole PlayMode suite)" or
    * "(filter: <names>)"; undefined means the line said neither.
    *
-   * Audited 2026-09-03: the delivered test-game campaign carried no verdict at
-   * all on any milestone, while its filtered runs went green and the ONE
-   * unfiltered run reported failures — among them the test whose failure
-   * means the core loop does not work. A green from a filter is not the suite
+   * Audited 2026-09-03: a run's filtered test runs went green while its one
+   * unfiltered run reported failures. A green from a filter is not the suite
    * passing, and delivery must be able to tell them apart.
    */
   unfiltered?: boolean;
@@ -48,8 +46,8 @@ export interface TaskTestVerdict {
    * none.
    *
    * Audited 2026-09-03: the verdict kept only counts, so a red "N of M tests
-   * failed" reached the delivery report without ever naming the one test
-   * whose failure means the core loop does not work. Names are read ONLY off
+   * failed" reached the delivery report without naming which tests failed.
+   * Names are read ONLY off
    * the red line itself, never from a window of following lines: a runner
    * that prints its whole suite after the summary would otherwise have its
    * PASSING tests named as failures.
@@ -65,14 +63,14 @@ export interface TaskTestVerdict {
    * Audited 2026-09-06: across a whole campaign every unity_my_assets_cloud
    * call answered "The Unity account link expired or was revoked — re-run the
    * Unity Link step" (token refresh HTTP 412), and not one word of it reached
-   * the channel or the delivery report. The only
-   * real-art source was dead for the entire build and nobody was told.
+   * the channel or the delivery report. The only purchased-asset source was
+   * unavailable for the whole run and nobody was told.
    */
   assetSourcingBlind?: string;
   /**
    * How the run ended, as data from the runtime. In a measured campaign most
    * milestone tips ended on the system's own "task_stuck" notice and every one
-   * went green: the only record of the stop was that sentence (GDD-drift W01).
+   * went green: the only record of the stop was that sentence.
    */
   runIntegrity?: TaskRunIntegrity;
 }

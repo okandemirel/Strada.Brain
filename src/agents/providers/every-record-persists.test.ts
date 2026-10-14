@@ -1,10 +1,10 @@
 /**
  * Whatever a run learns about a provider outlives the run.
  *
- * Measured 2026-08-22, run 37: Kimi refused at 23:02, the registry marked it
+ * Measured in a live run: Kimi refused late in the run, the registry marked it
  * down, and the chain skipped it correctly for the rest of the run. The file on
- * disk was last written at 21:44. Run 38 therefore booted with
- * "unavailable: []" and was free to hand goals straight back to it.
+ * disk had last been written well before the refusal. The next run therefore
+ * booted with "unavailable: []" and was free to hand goals straight back to it.
  *
  * The cause was one method. Four of the record methods called persistNow();
  * recordFailure — the one the chain's recovery probe uses — did not. Adding a

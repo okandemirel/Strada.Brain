@@ -33,11 +33,11 @@ const create = async (input: Record<string, unknown> = {}) => {
   const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-structure-"));
   installCoreDeclaration(projectPath);
   const result = await new ModuleCreateTool().execute(
-    { name: "Board", ...input },
+    { name: "Pantry", ...input },
     { projectPath } as never,
   );
   expect(result.isError, `refused: ${result.content}`).toBeFalsy();
-  return { base: join(projectPath, "Assets", "Modules", "BoardModule"), result };
+  return { base: join(projectPath, "Assets", "Modules", "PantryModule"), result };
 };
 
 describe("a generated module's folder layout", () => {
@@ -59,7 +59,7 @@ describe("a generated module's folder layout", () => {
 
   it("puts the asmdef at the module root", async () => {
     const { base } = await create();
-    expect(readdirSync(base)).toContain("Board.asmdef");
+    expect(readdirSync(base)).toContain("Pantry.asmdef");
   });
 
   it("does not invent a Mediators folder the framework never declared", async () => {
@@ -118,7 +118,7 @@ describe("a generated module's folder layout", () => {
     const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-structure-"));
     installCoreDeclaration(projectPath);
     const result = await new ModuleCreateTool().execute(
-      { name: "Board", asset_folders: ["Sounds"] },
+      { name: "Pantry", asset_folders: ["Sounds"] },
       { projectPath } as never,
     );
     expect(result.isError).toBe(true);
@@ -130,7 +130,7 @@ describe("a generated module's folder layout", () => {
     // whole path exists to prevent, so there is no fallback structure.
     const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-nocore-"));
     const result = await new ModuleCreateTool().execute(
-      { name: "Board" },
+      { name: "Pantry" },
       { projectPath } as never,
     );
     expect(result.isError).toBe(true);
@@ -155,10 +155,10 @@ describe("a framework whose layout lives in ModuleLayout.cs", () => {
     const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-layout-"));
     installCoreLayout(projectPath, { withLayout });
     const result = await new ModuleCreateTool().execute(
-      { name: "Board", ...input },
+      { name: "Pantry", ...input },
       { projectPath } as never,
     );
-    return { base: join(projectPath, "Assets", "Modules", "BoardModule"), result };
+    return { base: join(projectPath, "Assets", "Modules", "PantryModule"), result };
   };
 
   it("creates the module", async () => {
@@ -202,7 +202,7 @@ describe("a framework whose layout lives in ModuleLayout.cs", () => {
     // An uninitialised submodule: the directory is there, nothing in it is.
     const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-empty-core-"));
     mkdirSync(join(projectPath, "Packages", "Submodules", "Strada.Core"), { recursive: true });
-    const result = await new ModuleCreateTool().execute({ name: "Board" }, { projectPath } as never);
+    const result = await new ModuleCreateTool().execute({ name: "Pantry" }, { projectPath } as never);
     expect(result.isError).toBe(true);
     expect(result.content).not.toMatch(/is installed/);
     expect(result.content).toMatch(/checkout is incomplete/);

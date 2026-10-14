@@ -2,9 +2,9 @@
  * A delegated worker must inherit what the user authorized.
  *
  * Measured 2026-08-20: the run decomposed into multi-agent work and the very
- * first read of /Users/okan/Downloads/SampleGame_GDD.docx — the document the
- * task was about, named by the user in their own request — came back "Path
- * resolves outside the project directory".
+ * first read of a document the user had named by absolute path in their own
+ * request, outside the project, came back "Path resolves outside the project
+ * directory".
  *
  * The authorization is per-Orchestrator state, and delegation builds a new
  * Orchestrator with an empty map. The evidence of what the user typed did not
@@ -24,10 +24,10 @@ describe("carrying authorization across a delegation", () => {
   it("hands the parent's paths to the delegate's own chat id", () => {
     const child = orchestrator();
 
-    child.seedUserAuthorizedPaths("delegation-sub-1", ["/Users/okan/Downloads/SampleGame_GDD.docx"]);
+    child.seedUserAuthorizedPaths("delegation-sub-1", ["/home/tester/inbox/orchard-survey.docx"]);
 
     expect(child.userAuthorizedPathsSnapshot("delegation-sub-1")).toEqual([
-      "/Users/okan/Downloads/SampleGame_GDD.docx",
+      "/home/tester/inbox/orchard-survey.docx",
     ]);
   });
 
@@ -69,10 +69,10 @@ describe("carrying authorization across a delegation", () => {
 describe("one store, every orchestrator", () => {
   // Measured 2026-08-20, after seeding the delegate fixed the delegation path
   // and the refusal came back anyway: the run was decomposing into sub-goals,
-  // not delegating. Goal decomposition rewrote the user's
-  // "/Users/okan/Downloads/SampleGame_GDD.docx" into a sub-goal that said only
-  // "SampleGame_GDD.docx", so the sub-agent's Orchestrator had nothing to
-  // derive from and refused the document its task was about.
+  // not delegating. Goal decomposition rewrote the user's absolute path into
+  // a sub-goal that carried only the bare file name, so the sub-agent's
+  // Orchestrator had nothing to derive from and refused the document its task
+  // was about.
   //
   // Per-instance memory cannot survive that: the authorization has to be one
   // store, keyed by chat, that every orchestrator in the process reads.
@@ -87,10 +87,10 @@ describe("one store, every orchestrator", () => {
     const root = withStore(shared);
     const sub = withStore(shared);
 
-    root.seedUserAuthorizedPaths("cli-local", ["/Users/okan/Downloads/SampleGame_GDD.docx"]);
+    root.seedUserAuthorizedPaths("cli-local", ["/home/tester/inbox/orchard-survey.docx"]);
 
     expect(sub.userAuthorizedPathsSnapshot("cli-local")).toEqual([
-      "/Users/okan/Downloads/SampleGame_GDD.docx",
+      "/home/tester/inbox/orchard-survey.docx",
     ]);
   });
 

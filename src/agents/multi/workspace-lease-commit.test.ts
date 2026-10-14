@@ -716,17 +716,17 @@ describe("orphaned lease salvage at construction", () => {
   });
 
   it("with the seed maps the lease persisted, salvage COMMITS the crashed owner's work and quarantines only real conflicts", async () => {
-    // Measured 2026-09-08 08:19: a restart mid-task quarantined several real
-    // sprites (finished art drawn over placeholders) and some prefab edits;
-    // the project kept the placeholders because salvage had no
-    // seed maps and could only quarantine. The lease now writes its seed maps
-    // at acquire; a crashed owner's salvage commits by the live rules.
+    // Measured in a live campaign: a restart mid-task quarantined real agent
+    // work (new assets and prefab edits) and the project kept the older
+    // versions, because salvage had no seed maps and could only quarantine.
+    // The lease now writes its seed maps at acquire; a crashed owner's
+    // salvage commits by the live rules.
     const lease = await manager().acquireLease({ label: "crash", forceTempCopy: true });
     // The seed sidecar sits BESIDE the lease, out of the agent's reach.
     expect(existsSync(`${lease.path}.seed.json`)).toBe(true);
     expect(existsSync(join(lease.path, ".strada-lease-seed.json"))).toBe(false);
     // Agent work in the lease: a new file and an edit of a seeded file.
-    writeFileSync(join(lease.path, "Assets", "Scripts", "SpiceJar.png"), "FINISHED ART, NOT A PLACEHOLDER", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "SpiceJar.png"), "agent work, not a stale copy", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent edit", "utf8");
     utimesSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
     // The user evolved another seeded file in the PROJECT during the run.
@@ -758,7 +758,7 @@ describe("orphaned lease salvage at construction", () => {
     }, { timeout: 5000 });
 
     // Agent work landed in the project.
-    expect(readFileSync(join(source, "Assets", "Scripts", "SpiceJar.png"), "utf8")).toBe("FINISHED ART, NOT A PLACEHOLDER");
+    expect(readFileSync(join(source, "Assets", "Scripts", "SpiceJar.png"), "utf8")).toBe("agent work, not a stale copy");
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("agent edit");
     // The user's concurrent edit was kept; the agent's copy went to quarantine.
     expect(readFileSync(join(source, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("user evolved this");
@@ -799,7 +799,7 @@ describe("orphaned lease salvage at construction", () => {
 
   it("a lease acquired right after construction is seeded AFTER salvage has written the crashed owner's work", async () => {
     // Review 2026-09-08 (81985efd): salvage ran fire-and-forget while the
-    // campaign's boot resubmission seeded its lease — 0 of 2000 salvaged
+    // campaign's boot resubmission seeded its lease — none of the salvaged
     // files reached the new lease, and the agent's later edit of one read
     // as a user conflict.
     const lease = await manager().acquireLease({ label: "crash2", forceTempCopy: true });
@@ -1021,7 +1021,7 @@ describe("a loose script with a module twin is the system's own duplicate", () =
   });
 });
 
-describe("lease commit replay (measured 2026-09-10: worker commits dangling in the game repo, no salvage branch)", () => {
+describe("lease commit replay (measured 2026-09-10: worker commits dangling in the project repo, no salvage branch)", () => {
   const git = (cwd: string, ...args: string[]) =>
     execFileSync("git", ["-c", "user.email=w@x", "-c", "user.name=worker", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -1599,23 +1599,23 @@ describe("a person's edit that stats cannot see is not published over (Codex 202
 
 describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () => {
   it("does not carry, publish or conflict on bin/obj build output", async () => {
-    // Measured live 2026-09-12 11:26 and 12:03: the files in a tool
-    // project's {bin,obj}/Debug folders under Tools/ differed between the
-    // lease and the project — both had built them — so every one came back a CONFLICT,
-    // the commit published nothing, and the whole node failed.
-    mkdirSync(join(source, "Tools", "RouteSim", "obj", "Debug"), { recursive: true });
-    mkdirSync(join(source, "Tools", "RouteSim", "bin", "Debug"), { recursive: true });
+    // Measured in a live campaign: compiler output in a nested .NET project's
+    // bin/obj folders differed between the lease and the project, since both
+    // had built it — every file came back a CONFLICT, the commit published
+    // nothing, and the whole node failed.
+    mkdirSync(join(source, "Sim", "RouteSim", "obj", "Debug"), { recursive: true });
+    mkdirSync(join(source, "Sim", "RouteSim", "bin", "Debug"), { recursive: true });
     mkdirSync(join(source, "bin"), { recursive: true });
-    writeFileSync(join(source, "Tools", "RouteSim", "obj", "Debug", "RouteSim.cache"), "project build", "utf8");
-    writeFileSync(join(source, "Tools", "RouteSim", "bin", "Debug", "RouteSim.dll"), "project build", "utf8");
+    writeFileSync(join(source, "Sim", "RouteSim", "obj", "Debug", "RouteSim.cache"), "project build", "utf8");
+    writeFileSync(join(source, "Sim", "RouteSim", "bin", "Debug", "RouteSim.dll"), "project build", "utf8");
     writeFileSync(join(source, "bin", "tools.sh"), "#!/bin/sh\necho hi\n", "utf8"); // a repository's own bin/
 
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     // The worker builds too, and its outputs differ.
-    mkdirSync(join(lease.path, "Tools", "RouteSim", "obj", "Debug"), { recursive: true });
-    mkdirSync(join(lease.path, "Tools", "RouteSim", "bin", "Debug"), { recursive: true });
-    writeFileSync(join(lease.path, "Tools", "RouteSim", "obj", "Debug", "RouteSim.cache"), "lease build", "utf8");
-    writeFileSync(join(lease.path, "Tools", "RouteSim", "bin", "Debug", "RouteSim.dll"), "lease build", "utf8");
+    mkdirSync(join(lease.path, "Sim", "RouteSim", "obj", "Debug"), { recursive: true });
+    mkdirSync(join(lease.path, "Sim", "RouteSim", "bin", "Debug"), { recursive: true });
+    writeFileSync(join(lease.path, "Sim", "RouteSim", "obj", "Debug", "RouteSim.cache"), "lease build", "utf8");
+    writeFileSync(join(lease.path, "Sim", "RouteSim", "bin", "Debug", "RouteSim.dll"), "lease build", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Real.cs"), "the actual work", "utf8");
     writeFileSync(join(lease.path, "bin", "tools.sh"), "#!/bin/sh\necho edited\n", "utf8");
 
@@ -1625,8 +1625,8 @@ describe("compiler output is derived, at any depth (Codex 2026-09-12 R#4)", () =
     expect(result.conflicts).toEqual([]);
     expect(result.written).toContain(join("Assets", "Scripts", "Real.cs"));
     // The project keeps its own compiler output, untouched…
-    expect(readFileSync(join(source, "Tools", "RouteSim", "obj", "Debug", "RouteSim.cache"), "utf8")).toBe("project build");
-    expect(readFileSync(join(source, "Tools", "RouteSim", "bin", "Debug", "RouteSim.dll"), "utf8")).toBe("project build");
+    expect(readFileSync(join(source, "Sim", "RouteSim", "obj", "Debug", "RouteSim.cache"), "utf8")).toBe("project build");
+    expect(readFileSync(join(source, "Sim", "RouteSim", "bin", "Debug", "RouteSim.dll"), "utf8")).toBe("project build");
     // …and a repository's own bin/ of scripts is not compiler output.
     expect(readFileSync(join(source, "bin", "tools.sh"), "utf8")).toBe("#!/bin/sh\necho edited\n");
   });

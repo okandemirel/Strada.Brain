@@ -166,7 +166,7 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
     // the one thing worth keeping — enough of it to name the cause, not so much
     // that a log becomes a transcript.
     // Every call, one line: the failures alone could not answer "what did
-    // this sprint do for two hours" — measured 2026-09-07, an attempt's only
+    // this run do for two hours" — measured 2026-09-07, an attempt's only
     // trace was its refusals, and whether it ever called a generator or the
     // purchased library had to be inferred from the files it left behind.
     getLoggerSafe()?.info("Tool call", {
@@ -331,7 +331,7 @@ function childrenOf(node: unknown): unknown[] {
   return values.flatMap((value) => (Array.isArray(value) ? value : [value]));
 }
 
-/** "status: failed (compileIssues=27)" — the counts are the reason. */
+/** "status: failed (compileIssues=4)" — the counts are the reason. */
 function verdictSummary(parsed: unknown): string | undefined {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   const root = parsed as Record<string, unknown>;

@@ -1,13 +1,11 @@
 // ---------------------------------------------------------------------------
 // unity_delivery_measure — the campaign's delivery assessment, as a tool.
 //
-// Measured 2026-09-09 10:25-11:25 on the placeholder-art mission: its first
-// node, "Measure and record initial placeholder-grade sprite count using
-// tools", spent an hour reading and writing code because no tool exposed the
-// inventory the campaign's own gate reads (assessBuiltAsSpecified). Every
-// delivery verdict — placeholder-grade sprites, shipped renderers, unbound
-// prefabs — is now one read-only call away, so a run can MEASURE instead of
-// estimating or re-implementing.
+// Measured in a live campaign: a node asked to count placeholder-grade
+// sprites spent its time re-implementing the inventory, because no tool
+// exposed what the delivery gate reads (assessBuiltAsSpecified). Every
+// delivery verdict is now one read-only call away, so a run MEASURES instead
+// of estimating.
 // ---------------------------------------------------------------------------
 import type { ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { assessBuiltAsSpecified } from "../../autonomy/built-as-specified.js";

@@ -45,7 +45,7 @@ describe("readPlaymodeRun — a record is counts that add up (Codex 2026-09-11 B
   });
 });
 
-describe("readPlaymodeRun — red only by its failed tests (GDD-drift W09)", () => {
+describe("readPlaymodeRun — red only by its failed tests", () => {
   it("is true only when the failures alone make the record red", () => {
     const red = { total: 9, passed: 8, failed: 1, skipped: 0, failedNames: ["A.B.C"], unfiltered: true };
     write({ ...red, result: "Failed" });

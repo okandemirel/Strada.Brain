@@ -54,7 +54,7 @@
     "state": "done",
     "gddPath": "docs/GDD.md",
     "draftAttempts": 0,
-    "currentMilestone": 8,
+    "currentMilestone": 9,
     "createdAt": 1700000000000,
     "updatedAt": 1700345600000,
     "lastError": "NOT DELIVERED — Coverage completion 1.2 —<GDD passage omitted> was cancelled",
@@ -433,72 +433,12 @@
     },
     {
       "id": "m6",
-      "title": "Sprint 6 — funding renewals",
+      "title": "Sprint 6 — the review build",
       "status": "green",
       "attempts": 1,
       "taskId": "task_0000a006",
-      "resultExcerpt": "FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified\n\nNo se pudo completar esta tarea — el proveedor de IA no responde. Inténtelo de nuevo más tarde o use otro proveedor.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.",
-      "reconcileDeferred": false,
-      "sectionRefs": [
-        "§6",
-        "§5"
-      ],
-      "promptChars": 35,
-      "promptSha256": "0d5c216964d10cf2c6215d80e796961228538ae729f462c3978bee3ad9784286",
-      "tip": {
-        "id": "task_0000a006",
-        "status": "completed",
-        "createdAt": 1700216000000,
-        "completedAt": 1700223200000,
-        "resultChars": 753,
-        "resultSha256": "e425dc00aa166d6db270cde327b5f128b5649d536e3ec30ea502ee3774fa5a4a",
-        "stamps": {
-          "task_stuck": 1,
-          "provider_abort": 1
-        },
-        "evidenceLines": [
-          {
-            "line": 1,
-            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
-          },
-          {
-            "line": 3,
-            "text": "**Stop reflecting and make the renewal form read the night log, then run the PlayMode verification again.**"
-          },
-          {
-            "line": 5,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 6,
-            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
-          },
-          {
-            "line": 8,
-            "text": "No se pudo completar esta tarea — el proveedor de IA no responde. Inténtelo de nuevo más tarde o use otro proveedor."
-          },
-          {
-            "line": 10,
-            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
-          },
-          {
-            "line": 11,
-            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
-          }
-        ],
-        "verification": {
-          "testsGreen": false,
-          "detail": "PlayMode verification failed: 3 of 31 tests failed (log: ~/Library/Logs/Unity/Editor.log)"
-        }
-      }
-    },
-    {
-      "id": "m7",
-      "title": "Sprint 7 — the review build",
-      "status": "green",
-      "attempts": 1,
-      "taskId": "task_0000a007",
       "resultExcerpt": "ier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified (log: ~/Library/Logs/Unity/Editor.log)\n\n{\n  \"step\": 2,\n  \"goal\": \"wire the sky dome into scene 2\",\n  \"actions\": [\"open Assets/Scenes/Observatory.unity\", \"place the dome prefab\", \"save the scene\"]\n}\n\nI've reached the maximum number of steps for this request. Please send a follow-up message to continue.\n\nThe review build is assembled; the dome and the star field load in the entry scene.",
+      "reconcileDeferred": false,
       "visualEvidenceBounced": false,
       "noWorkBounced": false,
       "timeBoxEscalations": 0,
@@ -510,23 +450,23 @@
       "testVerdict": "PlayMode verification passed: 37 of 39 tests ran clean.",
       "structureRefused": true,
       "structureFindings": [
-        "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Observatory.unity and the prefabs it places.",
-        "2 scenes enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "REFUSAL STANDS, bounce budget spent: no enabled scene is the game — Build Settings holds no entry scene at all.",
+        "0 scenes enabled in Build Settings; no entry scene (build index 0) to open",
         "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +1 more",
         "GDD says: …<GDD passage omitted>…"
       ],
       "visualConformance": "**Does it look like the GDD?**\n- Partly: the dome and its star field read, but the coordinate grid over them is missing.\n- Judged from `<project>/Recordings/night-review/frame_00342.png` by openai.",
       "sectionRefs": [
         "§1",
-        "§6"
+        "§5"
       ],
       "promptChars": 47,
-      "promptSha256": "1560cb17ee457e236b1ca22ded26e2b2448a7bcb197f0c79c1bdad0816b37c8e",
+      "promptSha256": "69120c214a5e1fb5205ff3836dcbe5896d81ec02b951ce6c0b8fa2ace5e1dbdc",
       "tip": {
-        "id": "task_0000a007",
+        "id": "task_0000a006",
         "status": "completed",
-        "createdAt": 1700252000000,
-        "completedAt": 1700259200000,
+        "createdAt": 1700216000000,
+        "completedAt": 1700223200000,
         "resultChars": 823,
         "resultSha256": "0f10f7ba5fb6b15d2d487c65b54d2338c841cb7ae1783c2860be2b4804e808ba",
         "stamps": {
@@ -586,8 +526,8 @@
       "tip": {
         "id": "task_0000a008",
         "status": "completed",
-        "createdAt": 1700288000000,
-        "completedAt": 1700295200000,
+        "createdAt": 1700252000000,
+        "completedAt": 1700259200000,
         "resultChars": 894,
         "resultSha256": "318bf58c0970ba419da5f6b37988e5c1d2a87994a678f10da94c5bf736107fa0",
         "stamps": {
@@ -668,14 +608,77 @@
       "tip": {
         "id": "task_0000a009",
         "status": "cancelled",
-        "createdAt": 1700324000000,
-        "completedAt": 1700331200000,
+        "createdAt": 1700288000000,
+        "completedAt": 1700295200000,
         "cancelReason": "user",
         "resultChars": 102,
         "resultSha256": "f43a8b98183c39d6d094dc667a517fb7221212a16513052f19a569bdcd45e89a",
         "stamps": {},
         "evidenceLines": [],
         "verification": null
+      }
+    },
+    {
+      "id": "mcov1-3",
+      "title": "Coverage completion 1.3 — the seeing field reads the plate log",
+      "status": "green",
+      "attempts": 2,
+      "fromAudit": true,
+      "startedAtMs": 1700331200000,
+      "taskId": "task_0000a010",
+      "resultExcerpt": "FLAGS — unresolved; this node was NOT positively verified]\n- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified\n\nNo se pudo completar esta tarea — el proveedor de IA no responde. Inténtelo de nuevo más tarde o use otro proveedor.\n\n[VERIFIER FLAGS — unresolved; this node was NOT positively verified]\n- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later.",
+      "commitNote": "Committed 11 file(s) as `5a6b7c8`.",
+      "visualEvidence": "observed",
+      "sectionRefs": [
+        "§5.2"
+      ],
+      "promptChars": 46,
+      "promptSha256": "a6d2b071b807aea89bace4702adcb8b89054b44ebb655758ef177ee917a9ca52",
+      "tip": {
+        "id": "task_0000a010",
+        "status": "completed",
+        "createdAt": 1700324000000,
+        "completedAt": 1700331200000,
+        "resultChars": 753,
+        "resultSha256": "91aab6d36ef2b97fa6afcd18f86821cd94668ad79fbf950ad9c8085ee8ec42ae",
+        "stamps": {
+          "task_stuck": 1,
+          "provider_abort": 1
+        },
+        "evidenceLines": [
+          {
+            "line": 1,
+            "text": "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together."
+          },
+          {
+            "line": 3,
+            "text": "**Stop reflecting and make the seeing field read the plate log, then run the PlayMode verification again.**"
+          },
+          {
+            "line": 5,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 6,
+            "text": "- verification_skipped: no HEALTHY cross-provider verifier (every other provider is in cooldown or unconfigured) — this node was NOT independently verified"
+          },
+          {
+            "line": 8,
+            "text": "No se pudo completar esta tarea — el proveedor de IA no responde. Inténtelo de nuevo más tarde o use otro proveedor."
+          },
+          {
+            "line": 10,
+            "text": "[VERIFIER FLAGS — unresolved; this node was NOT positively verified]"
+          },
+          {
+            "line": 11,
+            "text": "- Provider #2 usage quota exhausted (resets in ~2h): Rate limit exceeded. Please try again later."
+          }
+        ],
+        "verification": {
+          "testsGreen": false,
+          "detail": "PlayMode verification failed: 3 of 31 tests failed (log: ~/Library/Logs/Unity/Editor.log)"
+        }
       }
     }
   ]

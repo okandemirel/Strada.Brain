@@ -320,9 +320,15 @@ export class FileRenameTool implements ITool {
  * same names deeper in the tree (Assets/Scripts/Build, Assets/Audio/Recordings)
  * are a person's folders, and matched at any depth they got the 2000-file cap.
  * Matched against the project-relative path toProjectRelative returns.
+ *
+ * Every entry is a root this side of the system demonstrably writes: Unity's
+ * own (Temp, Logs, obj, Build, Builds), Unity Recorder's default output and
+ * where capture-retention.ts prunes frames (Recordings), and this system's own
+ * state (.strada). A root nothing writes does not belong here — naming one
+ * hands a person's folder of that name the 2000-file cap for nothing.
  */
 const SYSTEM_OUTPUT_DIR_RE =
-  /^(?:Artifacts|Recordings|Logs|Temp|obj|Build|Builds|\.strada)(?:[\\/]|$)/i;
+  /^(?:Recordings|Logs|Temp|obj|Build|Builds|\.strada)(?:[\\/]|$)/i;
 
 /** Ordinary directories: a low cap, because this guard exists for a person's files. */
 const DELETE_DIR_LIMIT = 50;

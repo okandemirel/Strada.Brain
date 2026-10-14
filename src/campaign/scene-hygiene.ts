@@ -94,8 +94,45 @@ const defaultIo: SceneHygieneIo = {
  * Names that say "this scene exists to check something", not "this is the
  * game". The entry pick below prefers build index 0 among the scenes these do
  * not match.
+ *
+ * GENERAL DEVELOPMENT VOCABULARY ONLY, and matched as whole word tokens.
+ * Both halves of that matter, because this rule can refuse to name a game's
+ * real entry scene:
+ *   - A list drawn from one project's own scene names labels another game's
+ *     levels scaffolding. A level called a showcase, a boundary or an
+ *     assembled-something is a level.
+ *   - A raw substring match reads "Contest" as a test. Tokenising the file
+ *     name costs nothing and only matches the word a developer wrote.
+ * "Probe" is deliberately absent: reflection probes and probe-named objects
+ * are ordinary scene content, so it would misfire the same way.
  */
-const SCAFFOLDING_NAME = /InitTestScene|TestScene|SmokeTest|Sandbox|Verification|Verified|Showcase|Boundary|Assembled/i;
+const SCAFFOLDING_TOKENS: readonly (readonly string[])[] = [
+  // Unity's own generated InitTestScene<guid>, and the hand-written TestScene.
+  ["test", "scene"],
+  ["smoke", "test"],
+  ["sandbox"],
+  ["scratch"],
+  ["playground"],
+  ["debug"],
+];
+
+/**
+ * The file name as lower-case word tokens: "InitTestScene4d0f" →
+ * init/test/scene/4/d/0/f, "DockSmokeTest" → dock/smoke/test, "Contest" →
+ * contest (one token, so no "test" in it).
+ */
+function sceneNameTokens(fileName: string): string[] {
+  const base = fileName.replace(/\.unity$/iu, "");
+  return (base.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/gu) ?? []).map((t) => t.toLowerCase());
+}
+
+/** Whether the file name carries one of the scaffolding words as a word. */
+function isScaffoldingName(fileName: string): boolean {
+  const tokens = sceneNameTokens(fileName);
+  return SCAFFOLDING_TOKENS.some((sequence) =>
+    tokens.some((_, i) => sequence.every((word, j) => tokens[i + j] === word)),
+  );
+}
 
 /** Below this, a scene cannot hold a game: camera, light, one probe object. */
 const MIN_GAME_OBJECTS = 3;
@@ -197,7 +234,7 @@ export function assessSceneHygiene(
   const buildIndex = new Map(enabled.map((s, i) => [s.path, i]));
   const sortByRichness = (a: HygieneScene & { objects: number }, b: HygieneScene & { objects: number }): number =>
     b.objects - a.objects || (buildIndex.get(a.path) ?? 0) - (buildIndex.get(b.path) ?? 0);
-  const nonScaffolding = readable.filter((s) => !SCAFFOLDING_NAME.test(basename(s.path)));
+  const nonScaffolding = readable.filter((s) => !isScaffoldingName(basename(s.path)));
   const pool = nonScaffolding.length > 0 ? nonScaffolding : readable;
   const richest = [...pool].sort(sortByRichness)[0];
   // THE BUILD OPENS INDEX 0. That is the scene a person gets, so it is the
@@ -233,7 +270,7 @@ export function assessSceneHygiene(
   const others = enabled.filter((s) => s.path !== best.path);
   const scaffolding = others.filter(
     (s) =>
-      SCAFFOLDING_NAME.test(basename(s.path)) || (s.objects !== null && s.objects < MIN_GAME_OBJECTS),
+      isScaffoldingName(basename(s.path)) || (s.objects !== null && s.objects < MIN_GAME_OBJECTS),
   );
   const scaffoldingPaths = new Set(scaffolding.map((s) => s.path));
   const unclassified = others.filter((s) => !scaffoldingPaths.has(s.path) && s.objects !== null);

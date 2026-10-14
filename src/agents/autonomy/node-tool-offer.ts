@@ -4,8 +4,8 @@
  * Every worker turn used to carry the whole registry: measured 2026-09-10
  * 14:34, 106 tools, 73 352 characters of schema on a 36–51 k-token prompt —
  * half of every turn spent describing tools the node would never call — and
- * a node whose task is "call unity_delivery_measure, then unity_generate_sprite
- * twice" is offered animation, navmesh and asset-store tools it cannot use.
+ * a node whose task names one measuring tool and one generator is offered
+ * animation, navmesh and asset-store tools it cannot use.
  *
  * A node's task names what it needs. The offer is the core set every node
  * may need (read, write, search, git, verify, measure), plus every tool the

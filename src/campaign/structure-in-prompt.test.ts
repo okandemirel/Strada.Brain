@@ -22,19 +22,19 @@ function put(root: string, rel: string, body: string, guid?: string): void {
   if (guid) writeFileSync(`${abs}.meta`, `fileFormatVersion: 2\nguid: ${guid}\n`);
 }
 
-/** A tree shaped like the delivered test game: an empty entry scene, art nothing reaches. */
+/** A tree with an empty entry scene and art that no enabled scene reaches: the shape the structural refusal is for. */
 function emptyGameProject(): string {
   const root = mkdtempSync(join(tmpdir(), "structprompt-"));
   dirs.push(root);
   put(
     root,
     "ProjectSettings/EditorBuildSettings.asset",
-    "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n",
+    "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Lobby.unity\n",
   );
   put(
     root,
-    "Assets/Scenes/Main.unity",
-    "%YAML 1.1\n--- !u!1 &100\nGameObject:\n  m_Name: MainCamera\n" +
+    "Assets/Scenes/Lobby.unity",
+    "%YAML 1.1\n--- !u!1 &100\nGameObject:\n  m_Name: LobbyCamera\n" +
       "--- !u!20 &900\nCamera:\n  orthographic: 0\n",
     "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
   );
@@ -86,10 +86,10 @@ describe("the final sprint is told what the tree renders, on every submit", () =
     expect(prompt).toContain("unity_place_prefab");
   });
 
-  it("sends the final sprint to the sections of its own GDD file (GDD-drift trace M4)", () => {
-    // "Do not re-read the whole GDD" was read as "do not consult it": the
-    // delivered game drifted from rules the sprint was told not to look up.
-    // The measurement replaces an audit of the tree, not the design.
+  it("sends the final sprint to the sections of its own GDD file", () => {
+    // "Do not re-read the whole GDD" was read as "do not consult it": a final
+    // sprint built against rules it had been told not to look up. The
+    // measurement replaces an audit of the tree, not the design.
     const prompt = attach(emptyGameProject(), "Sprint 38 — deliver the game.", {
       gddPath: "docs/GlassworksDesign.md",
       gddText: "# Glassworks\n## 1. Kilns\nA kiln cools for a full night before it is opened.\n",

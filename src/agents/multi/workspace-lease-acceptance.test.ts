@@ -1,6 +1,6 @@
 /**
  * A lease never writes or deletes the campaign's acceptance checks
- * (GDD-drift plan W07).
+ *.
  *
  * The checks under Assets/StradaAcceptance are what a milestone is judged by.
  * A worker that could publish an edited check — `Assert.Pass()` in place of
@@ -79,7 +79,7 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     expect(readFileSync(join(lease.path, CHECK), "utf8")).toBe(CANONICAL);
     const planted = join("Assets", "StradaAcceptance", "M1", "Planted.cs");
     writeFileSync(join(lease.path, planted), "Assert.Pass();", "utf8");
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "board", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "route", "utf8");
 
     const result = await lease.commit();
     await lease.release();
@@ -87,7 +87,7 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     expect(existsSync(join(source, planted))).toBe(false);
     expect(result.conflicts).toEqual([planted]);
     expect(result.refusedSystemOwned).toEqual([planted]);
-    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Route.cs")]);
     expect(readFileSync(join(result.conflictsQuarantinedUnder!, planted), "utf8")).toBe("Assert.Pass();");
   });
 
@@ -97,9 +97,9 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     expect(lease.kind).toBe("git-worktree");
     writeFileSync(join(lease.path, CHECK), "Assert.Pass();", "utf8");
     writeFileSync(join(lease.path, FOLDER_META), "guid: 00000000000000000000000000000000\n", "utf8");
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "board", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "route", "utf8");
     gitAt(lease.path, "add", "-A");
-    gitAt(lease.path, "commit", "-qm", "feat: board, and make the jump check pass");
+    gitAt(lease.path, "commit", "-qm", "feat: route, and make the jump check pass");
 
     const result = await lease.commit();
     await lease.release();
@@ -108,10 +108,10 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     expect(readFileSync(join(source, FOLDER_META), "utf8")).toContain("fedcba98");
     expect([...(result.refusedSystemOwned ?? [])].sort()).toEqual([CHECK, FOLDER_META].sort());
     expect(result.conflicts).toEqual(expect.arrayContaining([CHECK, FOLDER_META]));
-    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Route.cs")]);
     // The replayed commit carries the worker's code and nothing of the checks.
     expect(result.commitsReplayed?.replayed).toBe(1);
-    expect(gitAt(source, "show", "--name-only", "--format=", "HEAD")).toBe("Assets/Scripts/Board.cs");
+    expect(gitAt(source, "show", "--name-only", "--format=", "HEAD")).toBe("Assets/Scripts/Route.cs");
     expect(gitAt(source, "show", "HEAD:Assets/StradaAcceptance/M1/Acceptance_M1.cs")).toBe(CANONICAL.trim());
     expect(gitAt(source, "log", "--format=%s", "--", "Assets/StradaAcceptance")).toBe(
       "campaign: acceptance checks for M1 (system-owned)",
@@ -126,9 +126,9 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     withChecks({ git: true });
     const lease = await gitManager().acquireLease({ label: "t" });
     writeFileSync(join(lease.path, CHECK), "Assert.Pass();", "utf8");
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "board", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "route", "utf8");
     gitAt(lease.path, "add", "-A");
-    gitAt(lease.path, "commit", "-qm", "feat: board, and make the jump check pass");
+    gitAt(lease.path, "commit", "-qm", "feat: route, and make the jump check pass");
     writeFileSync(join(lease.path, CHECK), CANONICAL, "utf8");
     gitAt(lease.path, "add", "-A");
     gitAt(lease.path, "commit", "-qm", "chore: put the check back");
@@ -143,7 +143,7 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     expect(gitAt(source, "log", "--format=%s", "--", "Assets/StradaAcceptance")).toBe(
       "campaign: acceptance checks for M1 (system-owned)",
     );
-    expect(gitAt(source, "show", "HEAD:Assets/Scripts/Board.cs")).toBe("board");
+    expect(gitAt(source, "show", "HEAD:Assets/Scripts/Route.cs")).toBe("route");
   });
 
   it("holds when the project is reached through a symlink and a link in it leads into the folder", async () => {
@@ -165,13 +165,13 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     rmSync(join(lease.path, "Assets", "Scripts", "Checks"), { recursive: true, force: true });
     mkdirSync(join(lease.path, "Assets", "Scripts", "Checks", "M1"), { recursive: true });
     writeFileSync(join(lease.path, through), "Assert.Pass();", "utf8");
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "board", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "route", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
     expect([...(result.refusedSystemOwned ?? [])].sort()).toEqual([planted, through].sort());
-    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Route.cs")]);
     expect(existsSync(join(source, planted))).toBe(false);
     expect(existsSync(join(source, "Assets", "StradaAcceptance", "M1", "Through.cs"))).toBe(false);
     expect(readdirSync(join(source, "Assets", "StradaAcceptance", "M1")).sort()).toEqual(
@@ -189,18 +189,18 @@ describe("a lease's writes into the acceptance folder are refused", () => {
     const planted = join("Assets", "StradaAcceptance", "M1", "Planted.cs");
     writeFileSync(join(lease.path, planted), "Assert.Pass();", "utf8");
     writeFileSync(join(lease.path, CHECK), "Assert.Pass();", "utf8");
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "board", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "route", "utf8");
     gitAt(lease.path, "add", "-A");
-    gitAt(lease.path, "commit", "-qm", "feat: board, and make the jump check pass");
+    gitAt(lease.path, "commit", "-qm", "feat: route, and make the jump check pass");
 
     const result = await lease.commit();
     await lease.release();
 
     expect([...(result.refusedSystemOwned ?? [])].sort()).toEqual([CHECK, planted].sort());
-    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Route.cs")]);
     expect(existsSync(join(source, planted))).toBe(false);
     expect(readFileSync(join(source, CHECK), "utf8")).toBe(CANONICAL);
-    expect(gitAt(source, "show", "--name-only", "--format=", "HEAD")).toBe("Assets/Scripts/Board.cs");
+    expect(gitAt(source, "show", "--name-only", "--format=", "HEAD")).toBe("Assets/Scripts/Route.cs");
   });
 
   it("holds however the folder's name is cased, before the campaign has created it", async () => {
@@ -222,14 +222,14 @@ describe("a lease's writes into the acceptance folder are refused", () => {
   it("an untouched seeded check is neither a conflict nor a refusal", async () => {
     withChecks({ git: true });
     const lease = await gitManager().acquireLease({ label: "t" });
-    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "board", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Route.cs"), "route", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.conflicts).toEqual([]);
     expect(result.refusedSystemOwned).toBeUndefined();
-    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Route.cs")]);
   });
 });
 
@@ -240,7 +240,7 @@ describe("a lease's deletions in the acceptance folder are declined", () => {
     mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
     writeFileSync(join(source, "Assets", "Scripts", "Leftover.cs"), "leftover", "utf8");
     gitAt(source, "add", "-A");
-    gitAt(source, "commit", "-qm", "campaign: Sprint 1 — foundations");
+    gitAt(source, "commit", "-qm", "campaign: Sprint 1 — project setup");
     // A project from before the lease ledger: the history rule decides.
     expect(existsSync(join(source, ".strada", "lease-written.log"))).toBe(false);
 

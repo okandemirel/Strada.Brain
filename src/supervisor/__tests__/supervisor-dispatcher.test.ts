@@ -256,7 +256,7 @@ describe("SupervisorDispatcher", () => {
     const emit = vi.fn();
     const executeNode = vi.fn().mockResolvedValue({
       ...makeOkResult("A"),
-      output: "Generated 23 sprites under Assets/Art/Kites (provider local).",
+      output: "Generated 23 sprites under Assets/Art/Signposts (provider local).",
     });
     const dispatcher = new SupervisorDispatcher({
       executeNode,
@@ -270,7 +270,7 @@ describe("SupervisorDispatcher", () => {
     expect(emit).toHaveBeenCalledWith("monitor:task_update", expect.objectContaining({
       nodeId: "A",
       status: "completed",
-      output: "Generated 23 sprites under Assets/Art/Kites (provider local).",
+      output: "Generated 23 sprites under Assets/Art/Signposts (provider local).",
     }));
   });
 
@@ -598,7 +598,7 @@ describe("a node that ran out of time with work in hand (measured 2026-09-10: sp
   });
 });
 
-describe("a node the dispatcher settles says how it ended (GDD-drift W01)", () => {
+describe("a node the dispatcher settles says how it ended", () => {
   it("work kept past the time budget is ok, and was cut short — whatever the aborted run itself reported", async () => {
     const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode, signal?: AbortSignal) => {
       await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));

@@ -23,7 +23,7 @@ import { RuntimeArtifactManager, createProjectScopeFingerprint } from "./runtime
 import type { Instinct, InstinctId, RuntimeArtifact } from "./types.js";
 import type { TimestampMs } from "../types/index.js";
 
-const PROJECT = "/projects/samplegame";
+const PROJECT = "/projects/widget-shop";
 const SCOPE = createProjectScopeFingerprint(PROJECT);
 
 const TASK = {

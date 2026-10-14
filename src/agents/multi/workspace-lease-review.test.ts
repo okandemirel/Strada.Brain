@@ -263,24 +263,24 @@ describe("writes: the user's copy is never overwritten by a version the agent wr
 });
 
 describe("a moved mtime is not a user edit", () => {
-  // Measured 2026-09-07 21:32: a failed branch merge rewrote 169 project files
-  // byte-for-byte one second before the lease commit; the commit read every
-  // one as "the user changed it" and quarantined the sprint's scene placements.
+  // Measured in a live campaign: a failed branch merge rewrote project files
+  // byte-for-byte a second before the lease commit; the commit read every one
+  // as "the user changed it" and quarantined the agent's edits.
   it("writes an agent edit over a project file whose mtime moved but whose bytes still equal the seed-time HEAD", async () => {
-    put(source, "Assets/Scenes/Main.unity", "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n");
+    put(source, "Assets/Scenes/Workbench.unity", "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n");
     git(source, "init", "-q");
     git(source, "add", "-A");
     git(source, "commit", "-qm", "base");
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
-    put(lease.path, "Assets/Scenes/Main.unity", "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n--- !u!1001 &1001\nPrefabInstance:\n");
+    put(lease.path, "Assets/Scenes/Workbench.unity", "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Root\n--- !u!1001 &1001\nPrefabInstance:\n");
     // Something rewrote the project's copy with the same bytes (a merge, a reimport).
-    const target = join(source, "Assets/Scenes/Main.unity");
+    const target = join(source, "Assets/Scenes/Workbench.unity");
     const future = new Date(Date.now() + 60_000);
     utimesSync(target, future, future);
     const result = await lease.commit();
     await lease.release();
     expect(result.conflicts).toEqual([]);
-    expect(result.written).toEqual([join("Assets", "Scenes", "Main.unity")]);
+    expect(result.written).toEqual([join("Assets", "Scenes", "Workbench.unity")]);
     expect(readFileSync(target, "utf8")).toContain("PrefabInstance");
   });
 
@@ -307,26 +307,26 @@ describe("a moved mtime is not a user edit", () => {
   // a trip through a UTF-8 string. Comparing the raw blob called both "the
   // user changed it" and quarantined the agent's edit.
   it("a CRLF checkout of the seed-time HEAD is not a user edit", async () => {
-    put(source, "Assets/Scripts/Board.cs", "class Board\n{\n}\n");
+    put(source, "Assets/Scripts/Route.cs", "class Route\n{\n}\n");
     git(source, "init", "-q");
     git(source, "config", "core.autocrlf", "true");
     git(source, "add", "-A");
     git(source, "commit", "-qm", "base");
     // Checked out again the way Git for Windows does it: CRLF on disk, LF in
     // the commit, and git sees no change.
-    const target = join(source, "Assets/Scripts/Board.cs");
+    const target = join(source, "Assets/Scripts/Route.cs");
     rmSync(target);
-    git(source, "checkout", "--", "Assets/Scripts/Board.cs");
-    expect(readFileSync(target, "utf8")).toBe("class Board\r\n{\r\n}\r\n");
+    git(source, "checkout", "--", "Assets/Scripts/Route.cs");
+    expect(readFileSync(target, "utf8")).toBe("class Route\r\n{\r\n}\r\n");
     expect(git(source, "status", "--porcelain")).toBe("");
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
-    put(lease.path, "Assets/Scripts/Board.cs", "class Board\r\n{\r\n  // agent\r\n}\r\n");
+    put(lease.path, "Assets/Scripts/Route.cs", "class Route\r\n{\r\n  // agent\r\n}\r\n");
     const future = new Date(Date.now() + 60_000);
     utimesSync(target, future, future);
     const result = await lease.commit();
     await lease.release();
     expect(result.conflicts).toEqual([]);
-    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(result.written).toEqual([join("Assets", "Scripts", "Route.cs")]);
     expect(readFileSync(target, "utf8")).toContain("// agent");
   });
 

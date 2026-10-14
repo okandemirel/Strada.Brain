@@ -1,5 +1,5 @@
 /**
- * What the settle path does with a scope verdict (GDD-drift plan W09): the
+ * What the settle path does with a scope verdict: the
  * pure half — the next step, the bounce text, the time-box split, the worker's
  * dispute lines, and the final milestone's missing proofs. Invented rows only.
  */

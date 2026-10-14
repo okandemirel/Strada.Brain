@@ -16,8 +16,8 @@ import { ProviderManager } from "../../providers/provider-manager.js";
 import type { IAIProvider } from "../../providers/provider.interface.js";
 
 /**
- * Measured live 2026-09-12 01:34: a project pinned to "opencode,opencode2"
- * with PROVIDER_CHAIN_STRICT=1 ran its sprint turns on OpenAI. The routing
+ * Measured live 2026-09-12 01:34: a deployment pinned to "opencode,opencode2"
+ * with PROVIDER_CHAIN_STRICT=1 ran its turns on OpenAI. The routing
  * fix (review O) closed the main chain; delegation built its candidate pool
  * from every credential in the environment, so an account reserved for other
  * work was still a sub-agent worker.

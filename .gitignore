@@ -57,7 +57,7 @@ benchmarks/corpus/unity-synth-v1-*/
 .strada-update.lock
 .scratch/
 
-# Fixtures that must never be published: a real campaign export, the names of
-# the private product a run was measured on, its design documents. Tests that
-# read them are skipped without them (src/tests/helpers/local-fixtures.ts).
+# Developer-supplied private fixtures (private exports, term lists, documents)
+# that must never be published. Tests that read them skip with a stated reason
+# when they are absent (src/tests/helpers/local-fixtures.ts).
 tests/fixtures/local/

@@ -1,7 +1,7 @@
 /**
  * Which tree the conformance rules read.
  *
- * Measured on a 68-minute run: the agent wrote into a workspace lease at
+ * Measured in a live campaign: the agent wrote into a workspace lease at
  * /var/folders/.../strada-workspaces/<id>/, the guard was handed the source
  * root, and the source root received nothing until the commit at the very end.
  * Every rule that reads the project — is this module complete, does this test

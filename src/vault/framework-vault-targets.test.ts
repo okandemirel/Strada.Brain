@@ -96,8 +96,9 @@ describe("which codebases get indexed", () => {
  * WP-1.2: Strada.Modules got no vault unless the project had it installed, so
  * `vault_search "IScreenService ScreenBody"` found nothing while a checkout sat
  * beside the install. And a framework vault indexed its whole package folder:
- * in a measured replay 49% of the injected vault blocks were notes runs had
- * written into the vendored framework folders, not the framework.
+ * in a measured replay of a live campaign, a large share of the injected vault
+ * blocks were notes runs had written into vendored framework folders, not the
+ * framework.
  */
 describe("framework vaults index the framework, available or installed (WP-1.2)", () => {
   const checkout = (path: string) => ({ path, source: "sibling-checkout" as const, version: "1.0.0", commit: "abc1234" });
@@ -134,11 +135,11 @@ describe("framework vaults index the framework, available or installed (WP-1.2)"
       expect(core.includePath?.(kept), kept).toBe(true);
     }
     for (const dropped of [
-      "docs/sprint-report.md",
-      "analysis/frame-budget.md",
-      "notes/run-42.md",
-      "plans/m3.md",
-      "reports/delivery.md",
+      "docs/retro.md",
+      "analysis/heap-profile.md",
+      "notes/scratch.md",
+      "plans/todo.md",
+      "reports/summary.md",
       "SecurityReports/scan.md",
       "dist/index.js",
       "Tests/Runtime/QueryTests.cs",
@@ -176,7 +177,7 @@ describe("framework vaults index the framework, available or installed (WP-1.2)"
     }
     expect(modules.includePath?.("ScreenModule/Runtime/Docs/ScreenDocs.cs")).toBe(true);
     // At the root they are still the notes runs left behind.
-    for (const dropped of ["analysis/frame-budget.md", "docs/plans/m3.md", "notes/Runtime/x.cs", "reports/Editor/y.md", "plans/README.md"]) {
+    for (const dropped of ["analysis/heap-profile.md", "docs/plans/todo.md", "notes/Runtime/x.cs", "reports/Editor/y.md", "plans/README.md"]) {
       expect(core.includePath?.(dropped), dropped).toBe(false);
       expect(mcp.includePath?.(dropped), dropped).toBe(false);
     }
@@ -194,7 +195,7 @@ describe("framework vaults index the framework, available or installed (WP-1.2)"
       mkdirSync(join(root, "Runtime"), { recursive: true });
       mkdirSync(join(root, "docs"), { recursive: true });
       writeFileSync(join(root, "Runtime", "Service.cs"), "namespace Fw { public class Service {} }\n");
-      writeFileSync(join(root, "docs", "leak.md"), "# a run's sprint notes\n");
+      writeFileSync(join(root, "docs", "leak.md"), "# working notes\n");
       writeFileSync(join(root, "README.md"), "# Framework\n");
       const target = frameworkVaultTargets(deps({ corePath: root }), undefined).find((t) => t.name === "Strada.Core")!;
       const vault = new UnityProjectVault({

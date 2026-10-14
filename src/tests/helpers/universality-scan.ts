@@ -2,7 +2,7 @@
  * How the universality guard (src/universality.test.ts) reads a file: the
  * projections it compares, the rolling-hash prefilter, and its two local
  * checks — passages of a confidential document, and the checkout's own
- * vehicle terms. Kept apart from the guard so they can be tested on invented
+ * product terms. Kept apart from the guard so they can be tested on invented
  * text: the guard's real inputs may never be written down.
  */
 
@@ -157,10 +157,9 @@ export function quotedLines(text: string, index: QuoteIndex): number[] {
 }
 
 /**
- * A vehicle-terms.txt list (one case-insensitive regular expression per line,
+ * A product-terms.txt list (one case-insensitive regular expression per line,
  * `#` starting a comment), matched so that how a name's parts are separated
- * does not decide whether it is found, as the digests match a name on its
- * letters and digits alone. Each line of a file is read as written and with
+ * does not decide whether it is found. Each line of a file is read as written and with
  * the underscores and dashes inside a word dropped (`\bfoobar\b` finds
  * foo_bar, foo-bar and FOO_BAR; case already finds FooBar). The whole file is
  * also read as words (see project), where a space in a term — or an
@@ -171,7 +170,7 @@ export function quotedLines(text: string, index: QuoteIndex): number[] {
  * line as written, `foo bar` found none of those, and `\bfoobar\b` missed
  * foo_bar and foo-bar.
  */
-export interface VehicleTerms {
+export interface ProductTerms {
   readonly line: RegExp;
   readonly words: RegExp;
 }
@@ -179,7 +178,7 @@ export interface VehicleTerms {
 const PLAIN_TERM = /^(?:\\b)?[\p{L}\p{N} _-]+(?:\\b)?$/u;
 const INNER_JOINT = /(?<=[\p{L}\p{N}])[_-]+(?=[\p{L}\p{N}])/gu;
 
-export function compileTerms(list: string): VehicleTerms | undefined {
+export function compileTerms(list: string): ProductTerms | undefined {
   const terms = list
     .split("\n")
     .map((l) => l.trim())
@@ -195,7 +194,7 @@ export function compileTerms(list: string): VehicleTerms | undefined {
 }
 
 /** The lines of `text` that name a term. */
-export function termLines(text: string, terms: VehicleTerms): number[] {
+export function termLines(text: string, terms: ProductTerms): number[] {
   const lines = new Set<number>();
   text.split("\n").forEach((line, i) => {
     if (terms.line.test(line) || terms.line.test(line.replace(INNER_JOINT, ""))) lines.add(i + 1);

@@ -108,13 +108,9 @@ describe("BuildStateObserver", () => {
   });
 
   it("hands the repair to the guardian instead of becoming a second owner", () => {
-    // Measured live 2026-09-04/05: the real-tree guardian AND a queue of
-    // AgentCore "investigate the build failure" tasks repaired the same Unity
-    // tree, each one's half-finished edits becoming the other's new error
-    // list. The count oscillated between 4 and 40 for eight hours; no
-    // convergence guard could bite, because it counts one owner's rounds while
-    // six agents share the tree. With a single owner it went 26 → 2 in ten
-    // minutes.
+    // Two repair owners on one tree make each other's half-finished edits the
+    // other's error list; while the guardian owns the repair it is disclosed,
+    // not actionable work (rationale: the BuildStateObserver constructor doc).
     const buildState = {
       getState: () => ({
         pendingFiles: new Set(["Assets/Foo.cs"]),
@@ -144,11 +140,8 @@ describe("BuildStateObserver", () => {
   });
 
   it("a failure with nothing pending is reported but NOT actionable", () => {
-    // Measured live 2026-09-05: "Build failed with 0 pending file(s)" was
-    // raised nine times at priority 85, and each became a task telling an
-    // agent to "investigate the current build failure … and rerun the build"
-    // with no file to look at. Those agents went hunting for something to
-    // repair and edited the Unity project instead.
+    // A failure with no pending files names nothing to fix; turned into a
+    // task, it sends an agent hunting for something to repair.
     const buildState = {
       getState: () => ({
         pendingFiles: new Set<string>(),
@@ -192,7 +185,7 @@ describe("BuildStateObserver", () => {
     owned = false;
     expect(observer.collect()[0]!.actionable).toBe(false); // still nothing pending
 
-    pending.add("Assets/Scripts/Board.cs");
+    pending.add("Assets/Scripts/Sundial.cs");
     const obs = observer.collect();
     expect(obs).toHaveLength(1);
     expect(obs[0]!.priority).toBe(85);
@@ -214,12 +207,12 @@ describe("GitStateObserver", () => {
   });
 });
 
-describe("GitStateObserver — breakdown, stable summary, growth threshold (2026-09-10)", () => {
+describe("GitStateObserver — breakdown, stable summary, growth threshold", () => {
   const porcelain = (lines: string[]) => async () => ({ exitCode: 0, stdout: lines.join("\n") + "\n" });
 
   it("counts Strada's own output apart, classifies the rest, and names the top directories", () => {
     const b = summarizeGitStatus([
-      " M Assets/Scripts/Board.cs",
+      " M Assets/Scripts/Sundial.cs",
       "?? Assets/Generated/a.png",
       "?? Assets/Generated/b.png",
       " D Assets/Old.cs",
@@ -288,8 +281,10 @@ describe("GitStateObserver — breakdown, stable summary, growth threshold (2026
     expect(shouldReportGitGrowth(0, 0)).toBe(false);
     expect(shouldReportGitGrowth(124, 100)).toBe(false);
     expect(shouldReportGitGrowth(125, 100)).toBe(true);
-    expect(shouldReportGitGrowth(1140, 1118)).toBe(false);
-    expect(shouldReportGitGrowth(1230, 1118)).toBe(true);
+    // Past 250 files the share term is the larger one: +40 on 1000 clears the
+    // 25-file floor but not the 10% (100) share.
+    expect(shouldReportGitGrowth(1040, 1000)).toBe(false);
+    expect(shouldReportGitGrowth(1100, 1000)).toBe(true);
   });
 });
 

@@ -1,12 +1,11 @@
 /**
  * The gate that asks what the user already owns.
  *
- * Measured on the test game: flat sprites and no meshes shipped for a design
- * that asks for 3D content, while Asset Store packages the user had already
- * downloaded sat on disk, some of them holding usable models. The tool that
- * finds them, unity_my_assets_cloud, was registered, advertised to the model
- * in every phase, and described as "use this BEFORE generating or importing
- * any art". Across the whole run log it was never called.
+ * Measured in a live campaign: the worker originated art while asset packages
+ * the user had already downloaded sat on disk. The tool that finds them,
+ * unity_my_assets_cloud, was registered, advertised in every phase and
+ * described as "use this BEFORE generating or importing any art", and the run
+ * never called it.
  *
  * So the missing piece was never the capability. It was that nothing made the
  * run stop and look. This gate is that stop, and it is deliberately cheap to
@@ -74,7 +73,7 @@ describe("a run that makes art without asking what the user owns", () => {
 describe("what the gate deliberately ignores", () => {
   it("says nothing when no art was originated", () => {
     const guard = guardFor();
-    guard.trackToolCall("file_write", { path: "/p/Assets/Scripts/Board.cs" }, false);
+    guard.trackToolCall("file_write", { path: "/p/Assets/Scripts/Telescope.cs" }, false);
 
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });
@@ -110,7 +109,7 @@ describe("clearing the gate", () => {
 
     // The honest answer "you own nothing that fits" clears it too: the rule
     // asks that the question was put, not that it was answered favourably.
-    guard.trackToolCall("unity_my_assets_cloud", { query: "pixel tileset" }, false);
+    guard.trackToolCall("unity_my_assets_cloud", { query: "brass instruments" }, false);
 
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });
@@ -152,18 +151,17 @@ describe("clearing the gate", () => {
 });
 
 /**
- * The way it actually happened.
+ * The other half: a run that originates no art at all.
  *
  * The gate above keys on art being ORIGINATED, on the theory that the moment to
- * ask "does the user already have one of these" is just before making one. A
- * measured run showed that is half the problem: the agent originated no art at
- * all. It wrote C# files, assembly definitions, ScriptableObjects and a scene —
- * and no sprites, no prefabs, no meshes. Then it played the game and captured
- * a run of identical frames.
+ * ask "does the user already have one of these" is just before making one. That
+ * is half the problem: a run can write code, assembly definitions, config
+ * assets and a scene, make no sprite, prefab or mesh, then play the game and
+ * capture identical frames.
  *
- * The gate never fired, because nothing triggered it. The silence and the empty
- * scene both looked correct. [STRADA NOTHING DRAWN] reported the symptom without
- * ever naming the cause.
+ * Nothing triggers the gate then. The silence and the empty scene both look
+ * correct, and [STRADA NOTHING DRAWN] reports the symptom without naming the
+ * cause.
  */
 
 /**
@@ -178,7 +176,7 @@ function playedProject(art: readonly string[] = []): string {
   const root = mkdtempSync(join(os.tmpdir(), "assets-empty-"));
   const scripts = join(root, "Assets", "Scripts");
   mkdirSync(scripts, { recursive: true });
-  writeFileSync(join(scripts, "Board.cs"), "public class Board {}");
+  writeFileSync(join(scripts, "Telescope.cs"), "public class Telescope {}");
   writeFileSync(join(scripts, "GameConfig.asset"), "%YAML 1.1");
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
@@ -196,7 +194,7 @@ function ranTheGame(root: string): StradaConformanceGuard {
   const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
   guard.trackToolCall(
     "file_write",
-    { path: join(root, "Assets", "Scripts", "Board.cs") },
+    { path: join(root, "Assets", "Scripts", "Telescope.cs") },
     false,
   );
   guard.trackToolCall("unity_playmode_verify", { captureFrames: 24 }, false);
@@ -228,7 +226,7 @@ describe("a game that was played and has nothing in it to draw", () => {
     const prompt = ranTheGame(playedProject(["Ship.prefab"])).getPrompt() ?? "";
 
     expect(prompt).not.toContain(GATE);
-    expect(prompt).toContain("already carries a renderer");
+    expect(prompt).toContain("[STRADA NO CAMERA]");
   });
 
   it("does not count art that belongs to the framework packages", () => {
@@ -249,7 +247,7 @@ describe("a game that was played and has nothing in it to draw", () => {
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
     guard.trackToolCall(
       "file_write",
-      { path: join(root, "Assets", "Scripts", "Board.cs") },
+      { path: join(root, "Assets", "Scripts", "Telescope.cs") },
       false,
     );
 
@@ -268,7 +266,7 @@ describe("a game that was played and has nothing in it to draw", () => {
     const guard = ranTheGame(playedProject());
     expect(guard.getPrompt() ?? "").toContain(GATE);
 
-    guard.trackToolCall("unity_my_assets_cloud", { query: "3d cube" }, false);
+    guard.trackToolCall("unity_my_assets_cloud", { query: "sextant" }, false);
 
     expect(guard.getPrompt() ?? "").not.toContain(GATE);
   });

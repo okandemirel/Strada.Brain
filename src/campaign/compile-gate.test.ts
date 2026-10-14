@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { CampaignManager, type CompileVerdict } from "./campaign-manager.js";
 
 /**
- * Measured live 2026-09-04 21:37. Sprint 7 was committed green — 1296 files,
- * f674e8d — and the campaign declared delivery while the tree carried 37
- * compile errors, found seconds later by the real-tree guardian and by no gate
- * at all. Every other gate reads what a run REPORTED; none asked the compiler.
+ * Measured in a live campaign: a sprint was committed green and the campaign
+ * declared delivery while the tree did not compile. The real-tree guardian
+ * found the errors seconds later, and no gate did. Every other gate reads what
+ * a run REPORTED; none asked the compiler.
  */
 describe("the delivery gate asks the compiler", () => {
   let dir: string;
@@ -36,8 +36,8 @@ describe("the delivery gate asks the compiler", () => {
   });
 
   it("carries the error count through when the compiler answers", async () => {
-    const v = await measure(async () => ({ ok: false, ran: true, errors: 37, detail: "37 error(s)" }));
-    expect(v).toEqual({ ok: false, ran: true, errors: 37, detail: "37 error(s)" });
+    const v = await measure(async () => ({ ok: false, ran: true, errors: 5, detail: "5 error(s)" }));
+    expect(v).toEqual({ ok: false, ran: true, errors: 5, detail: "5 error(s)" });
   });
 
   it("a clean compile passes", async () => {
@@ -66,8 +66,8 @@ describe("what the report says about the compiler", () => {
   };
 
   it("prints DOES NOT COMPILE with the count", () => {
-    const r = render({ ok: false, ran: true, errors: 37, detail: "37 error(s)" });
-    expect(r).toContain("DOES NOT COMPILE (37 errors)");
+    const r = render({ ok: false, ran: true, errors: 5, detail: "5 error(s)" });
+    expect(r).toContain("DOES NOT COMPILE (5 errors)");
     expect(r).toContain("did not compile");
   });
 

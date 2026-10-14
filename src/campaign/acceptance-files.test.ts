@@ -1,5 +1,5 @@
 /**
- * The system's acceptance files (GDD-drift plan W05).
+ * The system's acceptance files.
  *
  * A milestone is green only when checks the system owns pass. These tests pin
  * what makes those checks the system's and not the worker's: the GDD's numbers

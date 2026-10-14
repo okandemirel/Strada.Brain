@@ -89,7 +89,7 @@ describe("framework-paths write wall", () => {
   it("does not touch non-code assets or non-Assets paths", async () => {
     for (const path of [
       "Assets/Settings/GlazePaletteConfig.asset",
-      "Assets/Art/Generated/saucer.png",
+      "Assets/Art/Generated/jug.png",
       "docs/notes.md",
       "src/whatever.cs",
     ]) {
@@ -150,8 +150,8 @@ describe("framework-paths write wall", () => {
 });
 
 describe("the wall names the module twin", () => {
-  // Measured 2026-09-07: repeated refusals on a loose script that duplicated
-  // a module copy, none naming it.
+  // Measured in a live campaign: repeated refusals on a loose script that
+  // duplicated a module copy, none naming it.
   it("points at Assets/Modules/…/Same.cs and at file_delete for the loose copy", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

@@ -928,10 +928,11 @@ export class Orchestrator {
    *
    * Authorization is a property of what the user typed, not of the instance
    * that happened to receive it. Measured 2026-08-20: goal decomposition
-   * rewrote "read /Users/okan/Downloads/SampleGame_GDD.docx" into a sub-goal
-   * that said only "read SampleGame_GDD.docx", so the sub-agent's Orchestrator
-   * could derive nothing and refused the document its task was about. Keyed by
-   * chat id, so sharing the store never widens who may read what.
+   * rewrote "read <an absolute path the user named, outside the project>" into
+   * a sub-goal that kept only the bare file name, so the sub-agent's
+   * Orchestrator could derive nothing and refused a document the user had
+   * named. Keyed by chat id, so sharing the store never widens who may read
+   * what.
    */
   private readonly authorizedPathsByChat: Map<string, readonly string[]>;
   /**
@@ -1851,7 +1852,8 @@ export class Orchestrator {
     //
     // Measured, with the threshold at "complex":
     //   "write one C# file under Assets/Scripts…"  113 chars, moderate -> direct
-    //   a multi-script test-game request           longer,    complex  -> supervisor
+    // A request the classifier rates complex (say, "add a weather service, its
+    // config and two tests") still takes the supervisor, whatever its length.
     const isDecomposable = this.goalDecomposer?.shouldDecompose(coarsePlanningPrompt) ?? false;
     const meetsComplexity = classification
       ? this.shouldActivateSupervisor(classification)
@@ -2036,8 +2038,8 @@ export class Orchestrator {
       getLogger().info("Framework knowledge section trimmed to fit the prompt budget", frameworkTrim);
     }
     // Live section alone was a NAME LIST: namespaces and 40-per-namespace class
-    // names, no usage contracts. Measured 2026-08-23 (the test game): a run given
-    // only that invented its own module shapes — Models/Systems folders, a
+    // names, no usage contracts. Measured 2026-08-23: a run given only that
+    // invented its own module shapes — Models/Systems folders, a
     // hand-rolled config — because nothing in context showed how ModuleConfig,
     // [Inject], [StradaSystem] or EntityMediator actually wire. The static
     // knowledge carries those contracts; the live list carries the current
@@ -3082,7 +3084,7 @@ export class Orchestrator {
     status: TerminalStatus | undefined,
   ): MessageKey | undefined {
     // The table lives beside terminalKeyOf, which reads the same reasons into
-    // the key a task records (GDD-drift W01); the sentence is unchanged.
+    // the key a task records; the sentence is unchanged.
     return terminalMessageKeyOf(reason, status, () => this.quotaStopped());
   }
 
@@ -3172,10 +3174,10 @@ export class Orchestrator {
    * Two callers: the channel wiring, with the paths a person typed in the
    * message that just arrived, and delegation, which carries the parent's set
    * into a run that did not receive that message. Measured 2026-08-20: a
-   * delegated worker started with an empty map and refused
-   * /Users/okan/Downloads/SampleGame_GDD.docx, the document the task was about.
-   * Delegation only ever hands down what the parent already holds, so a worker
-   * cannot authorize itself.
+   * delegated worker started with an empty map and refused a document outside
+   * the project that the user had named in the request. Delegation only ever
+   * hands down what the parent already holds, so a worker cannot authorize
+   * itself.
    */
   seedUserAuthorizedPaths(chatId: string, paths: readonly string[]): void {
     rememberUserAuthorizedPaths(this.authorizedPathsByChat, chatId, paths);
@@ -4604,7 +4606,7 @@ export class Orchestrator {
       timeoutGuard.clear();
       logProviderCall("turn", provider, turnStartedAt, { response }, {
         // Where the input tokens come from: measured 2026-09-07 21:56, the
-        // FIRST turn of a sprint carried 48 490 input tokens.
+        // FIRST turn of a run carried 48 490 input tokens.
         promptChars: effectivePrompt?.length ?? 0,
         messages: session?.messages?.length ?? 0,
         tools: toolDefinitions?.length ?? 0,
@@ -4816,7 +4818,7 @@ export class Orchestrator {
         // A destructive ACT is refused outright; a command that merely carries
         // an execution SHAPE (a subshell, an interpreter one-liner) goes to the
         // reviewer, which can read what it actually does. Refusing the shape
-        // unread cost a sprint its turn for `ls … && file … && python3 -c
+        // unread cost a run its turn for `ls … && file … && python3 -c
         // <read the image's size>` — a measurement the agent could have
         // written to a file and run anyway (measured live 2026-09-12 05:03).
         // No allowlist match skips this: the allowlist used to, because the
@@ -5249,9 +5251,9 @@ export class Orchestrator {
     reason: string,
   ): ToolResult {
     // A rejection that names no alternative sends the run back to the same
-    // rejected shape. Measured 2026-08-24 (test-game overnight): a run kept
-    // re-submitting `python3 -c` to massage level JSON — each rejection said
-    // only "looks destructive", so the loop never taught itself the tool route.
+    // rejected shape. Measured 2026-08-24: a run kept re-submitting
+    // `python3 -c` to rewrite a JSON data file — each rejection said only
+    // "looks destructive", so the loop never taught itself the tool route.
     const guidance = /python\d?\s+-c\b|node\s+-e\b|perl\s+-e\b/i.test(reason + "")
       ? " Inline interpreters are always refused in this mode. Do the same work with the file tools: file_read to inspect, file_write to create or replace, file_edit for targeted changes."
       : " Choose a safer bounded operation and continue without waiting for user approval.";

@@ -1,14 +1,9 @@
 /**
  * A prefab nothing references is invisible.
  *
- * Measured 2026-08-22 on a project whose PlayMode suite was all green: a
- * folder of prefabs and sprites, a prefab config declaring GameObject fields —
- * and no .asset instance of it anywhere, so nothing held a reference to a
- * single prefab at run time. A near-empty scene, and every captured frame was
- * the same empty background.
- *
- * Every rule in the conformance set passed. The tests passed. The game did not
- * exist.
+ * A ScriptableObject config that declares prefab fields but has no .asset
+ * instance leaves every prefab unreferenced at run time: conformance rules and
+ * tests can all pass while nothing ever spawns.
  */
 
 import { describe, expect, it } from "vitest";
@@ -35,27 +30,27 @@ function project(opts: {
   assetReferencingIt: boolean;
 }): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "unbound-prefabs-"));
-  const moduleRoot = join(root, "Assets", "Modules", "DioramaModule");
+  const moduleRoot = join(root, "Assets", "Modules", "ApiaryModule");
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
 
   // The module's own config, wired, so only the prefab rule can object.
-  writeFileSync(join(scripts, "DioramaModuleConfig.cs"), "public class DioramaModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Game.Modules.Diorama.asmdef"), '{"name":"Game.Modules.Diorama"}');
-  writeFileSync(join(moduleRoot, "DioramaModuleConfig.asset"), "%YAML 1.1");
+  writeFileSync(join(scripts, "ApiaryModuleConfig.cs"), "public class ApiaryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Modules.Apiary.asmdef"), '{"name":"Game.Modules.Apiary"}');
+  writeFileSync(join(moduleRoot, "ApiaryModuleConfig.asset"), "%YAML 1.1");
   const tests = join(moduleRoot, "Tests", "Runtime");
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, "Game.Modules.Diorama.Tests.asmdef"), '{"name":"Game.Modules.Diorama.Tests"}');
-  writeFileSync(join(tests, "DioramaTests.cs"), "[Test] public void It() {}");
+  writeFileSync(join(tests, "Game.Modules.Apiary.Tests.asmdef"), '{"name":"Game.Modules.Apiary.Tests"}');
+  writeFileSync(join(tests, "ApiaryTests.cs"), "[Test] public void It() {}");
 
-  const configPath = join(scripts, "DioramaPrefabsConfig.cs");
+  const configPath = join(scripts, "HiveSpawnConfig.cs");
   writeFileSync(
     configPath,
     opts.prefabFields
-      ? "public class DioramaPrefabsConfig : ScriptableObject {\n" +
-          "    [SerializeField] private GameObject _kitePrefab;\n" +
-          "    [SerializeField] private GameObject _barrelPrefab;\n}"
-      : "public class DioramaPrefabsConfig : ScriptableObject {\n" +
+      ? "public class HiveSpawnConfig : ScriptableObject {\n" +
+          "    [SerializeField] private GameObject _smokerPrefab;\n" +
+          "    [SerializeField] private GameObject _frameRackPrefab;\n}"
+      : "public class HiveSpawnConfig : ScriptableObject {\n" +
           "    [SerializeField] private int _spawnBudget;\n}",
   );
   // Unity records a script's identity in its .meta, and an .asset points at that
@@ -64,14 +59,14 @@ function project(opts: {
 
   if (opts.assetReferencingIt) {
     writeFileSync(
-      join(moduleRoot, "DioramaPrefabs.asset"),
+      join(moduleRoot, "HiveSpawn.asset"),
       `%YAML 1.1\n  m_Script: {fileID: 11500000, guid: ${GUID}, type: 3}\n`,
     );
   }
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
-  writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+  writeFileSync(join(scenes, "Apiary.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
 
   return { root, configPath };
 }
@@ -89,7 +84,7 @@ describe("a config that holds prefabs and was never instantiated", () => {
     const prompt = promptFor(root, configPath);
 
     expect(prompt).toContain("[STRADA PREFABS UNBOUND]");
-    expect(prompt).toContain("DioramaPrefabsConfig");
+    expect(prompt).toContain("HiveSpawnConfig");
   });
 
   it("stays quiet once an asset points at it", () => {
@@ -186,9 +181,9 @@ describe("a config that holds prefabs and was never instantiated", () => {
     const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
     writeFileSync(
       configPath,
-      "public class DioramaPrefabsConfig : ScriptableObject {\n" +
-        "    // [SerializeField] private GameObject _kitePrefab;\n" +
-        "    /* [SerializeField] private GameObject _barrelPrefab; */\n" +
+      "public class HiveSpawnConfig : ScriptableObject {\n" +
+        "    // [SerializeField] private GameObject _smokerPrefab;\n" +
+        "    /* [SerializeField] private GameObject _frameRackPrefab; */\n" +
         "    [SerializeField] private int _spawnBudget;\n}",
     );
 
@@ -199,7 +194,7 @@ describe("a config that holds prefabs and was never instantiated", () => {
     const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
     writeFileSync(
       configPath,
-      "public sealed class DioramaPrefabsConfig : ModuleConfig {\n    [SerializeField] private GameObject _kitePrefab;\n}",
+      "public sealed class HiveSpawnConfig : ModuleConfig {\n    [SerializeField] private GameObject _smokerPrefab;\n}",
     );
 
     expect(promptFor(root, configPath)).toContain("[STRADA PREFABS UNBOUND]");

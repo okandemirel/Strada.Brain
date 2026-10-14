@@ -1,5 +1,5 @@
 /**
- * The system's acceptance files (GDD-drift plan W05): the C# a Unity project
+ * The system's acceptance files: the C# a Unity project
  * carries so a milestone's own GDD rows are judged by checks the system owns.
  *
  * In the measured campaign six of six milestones went green on prose. The checks
@@ -2212,10 +2212,11 @@ function balanced(code: string): boolean {
 /**
  * Whether a writer's check may run. It refuses what cannot fail or what does
  * not test the game: forbidden constructs, an assertion on reflection or
- * literals alone (the measured campaign's P1 guardrail asserted
- * `typeof(IX).GetMethods().Length == 1`), a harness coroutine that is never
- * yielded, a part that escapes its method, an input row that does not act
- * through the harness, a numeric row that writes its own assertion.
+ * literals alone (a check asserting `typeof(IX).GetInterfaces().Length >= 2`
+ * is decided by the declaration, not by anything the game does), a harness
+ * coroutine that is never yielded, a part that escapes its method, an input
+ * row that does not act through the harness, a numeric row that writes its own
+ * assertion.
  */
 export function lintAcceptanceBody(row: RequirementRow, check: AcceptanceCheckBody): AcceptanceLintResult {
   const problems: string[] = [];

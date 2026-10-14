@@ -2,9 +2,10 @@
  * This package is ESM ("type": "module"): a bare `require(` in source code is
  * a ReferenceError at run time. Inside a try/catch it is a silent false.
  *
- * Measured 2026-09-07: sprite-generate.ts answered "no local model" for a
- * whole campaign, and spec-scope.ts never found the GDD, for exactly this
- * reason — while every test passed, because the test runner shims require.
+ * Measured in a live campaign: sprite-generate.ts reported no local model and
+ * spec-scope.ts never found a project's design document, both because a bare
+ * require() inside try/catch threw into the catch. Every test still passed,
+ * because the test runner shims require.
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";

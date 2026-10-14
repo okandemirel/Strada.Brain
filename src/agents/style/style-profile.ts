@@ -35,24 +35,31 @@ export const STYLE_FAMILIES = [
 
 export const RENDER_PIPELINES = ["prerendered-frames", "realtime-3d", "sprite-native"] as const;
 
+/**
+ * The outline colour a profile gets when the document names none. Neutral by
+ * decision: the previous default was the exact outline colour of one project's
+ * character, so every other game inherited that project's line.
+ */
+export const DEFAULT_OUTLINE_COLOR = "#000000";
+
 export const styleProfileSchema = z.object({
   /** Broad look family driving material/proportion defaults. */
   family: z.enum(STYLE_FAMILIES),
   /** How the game should ship its characters/props. */
   pipeline: z.enum(RENDER_PIPELINES),
   proportions: z.object({
-    /** Body width factor (1.0 = natural). */
-    plump: z.number().min(0.5).max(1.5).default(1.0),
-    /** Head-bone scale (1.0 = natural; >1 for chibi). */
+    /** Body width factor (1.0 = natural, untouched silhouette). */
+    widthScale: z.number().min(0.5).max(1.5).default(1.0),
+    /** Head-bone scale (1.0 = natural). */
     headScale: z.number().min(0.5).max(2).default(1.0),
-  }).default({ plump: 1.0, headScale: 1.0 }),
+  }).default({ widthScale: 1.0, headScale: 1.0 }),
   /** Named palette (hex) — the game's color anchors, primary first. */
   palette: z.array(z.string().regex(/^#[0-9a-f]{6}$/i)).min(1).max(8),
   outline: z.object({
     /** Inverted-hull width factor; 0 disables (realistic looks). */
     width: z.number().min(0).max(3).default(0),
-    color: z.string().regex(/^#[0-9a-f]{6}$/i).default("#1f1418"),
-  }).default({ width: 0, color: "#1f1418" }),
+    color: z.string().regex(/^#[0-9a-f]{6}$/i).default(DEFAULT_OUTLINE_COLOR),
+  }).default({ width: 0, color: DEFAULT_OUTLINE_COLOR }),
   /** Shading approach the material stage should target. */
   shading: z.enum(["glossy", "flat", "pbr-realistic", "unlit"]),
   /** Games/media the GDD cites as visual references (for the agent's context). */
@@ -114,7 +121,7 @@ export function describeStyleForPrompt(profile: StyleProfile): string {
 }
 
 export interface FamilyDefaults {
-  plump: number;
+  widthScale: number;
   headScale: number;
   outlineWidth: number;
   shading: StyleProfile["shading"];
@@ -123,18 +130,21 @@ export interface FamilyDefaults {
 export function familyDefaults(family: StyleProfile["family"]): FamilyDefaults {
   switch (family) {
     case "toon-casual":
-      return { plump: 1.2, headScale: 1.22, outlineWidth: 1.0, shading: "glossy" };
+      // What the word implies and nothing more: a drawn line and flat cel
+      // shading. Body shape and finish come from the document alone — these
+      // numbers were once the proportions of one project's character.
+      return { widthScale: 1.0, headScale: 1.0, outlineWidth: 0.8, shading: "flat" };
     case "pixel":
-      return { plump: 1.0, headScale: 1.0, outlineWidth: 0, shading: "unlit" };
+      return { widthScale: 1.0, headScale: 1.0, outlineWidth: 0, shading: "unlit" };
     case "lowpoly":
-      return { plump: 1.0, headScale: 1.05, outlineWidth: 0.5, shading: "flat" };
+      return { widthScale: 1.0, headScale: 1.05, outlineWidth: 0.5, shading: "flat" };
     case "painterly":
-      return { plump: 1.0, headScale: 1.0, outlineWidth: 0.3, shading: "glossy" };
+      return { widthScale: 1.0, headScale: 1.0, outlineWidth: 0.3, shading: "glossy" };
     case "realistic":
-      return { plump: 1.0, headScale: 1.0, outlineWidth: 0, shading: "pbr-realistic" };
+      return { widthScale: 1.0, headScale: 1.0, outlineWidth: 0, shading: "pbr-realistic" };
     case "unspecified":
     default:
       // No squash, no outline, no gloss: nothing the document did not ask for.
-      return { plump: 1.0, headScale: 1.0, outlineWidth: 0, shading: "flat" };
+      return { widthScale: 1.0, headScale: 1.0, outlineWidth: 0, shading: "flat" };
   }
 }

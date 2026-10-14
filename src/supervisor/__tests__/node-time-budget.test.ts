@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { SupervisorDispatcher } from "../supervisor-dispatcher.js";
 
 /**
- * Measured 2026-09-03 on Sprint 7 (the delivery sprint): one node spent 70
- * minutes on 12 headless compiles, hit the one-hour node timeout, was killed
- * with nothing salvaged, and took 8 dependent nodes down with it. The node
- * was never told it had a deadline.
+ * A node that was never told its deadline ran past the per-node timeout, was
+ * killed with nothing salvaged, and its dependent nodes failed with it as
+ * dependency-failed. The node must be told its budget so it can land a
+ * smaller complete increment first.
  */
 describe("node time budget", () => {
   function dispatcherWith(nodeTimeoutMs: number) {
@@ -18,11 +18,11 @@ describe("node time budget", () => {
     const d = dispatcherWith(3_600_000);
     const withBudget = (d as unknown as {
       withDeadlineNotice(n: unknown, ms: number): { task: string; timeBudgetNotice?: string };
-    }).withDeadlineNotice({ id: "n1", task: "Clean project structure" }, 3_600_000);
+    }).withDeadlineNotice({ id: "n1", task: "Reconcile the tide-gauge readings" }, 3_600_000);
 
     // The visible label stays exactly as planned — the monitor and the
     // narrative render it; the budget rides in its own field.
-    expect(withBudget.task).toBe("Clean project structure");
+    expect(withBudget.task).toBe("Reconcile the tide-gauge readings");
     expect(withBudget.timeBudgetNotice).toContain("TIME BUDGET:");
     expect(withBudget.timeBudgetNotice).toContain("60 minutes");
     expect(withBudget.timeBudgetNotice).toContain("smallest complete increment");

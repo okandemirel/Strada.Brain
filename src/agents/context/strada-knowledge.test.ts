@@ -255,9 +255,9 @@ describe("buildDepsContext", () => {
   }
 
   it("names the purchased library, not only the local cache, before any art is generated", () => {
-    // Measured 2026-09-07: a sprint asked unity_my_assets (the local cache,
-    // 4 packages), read "nothing fits" and generated, while the account held
-    // 511 purchased packages behind unity_my_assets_cloud.
+    // Measured in a live campaign: a worker asked only unity_my_assets (the
+    // local download cache), read "nothing fits" and generated, while the
+    // account's purchased library sat behind unity_my_assets_cloud.
     const result = buildDepsContext(makeDepsStatus());
     expect(result).toContain("Delivering a Game, Not a Library");
     expect(result).toContain("unity_my_assets_cloud");
@@ -284,7 +284,7 @@ describe("buildDepsContext", () => {
    * vault built from the checkout.
    */
   describe("where the Strada.MCP source can be read", () => {
-    const project = "/work/SampleGame";
+    const project = "/work/MarshSurvey";
     const sibling = "/work/Strada.MCP";
 
     it("lists the project's own copy when the loaded one is outside the project", () => {
@@ -394,8 +394,8 @@ describe("buildDepsContext", () => {
     it("sends a worker to the vault for the checkout's source, not to a path file_read refuses", () => {
       const status = makeDepsStatus({ modulesInstalled: false, modulesPath: null, modulesCheckout: checkout });
 
-      const withVault = buildDepsContext(status, { projectPath: "/work/SampleGame", vaultNamed: (n) => n === "Strada.Modules" });
-      const withoutVault = buildDepsContext(status, { projectPath: "/work/SampleGame", vaultNamed: () => false });
+      const withVault = buildDepsContext(status, { projectPath: "/work/MarshSurvey", vaultNamed: (n) => n === "Strada.Modules" });
+      const withoutVault = buildDepsContext(status, { projectPath: "/work/MarshSurvey", vaultNamed: () => false });
 
       for (const result of [withVault, withoutVault]) {
         expect(result).not.toContain("may be read for reference");

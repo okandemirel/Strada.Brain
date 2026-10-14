@@ -386,8 +386,8 @@ describe("framework checkouts beside this install (WP-1.2)", () => {
 
   it("does not count a package folder under Packages/Submodules that the manifest does not reference", () => {
     // Unity loads a package nested under Packages/Submodules only through a
-    // manifest file: reference. Measured on an earlier project: an untracked
-    // Strada.Modules folder there read modules:true while Unity never compiled it.
+    // manifest file: reference, so an unreferenced folder there must not read
+    // as installed: Unity never compiles it.
     const nested = join(projectDir, "Packages", "Submodules", "Strada.Modules");
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(nested, "package.json"), JSON.stringify({ name: "com.strada.modules", version: "1.0.0" }));
@@ -865,9 +865,9 @@ describe("assessStradaMcpLoadTrust", () => {
 });
 
 describe("Unity version comparison", () => {
-  it("orders 6000.3.22 above 6000.3.9 (a lexicographic sort did not)", () => {
-    const older = parseUnityVersion("6000.3.9f1")!;
-    const newer = parseUnityVersion("6000.3.22f1")!;
+  it("orders 6000.2.15 above 6000.2.8 (a lexicographic sort did not)", () => {
+    const older = parseUnityVersion("6000.2.8f1")!;
+    const newer = parseUnityVersion("6000.2.15f1")!;
     expect(compareUnityVersions(older, newer)).toBe(-1);
     expect(compareUnityVersions(newer, older)).toBe(1);
     expect(compareUnityVersions(newer, newer)).toBe(0);
@@ -884,8 +884,8 @@ describe("Unity version comparison", () => {
     expect(absent.version).toBeNull();
     expect(absent.problem).toContain("missing");
 
-    writeFileSync(join(dir, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.3.22f1\n");
-    expect(readUnityProjectVersion(dir).version).toBe("6000.3.22f1");
+    writeFileSync(join(dir, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.1.4f1\n");
+    expect(readUnityProjectVersion(dir).version).toBe("6000.1.4f1");
     rmSync(dir, { recursive: true, force: true });
   });
 });

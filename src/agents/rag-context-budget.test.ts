@@ -34,7 +34,7 @@ function ragPipelineCapped(contextMaxTokens: number) {
   }));
   const pipeline = {
     contextMaxTokens,
-    search: vi.fn(async () => [hit("Board")]),
+    search: vi.fn(async () => [hit("IrrigationScheduler")]),
     formatContext: vi.fn(() => "rag context"),
     formatContextWithSpans,
   } as unknown as IRAGPipeline;
@@ -61,7 +61,7 @@ async function build(ragPipeline: IRAGPipeline, providerContextWindow: number) {
     chatId: "chat-1",
     conversationScope: "chat-1",
     identityKey: "user-1",
-    prompt: "how does the board spawn tiles",
+    prompt: "how does the irrigation scheduler pick a valve",
     profile: null,
     providerContextWindow,
   });

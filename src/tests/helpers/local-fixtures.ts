@@ -1,6 +1,6 @@
 /**
- * Fixtures that must never enter the public repository: a real campaign's
- * export, the names of the private product a run was measured on, its design
+ * Fixtures that must never enter the public repository: a private run's own
+ * export, the names of a project built with Strada.Brain, its design
  * documents. They live in the gitignored tests/fixtures/local/ directory, and
  * a test that reads one is skipped, saying why, on a checkout that has none.
  *

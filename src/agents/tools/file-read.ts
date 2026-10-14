@@ -146,10 +146,9 @@ export class FileReadTool implements ITool {
         }
         return await readAuthorizedFile(namedPath, offset, limit);
       }
-      // The same help the ENOENT path gives. Measured 2026-08-21, 15:38: two
-      // reads thirty seconds apart, one answered "that name is at: ..." and the
-      // other bare — the difference being whether the missing file's PARENT
-      // existed, which is nothing the caller did differently.
+      // The same help the ENOENT path gives: a miss whose parent directory is
+      // also missing came down this branch with no same-name hint, though the
+      // caller did nothing different.
       const guardMessage = readErrorFor(pathCheck.error, relPath);
       const guardHelp = guardMessage.startsWith("file not found")
         ? await missHelp(context.projectPath, pathResolve(context.projectPath, relPath))
@@ -444,30 +443,21 @@ async function readAuthorizedFile(
  * Is the size gate meaningful for this file?
  *
  * The gate exists to bound how much text reaches the model. A .docx or .pdf is a
- * compressed container: measured, a 1.26 MB Word file holds 77 KB of text, so
- * checking the archive against a text budget refuses a document that is well
- * within it. Containers are judged on what comes out of them instead.
+ * compressed container whose archive size says little about the text inside it,
+ * so checking the archive against a text budget refuses documents well within
+ * it. Containers are judged on what comes out of them instead.
  */
 function isRichDocument(path: string): boolean {
   return RICH_DOCUMENT_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext));
 }
 
 /**
- * The guard speaks for writers.
- *
- * A path with no parent directory is, to a reader, simply a file that is not
- * there — and "Parent directory does not exist" sends the agent looking for a
- * directory problem it does not have. Measured across two live runs: five
- * reads answered that way, none of them about a directory. Confinement keeps
- * its own wording, because that one means what it says.
- */
-/**
  * What to add to a miss: the name it asked for, wherever that name actually is,
  * before the names beside where it looked.
  *
- * Measured 2026-08-21: six of seven misses in one run named a file that existed
- * under exactly that name in a different directory, and the neighbouring names
- * described a directory the file had never been in.
+ * Measured live: most misses named a file that existed under exactly that name
+ * in another directory, and the neighbouring names described a directory the
+ * file had never been in.
  */
 async function missHelp(projectRoot: string, fullPath: string): Promise<string> {
   const elsewhere = await sameNameElsewhere(projectRoot, fullPath);
@@ -476,6 +466,15 @@ async function missHelp(projectRoot: string, fullPath: string): Promise<string> 
     : await nearbyNames(fullPath);
 }
 
+/**
+ * The guard speaks for writers.
+ *
+ * A path with no parent directory is, to a reader, simply a file that is not
+ * there — and "Parent directory does not exist" sends the agent looking for a
+ * directory problem it does not have. Measured live: reads answered that way
+ * were never about a directory. Confinement keeps its own wording, because that
+ * one means what it says.
+ */
 function readErrorFor(guardError: string | undefined, relPath: string): string {
   if (guardError === "Parent directory does not exist") return `file not found: ${relPath}`;
   return guardError ?? "path rejected";

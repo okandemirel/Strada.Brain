@@ -1,11 +1,10 @@
 /**
  * How a run ended, as data rather than as a sentence.
  *
- * In a measured campaign every milestone tip but one carried the system's own
- * "task_stuck" stamp, and all six went green: the only record of how a run
- * ended was the localized text it showed the user, and the gate read prose.
- * The key is carried from the agent runtime to the task's verification
- * (GDD-drift plan W01); the scope gate folds a run's keys into the worst one.
+ * When the only record of how a run ended was the localized notice shown to
+ * the user, a gate reading prose could pass a run the system itself had
+ * stamped task_stuck. The key is carried from the agent runtime to the task's
+ * verification; the scope gate folds a run's keys into the worst one.
  */
 
 export type TerminalKey =

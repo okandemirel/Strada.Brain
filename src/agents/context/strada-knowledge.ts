@@ -51,27 +51,27 @@ A Strada project is built from MANY modules, one per bounded concern, not one
 module for the whole game. Decide the boundaries from the work itself before
 writing code, and create a module for each.
 
-- A module owns one concern end to end: input, camera, board, scoring, audio,
-  save/load, UI shell. If two parts change for unrelated reasons, they are two
-  modules.
+- A module owns one concern end to end: input, camera, patrol routes, inventory,
+  dialogue, save/load, UI shell. If two parts change for unrelated reasons, they
+  are two modules.
 - A module is a compilation boundary: its own folder under \`Assets/Modules/\`,
   its own \`.asmdef\`, its own \`*ModuleConfig\`, its own \`Tests/Runtime\` and
   \`Tests/Editor\`. Registering it with the framework is what makes it exist.
 - Depend through interfaces registered in \`ModuleConfig.Configure(IModuleBuilder)\`, never by
   reaching into another module's internals. A module that cannot be compiled
   without three others is not a module.
-- Go as fine as the concerns genuinely are. A grid game is not "a game module":
-  it is board state, match detection, gravity/refill, scoring, input, camera and
-  presentation — each with its own lifecycle and its own reasons to change.
+- Go as fine as the concerns genuinely are. A stealth game is not "a game module":
+  it is guard patrols, perception, inventory, dialogue, save/load, input and
+  camera — each with its own lifecycle and its own reasons to change.
 - A top-level concern is a top-level module: it sits directly under
-  \`Assets/Modules/\` — \`Assets/Modules/InputModule/\`, \`Assets/Modules/BoardModule/\`.
+  \`Assets/Modules/\` — \`Assets/Modules/PatrolModule/\`, \`Assets/Modules/InventoryModule/\`.
 - Nest a submodule only when it is genuinely PART OF its parent's concern and
-  ships with it — \`BoardModule/GridRenderingModule/\` is reasonable if grid
-  rendering exists only to serve the board and would be meaningless beside it.
+  ships with it — \`PatrolModule/WaypointModule/\` is reasonable if waypoint
+  authoring exists only to serve patrol routes and would be meaningless beside it.
   A submodule that another module could equally depend on belongs at the top
   level instead.
 - Do NOT wrap everything in a folder named after the game or the feature set.
-  \`Assets/Modules/<Game>Module/BoardModule/\` is wrong: <Game> is the game,
+  \`Assets/Modules/<Game>Module/PatrolModule/\` is wrong: <Game> is the game,
   not a concern, so it owns nothing and only hides its children. The game is the
   set of modules, not a module containing them.
 - One module holding the whole feature set is the failure this rule exists to
@@ -397,13 +397,13 @@ export interface VaultAvailability {
  * always registers — so the agent was told to search a vault that could only
  * answer with Strada.Brain's files.
  *
- * Measured: `vault_search` for "ModuleConfig Service SystemBase IComponent
- * EntityMediator" came back `no vault hits`, and another returned five hits from
- * Strada.Brain's own analysis notes with the hint "No vault indexed for
- * projectPath". The agent tried it two or three times per run, learned it was
- * useless, and fell back to raw scanning: one run spent 105 file_read, 21
- * list_directory and 12 glob_search calls against a project whose 668 files —
- * 341 of them Strada.Core sources — were sitting indexed and unused.
+ * Measured in a live campaign: `vault_search` for core framework type names came
+ * back `no vault hits`, and another query answered only from Strada.Brain's own
+ * analysis notes, with the hint "No vault indexed for projectPath". The agent
+ * tried it a few times per run, learned it was useless, and fell back to raw
+ * scanning: dozens of file_read, list_directory and glob_search calls against a
+ * project whose files, Strada.Core sources included, were sitting indexed and
+ * unused.
  *
  * So the hint now carries the counts. A claim the agent can check is worth more
  * than an instruction it has already learned to distrust, and when nothing is
@@ -948,10 +948,10 @@ export function buildDepsContext(status?: StradaDepsStatus, options: DepsContext
     lines.push(
       `\n### Delivering a Game, Not a Library (CRITICAL)`,
       `Compiling C# is the start of the job, not the end. A project with modules, assemblies and passing tests and no scene is a library; the user asked for a game.`,
-      `1. Before generating ANY art, model, texture or tool asset, ask what the user already owns: \`unity_my_assets_cloud\` (action 'purchases' or 'search') is the full purchased library — hundreds of packages when the Unity Link is set up — and 'download' fetches one; \`unity_my_assets\` sees only the few already downloaded to this machine. A package the user owns beats one that has to be made. Measured 2026-09-07: a sprint asked the local cache, read "nothing fits" and generated, while the account held 511 packages.`,
+      `1. Before generating ANY art, model, texture or tool asset, ask what the user already owns: \`unity_my_assets_cloud\` (action 'purchases' or 'search') is the full purchased library — hundreds of packages when the Unity Link is set up — and 'download' fetches one; \`unity_my_assets\` sees only the few already downloaded to this machine. A package the user owns beats one that has to be made. Measured in a live campaign: a run asked only the local cache, read "nothing fits" and generated art while the purchased library sat unasked.`,
       `2. If one fits, bring it in with \`unity_import_asset_package\`. It preserves each asset's .meta, which is what keeps the package's own references working — a copy without them arrives wired to nothing. Only generate an asset when nothing owned fits.`,
       `3. A ModuleConfig CLASS does nothing until a ModuleConfig ASSET exists for it: the bootstrapper serializes asset references, not types.`,
-      `4a. To bind art and place prefabs, use \`unity_bind_sprite\` and \`unity_place_prefab\`: they edit the serialized files in Unity's own shape, need no Editor, and verify what they wrote — the delivery measurement counts exactly what they produce. Measured 2026-09-07: eight sprints failed "the shipped scenes render NOTHING" for want of them.`,
+      `4a. To bind art and place prefabs, use \`unity_bind_sprite\` and \`unity_place_prefab\`: they edit the serialized files in Unity's own shape, need no Editor, and verify what they wrote — the delivery measurement counts exactly what they produce.`,
       `4. NEVER hand-write a .unity scene or a .asset file. Measured: a run wrote scene YAML whose _gameConfig carried the right guid and the right fileID and \`type: 3\` instead of \`type: 2\`. Every static check passed — the reference is present and non-zero — and at runtime the bootstrapper saw null and logged "No configuration assigned!". One number, invisible on inspection, and the game does not start. \`unity_scene_build\` writes it correctly.`,
       `5. Use \`unity_scene_build\` to assemble the scene from a spec: it creates the assets, GameObjects and prefabs, assigns serialized fields (including GameBootstrapper._gameConfig), and verifies on disk that each reference is a real link rather than a {fileID: 0} that looks like one. It needs no Editor open.`,
       `6. Then call \`unity_playmode_verify\` to actually run the game headlessly. A wired scene is not a running one — a bootstrapper can initialize into a module that throws on its first frame, and the scene file reads identically either way.`,

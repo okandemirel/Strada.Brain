@@ -95,9 +95,10 @@ export function allProvidersCoolingDownMs(): number {
       // for a short grace. Measured live 2026-09-03 18:39: three accounts
       // held FreeUsageLimitError 429s, their short cooldowns lapsed between
       // the failing probe and the settle, the outage measure read 0, and the
-      // campaign charged Sprint 7 its second attempt for a wall it never got
-      // to work behind. Beyond the grace the member is probe-worthy (see
-      // LAPSED_DOWN_GRACE_MS) — only a call can flip it healthy again.
+      // campaign charged the running sprint a second attempt for a wall it
+      // never got to work behind. Beyond the grace the member is
+      // probe-worthy (see LAPSED_DOWN_GRACE_MS) — only a call can flip it
+      // healthy again.
       if (entry.status === "down" && now - entry.cooldownUntil < LAPSED_DOWN_GRACE_MS) {
         soonestActive = Math.min(soonestActive, entry.cooldownUntil + LAPSED_DOWN_GRACE_MS);
         continue;
@@ -169,12 +170,10 @@ const OUTAGE_NAMED_LIMIT = 4;
 /**
  * The outage, in a clause that names its CAUSE.
  *
- * Audited 2026-09-04: the campaign parked itself with
- * "⏸️ paused by a provider outage. Cause: Sprint 7 blocked after 2 attempts:
- * Completed: 1. **Varsayım**: …" — the first line said outage and the cause
- * line quoted 200 characters of the agent's own prose, so the sprint read as
- * having failed on its merits. The real cause was one account's monthly quota
- * (17 days) and the other's ~4h wall, and nothing said so.
+ * Audited 2026-09-04: a campaign paused for a provider outage, but the cause
+ * line quoted the first 200 characters of the agent's own prose, so the sprint
+ * read as having failed on its merits. The real cause was one account's
+ * monthly quota and another's multi-hour wall, and nothing said so.
  *
  * Returns "" when nothing is measurable, so a caller can fall back rather
  * than print an empty accusation.

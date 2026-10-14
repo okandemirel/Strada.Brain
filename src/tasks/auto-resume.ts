@@ -26,10 +26,10 @@ export interface AutoResumeDecision {
  * Three answers, and the middle one is the point. Replaying a tree
  * (prepareTreeForRetry keeps the completed nodes and resets the rest) is right
  * while rounds are still finishing nodes. It is useless once they are not:
- * measured 2026-08-22, run 40 resumed once, the same two nodes failed the same
- * way, and the run stopped — correctly, under the old rule, but a round that
- * repeats itself is exactly the moment to plan differently rather than to give
- * up. Replanning throws the tree away and decomposes again with the failure
+ * measured in a live campaign, a goal tree resumed once, the same nodes failed
+ * the same way, and the run stopped — correctly, under the old rule, but a
+ * round that repeats itself is exactly the moment to plan differently rather
+ * than to give up. Replanning throws the tree away and decomposes again with the failure
  * reasons as input, which is the one thing a replay cannot do.
  *
  * The bounds stay: three replays, two fresh plans. A third identical outcome

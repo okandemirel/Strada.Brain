@@ -1,10 +1,10 @@
 /**
  * A key the provider refused, costing one attempt instead of every attempt.
  *
- * Measured 2026-08-23 on run 55: a provider whose key had been revoked failed
- * preflight and was reported as failed — then was tried six more times during
- * the run. Each 401 was classified "non-retryable", which ended the whole chain
- * call rather than that provider's turn in it, and one of them blocked the task.
+ * Measured 2026-08-23: a provider whose key had been revoked failed preflight
+ * and was reported as failed — then was tried again and again during the run.
+ * Each 401 was classified "non-retryable", which ended the whole chain call
+ * rather than that provider's turn in it, and one of them blocked the task.
  * Nothing recorded the provider as unusable, so every call rediscovered it.
  *
  * A 401 is about this provider's credential and says nothing about the sibling

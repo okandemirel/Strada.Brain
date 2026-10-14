@@ -6,11 +6,10 @@
  *                         (adding the renderer if the object has none)
  *   unity_place_prefab  — put a prefab instance into a scene as a root object
  *
- * Measured 2026-09-07: eight remediation attempts, hours each, on "the shipped
- * scenes render NOTHING: 0 renderer components … 3 scripts call
- * CreatePrimitive". The agents had real sprites and real prefabs and no way to
- * connect them except hand-written YAML (forbidden — a reference with the
- * wrong `type:` reads as present and is null at runtime) or an Editor batch
+ * Measured in a live campaign: the delivery gate kept refusing scenes that
+ * placed no renderers while real sprites and prefabs sat on disk. There was no
+ * way to connect them except hand-written YAML (forbidden — a reference with
+ * the wrong `type:` reads as present and is null at runtime) or an Editor batch
  * (unity_scene_build, minutes per run, coupled to the compile). These edit the
  * serialized files directly, in Unity 6's own shapes, and verify by re-reading
  * what they wrote — the same way the delivery measurement will read it.
@@ -116,7 +115,7 @@ function writeAtomic(path: string, text: string): void {
 
 // ─── SpriteRenderer ───────────────────────────────────────────────────────
 
-/** Unity 6000.3 SpriteRenderer, as the Editor serializes it (copied from a project file, 2026-09-07). */
+/** A Unity 6000.3 SpriteRenderer as the Editor serializes a freshly added one. */
 export function spriteRendererDoc(
   fileId: string,
   gameObjectId: string,
@@ -206,7 +205,7 @@ export interface SpriteTableEntry {
  *   internalIDToNameTable:
  *   - first:
  *       213: 21300002       # 213 = Sprite; the value is the sub-asset's fileID
- *     second: hero_idle
+ *     second: lamp_glow_a
  *
  * A Single-mode texture records one entry (fileID 21300000) or, in older
  * importer versions, none at all; a SHEET records one per slice, each with its

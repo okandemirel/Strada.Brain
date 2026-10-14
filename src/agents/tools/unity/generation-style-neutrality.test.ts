@@ -1,10 +1,11 @@
 /**
- * A generator asks for what THIS project's document said, or for nothing.
+ * A generator asks for what THIS project's design document said, or for
+ * nothing.
  *
- * The sprite and mesh fallbacks carried one game's art direction, a fixed
- * character look written into each tool, whatever the document asked for and
- * whatever the asset was, so a StoneBridge was generated as a character in
- * that look (Codex 2026-09-12 T#13).
+ * The sprite and mesh fallbacks each carried one art direction, written into
+ * the tool as a fixed character look: it was dispatched whatever the document
+ * asked for and whatever the asset was, so an inanimate subject came back as
+ * a character in that look (Codex 2026-09-12 T#13).
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -13,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../../../utils/logger.js";
 import { describeStyleForPrompt, saveStyleProfile, loadStyleProfile } from "../../style/style-profile.js";
-import { SpriteGenerateTool, defaultNegative } from "./sprite-generate.js";
+import { SpriteGenerateTool, defaultNegative, finishGrid, readsAsReport, styleNotesForPrompt } from "./sprite-generate.js";
 
 beforeAll(() => {
   createLogger("error", "test.log");
@@ -29,7 +30,7 @@ function projectWith(profile?: Parameters<typeof saveStyleProfile>[1]): string {
 const pixelProfile = {
   family: "pixel" as const,
   pipeline: "sprite-native" as const,
-  proportions: { plump: 1.0, headScale: 1.0 },
+  proportions: { widthScale: 1.0, headScale: 1.0 },
   palette: ["#101020"],
   outline: { width: 0, color: "#2d3a4f" },
   shading: "unlit" as const,
@@ -40,10 +41,9 @@ const pixelProfile = {
 describe("describeStyleForPrompt", () => {
   it("says what the profile says, and nothing about families it does not name", () => {
     const said = describeStyleForPrompt(pixelProfile as never);
-    expect(said).toContain("pixel style");
-    expect(said).toContain("unlit flat colours");
-    expect(said).toContain("monochrome, no outline");
-    expect(said).not.toMatch(/casual|glossy|character/i);
+    // Exactly what the profile says, in order, and nothing else: a forbidden
+    // word list passes any wording it does not happen to name.
+    expect(said).toBe("pixel style, unlit flat colours, monochrome, no outline, 1-bit look");
   });
 
   it("says nothing at all for an unspecified family with no notes", () => {
@@ -65,17 +65,19 @@ describe("the sprite generator's default prompt", () => {
   };
 
   it("asks for nothing in particular when the project has no style profile", async () => {
-    const prompt = await promptFor(projectWith());
-    expect(prompt).toContain("stone bridge");
-    expect(prompt).not.toMatch(/casual|glossy|character|outline/i);
+    // The whole prompt, pinned: the subject, plainly, and no look at all.
+    expect(await promptFor(projectWith())).toBe(
+      "game sprite of stone bridge, single subject centered, isolated on plain white background, studio quality",
+    );
   });
 
-  it("honours a profile that asks for the opposite of the old default", async () => {
+  it("honours a profile's own family and notes", async () => {
     const root = projectWith(pixelProfile as never);
     expect(loadStyleProfile(root)?.family).toBe("pixel");
-    const prompt = await promptFor(root);
-    expect(prompt).toContain("pixel-art");
-    expect(prompt).not.toMatch(/glossy/i);
+    expect(await promptFor(root)).toBe(
+      "16-bit pixel-art game sprite of stone bridge, limited palette, crisp pixels, single subject centered, " +
+        "plain background; monochrome, no outline, 1-bit look",
+    );
   });
 });
 
@@ -129,5 +131,69 @@ describe("the request must not contradict the project's own direction (Codex 202
     const kept = await defaultNegative(projectWith(pixelProfile as never), true);
     expect(kept).not.toMatch(/dark background|scenery/);
     expect(await defaultNegative(projectWith(pixelProfile as never), false)).toMatch(/dark background/);
+  });
+});
+
+/**
+ * The placeholder shapes are finished the same way: the light band across the
+ * top used to be drawn on every sprite, so a project with no profile at all
+ * got a glossy one.
+ */
+describe("the placeholder sprite's gloss band", () => {
+  const base = { r: 100, g: 100, b: 100 };
+  const grid = (): ({ r: number; g: number; b: number } | null)[][] =>
+    Array.from({ length: 20 }, () => Array.from({ length: 20 }, () => ({ ...base })));
+  const topBandIsLit = (g: ReturnType<typeof grid>): boolean =>
+    g.slice(0, 5).some((row) => row.some((px) => px !== null && px.r > base.r));
+
+  it("is drawn for a profile that asks for gloss, and for nobody else", () => {
+    const glossy = grid();
+    finishGrid(glossy, base, { outlineWidth: 0, gloss: true });
+    expect(topBandIsLit(glossy)).toBe(true);
+
+    for (const opts of [undefined, { outlineWidth: 0 }, { outlineWidth: 0, gloss: false }]) {
+      const g = grid();
+      finishGrid(g, base, opts);
+      expect(topBandIsLit(g), JSON.stringify(opts)).toBe(false);
+    }
+  });
+});
+
+/**
+ * A project's art-direction notes travel into every default prompt, and a run
+ * can append its own bookkeeping to them. What is dropped is decided by the
+ * FORM of a sentence — a path, an identifier, a proportion, a bare figure, a
+ * progress mark — not by a list of words from one project's reports.
+ */
+describe("readsAsReport", () => {
+  it.each([
+    "Repainted the atlas at Assets/Art/tiles.png.",
+    "paletteIndex now matches the importer.",
+    "tile_width was raised everywhere.",
+    "Covered 93% of the shelves.",
+    "Re-pointed 12 of 30 bindings.",
+    "Finished on run 418.",
+    "See https://example.invalid/brief for the rest.",
+    "Atlas re-cut \u2713",
+    "TODO: pick the dusk palette.",
+  ])("reads as a report: %s", (sentence) => {
+    expect(readsAsReport(sentence)).toBe(true);
+  });
+
+  it.each([
+    "Sun-bleached sandstone under indigo ink linework.",
+    "Hand-painted goods on every shelf.",
+    "A 1-bit look, 8 colours at most.",
+    "Overcast natural lighting, no studio light.",
+    "Thick 2 pixel outlines, dusk palette.",
+  ])("reads as a look: %s", (sentence) => {
+    expect(readsAsReport(sentence)).toBe(false);
+  });
+
+  it("keeps the look sentences of a note and drops the reporting ones", () => {
+    const kept = styleNotesForPrompt(
+      "Chalk on slate, all edges soft. Redrew 14 of them. Dusk palette only. | tiles.png re-cut, all checks green.",
+    );
+    expect(kept).toBe("Chalk on slate, all edges soft. Dusk palette only.");
   });
 });

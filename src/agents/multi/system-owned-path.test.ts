@@ -1,5 +1,5 @@
 /**
- * The acceptance checks' folder is the system's (GDD-drift plan W00/W07).
+ * The acceptance checks' folder is the system's.
  *
  * A worker's lease must never write or delete a check the campaign judges it
  * by. The question "is this path inside that folder" has to be answered the

@@ -762,8 +762,9 @@ function whyNotActionableWork(
 /**
  * A goal driven by a working-tree observation is ABOUT the project's real
  * tree: it must run there, not in a worktree lease seeded from HEAD. Measured
- * 2026-09-10 22:31: "investigate the 1118 uncommitted changes" ran in a lease
- * and reported a clean tree. Every other goal keeps the lease.
+ * in a live campaign (2026-09-10 22:31): a goal to investigate the uncommitted
+ * changes ran in a worktree lease seeded from HEAD and reported a clean tree.
+ * Every other goal keeps the lease.
  */
 /**
  * Words that say the goal is ABOUT the tree's current state.

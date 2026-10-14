@@ -1,9 +1,7 @@
 /**
- * The check that would have failed the run that reported success.
- *
- * Measured: several modules, their C# files and test assemblies, all
- * compiling, and no scene, no ScriptableObject asset and no bootstrapper. Every
- * code-shape rule passed. These read the artifacts instead.
+ * Code can compile and pass every shape rule with no scene, no
+ * ScriptableObject asset and no bootstrapper. These read the artifacts
+ * instead.
  */
 
 import { describe, it, expect } from "vitest";
@@ -33,8 +31,8 @@ MonoBehaviour:
 describe("a delivered game", () => {
   it("passes when a scene wires a bootstrapper to a config that exists", () => {
     const io = project({
-      "/p/Assets/Modules/QuarryModule/Scripts/QuarryModuleConfig.cs": "",
-      "/p/Assets/Generated/QuarryModuleConfig.asset": "",
+      "/p/Assets/Modules/AlmanacModule/Scripts/AlmanacModuleConfig.cs": "",
+      "/p/Assets/Generated/AlmanacModuleConfig.asset": "",
       "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
     });
 
@@ -45,10 +43,9 @@ describe("a delivered game", () => {
   });
 
   it("fails a run that produced code and no scene", () => {
-    // The measured case, exactly.
     const io = project({
-      "/p/Assets/Modules/QuarryModule/Scripts/QuarryModuleConfig.cs": "",
-      "/p/Assets/Modules/QuarryModule/QuarryModule.asmdef": "",
+      "/p/Assets/Modules/AlmanacModule/Scripts/AlmanacModuleConfig.cs": "",
+      "/p/Assets/Modules/AlmanacModule/AlmanacModule.asmdef": "",
     });
 
     const report = assessSceneWiring("/p", io);
@@ -61,7 +58,7 @@ describe("a delivered game", () => {
     // The bootstrapper holds asset references, not types: a class with no asset
     // is a module nothing can load.
     const io = project({
-      "/p/Assets/Modules/QuarryModule/Scripts/QuarryModuleConfig.cs": "",
+      "/p/Assets/Modules/AlmanacModule/Scripts/AlmanacModuleConfig.cs": "",
       "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
     });
 
@@ -69,7 +66,7 @@ describe("a delivered game", () => {
 
     expect(report.problems.map((p) => p.kind)).toContain("missing-config-asset");
     expect(report.problems.find((p) => p.kind === "missing-config-asset")?.detail)
-      .toContain("QuarryModuleConfig");
+      .toContain("AlmanacModuleConfig");
   });
 
   it("fails a scene with no bootstrapper in it", () => {
@@ -86,8 +83,8 @@ describe("a delivered game", () => {
     // {fileID: 0} is a null wearing the shape of a link. The field is present,
     // the scene loads, the game boots and does nothing.
     const io = project({
-      "/p/Assets/Generated/QuarryModuleConfig.asset": "",
-      "/p/Assets/Modules/QuarryModule/Scripts/QuarryModuleConfig.cs": "",
+      "/p/Assets/Generated/AlmanacModuleConfig.asset": "",
+      "/p/Assets/Modules/AlmanacModule/Scripts/AlmanacModuleConfig.cs": "",
       "/p/Assets/Scenes/Main.unity": UNWIRED_SCENE,
     });
 
@@ -126,24 +123,21 @@ describe("a delivered game", () => {
 });
 
 describe("an asset whose file name is not the class name", () => {
-  // Measured 2026-08-20 end to end: unity_scene_build assembled a scene from a
-  // real GDD run, verified every reference on disk, and its play-mode boot test
-  // passed — and this check called the project unassembled, because the tool
-  // names its assets <Name>Module.asset while the class is <Name>ModuleConfig. A
-  // correctly built game accused of being a library sends the agent back to
-  // rebuild what it had already got right.
+  // unity_scene_build names its assets <Name>Module.asset while the class is
+  // <Name>ModuleConfig; a check that compares names accuses a correctly built
+  // game of being a library.
   const CONFIG_ASSET = `
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_Script: {fileID: 11500000, guid: c0ffee00c0ffee00c0ffee00c0ffee00, type: 3}
-  m_Name: KilnModule
+  m_Name: CensusModule
 `;
 
   it("recognises the asset by the script it instantiates", () => {
     const io = project({
-      "/p/Assets/Modules/Kiln/KilnModuleConfig.cs": "",
-      "/p/Assets/Modules/Kiln/KilnModuleConfig.cs.meta": "guid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
-      "/p/Assets/Generated/KilnModule.asset": CONFIG_ASSET,
+      "/p/Assets/Modules/Census/CensusModuleConfig.cs": "",
+      "/p/Assets/Modules/Census/CensusModuleConfig.cs.meta": "guid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
+      "/p/Assets/Generated/CensusModule.asset": CONFIG_ASSET,
       "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
     });
 
@@ -155,8 +149,8 @@ MonoBehaviour:
 
   it("still accuses when no asset instantiates the class", () => {
     const io = project({
-      "/p/Assets/Modules/Kiln/KilnModuleConfig.cs": "",
-      "/p/Assets/Modules/Kiln/KilnModuleConfig.cs.meta": "guid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
+      "/p/Assets/Modules/Census/CensusModuleConfig.cs": "",
+      "/p/Assets/Modules/Census/CensusModuleConfig.cs.meta": "guid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
       // An asset, but of some other script.
       "/p/Assets/Settings/Other.asset": CONFIG_ASSET.replace("c0ffee00c0ffee00c0ffee00c0ffee00", "dddddddddddddddddddddddddddddddd"),
       "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
@@ -169,8 +163,8 @@ MonoBehaviour:
 
   it("falls back to the name when the project has no .meta files", () => {
     const io = project({
-      "/p/Assets/Modules/Quarry/QuarryModuleConfig.cs": "",
-      "/p/Assets/Generated/QuarryModuleConfig.asset": "",
+      "/p/Assets/Modules/Almanac/AlmanacModuleConfig.cs": "",
+      "/p/Assets/Generated/AlmanacModuleConfig.asset": "",
       "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
     });
 

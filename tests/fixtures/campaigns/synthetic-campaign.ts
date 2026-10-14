@@ -144,14 +144,14 @@ const RESULTS: Record<string, string> = {
     FLAGS,
     NO_VERIFIER,
   ].join("\n"),
-  m6: [
-    ...attempt(STUCK, "Stop reflecting and make the renewal form read the night log, then run the PlayMode verification again."),
+  "mcov1-3": [
+    ...attempt(STUCK, "Stop reflecting and make the seeing field read the plate log, then run the PlayMode verification again."),
     ABORT_ES,
     "",
     FLAGS,
     QUOTA,
   ].join("\n"),
-  m7: [
+  m6: [
     "Integration plan for the review build:",
     "",
     ...planStep(1),
@@ -180,9 +180,9 @@ const LINEAGE: Record<string, { root: string; retries?: string[] }> = {
   m4: { root: "task_0000a004" },
   m5: { root: "task_0000a005", retries: ["task_0000a015", "task_0000a025"] },
   m6: { root: "task_0000a006" },
-  m7: { root: "task_0000a007" },
   mcov1: { root: "task_0000a008" },
   "mcov1-2": { root: "task_0000a009" },
+  "mcov1-3": { root: "task_0000a010" },
 };
 const tipOf = (id: string): string => LINEAGE[id]!.retries?.at(-1) ?? LINEAGE[id]!.root;
 
@@ -222,8 +222,8 @@ function milestones(): CampaignMilestone[] {
       noWorkBounced: false,
       timeBoxEscalations: 1,
     }),
-    green("m6", 6, "funding renewals", "Implement §6 against the log of §5.", { reconcileDeferred: false }),
-    green("m7", 7, "the review build", "Assemble §1 to §6 into one build, then deliver.", {
+    green("m6", 6, "the review build", "Assemble §1 to §5 into one build, then deliver.", {
+      reconcileDeferred: false,
       visualEvidenceBounced: false,
       noWorkBounced: false,
       timeBoxEscalations: 0,
@@ -235,8 +235,8 @@ function milestones(): CampaignMilestone[] {
       testVerdict: "PlayMode verification passed: 37 of 39 tests ran clean.",
       structureRefused: true,
       structureFindings: [
-        "REFUSAL STANDS, bounce budget spent: the shipped scenes render NOTHING — 0 renderer components in the entry scene Assets/Scenes/Observatory.unity and the prefabs it places.",
-        "2 scenes enabled in Build Settings; entry scene (build index 0): Assets/Scenes/Observatory.unity",
+        "REFUSAL STANDS, bounce budget spent: no enabled scene is the game — Build Settings holds no entry scene at all.",
+        "0 scenes enabled in Build Settings; no entry scene (build index 0) to open",
         "3 runtime scripts build geometry with CreatePrimitive/PrimitiveType: Assets/Observatory/Dome/DomeRotator.cs, Assets/Observatory/Sky/StarField.cs, +1 more",
         GDD_SAYS,
       ],
@@ -287,6 +287,19 @@ function milestones(): CampaignMilestone[] {
       visualEvidence: "observed",
       compileVerdict: { ok: true, ran: true, errors: 0, detail: "Runtime assemblies compile; test assemblies are not built by this check." },
     } as CampaignMilestone,
+    {
+      id: "mcov1-3",
+      title: "Coverage completion 1.3 — the seeing field reads the plate log",
+      prompt: "Close the gap the coverage audit listed: §5.2.",
+      status: "green",
+      attempts: 2,
+      fromAudit: true,
+      startedAtMs: T0 + 92 * HOUR,
+      taskId: LINEAGE["mcov1-3"]!.root,
+      resultExcerpt: excerpt("mcov1-3"),
+      commitNote: "Committed 11 file(s) as `5a6b7c8`.",
+      visualEvidence: "observed",
+    } as CampaignMilestone,
   ];
 }
 
@@ -322,7 +335,7 @@ export function seedSyntheticCampaign(campaignsDb: string, tasksDb: string): voi
       gddText: SYNTHETIC_GDD,
       draftAttempts: 0,
       milestones: milestones(),
-      currentMilestone: 8,
+      currentMilestone: 9,
       createdAt: T0,
       updatedAt: T0 + 96 * HOUR,
       lastError: `NOT DELIVERED — ${LAST_GAP_TITLE} was cancelled`,
@@ -359,14 +372,14 @@ export function seedSyntheticCampaign(campaignsDb: string, tasksDb: string): voi
       });
     });
     tasks.setVerification(
-      tipOf("m6") as TaskId,
+      tipOf("mcov1-3") as TaskId,
       JSON.stringify({
         testsGreen: false,
         detail: `PlayMode verification failed: 3 of 31 tests failed (log: ${SYNTHETIC_HOME}/Library/Logs/Unity/Editor.log)`,
       }),
     );
     tasks.setVerification(
-      tipOf("m7") as TaskId,
+      tipOf("m6") as TaskId,
       JSON.stringify({ testsGreen: true, detail: "PlayMode verification passed: 37 of 39 tests ran clean." }),
     );
   } finally {

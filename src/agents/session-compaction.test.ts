@@ -381,7 +381,7 @@ describe("decideCompaction — the provider's count is ground truth (measured 20
     expect(d.maxTokens).toBe(COMPACTION_TARGET_FLOOR_TOKENS);
   });
 
-  it("holds the conversation at its floor share when the schemas would squeeze it, and says the offer is what must shrink (#33)", () => {
+  it("holds the conversation at its floor share when the schemas would squeeze it, and says the offer is what must shrink", () => {
     const window = 64_000;
     const toolTokens = toolSchemaTokens(73_352); // measured 2026-09-10 14:34: 106 tools
     const d = decideCompaction({ estimatedTokens: 40_000, toolTokens, contextWindow: window });

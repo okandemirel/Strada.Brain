@@ -6,7 +6,7 @@ import { writeFileInsideRoot } from "../file-write.js";
  * Write a generated stub only where nothing is there yet.
  *
  * The strada_create_* tools wrote with a plain writeFile, which truncates: a
- * module folder that already held an implemented BoardSystem.cs got it replaced
+ * module folder that already held an implemented <Name>System.cs got it replaced
  * by the template, and the tool reported "created" (audit tools#0). The
  * conformance gate sends the agent to strada_create_module precisely when a
  * module folder already holds code, so that was the normal path, not a corner.

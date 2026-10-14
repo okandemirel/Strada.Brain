@@ -1,7 +1,7 @@
 /**
  * Vault ids are qualified; the names a caller knows are the kinds.
  *
- * Measured on the test-game run of 2026-08-19: vault_search's own description
+ * Measured in a live run on 2026-08-19: vault_search's own description
  * offers 'self' as an example vaultId, the agent used it, and the registry
  * answered "vault not found: self" — twice. The registered id was
  * "self:strada-brain", and the error named no alternative to try.
@@ -20,7 +20,7 @@ describe('resolving the vault a caller meant', () => {
   it('accepts the kind when it names exactly one vault', () => {
     const registry = new VaultRegistry();
     registry.register(vault('self:strada-brain', 'self'));
-    registry.register(vault('unity-project:pf', 'unity-project'));
+    registry.register(vault('unity-project:9b4e2c10', 'unity-project'));
 
     expect(registry.resolve('self')?.id).toBe('self:strada-brain');
   });
@@ -84,8 +84,8 @@ describe('resolving the vault a caller meant', () => {
 
 describe('the miss the caller is told about', () => {
   it('names the ids that would have worked', () => {
-    expect(vaultNotFound('self', ['self:strada-brain', 'unity-project:pf'])).toBe(
-      'vault not found: self — registered: self:strada-brain, unity-project:pf',
+    expect(vaultNotFound('self', ['self:strada-brain', 'unity-project:9b4e2c10'])).toBe(
+      'vault not found: self — registered: self:strada-brain, unity-project:9b4e2c10',
     );
   });
 

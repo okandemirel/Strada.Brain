@@ -485,8 +485,8 @@ export class BackgroundExecutor {
           // the marker used to be the only admission ticket, so a mission
           // blocked with any other sentence — "blocked:provider_unavailable",
           // "workspace directory is gone", a channel-authored block — was
-          // never retried after a restart (audited 2026-09-10: the driver
-          // mission sat blocked through three boots with exactly that reason).
+          // never retried after a restart (audited 2026-09-10: a mission sat
+          // blocked through several boots with exactly that reason).
           // …unless the stop was the BUDGET, which is a rolling window rather
           // than a verdict about the work. When it has drained, the mission
           // goes back in (Codex 2026-09-11 F#7).
@@ -846,7 +846,7 @@ export class BackgroundExecutor {
           // A dead Unity link is evidence even when the run wrote nothing and
           // ran no test — that is exactly the run it stops (audited 2026-09-06).
           // So is how the run ended: a stuck run that wrote nothing is still
-          // a stuck run (GDD-drift W01).
+          // a stuck run.
           : verdict.assetSourcingBlind !== undefined || integrity !== undefined
             ? { ...verdict, testsGreen: undefined, detail: "no test run observed" }
             : undefined;
@@ -1864,9 +1864,9 @@ export class BackgroundExecutor {
         (task.attachments?.length ?? 0) > 0 ||
         (Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text"));
       // supervisorMode "off": one agent, no plan, no task lease. Measured
-      // 2026-09-09 12:37: the guardian's 3-error compile repair was decomposed
-      // into 8 nodes and its first node spent its whole 60-min budget
-      // "extracting" errors that were already in the prompt; 7 nodes skipped.
+      // 2026-09-09: the guardian's small compile repair was decomposed into
+      // many nodes, and its first node spent its whole budget "extracting"
+      // errors that were already in the prompt; the rest were skipped.
       const singleAgent = task.supervisorMode === "off";
       const shouldDecomposeTask = !singleAgent && (this.decomposer?.shouldDecompose(task.prompt) ?? false);
       const shouldAttemptSharedPlanning =
@@ -1961,7 +1961,7 @@ export class BackgroundExecutor {
             ),
           );
           // The verifier's report rides on the result once the supervisor
-          // returns it (GDD-drift W02); read structurally until then.
+          // returns it; read structurally until then.
           const notVerified = (supervisorResult as { verification?: { notVerified?: unknown } })
             .verification?.notVerified;
           this.recordTestVerdict(
@@ -1999,8 +1999,8 @@ export class BackgroundExecutor {
           // the lease write-back: measured 2026-09-07, a failed merge attempt
           // rewrote a large share of the project's files just before the
           // commit, and the commit read every one of them as "the user
-          // changed it" — the sprint's scene placements and sprite bindings
-          // were quarantined and the project never received them.
+          // changed it", so the run's own files were quarantined and never
+          // reached the project.
           integrateAfterWriteBack = true;
           return;
         }
@@ -2029,8 +2029,8 @@ export class BackgroundExecutor {
         // A FULL failure is exactly where replaying the same tree changes
         // nothing. It went straight to the keep-alive, which resubmits the
         // SAME prompt against the SAME goal tree: measured live 2026-09-12,
-        // eight successive tasks carried the identical 4 933-byte prompt and
-        // goal root over five hours (Codex 2026-09-12 R#2). The partial branch
+        // successive tasks carried the identical prompt and goal root for
+        // hours (Codex 2026-09-12 R#2). The partial branch
         // already has the right decision — retry once, then REPLAN when
         // nothing completed, then escalate — so a full failure takes it too.
         if (admission.supervisorGoalTree?.rootId) {
@@ -2260,8 +2260,8 @@ export class BackgroundExecutor {
               getLogger().info("Task workspace committed", {
                 files: result.written.length,
                 conflicts: result.conflicts.length,
-                // A commit that adds 15 files and silently declines 18 deletions
-                // is not the clean success "files: 15, conflicts: 0" reads as.
+                // A commit that adds files and silently declines deletions is
+                // not the clean success "files: N, conflicts: 0" reads as.
                 // Measured 2026-08-21: an agent deleted a duplicate interface it
                 // had just resolved, the deletion was declined, and the next run
                 // opened on the CS0101 errors it had already fixed once.
@@ -2825,8 +2825,8 @@ export class BackgroundExecutor {
     // old key hashed the prompt — but every retry resubmits with a replay
     // preface prepended, so the key changed each round, the attempt counter
     // reset to 0 forever, and the backoff never grew past its floor. Measured
-    // 2026-08-27 (the test game): a fresh full decomposition every 30–60s,
-    // plan file after plan file, cap never reached.
+    // 2026-08-27: a fresh full decomposition every 30–60s, plan file after
+    // plan file, cap never reached.
     const key = `mission:${this.lineageRootTaskId(task)}`;
     const attempt = this.missionRetries.get(key) ?? 0;
     // An UNANSWERABLE budget is treated as spent: the predicate reads storage,
@@ -3014,9 +3014,9 @@ export class BackgroundExecutor {
       };
       // A CANCELLED tip means someone stopped this mission on purpose — the
       // campaign cancels its lineages when it finishes, and reviving them
-      // resubmits sprint work against a game that already shipped (measured
-      // live 2026-09-03: three revivals after delivery, at 09:19, 09:37 and
-      // 09:53, each able to write to the project the user was inspecting).
+      // resubmits work against a project the campaign has already delivered
+      // (measured live 2026-09-03: revivals after delivery, each able to write
+      // to the project the user was inspecting).
       // A deliberate stop outranks a keep-alive.
       try {
         // The ANCESTRY, not just the tip: a continuation that minted a fresh
@@ -3285,9 +3285,8 @@ export class BackgroundExecutor {
 
     // A CANCELLED lineage is a deliberate stop and outranks every automatic
     // continuation. The mission keep-alive learned this on 2026-09-03; the
-    // goal auto-resume did not, so the same delivered campaign's sprint work
-    // came back a fifth time at 10:35 through "Replanning a stalled goal"
-    // instead — three fresh tasks against a game that had already shipped.
+    // goal auto-resume did not, so a delivered campaign's work came back
+    // through "Replanning a stalled goal" instead.
     if (this.isLineageCancelled(task)) {
       getLoggerSafe().info("Goal auto-resume abandoned — the lineage was cancelled", {
         taskId: task.id,

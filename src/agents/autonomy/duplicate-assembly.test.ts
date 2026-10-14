@@ -7,11 +7,9 @@
  * valid, and script_validate is a syntax check, so the first sign is a project
  * that will not build.
  *
- * Measured on a live run: asked to add tests, the agent created the framework's
- * Tests/Runtime + Tests/Editor pair and also kept its own habit of a Tests/ root
- * assembly. It ended with Tests/YourGame.SampleGame.Tests.asmdef and
- * Tests/Runtime/YourGame.SampleGame.Tests.asmdef claiming one name, and six test
- * files at the Tests root belonging to neither mode.
+ * Measured in a live run: asked to add tests, the worker created the
+ * framework's Tests/Runtime + Tests/Editor pair and also kept a Tests/ root
+ * assembly with the same name, so the two clashed.
  */
 
 import { resolve } from "node:path";
@@ -30,17 +28,17 @@ const DEPS = {
 
 // The guard resolves module roots natively ("D:\proj\..." on Windows), so the
 // fixture names the directory the same way.
-const MODULE_DIR = resolve("/proj/Assets/Modules/SampleGame");
+const MODULE_DIR = resolve("/proj/Assets/Modules/Orchard");
 
 function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
   const guard = new StradaConformanceGuard(DEPS, {
     projectPath: "/proj",
-    listDir: () => ["SampleGameModuleConfig.cs", "SampleGame.asmdef"],
+    listDir: () => ["OrchardModuleConfig.cs", "Orchard.asmdef"],
     listAsmdefs: (dir: string) => (dir === MODULE_DIR ? asmdefs : []),
   });
   guard.trackToolCall(
     "file_write",
-    { path: "Assets/Modules/SampleGame/Tests/GridTests.cs", content: "class X {}" },
+    { path: "Assets/Modules/Orchard/Tests/PruningTests.cs", content: "class X {}" },
     false,
     "written",
   );
@@ -49,29 +47,28 @@ function guardSeeing(asmdefs: string[]): StradaConformanceGuard {
 
 describe("duplicate assembly names", () => {
   it("reports both locations of the clashing name", () => {
-    // The measured shape, verbatim.
     const guard = guardSeeing([
-      "SampleGame.asmdef",
-      "Tests/YourGame.SampleGame.Tests.asmdef",
-      "Tests/Runtime/YourGame.SampleGame.Tests.asmdef",
-      "Tests/Editor/YourGame.SampleGame.Editor.Tests.asmdef",
+      "Orchard.asmdef",
+      "Tests/YourGame.Orchard.Tests.asmdef",
+      "Tests/Runtime/YourGame.Orchard.Tests.asmdef",
+      "Tests/Editor/YourGame.Orchard.Editor.Tests.asmdef",
     ]);
 
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain("STRADA DUPLICATE ASSEMBLY");
-    expect(prompt).toContain("YourGame.SampleGame.Tests");
+    expect(prompt).toContain("YourGame.Orchard.Tests");
     // Naming one location would leave the agent guessing which to remove.
-    expect(prompt).toContain("Tests/YourGame.SampleGame.Tests.asmdef");
-    expect(prompt).toContain("Tests/Runtime/YourGame.SampleGame.Tests.asmdef");
+    expect(prompt).toContain("Tests/YourGame.Orchard.Tests.asmdef");
+    expect(prompt).toContain("Tests/Runtime/YourGame.Orchard.Tests.asmdef");
   });
 
   it("takes precedence over the test-coverage advice", () => {
     // With a duplicate present nothing in the project compiles, so telling the
     // agent about missing test assemblies first would be advice it cannot act on.
     const guard = guardSeeing([
-      "Domain/YourGame.SampleGame.Domain.asmdef",
-      "Tests/YourGame.SampleGame.Tests.asmdef",
-      "Tests/Runtime/YourGame.SampleGame.Tests.asmdef",
+      "Domain/YourGame.Orchard.Domain.asmdef",
+      "Tests/YourGame.Orchard.Tests.asmdef",
+      "Tests/Runtime/YourGame.Orchard.Tests.asmdef",
     ]);
 
     const prompt = guard.getPrompt() ?? "";
@@ -81,9 +78,9 @@ describe("duplicate assembly names", () => {
 
   it("stays quiet when every assembly name is distinct", () => {
     const guard = guardSeeing([
-      "SampleGame.asmdef",
-      "Tests/Runtime/SampleGame.Tests.asmdef",
-      "Tests/Editor/SampleGame.Editor.Tests.asmdef",
+      "Orchard.asmdef",
+      "Tests/Runtime/Orchard.Tests.asmdef",
+      "Tests/Editor/Orchard.Editor.Tests.asmdef",
     ]);
 
     expect(guard.getPrompt()).toBeNull();
@@ -92,7 +89,7 @@ describe("duplicate assembly names", () => {
   it("does not confuse same-named files in different modules", () => {
     // Uniqueness is checked per module here; a second module's own Tests
     // assembly is a different name because it carries that module's namespace.
-    const guard = guardSeeing(["SampleGame.asmdef", "Tests/Runtime/SampleGame.Tests.asmdef"]);
+    const guard = guardSeeing(["Orchard.asmdef", "Tests/Runtime/Orchard.Tests.asmdef"]);
     expect(guard.getPrompt()).toBeNull();
   });
 });

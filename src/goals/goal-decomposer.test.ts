@@ -193,21 +193,21 @@ describe("GoalDecomposer", () => {
       expect(hasDependency).toBe(true);
     });
 
-    it("folds a bare measurement node into the work that depends on it (measured 2026-09-09: plan after plan opened with one)", async () => {
+    it("folds a bare measurement node into the work that depends on it", async () => {
       const provider = createMockProvider([
         JSON.stringify({
           nodes: [
-            { id: "s1", task: "Call unity_delivery_measure once. Record the count and list the placeholder paths.", dependsOn: [] },
-            { id: "s2", task: "Regenerate the first batch of placeholders in place, re-measure, verify and commit", dependsOn: ["s1"] },
-            { id: "s3", task: "Regenerate the next batch of placeholders in place, re-measure, verify and commit", dependsOn: ["s2"] },
+            { id: "s1", task: "Call unity_delivery_measure once. Record the count and list the stale lightmap groups.", dependsOn: [] },
+            { id: "s2", task: "Re-bake the first lightmap group in place, re-measure, verify and commit", dependsOn: ["s1"] },
+            { id: "s3", task: "Re-bake the next lightmap group in place, re-measure, verify and commit", dependsOn: ["s2"] },
           ],
         }),
       ]);
       const decomposer = new GoalDecomposer(provider, 3);
-      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until none is measured");
+      const tree = await decomposer.decomposeProactive("test-session", "Re-bake the lightmaps in groups until none is stale");
       const children = Array.from(tree.nodes.values()).filter((n) => n.depth === 1);
       expect(children).toHaveLength(2);
-      expect(children.some((n) => /^Call unity_delivery_measure once\. Record the count and list the placeholder paths\. Then, in this same step: Regenerate the first batch/.test(n.task))).toBe(true);
+      expect(children.some((n) => /^Call unity_delivery_measure once\. Record the count and list the stale lightmap groups\. Then, in this same step: Re-bake the first lightmap group/.test(n.task))).toBe(true);
       expect(children.every((n) => !/^Call unity_delivery_measure once\. Record[^]*$/.test(n.task) || n.task.includes("Then, in this same step"))).toBe(true);
     });
 
@@ -218,7 +218,7 @@ describe("GoalDecomposer", () => {
         JSON.stringify({ nodes: [{ id: "s1", task: "Regenerate the beacon glyphs in place, verify, commit", dependsOn: [] }, { id: "s2", task: "Regenerate the tide charts in place, verify, commit", dependsOn: ["s1"] }] }),
       ]);
       const decomposer = new GoalDecomposer(provider, 3);
-      const tree = await decomposer.decomposeProactive("test-session", "Replace the placeholder art in batches until none is measured");
+      const tree = await decomposer.decomposeProactive("test-session", "Re-encode the stale audio stems in batches until none is left");
       expect(Array.from(tree.nodes.values()).filter((n) => n.depth === 1)).toHaveLength(2);
       const chat = provider.chat as unknown as { mock: { calls: unknown[][] } };
       expect(chat.mock.calls).toHaveLength(2);
@@ -294,8 +294,8 @@ describe("GoalDecomposer", () => {
     });
 
     it("rejects an exploration-only plan and tells the retry why", async () => {
-      // Measured 2026-09-08 08:21: a plan of nothing but "vault_search for …"
-      // nodes, and a sprint spent producing nothing.
+      // Measured 2026-09-08: a plan of nothing but "vault_search for …" nodes
+      // produced nothing.
       const provider = createMockProvider([
         JSON.stringify({
           nodes: [

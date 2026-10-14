@@ -282,9 +282,8 @@ const DEFAULT_SUBMODULE_TIMEOUT_MS = 300_000;
  * 2026-09-10: the cap used to apply to everything, and a file the lease was
  * not seeded with is one the agent "wrote blind" — its work is quarantined at
  * commit and deleted with the lease. A Unity project routinely carries more
- * than 2000 uncommitted paths under Assets/ (measured on the test project,
- * both at the seed and in the case the seed-priority comment cites), so the
- * agent's edits to the paths past the cut were being thrown away.
+ * than 2000 uncommitted paths under Assets/, so the agent's edits to the
+ * paths past the cut were being thrown away.
  */
 const MAX_UNCOMMITTED_ENTRIES = 2000;
 /** Paths the lease must always be seeded with: the project's own content. */
@@ -334,7 +333,8 @@ function parsePorcelainZ(stdout: string): PorcelainEntry[] {
  * logs were here from the start; UserSettings joined 2026-09-10 after a
  * play-through inside a lease rewrote the editor's per-user state there and
  * the commit quarantined it against the project's copy as two "conflicts".
- * Engine state, not game content — no vehicle name belongs in this list.
+ * Engine state, not game content: nothing specific to one project belongs in
+ * this list.
  */
 export const DEFAULT_WORKSPACE_COPY_EXCLUDES: readonly string[] = ["Library", "Temp", "Logs", "Builds", "obj", "UserSettings"];
 
@@ -390,13 +390,13 @@ const LEASE_SIDECAR_FILES = new Set([".strada-lease-owner.json", ".strada-lease-
 /**
  * The seed maps and seed HEAD, written BESIDE the lease at acquire so that a
  * crashed or restarted owner's work can still be committed by the rules the
- * live commit uses. Measured 2026-09-08 08:19: without them, salvage was
- * quarantine-only — several finished sprites (real art replacing
- * placeholders) and some prefab edits went to .strada/lease-conflicts and
- * the project kept the placeholders. Review 2026-09-08: a file INSIDE the
- * lease is writable by the agent's own tools — a forged sourceSeed made
- * salvage overwrite a user's concurrent edit, a forged leaseSeed entry made
- * it delete a user's scene — so the sidecar lives outside the tree.
+ * live commit uses. Measured 2026-09-08: without them, salvage was
+ * quarantine-only. A crashed owner's finished files went to
+ * .strada/lease-conflicts and the project kept its older versions. Review
+ * 2026-09-08: a file INSIDE the lease is writable by the agent's own tools —
+ * a forged sourceSeed made salvage overwrite a user's concurrent edit, a
+ * forged leaseSeed entry made it delete a user's scene — so the sidecar
+ * lives outside the tree.
  */
 const LEASE_SEED_SUFFIX = ".seed.json";
 /** `<leaseRoot>/<lease-name>.seed.json` — a SIBLING of the workspace, like the claim file: the agent's tools cannot reach it. */
@@ -728,8 +728,8 @@ export class WorkspaceLeaseManager {
     // TEST ISOLATION GUARD. A test that builds a manager on the DEFAULT lease
     // root shares it with the live daemon on this machine, and salvage /
     // release then delete the daemon's live workspaces — measured twice:
-    // 2026-08-30 (12339242) and again 2026-09-02 18:09 ("workspace directory
-    // is gone" on Sprint 7's lease while parallel fixers ran lease tests).
+    // 2026-08-30 (12339242) and again 2026-09-02 ("workspace directory is
+    // gone" on a live run's lease while parallel fixers ran lease tests).
     // Under vitest, refuse the shared root outright.
     if (process.env["VITEST"] && !options.leaseRoot) {
       throw new Error(
@@ -748,8 +748,8 @@ export class WorkspaceLeaseManager {
     // The default lease root is MACHINE-GLOBAL (os.tmpdir()). A test that
     // constructs a manager without its own leaseRoot lists the RUNNING
     // daemon's live leases as orphans and deletes them — measured live
-    // 2026-08-28 11:41: a vitest worker salvaged and removed the campaign's
-    // Sprint-1 worktree mid-task. Tests must always pass an isolated root.
+    // 2026-08-28: a vitest worker salvaged and removed a running task's
+    // worktree mid-task. Tests must always pass an isolated root.
     if (
       options.leaseRoot === undefined &&
       (process.env["VITEST"] !== undefined || process.env["NODE_ENV"] === "test")
@@ -783,9 +783,9 @@ export class WorkspaceLeaseManager {
       const orphans = this.listOrphanedLeases();
       if (orphans.length > 0) {
         // acquireLease awaits this: review 2026-09-08 (81985efd) measured a
-        // boot lease seeded with 0 of the 2000 files salvage was still writing
-        // into the project, so the agent's later edit of one of them read as
-        // a user conflict.
+        // boot lease seeded before salvage had finished writing the crashed
+        // run's files into the project, so the agent's later edit of one of
+        // them read as a user conflict.
         const salvage = this.salvageOrphanedLeases(orphans)
           .catch((err: unknown) => {
             // Logged once here; a failed salvage is not a reason to refuse
@@ -1142,8 +1142,8 @@ export class WorkspaceLeaseManager {
    *
    * Shutdown used to release without committing, so a task interrupted mid-run
    * had its files deleted along with the workspace. Measured: a run stopped by
-   * SIGINT had written Modules/SampleGame/Tests/Runtime/DomainModelTests.cs into
-   * its lease; after "Shutdown complete" the file existed neither in the project
+   * SIGINT had written a test file (<Module>/Tests/Runtime/<File>.cs) into its
+   * lease; after "Shutdown complete" the file existed neither in the project
    * nor anywhere under the lease root. The agent's work for that run was gone.
    *
    * The asymmetry decides it: publishing work the user did not end up wanting is
@@ -1374,18 +1374,18 @@ export class WorkspaceLeaseManager {
   /**
    * Check out the project's submodules inside the fresh worktree.
    *
-   * `git worktree add` leaves submodule paths as empty directories, and the
-   * product's own installer puts Strada.Core and Strada.MCP there — it runs
-   * `git submodule add`. So without this the agent's workspace contains zero of
-   * the framework it is supposed to conform to, while the project it was seeded
-   * from has all of it.
+   * `git worktree add` leaves submodule paths as empty directories, and
+   * Strada.Brain's own installer puts Strada.Core and Strada.MCP there — it
+   * runs `git submodule add` (src/config/strada-deps.ts). So without this the
+   * agent's workspace contains zero of the framework it is supposed to conform
+   * to, while the project it was seeded from has all of it.
    *
-   * Measured on a full test-game build: the project held every Strada.Core
-   * .cs file and the workspace held none. `list_directory Packages/Submodules/
-   * Strada.Core` answered "directory not found", the glob for its sources found
-   * nothing, and the agent — having looked and found no framework — invented its
-   * own: a GameModuleConfig deriving from ScriptableObject and an .asmdef
-   * referencing Unity.ugui instead of Strada.Core.
+   * Measured on a full run: the project held every Strada.Core .cs file and
+   * the workspace held none. `list_directory Packages/Submodules/Strada.Core`
+   * answered "directory not found", the glob for its sources found nothing,
+   * and the agent — having looked and found no framework — invented its own:
+   * a module config deriving from ScriptableObject instead of the framework's
+   * module base, and an .asmdef referencing Unity.ugui instead of Strada.Core.
    *
    * Failure here is logged, not thrown: a submodule that cannot be fetched
    * should degrade the workspace, not kill the task.
@@ -1400,8 +1400,9 @@ export class WorkspaceLeaseManager {
       args: [
         "-C",
         workspacePath,
-        // Strada.Core and Strada.MCP are developed beside the game, so the
-        // supported setup wires them as submodules on local paths. Since the
+        // Strada.Core and Strada.MCP can be developed side by side with the
+        // project that uses them, so the supported setup wires them as
+        // submodules on local paths. Since the
         // CVE-2022-39253 mitigation git refuses to clone those over the `file`
         // transport, and it ignores the setting when it comes from repository
         // config — there is nothing a user can put in their own project to
@@ -1479,8 +1480,8 @@ export class WorkspaceLeaseManager {
    *
    * This used to be `rev-list --count HEAD --not --all`, which always answers
    * 0: `--all` includes HEAD itself, so no commit is ever "not in --all".
-   * Measured 2026-09-10 in the game repo: worker commits from the day
-   * before dangling in the object store, zero salvage branches, zero
+   * Measured 2026-09-10 in a live project's repository: worker commits from
+   * the day before dangling in the object store, zero salvage branches, zero
    * "Preserved lease commits" log lines — the salvage had never fired once.
    */
   /**
@@ -1526,8 +1527,8 @@ export class WorkspaceLeaseManager {
    * worktree on a detached HEAD, so the project received the content as
    * uncommitted changes and the commits themselves died with the worktree
    * (salvage never fired — see listLeaseCommits). Measured 2026-09-09: a run
-   * committed a sprite delivery in its lease; the project got the delivered
-   * files as uncommitted changes and no commit.
+   * committed its work in its lease; the project got the files as uncommitted
+   * changes and no commit.
    *
    * Each lease commit becomes one project commit with the same author,
    * message and per-path content, built through a TEMPORARY index so the
@@ -1713,9 +1714,9 @@ export class WorkspaceLeaseManager {
           // never enters the project's history either (Codex 2026-09-11 #4, #7).
           if (isHeld(rel)) continue;
           // No lease commit carries a check into the project's history, not
-          // even one whose working copy ended where the project's is (GDD-drift
-          // plan W07). A git path cannot pass through a link, so its spelling
-          // decides.
+          // even one whose working copy ended where the project's is
+          // (2eca567d). A git path cannot pass through a link, so its
+          // spelling decides.
           if (isSystemOwnedCheckPath(rel)) continue;
           // Nor a framework package edit (WP-1.2), even one taken back later.
           if (isFrameworkPackagePath(rel)) continue;
@@ -1763,7 +1764,7 @@ export class WorkspaceLeaseManager {
         replayedShas.add(commit.sha);
         projectShas.push(newSha);
         // Structured fields, never a re-split string: a path with a comma in
-        // it ("Assets/Hero,Idle.cs") was cut at the wrong place (P#10).
+        // it ("Assets/Weather,Rain.cs") was cut at the wrong place (P#10).
         for (const a of adds) touched.add(a.path);
         for (const r of removes) touched.add(r);
       }
@@ -1856,7 +1857,7 @@ export class WorkspaceLeaseManager {
    * not the agent's file — and a worktree's submodule checkout has its own git
    * dir under .git/worktrees/<lease>/modules, so the commits it holds were
    * never reachable from the project's submodule and died with the worktree.
-   * A framework developed side by side with the game (Strada.Core as a
+   * A framework developed side by side with a project (Strada.Core as a
    * submodule) lost every fix the agent made to it.
    *
    * For each submodule the lease checked out: fetch its commits into the
@@ -2144,10 +2145,10 @@ export class WorkspaceLeaseManager {
             if (untouched) return {}; // present at seed time and never written to — not agent work
           }
 
-          // THE ACCEPTANCE CHECKS ARE THE SYSTEM'S (GDD-drift plan W07): a
-          // worker that could publish an edited or added check could write
-          // its own green. Judged against the project by both of its names,
-          // so a link in the project that leads into the folder is the folder.
+          // THE ACCEPTANCE CHECKS ARE THE SYSTEM'S (2eca567d): a worker that
+          // could publish an edited or added check could write its own green.
+          // Judged against the project by both of its names, so a link in the
+          // project that leads into the folder is the folder.
           // A rewrite that left the bytes as the project has them is no
           // refusal — there is nothing to publish.
           if (isSystemOwnedCheckPath(rel, sourceRoot)) {

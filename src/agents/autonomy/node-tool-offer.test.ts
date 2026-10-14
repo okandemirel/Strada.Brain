@@ -9,13 +9,13 @@ const registry = [
   "strada_create_module", "strada_scaffold_feature", "code_quality",
 ].map((name) => ({ name, chars: name.length }));
 
-const batchNode =
-  "Batch 2: call unity_delivery_measure once and take the first 24 placeholder paths; then call unity_generate_sprite exactly TWICE " +
-  "with batch of 12; then unity_delivery_measure again, run unity_verify_change, and commit.\n\n" + NODE_SCOPE_MARKER;
+const measureAndGenerateNode =
+  "Call unity_delivery_measure, then unity_generate_sprite for the missing map symbols; " +
+  "afterwards run unity_verify_change and commit.\n\n" + NODE_SCOPE_MARKER;
 
 describe("a plan node is offered the tools its task names, their families, and the core — not the whole registry (measured 2026-09-10: 106 tools, 73 352 chars per turn)", () => {
   it("names the tools in the text, keeps their family and the core, withholds the rest", () => {
-    const offer = selectNodeTools(batchNode, registry);
+    const offer = selectNodeTools(measureAndGenerateNode, registry);
     expect(offer.narrowed).toBe(true);
     expect(offer.named).toEqual(["unity_delivery_measure", "unity_generate_sprite", "unity_verify_change"]);
     const names = offer.offered.map((t) => t.name);
@@ -30,7 +30,7 @@ describe("a plan node is offered the tools its task names, their families, and t
   });
 
   it("a node that names no tool keeps the whole offer — narrowing on a guess would hide the tool it needed", () => {
-    const offer = selectNodeTools("Implement the driver adapter over the game's flow and input services.\n\n" + NODE_SCOPE_MARKER, registry);
+    const offer = selectNodeTools("Write the migration that renames the field journal's legacy columns.\n\n" + NODE_SCOPE_MARKER, registry);
     expect(offer.narrowed).toBe(false);
     expect(offer.offered).toHaveLength(registry.length);
     expect(offer.withheld).toBe(0);

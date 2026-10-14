@@ -55,7 +55,7 @@ export interface MilestoneStatusSnapshot {
    * 2026-09-12 V#7).
    */
   readonly coverageClosed?: boolean;
-  /** Its GDD rows by status; present only when the campaign has a requirement ledger (GDD-drift W14). */
+  /** Its GDD rows by status; present only when the campaign has a requirement ledger. */
   readonly rows?: RowCounts;
   /** Set when its budget ran out on failing rows: it is `failed`, its rows were queued and the ladder moved on. */
   readonly parked?: { readonly reasons: readonly string[]; readonly queued: number };

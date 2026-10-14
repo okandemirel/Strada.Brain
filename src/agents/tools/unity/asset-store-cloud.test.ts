@@ -44,14 +44,14 @@ describe("UnityAssetStoreClient", () => {
         return TOKEN_OK;
       },
       "https://pkg.test/-/api/purchases": () => [
-        { productId: "1", title: "Frog Pack", publisher: "Acme" },
+        { productId: "1", title: "Brass Gear Pack", publisher: "Acme" },
       ],
     });
     const client = new UnityAssetStoreClient(LINK, f);
 
     const a = await client.listPurchases();
     const b = await client.listPurchases();
-    expect(a[0]!.title).toBe("Frog Pack");
+    expect(a[0]!.title).toBe("Brass Gear Pack");
     expect(b).toHaveLength(1);
     expect(tokenCalls).toBe(1);
   });
@@ -89,21 +89,21 @@ describe("UnityAssetStoreClient", () => {
     const f: FetchLike = async (url) => {
       seenUrl = url;
       return new Response(
-        JSON.stringify({ total: 2, results: [{ id: 27821, title: "Frog" }, { id: 176353, title: "Frog Family" }] }),
+        JSON.stringify({ total: 2, results: [{ id: 50101, title: "Brass Gear" }, { id: 50102, title: "Gear Workshop" }] }),
         { status: 200 },
       );
     };
     const client = new UnityAssetStoreClient(LINK, f);
-    const hits = await client.searchStore("frog character", 5);
+    const hits = await client.searchStore("brass gear", 5);
     expect(hits).toHaveLength(2);
-    expect(seenUrl).toContain("q=frog%20character");
+    expect(seenUrl).toContain("q=brass%20gear");
     expect(seenUrl).toContain("rows=5");
     expect(seenUrl.startsWith("https://kharma.unity3d.com/")).toBe(true);
   });
 
   it("a 403 on download-info with a fresh token is about the product, not the link", async () => {
-    // Measured 2026-09-07 10:30: the agent was told to re-run Unity Link
-    // twelve hours after the user had linked; the 403 was for the product.
+    // Measured in a live campaign: the agent was told to re-run Unity Link
+    // hours after the user had linked; the 403 was for the product.
     const f: FetchLike = async (url) => {
       if (url.includes("oauth2/token")) return new Response(JSON.stringify(TOKEN_OK), { status: 200 });
       return new Response("forbidden", { status: 403 });
@@ -121,21 +121,21 @@ describe("UnityAssetStoreClient", () => {
       if (url.includes("oauth2/token")) return new Response(JSON.stringify(TOKEN_OK), { status: 200 });
       return new Response("unauthorized", { status: 401 });
     };
-    await expect(new UnityAssetStoreClient(LINK, f).getDownloadInfo("27821")).rejects.toBeInstanceOf(UnityLinkExpiredError);
+    await expect(new UnityAssetStoreClient(LINK, f).getDownloadInfo("50101")).rejects.toBeInstanceOf(UnityLinkExpiredError);
   });
 
   it("reads the signed url out of download-info", async () => {
     const f = makeFetch({
       "https://id.test/v1/oauth2/token": () => TOKEN_OK,
-      "https://pkg.test/-/api/legacy-package-download-info/27821": () => ({
+      "https://pkg.test/-/api/legacy-package-download-info/50101": () => ({
         url: "https://signed.example/pkg.unitypackage?sig=abc",
-        filename: "frog.unitypackage",
+        filename: "brass-gear.unitypackage",
       }),
     });
     const client = new UnityAssetStoreClient(LINK, f);
-    const info = await client.getDownloadInfo("27821");
+    const info = await client.getDownloadInfo("50101");
     expect(info.url).toContain("signed.example");
-    expect(info.filename).toBe("frog.unitypackage");
+    expect(info.filename).toBe("brass-gear.unitypackage");
   });
 });
 
@@ -144,7 +144,7 @@ describe("markDownloaded", () => {
     const merged = markDownloaded(
       [
         { productId: "1", title: "ARCADE FREE Racing Car", downloadedLocally: false },
-        { productId: "2", title: "Some Frog Pack", downloadedLocally: false },
+        { productId: "2", title: "Some Gear Workshop Pack", downloadedLocally: false },
       ],
       ["ARCADE - FREE Racing Car", "20 Logo Templates"],
     );
@@ -163,14 +163,14 @@ describe("MyAssetsCloudTool", () => {
   it("search action lists catalog hits", async () => {
     const f = makeFetch({
       "https://kharma.unity3d.com/api/en-US/search/results.json": () => ({
-        results: [{ id: 27821, title: "Frog", publisher: "Acme" }],
+        results: [{ id: 50101, title: "Brass Gear", publisher: "Acme" }],
       }),
     });
     const tool = toolWith(new UnityAssetStoreClient(LINK, f));
-    const result = await tool.execute({ action: "search", query: "frog" }, ctx);
+    const result = await tool.execute({ action: "search", query: "brass gear" }, ctx);
     expect(result.isError).toBeFalsy();
-    expect(String(result.content)).toContain("Frog");
-    expect(String(result.content)).toContain("27821");
+    expect(String(result.content)).toContain("Brass Gear");
+    expect(String(result.content)).toContain("50101");
   });
 
   it("purchases action merges with the local cache flag", async () => {

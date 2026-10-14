@@ -1,13 +1,12 @@
 /**
  * Thinking blocks a provider leaked into the visible reply.
  *
- * Measured 2026-09-07 (campaign mcov1): 100 replies in the run log begin
- * "<reasoning>\nHere's a thinking process:" — from the OpenCode chain — and
- * three different parsers met them three different ways: the coverage audit
- * extracted the first `{…}` from inside the block and called the audit
- * "malformed JSON"; the goal decomposer failed to parse; the supervisor
- * verifier pasted 240 chars of it as a finding. One rule, applied before any
- * of them read the reply.
+ * Measured 2026-09-07 in a live campaign: replies from the OpenCode chain
+ * began "<reasoning>\nHere's a thinking process:" and three different parsers
+ * met them three different ways: the coverage audit extracted the first `{…}`
+ * from inside the block and called the audit "malformed JSON"; the goal
+ * decomposer failed to parse; the supervisor verifier pasted 240 chars of it
+ * as a finding. One rule, applied before any of them read the reply.
  */
 
 /** `<reasoning>…</reasoning>` / `<think>…</think>`, closed — removable. */

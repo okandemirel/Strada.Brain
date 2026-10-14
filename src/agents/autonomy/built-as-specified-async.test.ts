@@ -91,11 +91,11 @@ function gameProject(): string {
   put(
     root,
     "ProjectSettings/EditorBuildSettings.asset",
-    `EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: ${g(1)}\n`,
+    `EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Entry.unity\n    guid: ${g(1)}\n`,
   );
   put(
     root,
-    "Assets/Scenes/Main.unity",
+    "Assets/Scenes/Entry.unity",
     `${HEADER}--- !u!1 &1\nGameObject:\n  m_Name: Root\n` +
       `--- !u!1001 &1001\nPrefabInstance:\n  m_SourcePrefab: {fileID: 100100000, guid: ${g(10)}, type: 3}\n` +
       "--- !u!20 &900\nCamera:\n  m_Enabled: 1\n  orthographic: 1\n",
@@ -103,13 +103,13 @@ function gameProject(): string {
   );
   put(
     root,
-    "Assets/Prefabs/Frog.prefab",
-    `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Frog\n` +
+    "Assets/Prefabs/Signpost.prefab",
+    `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Signpost\n` +
       `--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Sprite: {fileID: 21300000, guid: ${g(20)}, type: 3}\n`,
     g(10),
   );
   put(root, "Assets/Prefabs/Unused.prefab", `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Unused\n`, g(11));
-  put(root, "Assets/Art/Frog.png", png(16, 16, "noise"), g(20));
+  put(root, "Assets/Art/Signpost.png", png(16, 16, "noise"), g(20));
   put(root, "Assets/Art/Placeholder.png", png(32, 32, "flat"), g(21));
   put(root, "Assets/Art/Broken.png", Buffer.from("not a png"), g(22));
   put(root, "Assets/Audio/a.wav", wav(0.2, 1), g(30));

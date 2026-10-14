@@ -24,11 +24,11 @@ const deps = {
 
 function libraryProject(): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "spec-gate-"));
-  const scripts = join(root, "Assets", "Modules", "QuarryModule", "Scripts");
+  const scripts = join(root, "Assets", "Modules", "ApiaryModule", "Scripts");
   mkdirSync(scripts, { recursive: true });
-  const configPath = join(scripts, "QuarryModuleConfig.cs");
-  writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Game.Quarry.asmdef"), '{"name":"Game.Quarry"}');
+  const configPath = join(scripts, "ApiaryModuleConfig.cs");
+  writeFileSync(configPath, "public class ApiaryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Apiary.asmdef"), '{"name":"Game.Apiary"}');
   return { root, configPath };
 }
 

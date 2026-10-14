@@ -1,5 +1,5 @@
 /**
- * The acceptance test writer (GDD-drift plan W06, M3).
+ * The acceptance test writer.
  *
  * A milestone is green only when its own GDD rows pass checks the system
  * owns. Those checks are only worth something if they test what the GDD

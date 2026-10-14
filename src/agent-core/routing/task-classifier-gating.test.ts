@@ -9,7 +9,7 @@
  *
  * The comment cost real time in this repo: it was read, believed, and used to
  * rule the classifier out as the cause of a request being fanned into a
- * seven-node goal tree — which is exactly what it had done. A comment that
+ * multi-node goal tree — which is exactly what it had done. A comment that
  * contradicts the code is worse than no comment, because it is trusted.
  *
  * These tests pin the relationship so the two cannot drift apart silently again.
@@ -51,9 +51,9 @@ describe("complexity is decided by length alone", () => {
   });
 
   it("is blind to how many things the request actually names", () => {
-    // The measured case that makes any target-counting replacement a bad trade:
-    // a short request naming three files scores lower than a long one naming
-    // none, and it is the long prose one that needs decomposing.
+    // Why any target-counting replacement is a bad trade: a short request
+    // naming three files scores lower than a long one naming none, and it is
+    // the long prose one that needs decomposing.
     const threeFiles = "fix `A.cs`, `B.cs` and `C.cs`";
     const prose = "a".repeat(200);
 
