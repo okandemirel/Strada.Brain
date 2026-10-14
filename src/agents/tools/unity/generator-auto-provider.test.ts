@@ -41,7 +41,7 @@ function installModel(root: string, id: string): void {
  * Measured 2026-09-06: sd15 and TripoSR were installed (6.7 GB of weights
  * under ~/.strada/assets-local) and across a whole campaign `provider:
  * "local"` was requested zero times. Every sprite the game shipped was a
- * procedural blob — "Frog.png" is a red circle with two white squares —
+ * procedural blob — a character sprite was a coloured disc with two white dots —
  * because "procedural" was the default and nothing told the sprint otherwise.
  */
 /** A runner that is "installed" but refuses to draw — exercises the local branch without a model. */
@@ -106,16 +106,16 @@ describe("the installed model is the default; the placeholder is the fallback", 
     // localAvailable says yes and the stub runner refuses to draw, so the
     // local branch errors and the fallback is exercised without a model.
     const { root, ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "SpiceJar" }, ctx);
     expect(r.isError).toBeFalsy();
-    expect(existsSync(join(root, "Assets/Art/Generated/Frog.png"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/SpiceJar.png"))).toBe(true);
     expect(String(r.content)).toContain("PLACEHOLDER");
     expect(String(r.content)).toContain("local model failed");
   });
 
   it("sprite: with nothing installed, AUTO is procedural and SAYS it is a placeholder", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Frog" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "SpiceJar" }, ctx);
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).toContain("PLACEHOLDER: no local text-to-image model is installed");
   });
@@ -126,24 +126,24 @@ describe("the installed model is the default; the placeholder is the fallback", 
     // them as placeholder art.
     const { ctx } = project();
     const tool = new SpriteGenerateTool({ localAvailable: () => true, runner: refusing });
-    const refused = await tool.execute({ name: "Frog", provider: "procedural" }, ctx);
+    const refused = await tool.execute({ name: "SpiceJar", provider: "procedural" }, ctx);
     expect(refused.isError).toBe(true);
     expect(refused.content).toContain("placeholder-grade");
     expect(refused.content).toContain("acceptPlaceholder");
-    const accepted = await tool.execute({ name: "Frog", provider: "procedural", acceptPlaceholder: true }, ctx);
+    const accepted = await tool.execute({ name: "SpiceJar", provider: "procedural", acceptPlaceholder: true }, ctx);
     expect(accepted.isError).toBeFalsy();
   });
 
   it("mesh: a knowing 'procedural' is refused while a local model is installed", async () => {
     const { ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", shape: "sphere", provider: "procedural" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "SpiceJar", shape: "sphere", provider: "procedural" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("acceptPlaceholder");
   });
 
   it("sprite: a batch draws every name through one runner call and reports each file", async () => {
     // Measured 2026-09-07: ~45-60 s per sprite plus a model load per call;
-    // a GDD with 20 canvases × 10 areas is 200 round-trips one by one.
+    // a design with 36 stalls is 36 round-trips one by one.
     const { root, ctx } = project();
     const batchCalls: number[] = [];
     const runner = {
@@ -159,17 +159,17 @@ describe("the installed model is the default; the placeholder is the fallback", 
       }),
     } as unknown as LocalRunnerLike;
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
-      { batch: [{ name: "FrogRed" }, { name: "FrogBlue", prompt: "a blue frog" }, { name: "FrogGold" }] },
+      { batch: [{ name: "SpiceJar" }, { name: "SilkBolt", prompt: "a bolt of indigo silk" }, { name: "SaltBlock" }] },
       ctx,
     );
     expect(batchCalls).toEqual([3]);
     expect(runner.textToImage).not.toHaveBeenCalled();
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain("2 of 3 sprites written");
-    expect(r.content).toContain("✓ Assets/Art/Generated/FrogRed.png");
-    expect(r.content).toContain("✗ Assets/Art/Generated/FrogGold.png");
-    expect(existsSync(join(root, "Assets/Art/Generated/FrogBlue.png.meta"))).toBe(true);
-    expect(existsSync(join(root, "Assets/Art/Generated/FrogGold.png.meta"))).toBe(false); // orphan meta removed
+    expect(r.content).toContain("✓ Assets/Art/Generated/SpiceJar.png");
+    expect(r.content).toContain("✗ Assets/Art/Generated/SaltBlock.png");
+    expect(existsSync(join(root, "Assets/Art/Generated/SilkBolt.png.meta"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/SaltBlock.png.meta"))).toBe(false); // orphan meta removed
   });
 
   it("sprite: a blank draw is retried once with another seed, and reported ✗ when still blank", async () => {
@@ -187,20 +187,20 @@ describe("the installed model is the default; the placeholder is the fallback", 
       textToImageBatch: vi.fn(async (_spec: unknown, jobs: Array<{ out: string; seed?: number }>) => {
         calls++;
         for (const j of jobs) {
-          // Retry (a seed is set) succeeds for FrogA, FrogB stays blank forever.
-          if (j.seed !== undefined && j.out.endsWith("FrogA.png")) real(j.out);
-          else if (j.out.endsWith("FrogA.png")) blank(j.out);
+          // Retry (a seed is set) succeeds for DateBasket, Lantern stays blank forever.
+          if (j.seed !== undefined && j.out.endsWith("DateBasket.png")) real(j.out);
+          else if (j.out.endsWith("DateBasket.png")) blank(j.out);
           else blank(j.out);
         }
         return { ok: true, detail: `${jobs.length} written`, written: jobs.map((j) => j.out), missing: [], keptBackground: [] };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "FrogA" }, { name: "FrogB" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "DateBasket" }, { name: "Lantern" }] }, ctx);
     expect(calls).toBe(2); // one batch, one retry of the blanks
-    expect(r.content).toContain("✓ Assets/Art/Generated/FrogA.png");
-    expect(r.content).toContain("✗ Assets/Art/Generated/FrogB.png — drew nothing usable twice");
-    expect(existsSync(join(root, "Assets/Art/Generated/FrogB.png"))).toBe(false);
-    expect(existsSync(join(root, "Assets/Art/Generated/FrogB.png.meta"))).toBe(false);
+    expect(r.content).toContain("✓ Assets/Art/Generated/DateBasket.png");
+    expect(r.content).toContain("✗ Assets/Art/Generated/Lantern.png — drew nothing usable twice");
+    expect(existsSync(join(root, "Assets/Art/Generated/Lantern.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/Lantern.png.meta"))).toBe(false);
   });
 
   it("sprite: a kept background is said, not hidden", async () => {
@@ -214,7 +214,7 @@ describe("the installed model is the default; the placeholder is the fallback", 
         return { ok: true, detail: "1 written", written: jobs.map((j) => j.out), missing: [], keptBackground: [jobs[0]!.out] };
       }),
     } as unknown as LocalRunnerLike;
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "Frog" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ batch: [{ name: "SpiceJar" }] }, ctx);
     expect(r.content).toContain("background KEPT");
   });
 
@@ -230,29 +230,29 @@ describe("the installed model is the default; the placeholder is the fallback", 
 
   it("sprite: an accepted explicit placeholder is honoured and carries no placeholder note", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", provider: "procedural", acceptPlaceholder: true }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "SpiceJar", provider: "procedural", acceptPlaceholder: true }, ctx);
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).not.toContain("PLACEHOLDER");
   });
 
   it("sprite: explicit local does NOT silently fall back", async () => {
     const { root, ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "SpiceJar", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
-    expect(existsSync(join(root, "Assets/Art/Generated/Frog.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/SpiceJar.png"))).toBe(false);
   });
 
   it("mesh: AUTO with a local model falls back WITH a note when it fails", async () => {
     const { root, ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "Frog", shape: "sphere" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => true, runner: refusing }).execute({ name: "SpiceJar", shape: "sphere" }, ctx);
     expect(r.isError).toBeFalsy();
-    expect(existsSync(join(root, "Assets/Art/Generated/Meshes/Frog.obj"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/Meshes/SpiceJar.obj"))).toBe(true);
     expect(String(r.content)).toContain("PLACEHOLDER");
   });
 
   it("mesh: AUTO with nothing installed says it is a placeholder", async () => {
     const { ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Frog", shape: "sphere" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "SpiceJar", shape: "sphere" }, ctx);
     expect(String(r.content)).toContain("PLACEHOLDER: no local image-to-3D model is installed");
   });
 });
@@ -316,10 +316,11 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
   it("cuts at the first | and drops verification/config sentences", async () => {
     const { styleNotesForPrompt } = await import("./sprite-generate.js");
     const notes =
-      "Use flat cut-paper shapes over a painted, softly lit lake, with thick friendly outlines, and round lacquered frogs. " +
-      "| verification: visual assets for areas integrated into PresentationModule config and prefab references verified.";
+      "Sun-bleached sandstone under indigo ink linework. Hand-painted goods on every shelf. " +
+      "| verification: trade-route sprites integrated into the scene config and prefab references verified.";
     const out = styleNotesForPrompt(notes);
-    expect(out).toContain("round lacquered frogs");
+    expect(out).toContain("indigo ink linework");
+    expect(out).toContain("Hand-painted goods on every shelf");
     expect(out).not.toMatch(/verif|config|prefab/i);
   });
 
@@ -328,13 +329,13 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
     writeFileSync(
       join(root, "style.json"),
       JSON.stringify({
-        family: "toon-casual",
-        pipeline: "realtime-3d",
-        palette: ["#e4574c"],
-        outline: { width: 2, color: "#3a2a2a" },
+        family: "painterly",
+        pipeline: "sprite-native",
+        palette: ["#c9a46a", "#2e3a6b"],
+        outline: { width: 1, color: "#2e3a6b" },
         shading: "flat",
         references: [],
-        notes: "warm pastel palette. | verification: prefab references verified.",
+        notes: "sun-bleached sandstone and indigo ink. | verification: prefab references verified.",
       }),
     );
     const prompts: string[] = [];
@@ -347,8 +348,8 @@ describe("styleNotesForPrompt keeps the look and drops the report", () => {
       }),
       imageToMesh: vi.fn(async () => ({ ok: false, detail: "n/a" })),
     } as unknown as LocalRunnerLike;
-    await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ name: "Frog" }, ctx);
-    expect(prompts[0]).toContain("warm pastel palette");
+    await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute({ name: "SpiceJar" }, ctx);
+    expect(prompts[0]).toContain("sun-bleached sandstone and indigo ink");
     expect(prompts[0]).not.toMatch(/verif|prefab/i);
   });
 });
@@ -362,11 +363,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("a failed regeneration keeps the previous sprite AND its .meta (the guid every prefab references)", async () => {
     const { root, ctx } = project();
-    const png = join(root, "Assets/Art/Generated/Frog.png");
+    const png = join(root, "Assets/Art/Generated/SpiceJar.png");
     mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
     writeFileSync(png, pngFixture("noise"));
     writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Frog", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "SpiceJar", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("previous drawn sprite and its .meta were kept");
     expect(readFileSync(`${png}.meta`, "utf8")).toContain("guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -378,11 +379,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("AUTO does not overwrite drawn art with a placeholder when the model fails", async () => {
     const { root, ctx } = project();
-    const png = join(root, "Assets/Art/Generated/Frog.png");
+    const png = join(root, "Assets/Art/Generated/SpiceJar.png");
     mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
     writeFileSync(png, pngFixture("noise"));
     writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "Frog" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer(() => {}, false), specFor }).execute({ name: "SpiceJar" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("was KEPT");
     expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
@@ -391,11 +392,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("a blank-twice regeneration restores the previous good sprite instead of deleting it", async () => {
     const { root, ctx } = project();
-    const png = join(root, "Assets/Art/Generated/Frog.png");
+    const png = join(root, "Assets/Art/Generated/SpiceJar.png");
     mkdirSync(join(root, "Assets/Art/Generated"), { recursive: true });
     writeFileSync(png, pngFixture("noise"));
     writeFileSync(`${png}.meta`, "fileFormatVersion: 2\nguid: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n");
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("flat"))), specFor }).execute({ name: "Frog", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("flat"))), specFor }).execute({ name: "SpiceJar", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("previous drawn sprite was kept");
     expect(readFileSync(png).equals(pngFixture("noise"))).toBe(true);
@@ -403,11 +404,11 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("a cut-out that removed the subject (alpha specks) is not a usable sprite", async () => {
     const { root, ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("specks", 128))), specFor }).execute({ name: "GreenFrog", provider: "local" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: drawer((out) => writeFileSync(out, pngFixture("specks", 128))), specFor }).execute({ name: "IndigoRug", provider: "local" }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("opaque");
-    expect(existsSync(join(root, "Assets/Art/Generated/GreenFrog.png"))).toBe(false);
-    expect(existsSync(join(root, "Assets/Art/Generated/GreenFrog.png.meta"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/IndigoRug.png"))).toBe(false);
+    expect(existsSync(join(root, "Assets/Art/Generated/IndigoRug.png.meta"))).toBe(false);
   });
 
   it("a batch that drew nothing over earlier files reports 0 written, not 3", async () => {
@@ -444,13 +445,13 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("a path that resolves outside Assets/ is refused by every generator", async () => {
     const { root, ctx } = project();
-    const sprite = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Rocket", path: "Assets/../ProjectSettings" }, ctx);
+    const sprite = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Signpost", path: "Assets/../ProjectSettings" }, ctx);
     expect(sprite.isError).toBe(true);
     expect(sprite.content).toContain("outside Assets/");
-    expect(existsSync(join(root, "ProjectSettings/Rocket.png"))).toBe(false);
-    const mesh = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Rocket", shape: "cube", path: "Assets/.." }, ctx);
+    expect(existsSync(join(root, "ProjectSettings/Signpost.png"))).toBe(false);
+    const mesh = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Signpost", shape: "cube", path: "Assets/.." }, ctx);
     expect(mesh.isError).toBe(true);
-    expect(existsSync(join(root, "Rocket.obj"))).toBe(false);
+    expect(existsSync(join(root, "Signpost.obj"))).toBe(false);
     const { AudioGenerateTool } = await import("./audio-generate.js");
     const audio = await new AudioGenerateTool().execute({ name: "click", path: "Assets/../Library" }, ctx);
     expect(audio.isError).toBe(true);
@@ -459,7 +460,7 @@ describe("defects the generator review found (2026-09-07)", () => {
 
   it("repeated names in a batch are refused up front", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing, specFor }).execute({ batch: [{ name: "Frog" }, { name: "Frog" }] }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => true, runner: refusing, specFor }).execute({ batch: [{ name: "SpiceJar" }, { name: "SpiceJar" }] }, ctx);
     expect(r.isError).toBe(true);
     expect(r.content).toContain("repeat");
   });
@@ -485,7 +486,7 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
       }),
     } as unknown as LocalRunnerLike;
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
-      { batch: [{ name: "Frog" }, { name: "Rocket" }, { name: "Tree" }] },
+      { batch: [{ name: "SpiceJar" }, { name: "Signpost" }, { name: "Tree" }] },
       ctx,
     );
     // The duplicates were redrawn rather than counted as distinct artwork.
@@ -530,7 +531,7 @@ describe("a batch item's bare name meets the existing placeholder (2026-09-09 19
     } as unknown as LocalRunnerLike;
 
     const r = await new SpriteGenerateTool({ localAvailable: () => true, runner, specFor }).execute(
-      { batch: [{ name: "Frog" }, { name: "Rocket" }, { name: "Tree" }] },
+      { batch: [{ name: "SpiceJar" }, { name: "Signpost" }, { name: "Tree" }] },
       ctx,
     );
 
@@ -650,7 +651,7 @@ describe("AUTO runs the model that is installed, not the smallest the device cou
   it("mesh concept stage: the 2D model drawn with is sdxl, the lift uses the installed 3D model", async () => {
     const { ctx } = project();
     const runner = recorder((id) => id === "sdxl" || id === "triposr");
-    const r = await new MeshGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "Crate" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => true, runner, device: bigMac }).execute({ name: "SaltBlock" }, ctx);
     expect(String(r.content)).toContain("Mesh written by local image-to-3D");
     expect(runner.drawn).toEqual(["sdxl"]);
     expect(runner.lifted).toEqual(["triposr"]);

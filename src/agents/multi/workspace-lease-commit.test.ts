@@ -717,7 +717,7 @@ describe("orphaned lease salvage at construction", () => {
 
   it("with the seed maps the lease persisted, salvage COMMITS the crashed owner's work and quarantines only real conflicts", async () => {
     // Measured 2026-09-08 08:19: a restart mid-task quarantined five real
-    // Rocket sprites (186 KB each, drawn over 274-byte placeholders) and three
+    // sprites (186 KB each, drawn over 274-byte placeholders) and three
     // prefab edits; the project kept the placeholders because salvage had no
     // seed maps and could only quarantine. The lease now writes its seed maps
     // at acquire; a crashed owner's salvage commits by the live rules.
@@ -726,7 +726,7 @@ describe("orphaned lease salvage at construction", () => {
     expect(existsSync(`${lease.path}.seed.json`)).toBe(true);
     expect(existsSync(join(lease.path, ".strada-lease-seed.json"))).toBe(false);
     // Agent work in the lease: a new file and an edit of a seeded file.
-    writeFileSync(join(lease.path, "Assets", "Scripts", "RocketNose.png"), "REAL ART 186KB", "utf8");
+    writeFileSync(join(lease.path, "Assets", "Scripts", "SpiceJar.png"), "REAL ART 186KB", "utf8");
     writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent edit", "utf8");
     utimesSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), new Date(Date.now() + 5000), new Date(Date.now() + 5000));
     // The user evolved another seeded file in the PROJECT during the run.
@@ -758,7 +758,7 @@ describe("orphaned lease salvage at construction", () => {
     }, { timeout: 5000 });
 
     // Agent work landed in the project.
-    expect(readFileSync(join(source, "Assets", "Scripts", "RocketNose.png"), "utf8")).toBe("REAL ART 186KB");
+    expect(readFileSync(join(source, "Assets", "Scripts", "SpiceJar.png"), "utf8")).toBe("REAL ART 186KB");
     expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("agent edit");
     // The user's concurrent edit was kept; the agent's copy went to quarantine.
     expect(readFileSync(join(source, "Assets", "Scripts", "UserFile.cs"), "utf8")).toBe("user evolved this");

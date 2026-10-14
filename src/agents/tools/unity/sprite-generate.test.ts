@@ -49,12 +49,12 @@ describe("SpriteGenerateTool", () => {
 
   it("writes a PNG and a sprite .meta under Assets/", async () => {
     const result = await tool.execute(
-      { name: "Rocket", shape: "arrow", color: "#ff5500" },
+      { name: "Signpost", shape: "arrow", color: "#ff5500" },
       makeContext(dir),
     );
     expect(result.isError).toBeFalsy();
 
-    const pngPath = join(dir, "Assets", "Art", "Generated", "Rocket.png");
+    const pngPath = join(dir, "Assets", "Art", "Generated", "Signpost.png");
     expect(existsSync(pngPath)).toBe(true);
     const png = readFileSync(pngPath);
     expect(png.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -67,10 +67,10 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("is deterministic in shape/colour when only a name is given", async () => {
-    const r1 = await tool.execute({ name: "FrozenFrog" }, makeContext(dir));
-    const png1 = readFileSync(join(dir, "Assets", "Art", "Generated", "FrozenFrog.png"));
-    const r2 = await tool.execute({ name: "FrozenFrog" }, makeContext(dir));
-    const png2 = readFileSync(join(dir, "Assets", "Art", "Generated", "FrozenFrog.png"));
+    const r1 = await tool.execute({ name: "DateBasket" }, makeContext(dir));
+    const png1 = readFileSync(join(dir, "Assets", "Art", "Generated", "DateBasket.png"));
+    const r2 = await tool.execute({ name: "DateBasket" }, makeContext(dir));
+    const png2 = readFileSync(join(dir, "Assets", "Art", "Generated", "DateBasket.png"));
     expect(r1.isError).toBeFalsy();
     expect(r2.isError).toBeFalsy();
     // Same name → same shape, same palette, byte-identical render.
@@ -90,13 +90,13 @@ describe("SpriteGenerateTool", () => {
     const a = await tool.execute({ name: "Status/ClaimFeedback", path: "Assets/Modules/LiveOpsModule/Art" }, makeContext(dir));
     expect(a.isError, String(a.content)).toBeFalsy();
     expect(existsSync(join(dir, "Assets/Modules/LiveOpsModule/Art/Status/ClaimFeedback.png"))).toBe(true);
-    const b = await tool.execute({ name: "Assets/Art/Generated/Frog.png" }, makeContext(dir));
+    const b = await tool.execute({ name: "Assets/Art/Generated/SpiceJar.png" }, makeContext(dir));
     expect(b.isError, String(b.content)).toBeFalsy();
-    expect(existsSync(join(dir, "Assets/Art/Generated/Frog.png"))).toBe(true);
-    const c = await tool.execute({ path: "Assets/Art/Generated", batch: [{ name: "Ball.png" }, { name: "Icons/Hand" }] }, makeContext(dir));
+    expect(existsSync(join(dir, "Assets/Art/Generated/SpiceJar.png"))).toBe(true);
+    const c = await tool.execute({ path: "Assets/Art/Generated", batch: [{ name: "SaltBlock.png" }, { name: "Icons/Compass" }] }, makeContext(dir));
     expect(c.isError, String(c.content)).toBeFalsy();
-    expect(existsSync(join(dir, "Assets/Art/Generated/Ball.png"))).toBe(true);
-    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Hand.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/SaltBlock.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Compass.png"))).toBe(true);
   });
 
   it("a bare name that names an existing placeholder elsewhere under Assets/ overwrites THAT placeholder (measured 2026-09-09 19:24: 12 new files beside 12 untouched placeholders)", async () => {
@@ -139,10 +139,10 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("a batch item may name its target as path/file, and one malformed item does not cost the rest their turn (measured 2026-09-09 21:21)", async () => {
-    const r = await tool.execute({ batch: [{ path: "Assets/Art/Generated/Ball.png" }, { name: "" }, { file: "Icons/Hand" }], acceptPlaceholder: true }, makeContext(dir));
+    const r = await tool.execute({ batch: [{ path: "Assets/Art/Generated/SaltBlock.png" }, { name: "" }, { file: "Icons/Compass" }], acceptPlaceholder: true }, makeContext(dir));
     expect(r.isError, String(r.content)).toBeFalsy();
-    expect(existsSync(join(dir, "Assets/Art/Generated/Ball.png"))).toBe(true);
-    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Hand.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/SaltBlock.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets/Art/Generated/Icons/Compass.png"))).toBe(true);
     expect(String(r.content)).toContain("1 item(s) skipped");
     const none = await tool.execute({ batch: [{ name: "" }, { name: "1bad" }] }, makeContext(dir));
     expect(none.isError).toBe(true);
@@ -150,13 +150,13 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("refuses output outside Assets/", async () => {
-    const result = await tool.execute({ name: "Rocket", path: "SomewhereElse" }, makeContext(dir));
+    const result = await tool.execute({ name: "Signpost", path: "SomewhereElse" }, makeContext(dir));
     expect(result.isError).toBe(true);
     expect(String(result.content)).toContain("Assets");
   });
 
   it("honours read-only mode", async () => {
-    const result = await tool.execute({ name: "Rocket" }, makeContext(dir, true));
+    const result = await tool.execute({ name: "Signpost" }, makeContext(dir, true));
     expect(result.isError).toBe(true);
   });
 
@@ -182,15 +182,15 @@ describe("SpriteGenerateTool", () => {
   });
 
   it("accepts a custom output dir under Assets/", async () => {
-    mkdirSync(join(dir, "Assets", "Modules", "BoardModule", "Sprites"), { recursive: true });
+    mkdirSync(join(dir, "Assets", "Modules", "MarketModule", "Sprites"), { recursive: true });
     // Pre-create the meta-less dir chain the way a module would.
-    writeFileSync(join(dir, "Assets", "Modules", "BoardModule", "Sprites", "keep.txt"), "x");
+    writeFileSync(join(dir, "Assets", "Modules", "MarketModule", "Sprites", "keep.txt"), "x");
     const result = await tool.execute(
-      { name: "Frog_Red", path: "Assets/Modules/BoardModule/Sprites" },
+      { name: "Stall_Corner", path: "Assets/Modules/MarketModule/Sprites" },
       makeContext(dir),
     );
     expect(result.isError).toBeFalsy();
-    expect(existsSync(join(dir, "Assets", "Modules", "BoardModule", "Sprites", "Frog_Red.png"))).toBe(true);
+    expect(existsSync(join(dir, "Assets", "Modules", "MarketModule", "Sprites", "Stall_Corner.png"))).toBe(true);
   });
 });
 

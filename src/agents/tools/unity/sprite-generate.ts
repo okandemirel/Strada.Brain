@@ -496,8 +496,8 @@ export type LocalRunnerLike = Pick<
 /**
  * The part of style.json's notes that describes a LOOK. Measured 2026-09-07:
  * the project's notes read "…<the art direction>. | verification: visual assets
- * for areas … integrated into PresentationModule config and prefab references
- * verified." — a sprint had appended its report to the art direction, and
+ * … integrated into the scene config and prefab references verified." — a
+ * sprint had appended its report to the art direction, and
  * every default diffusion prompt carried that sentence. Only the first
  * "|"-segment, and never a sentence about verification, config or prefabs.
  */
@@ -623,7 +623,7 @@ export class SpriteGenerateTool implements ITool {
     properties: {
       name: {
         type: "string",
-        description: "Element name the sprite is for, e.g. 'Rocket' or 'IceCrate'. Also the file name.",
+        description: "Element name the sprite is for, e.g. 'Door' or 'Signpost'. Also the file name.",
       },
       path: {
         type: "string",
@@ -661,8 +661,8 @@ export class SpriteGenerateTool implements ITool {
       batch: {
         type: "array",
         description:
-          `Up to ${SPRITE_BATCH_MAX} sprites in ONE call — the local model loads once and draws them all (a GDD ` +
-          "area's canvases, a family of character skins). Each item: { name, prompt? }; path/size/negative apply to all. " +
+          `Up to ${SPRITE_BATCH_MAX} sprites in ONE call — the local model loads once and draws them all (the props ` +
+          "one screen of a GDD lists, a set of UI icons). Each item: { name, prompt? }; path/size/negative apply to all. " +
           "The result names every file written and every one that failed.",
         items: {
           type: "object",
@@ -729,7 +729,7 @@ export class SpriteGenerateTool implements ITool {
     const rawName = target.name;
     if (!/^[A-Za-z][\w-]{0,40}$/.test(rawName)) {
       return {
-        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'IceCrate')",
+        content: "Error: name must start with a letter and contain only letters, digits, _ or - (e.g. 'Signpost')",
         isError: true,
       };
     }
@@ -915,10 +915,9 @@ export class SpriteGenerateTool implements ITool {
 
             // The project's style.json (GDD-derived, never universal) steers
             // the default prompt. WITHOUT one, nothing is assumed: the
-            // fallback used to ask for a "mobile casual game character" with
-            // a thick outline and glossy shading — one game's art direction,
-            // applied to every document and every asset, and contradicting
-            // the profile's own notes when they said otherwise (Codex
+            // fallback used to ask for one fixed character look — a single
+            // art direction, applied to every document and every asset, and
+            // contradicting the profile's own notes when they said otherwise (Codex
             // 2026-09-12 T#13).
             let family = "unspecified";
             let notes = "";
@@ -961,7 +960,7 @@ export class SpriteGenerateTool implements ITool {
   /**
    * Many sprites, one model load. Measured 2026-09-07: one sprite is ~45-60 s
    * on this machine and every call paid a ~10 s pipeline load plus a model
-   * round-trip; a GDD with 20 canvases per area and 10 areas is 200 sprites.
+   * round-trip; a design with 36 stalls is 36 round-trips.
    */
   private async executeBatch(
     input: Record<string, unknown>,
@@ -1132,7 +1131,7 @@ export class SpriteGenerateTool implements ITool {
         if (why !== undefined) unusable.set(j.fullPath, why);
       }
       // …and TWO SUBJECTS CANNOT SHARE ONE IMAGE. A runner that wrote the same
-      // valid picture for Frog, Rocket and Tree reported "3 of 3 sprites
+      // valid picture for SpiceJar, Signpost and Tree reported "3 of 3 sprites
       // written" and the inventory counted three sprites with no placeholders
       // (Codex 2026-09-11 N#10). The retry below redraws them with new seeds.
       const byContent = new Map<string, string>();

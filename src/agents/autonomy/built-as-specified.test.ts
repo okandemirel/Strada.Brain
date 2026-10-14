@@ -64,13 +64,13 @@ const prefabInstance = (guid: string, id = 1001): string =>
 
 /** A prefab whose SpriteRenderer binds a real project sprite. */
 const artPrefab = (spriteGuid: string): string =>
-  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Frog\n` +
+  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Stall\n` +
   `--- !u!212 &8\nSpriteRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 2100000, guid: aaaabbbbccccddddeeeeffff00001111, type: 2}\n` +
   `  m_Sprite: {fileID: 21300000, guid: ${spriteGuid}, type: 3}\n`;
 
 /** A prefab whose renderers are Unity built-ins only (Cube + Default-Material). */
 const primitivePrefab = (): string =>
-  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Block\n` +
+  `${HEADER}--- !u!1 &7\nGameObject:\n  m_Name: Signpost\n` +
   `--- !u!33 &9\nMeshFilter:\n  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}\n` +
   `--- !u!23 &8\nMeshRenderer:\n  m_Enabled: 1\n  m_Materials:\n  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}\n`;
 
@@ -126,20 +126,20 @@ describe("assessBuiltAsSpecified — refusal", () => {
     put(
       root,
       "Assets/Settings/PresentationPrefabConfig.asset",
-      `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _frogPrefab: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n`,
+      `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _stallPrefab: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n`,
       "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
     );
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
     // Unbound art: a prefab and a model nothing reaches.
-    put(root, "Assets/Prefabs/Ball.prefab", artPrefab("44444444444444444444444444444444"), "33333333333333333333333333333333");
-    put(root, "Assets/Art/Models/Frog.fbx", "binary", "55555555555555555555555555555555");
-    put(root, "Assets/Art/ball.png", "pixels", "44444444444444444444444444444444");
+    put(root, "Assets/Prefabs/SpiceJar.prefab", artPrefab("44444444444444444444444444444444"), "33333333333333333333333333333333");
+    put(root, "Assets/Art/Models/Stall.fbx", "binary", "55555555555555555555555555555555");
+    put(root, "Assets/Art/spice_jar.png", "pixels", "44444444444444444444444444444444");
     // The geometry the player actually sees.
     put(
       root,
-      "Assets/Scripts/BoardBuilder.cs",
-      "public class BoardBuilder { void Build() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }",
+      "Assets/Scripts/MarketBuilder.cs",
+      "public class MarketBuilder { void Build() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }",
       "66666666666666666666666666666666",
     );
 
@@ -152,8 +152,8 @@ describe("assessBuiltAsSpecified — refusal", () => {
     // …the counts…
     expect(report.refusal).toContain("0 world renderer components");
     // …and the unbound assets it found.
-    expect(report.refusal).toContain("Assets/Prefabs/Ball.prefab");
-    expect(report.refusal).toContain("Assets/Art/Models/Frog.fbx");
+    expect(report.refusal).toContain("Assets/Prefabs/SpiceJar.prefab");
+    expect(report.refusal).toContain("Assets/Art/Models/Stall.fbx");
     expect(report.refusal).toContain("GameObject.CreatePrimitive");
     expect(report.refusal).toContain("unity_bind_sprite");
     expect(report.refusal).toContain("unity_place_prefab");
@@ -161,11 +161,11 @@ describe("assessBuiltAsSpecified — refusal", () => {
     // The scaffolding scene is measured but not judged as shipped work.
     expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/ProductionMain.unity"]);
     // The prefab the config points at is NOT called unbound…
-    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Frog.prefab");
+    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Stall.prefab");
     // …but its 1 renderer is reported as referenced-only, never as shipped.
     expect(report.referencedOnlyRenderers).toBe(1);
-    expect(report.unboundPrefabs).toContain("Assets/Prefabs/Ball.prefab");
-    expect(report.primitiveScripts).toEqual(["Assets/Scripts/BoardBuilder.cs"]);
+    expect(report.unboundPrefabs).toContain("Assets/Prefabs/SpiceJar.prefab");
+    expect(report.primitiveScripts).toEqual(["Assets/Scripts/MarketBuilder.cs"]);
   });
 
   it("refuses when every placed renderer is a Unity built-in and art sits unbound", () => {
@@ -177,9 +177,9 @@ describe("assessBuiltAsSpecified — refusal", () => {
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Block.prefab", primitivePrefab(), "11111111111111111111111111111111");
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "33333333333333333333333333333333");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Signpost.prefab", primitivePrefab(), "11111111111111111111111111111111");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "33333333333333333333333333333333");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -189,7 +189,7 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toContain("Every renderer the shipped scenes have is a Unity built-in");
     expect(report.refusal).toContain("Default-Material");
     expect(report.refusal).toContain("built-in Cube mesh");
-    expect(report.refusal).toContain("Assets/Prefabs/Frog.prefab");
+    expect(report.refusal).toContain("Assets/Prefabs/Stall.prefab");
   });
 });
 
@@ -203,8 +203,8 @@ describe("assessBuiltAsSpecified — passes", () => {
       `${HEADER}${CAMERA(1)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -245,8 +245,8 @@ describe("assessBuiltAsSpecified — passes", () => {
     );
     put(root, "Assets/InitTestScene4abd18f9-8be4-4a53.unity", `${HEADER}${CAMERA(0)}`, "5cf5f5f5f5f5f5f5f5f5f5f5f5f5f5f5");
     put(root, "Assets/Tests/Runtime/BootFixture.unity", `${HEADER}${CAMERA(0)}`, "5cd5d5d5d5d5d5d5d5d5d5d5d5d5d5d5");
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
     // A fixture prefab and an editor-only tool: neither is the game's art or
     // the game's geometry.
     put(root, "Assets/Tests/Runtime/Fixture.prefab", artPrefab("44444444444444444444444444444444"), "77777777777777777777777777777777");
@@ -286,8 +286,8 @@ describe("assessBuiltAsSpecified — passes", () => {
       `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
     put(
       root,
       "Assets/Scripts/Dead.cs",
@@ -323,8 +323,8 @@ describe("assessBuiltAsSpecified — what it could not measure", () => {
     const root = project();
     buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
     put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}`, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root, undefined, { walkBudget: 2 });
     // Both walks are budgeted, and each says so in its own words.
@@ -361,8 +361,8 @@ describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
         `  m_EditorClassIdentifier: Strada.Core::Strada.Core.Bootstrap.GameBootstrapper\n`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
 
     const report = assessBuiltAsSpecified(root);
     const entry = report.scenes[0]!;
@@ -386,11 +386,11 @@ describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
       `${HEADER}--- !u!1 &100\nGameObject:\n  m_Name: Root\n${prefabInstance("11111111111111111111111111111111")}`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/frog.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/stall.png", "pixels", "22222222222222222222222222222222");
 
     const entry = assessBuiltAsSpecified(root).scenes[0]!;
-    // The placed Frog prefab holds a GameObject of its own; the scene's count
+    // The placed Stall prefab holds a GameObject of its own; the scene's count
     // must stay 1, or "how full is this scene" answers with the prefab's guts.
     expect(entry.gameObjects).toBe(1);
     expect(entry.prefabInstances).toBe(1);
@@ -473,7 +473,7 @@ function boundSpriteProject(root: string, spriteGuid: string): void {
     `${HEADER}${CAMERA(0)}${prefabInstance("11111111111111111111111111111111")}`,
     "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
   );
-  put(root, "Assets/Prefabs/Frog.prefab", artPrefab(spriteGuid), "11111111111111111111111111111111");
+  put(root, "Assets/Prefabs/Stall.prefab", artPrefab(spriteGuid), "11111111111111111111111111111111");
 }
 
 describe("assessBuiltAsSpecified — placeholder-grade art", () => {
@@ -483,9 +483,9 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
   it("refuses when the sprite art is overwhelmingly flat shapes, naming counts, files and the tools", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Generated/Frog.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Stall.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
     for (let i = 1; i <= 11; i++) {
-      putBytes(root, `Assets/Art/Areas/SunnyFarm/Artwork_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
+      putBytes(root, `Assets/Art/Routes/SaltRoad/Stall_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
     }
     putBytes(root, "Assets/Art/Real/Hero.png", png(64, 64, "noise"), "c0000000000000000000000000000000");
 
@@ -498,32 +498,32 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     expect(report.refusal).toContain("SAME name and the SAME path as the placeholder file");
     // …and what is real already, so the next sprint does not redraw it.
     expect(report.disclosures.join("\n")).toContain("1 are real art already (newest first: Assets/Art/Real/Hero.png)");
-    expect(report.refusal).toContain("Assets/Art/Areas/SunnyFarm/Artwork_1.png");
+    expect(report.refusal).toContain("Assets/Art/Routes/SaltRoad/Stall_1.png");
     expect(report.refusal).toContain("unity_generate_sprite");
     expect(report.refusal).toContain("unity_my_assets_cloud");
   });
 
   it("names the placeholders a shipped scene binds FIRST, and says to replace those before wiring more", () => {
-    // Measured 2026-09-07 22:40: a sprint wired six area-background prefabs to
+    // Measured 2026-09-07 22:40: a sprint wired six backdrop prefabs to
     // placeholder PNGs while the refusal's examples were unbound LiveOps icons.
     const root = project();
-    boundSpriteProject(root, "a0000000000000000000000000000000"); // Frog.prefab placed, sprite a000… bound
-    putBytes(root, "Assets/Art/frog.png", png(64, 64, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
+    boundSpriteProject(root, "a0000000000000000000000000000000"); // Stall.prefab placed, sprite a000… bound
+    putBytes(root, "Assets/Art/stall.png", png(64, 64, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
     for (let i = 1; i <= 11; i++) {
       putBytes(root, `Assets/Art/LiveOps/Icon_${i}.png`, png(64, 64, "flat"), `b${String(i).padStart(31, "0")}`);
     }
     const report = assessBuiltAsSpecified(root);
     expect(report.boundPlaceholderSprites).toBe(1);
-    expect(report.placeholderSpritePaths[0]).toBe("Assets/Art/frog.png");
+    expect(report.placeholderSpritePaths[0]).toBe("Assets/Art/stall.png");
     expect(report.refusal).toContain("1 of them are bound into the shipped scenes");
     expect(report.refusal).toContain("do not wire more placeholders");
-    expect(report.refusal!.indexOf("Assets/Art/frog.png")).toBeLessThan(report.refusal!.indexOf("Icon_"));
+    expect(report.refusal!.indexOf("Assets/Art/stall.png")).toBeLessThan(report.refusal!.indexOf("Icon_"));
   });
 
   it("only discloses when the placeholders are a minority", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Frog.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Stall.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
     for (let i = 1; i <= 8; i++) {
       putBytes(root, `Assets/Art/Real/Hero_${i}.png`, png(64, 64, "noise"), `c${String(i).padStart(31, "0")}`);
     }
@@ -540,7 +540,7 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
     // Fewer than the minimum, and one is not even a PNG.
-    putBytes(root, "Assets/Art/Generated/Frog.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Generated/Stall.png", png(64, 64, "flat"), "a0000000000000000000000000000000");
     put(root, "Assets/Art/junk.png", "pixels", "e0000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
@@ -579,11 +579,11 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
   it("counts clips, duplicates by content and blips, and says so", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Frog.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/music_base_loop.wav", wav(3, 7), "d1000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/music_beach.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
-    putBytes(root, "Assets/Audio/ui_click.wav", wav(0.15, 3), "d3000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/win.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Stall.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/music_caravan.wav", wav(3, 7), "d1000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/music_dunes.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
+    putBytes(root, "Assets/Audio/ui_select.wav", wav(0.15, 3), "d3000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/sale.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
 
@@ -592,15 +592,15 @@ describe("assessBuiltAsSpecified — audio inventory", () => {
     expect(report.artInventory.shortAudio).toBe(1);
     const line = report.disclosures.find((d) => d.startsWith("Project audio"))!;
     expect(line).toContain("4 clips, 3 distinct by content");
-    expect(line).toContain("music_beach.wav = Assets/Audio/music_base_loop.wav");
+    expect(line).toContain("music_dunes.wav = Assets/Audio/music_caravan.wav");
     expect(line).toContain("1 shorter than 0.5s");
-    expect(line).toContain("ui_click.wav");
+    expect(line).toContain("ui_select.wav");
   });
 
   it("says when there is no audio at all", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Art/Real/Frog.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
+    putBytes(root, "Assets/Art/Real/Stall.png", png(64, 64, "noise"), "a0000000000000000000000000000000");
     expect(assessBuiltAsSpecified(root).disclosures).toContain("Project audio: no audio clips under Assets/ at all.");
   });
 });
@@ -617,8 +617,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
     buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
     put(root, "Assets/Scenes/Main.unity",
       `${HEADER}${CAMERA(0)}--- !u!1 &30\nGameObject:\n  m_Name: Score\n--- !u!222 &31\nCanvasRenderer:\n  m_GameObject: {fileID: 30}\n`, G("5"));
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab(G("2")), G("1"));
-    put(root, "Assets/Art/frog.png", "pixels", G("2"));
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/stall.png", "pixels", G("2"));
     put(root, "Assets/Scripts/World.cs", "class W { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }", G("6"));
     const report = assessBuiltAsSpecified(root);
     expect(report.shippedRenderers).toBe(1);
@@ -655,7 +655,7 @@ describe("defects the measurement review found (2026-09-07)", () => {
     const withPrimitives = project();
     buildSettings(withPrimitives, [{ path: "Assets/Scenes/Main.unity" }]);
     put(withPrimitives, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}${canvases}`, G("5"));
-    put(withPrimitives, "Assets/Prefabs/Frog.prefab", artPrefab(G("2")), G("1"));
+    put(withPrimitives, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
     put(withPrimitives, "Assets/Art/thing.png", "pixels", G("2"));
     put(withPrimitives, "Assets/Scripts/World.cs", "class W { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); GameObject.CreatePrimitive(PrimitiveType.Sphere); } }", G("6"));
     expect(assessBuiltAsSpecified(withPrimitives).refusal).toContain("render NOTHING");
@@ -839,9 +839,9 @@ describe("defects the measurement review found (2026-09-07)", () => {
     const root = project();
     buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
     put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  m_EditorClassIdentifier: Assembly-CSharp::Spawner\n`, G("5"));
-    put(root, "Assets/Resources/Prefabs/Frog.prefab", artPrefab(G("2")), G("1"));
-    put(root, "Assets/Art/frog.png", "pixels", G("2"));
-    put(root, "Assets/Scripts/Spawner.cs", "class Spawner { void S() { Instantiate(Resources.Load(\"Prefabs/Frog\")); } }", G("6"));
+    put(root, "Assets/Resources/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/stall.png", "pixels", G("2"));
+    put(root, "Assets/Scripts/Spawner.cs", "class Spawner { void S() { Instantiate(Resources.Load(\"Prefabs/Stall\")); } }", G("6"));
     const report = assessBuiltAsSpecified(root);
     expect(report.refusal).toBeUndefined();
     expect(report.referencedOnlyRenderers).toBe(1);
@@ -892,8 +892,8 @@ describe("defects the measurement review found (2026-09-07)", () => {
     const root = project();
     buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
     put(root, "Assets/Scenes/Main.unity", crlf, G("5"));
-    put(root, "Assets/Prefabs/Frog.prefab", artPrefab(G("2")), G("1"));
-    put(root, "Assets/Art/frog.png", "pixels", G("2"));
+    put(root, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
+    put(root, "Assets/Art/stall.png", "pixels", G("2"));
     const report = assessBuiltAsSpecified(root);
     expect(report.refusal).toBeUndefined();
     expect(report.shippedRenderers).toBe(1); // not 2: the stripped doc is the same renderer
@@ -911,7 +911,7 @@ describe("defects the measurement review found (2026-09-07)", () => {
     const missing = project();
     buildSettings(missing, [{ path: "Assets/Scenes/Gone.unity" }, { path: "Assets/Scenes/Main.unity" }]);
     put(missing, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}`, G("5"));
-    put(missing, "Assets/Art/frog.png", "pixels", G("2"));
+    put(missing, "Assets/Art/stall.png", "pixels", G("2"));
     expect(assessBuiltAsSpecified(missing).refusal).toContain("Gone.unity — missing from disk");
   });
 
@@ -920,9 +920,9 @@ describe("defects the measurement review found (2026-09-07)", () => {
       const root = project();
       buildSettings(root, [{ path: "Assets/Scenes/Main.unity" }]);
       put(root, "Assets/Scenes/Main.unity", `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _config: {fileID: 11400000, guid: ${G("c")}, type: 2}\n`, G("5"));
-      put(root, "Assets/Settings/Config.asset", `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _frog: {fileID: 7, guid: ${G("1")}, type: 3}\n`, G("c"));
-      put(root, "Assets/Prefabs/Frog.prefab", artPrefab(G("2")), G("1"));
-      put(root, "Assets/Art/frog.png", "pixels", G("2"));
+      put(root, "Assets/Settings/Config.asset", `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  _stall: {fileID: 7, guid: ${G("1")}, type: 3}\n`, G("c"));
+      put(root, "Assets/Prefabs/Stall.prefab", artPrefab(G("2")), G("1"));
+      put(root, "Assets/Art/stall.png", "pixels", G("2"));
       put(root, "Assets/Scripts/Fader.cs", `class Fader { void F() { ${"GameObject.CreatePrimitive(PrimitiveType.Quad); ".repeat(calls)} } }`, G("6"));
       return assessBuiltAsSpecified(root).refusal ?? "none";
     };
