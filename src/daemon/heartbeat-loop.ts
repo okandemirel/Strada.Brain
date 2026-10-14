@@ -447,6 +447,24 @@ export class HeartbeatLoop {
       return; // Skip all triggers this tick
     }
 
+    // EVERY PROVIDER COOLING IS NOTHING TO FIRE INTO. A trigger's action is an
+    // agent task, so firing one while the whole chain is in cooldown submits a
+    // task that can only fail, blocks it, and comes back on the next tick:
+    // measured live 2026-10-14, a 2-hour quota wall had the 5-minute
+    // health-check cron queue blocked task after blocked task, each spending
+    // its turns on "All providers are in cooldown". The consolidation path
+    // above already reads this registry; the triggers did not.
+    if (ProviderHealthRegistry.getInstance().areAllUnavailable()) {
+      if (!this.providersCoolingEmitted) {
+        this.providersCoolingEmitted = true;
+        this.logger.info("Triggers skipped — every provider is cooling down", { triggers: triggers.length });
+      }
+      this.lastTick = now;
+      return;
+    }
+    // Usable again: announce the next outage once, not once per tick.
+    this.providersCoolingEmitted = false;
+
     // Sequential evaluation -- prevents budget race conditions
     for (const trigger of triggers) {
       const outcome = this.evaluateTrigger(trigger, now, budgetUsage, false);
@@ -618,6 +636,9 @@ export class HeartbeatLoop {
    * The unified budget's refusal to dispatch any trigger now, or undefined
    * when it allows it. Checked once per tick, and by every manual fire.
    */
+  /** Latch for the cooling-chain notice, so an outage is announced once. */
+  private providersCoolingEmitted = false;
+
   private unifiedBudgetRefusal(now: Date): string | undefined {
     const manager = this.unifiedBudgetManager;
     if (!manager) return undefined;

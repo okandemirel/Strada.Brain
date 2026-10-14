@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HeartbeatLoop } from "./heartbeat-loop.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
+import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import { TriggerRegistry } from "./trigger-registry.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
@@ -1247,6 +1248,70 @@ function makeBudgetStorage() {
     getAllBudgetConfig: () => ({ ...cfg }),
   };
 }
+
+/**
+ * EVERY PROVIDER COOLING IS NOTHING TO FIRE INTO. Measured live 2026-10-14: a
+ * two-hour quota wall had the 5-minute health-check cron queue blocked task
+ * after blocked task, each spending its turns on "All providers are in
+ * cooldown". The consolidation path in the same tick already reads this
+ * registry; the triggers did not.
+ */
+describe("HeartbeatLoop — a fully cooling chain gates trigger dispatch", () => {
+  let registry: TriggerRegistry;
+  let taskManager: ReturnType<typeof makeTaskManager>;
+  let loop: HeartbeatLoop;
+  let config: DaemonConfig;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ProviderHealthRegistry.resetInstance();
+    registry = new TriggerRegistry();
+    taskManager = makeTaskManager();
+    config = makeDaemonConfig();
+    loop = new HeartbeatLoop(
+      registry, taskManager as any, makeBudgetTracker() as any, makeSecurityPolicy() as any,
+      makeApprovalQueue() as any, makeStorage() as any, makeIdentityManager() as any, makeEventBus(),
+      config, makeLogger() as any,
+    );
+  });
+
+  afterEach(() => {
+    loop.stop();
+    ProviderHealthRegistry.resetInstance();
+    vi.useRealTimers();
+  });
+
+  async function tick(): Promise<void> {
+    registry.register(makeTrigger("t1", { shouldFire: true }));
+    loop.start();
+    await vi.advanceTimersByTimeAsync(config.heartbeat.intervalMs + 10);
+  }
+
+  it("fires nothing while every provider of the chain is cooling", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    health.recordQuotaExhausted("opencode", "usage quota exhausted (resets in ~2h)");
+    expect(health.areAllUnavailable()).toBe(true);
+
+    await tick();
+
+    expect(taskManager.submit).not.toHaveBeenCalled();
+  });
+
+  it("fires again as soon as one provider is usable", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    health.recordQuotaExhausted("opencode", "usage quota exhausted (resets in ~2h)");
+    // A second account that failed once and answered since: an entry the
+    // registry knows, and knows is healthy again (recordSuccess returns early
+    // for a provider it has never seen fail).
+    health.recordFailure("opencode2", "a blip");
+    health.recordSuccess("opencode2");
+    expect(health.areAllUnavailable()).toBe(false);
+
+    await tick();
+
+    expect(taskManager.submit).toHaveBeenCalled();
+  });
+});
 
 describe("HeartbeatLoop — the daemon daily sub-limit gates trigger dispatch", () => {
   let registry: TriggerRegistry;
