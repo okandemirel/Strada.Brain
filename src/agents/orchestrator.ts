@@ -72,7 +72,7 @@ import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
-import { logProviderCall, toolDefinitionChars } from "./providers/provider-call-log.js";
+import { conversationChars, logProviderCall, toolDefinitionChars } from "./providers/provider-call-log.js";
 import { archiveToolFailure } from "./tool-failure-archive.js";
 import { unknownToolMessage } from "./unknown-tool-hint.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
@@ -4511,6 +4511,9 @@ export class Orchestrator {
           messages: session?.messages?.length ?? 0,
           tools: toolDefinitions?.length ?? 0,
           toolChars: toolDefinitionChars(toolDefinitions),
+          // What the loop RE-SENDS every turn. Without it a 20M-token
+          // milestone could not be aimed at anything (2026-10-14).
+          ...conversationChars(session?.messages),
         });
         this.classifySilentStreamResponse(response, provider);
         return response;
@@ -4611,6 +4614,7 @@ export class Orchestrator {
         messages: session?.messages?.length ?? 0,
         tools: toolDefinitions?.length ?? 0,
         toolChars: toolDefinitionChars(toolDefinitions),
+        ...conversationChars(session?.messages),
       });
       // Route empty 200s to the health-failure path (the shared breaker predicate, audit #9).
       this.classifySilentStreamResponse(response, provider);

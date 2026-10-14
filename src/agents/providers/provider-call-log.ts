@@ -24,6 +24,50 @@ export function toolDefinitionChars(tools: ReadonlyArray<unknown> | undefined): 
 }
 
 /**
+ * How much of the request the CONVERSATION is, and how much of that is one
+ * message.
+ *
+ * Measured 2026-10-14 on the proof run: 241 turns, a median 89k input tokens
+ * each, 20.0M in total for one unfinished milestone — while the system prompt
+ * (`promptChars`) accounted for ~20k tokens and the tool catalogue
+ * (`toolChars`) for ~9k. The rest is the history the loop re-sends every
+ * turn, and nothing measured it, so "the run is expensive" could not be
+ * aimed at anything. Session compaction never ran: its trigger is 0.7 of a
+ * 256k configured window and the largest turn reached 137k.
+ *
+ * Content is summed without stringifying the whole array: a turn carrying a
+ * 300 KB history should not pay for a second copy of it to be logged.
+ */
+export function conversationChars(
+  messages: ReadonlyArray<{ readonly content?: unknown }> | undefined,
+): { historyChars: number; largestMessageChars: number } {
+  if (!messages || messages.length === 0) return { historyChars: 0, largestMessageChars: 0 };
+  let total = 0;
+  let largest = 0;
+  for (const message of messages) {
+    const content = message.content;
+    const size =
+      typeof content === "string"
+        ? content.length
+        : content === undefined || content === null
+          ? 0
+          : safeSize(content);
+    total += size;
+    if (size > largest) largest = size;
+  }
+  return { historyChars: total, largestMessageChars: largest };
+}
+
+/** The size of a non-string content block, or 0 when it cannot be measured. */
+function safeSize(content: unknown): number {
+  try {
+    return JSON.stringify(content)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * The measured pace of the agent loop's turns, newest TURN_PACE_WINDOW.
  * Measured in a live campaign on a slow free tier: a fixed wall-clock node
  * budget bought too few turns for the node to get past orientation, it was
