@@ -370,18 +370,18 @@ const sha256 = (bytes: string | Buffer): string => createHash("sha256").update(b
 function makeRow(rid: string, status: RequirementStatus, overrides: Partial<RequirementRow> = {}): RequirementRow {
   return {
     rid,
-    encoded: `Enemies cannot pass walls. [${rid}]`,
+    encoded: `A graft never takes on a dead branch. [${rid}]`,
     label: "G-04",
-    text: "Enemies cannot pass walls.",
-    section: "7.4 Movement",
-    sectionPath: ["7 Season Play", "7.4 Movement"],
+    text: "A graft never takes on a dead branch.",
+    section: "7.4 Grafting",
+    sectionPath: ["7 Season Play", "7.4 Grafting"],
     sectionNumber: "7.4",
     line: 120,
-    span: { start: 4000, end: 4026 },
+    span: { start: 4000, end: 4037 },
     kind: "rule",
     source: "extracted",
     owner: "m1",
-    ownership: [{ milestoneId: "m1", reason: "covered-section", detail: "7.4 Movement", atMs: 1 }],
+    ownership: [{ milestoneId: "m1", reason: "covered-section", detail: "7.4 Grafting", atMs: 1 }],
     status,
     checks: [{ kind: "test", testName: `Strada.Acceptance.M1.Acceptance_M1.R1_${rid}`, path: "Assets/StradaAcceptance/M1/Acceptance_M1.cs", bodySha: "b".repeat(64) }],
     last: { revision: "abc12345", runId: "run-1", atMs: 2, outcome: status === "passing" ? "pass" : "fail", detail: "observed 3" },
@@ -406,7 +406,7 @@ function makeLedger(rows: RequirementRow[]): RequirementLedger {
 
 /** Bytes a renderer could plausibly emit: BOM, CRLF, a NUL, Turkish, an emoji, tabs, trailing spaces. */
 const TRICKY_SOURCE =
-  "﻿using NUnit.Framework;\r\nnamespace Strada.Acceptance.M1 {\r\n\t// REQ r1 — düşman duvardan geçemez 🎮\u0000\r\n}\n  ";
+  "﻿using NUnit.Framework;\r\nnamespace Strada.Acceptance.M1 {\r\n\t// REQ r1 — ölü dala aşı tutmaz 🎮\u0000\r\n}\n  ";
 
 function makeAcceptance(overrides: Partial<AcceptanceSource> = {}): AcceptanceSource {
   const source = overrides.source ?? TRICKY_SOURCE;

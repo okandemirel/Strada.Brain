@@ -384,11 +384,10 @@ describe("a per-session requirement is measured per session (Codex 2026-09-12 T#
 });
 
 /**
- * The document's own numbers, read the way it wrote them. Measured by Codex
- * 2026-09-12 (U#F3) against a real document: a "start-up ≤ N s" stated no
- * timing requirement at all, "ship at least 20 levels" meant exactly twenty,
- * a four-digit count with a separator meant nothing, and the level count the delivery was held to came
- * from a sentence about how far ahead of the player the queue runs.
+ * The document's own numbers, read the way it wrote them. Found by Codex
+ * 2026-09-12 (U#F3): a "start-up ≤ N s" stated no timing requirement at all,
+ * "ship at least 20 levels" meant exactly twenty, and a four-digit count with
+ * a separator meant nothing.
  */
 describe("comparators, separators and subjects (Codex 2026-09-12 U#F3)", () => {
   const kinds = (text: string): Array<[string, string, number]> =>
@@ -972,10 +971,10 @@ describe("a platform's budget, and a session that took no time (Codex 2026-09-12
 describe("does the document require an outcome (Codex 2026-09-13 AG#3)", () => {
   it("says yes when the document states a win or lose condition", () => {
     for (const text of [
-      "# GDD\n\nWin condition: clear every blocker on the board.",
+      "# GDD\n\nWin condition: harvest every tree in the orchard.",
       "# GDD\n\nThe player loses when the timer runs out (game over).",
       "# GDD\n\nComplete the level to unlock the next one.",
-      "# GDD\n\nKazanma koşulu: tüm bloklar temizlenir.",
+      "# GDD\n\nKazanma koşulu: bahçedeki tüm ağaçlar hasat edilir.",
     ]) {
       expect(documentRequiresAnOutcome(text), text).toBe(true);
     }

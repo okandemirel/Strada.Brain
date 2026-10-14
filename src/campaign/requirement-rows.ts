@@ -159,8 +159,8 @@ const CONDITIONS: Record<Language, readonly string[]> = {
  *     of seed tokens between seasons is about the economy, and a BUDGET of
  *     seven grafts per season is a game requirement.
  *   • METRIC and PRODUCTION headings (a KPI section, the roadmap, staffing,
- *     the production schedule — not an element unlock schedule) decide for
- *     every row under them, at any depth.
+ *     the production schedule — not a schedule the game itself runs) decide
+ *     for every row under them, at any depth.
  *   • Every other business NOUN decides only as the row's own heading, only
  *     when that heading names nothing else ("Team", "Budget", "Risk
  *     Management" — not "Team Size", "Performance Budget" or "Risk Cards"),
@@ -256,7 +256,7 @@ function languagesOf(text: string): Set<Language> {
 const NUM = String.raw`(?:[1-9]\d{0,2}(?:[.,]\d{3})+(?![.,]?\d)|\d+(?:[.,]\d+)?)`;
 /** A number glued to a letter, a section sign, a label dash or a ratio slash is an identifier ("G-01", "§5.2", "L14", "x/12"). */
 const NOT_AN_IDENTIFIER = String.raw`(?<![\p{L}\p{N}§#_.,\/×\-–—])`;
-/** Units of measure. No bare "m": case-blind, it read "10M+ players" as ten metres. */
+/** Units of measure. No bare "m": case-blind, it read "3M installs" as three metres. */
 const UNIT = String.raw`(?:%|°|×|fps|hz|ms|milliseconds?|millisaniye\p{L}*|secs?|seconds?|saniye\p{L}*|sn|sekunden?|segundos?|secondes?|s|mins?|minutes?|minuten?|minutos?|dakika\p{L}*|dk|h|hrs?|hours?|stunden?|horas?|heures?|saat\p{L}*|days?|gün\p{L}*|tage?n?|días?|jours?|weeks?|px|pt|dp|mb|gb|kb|cm|mm|km|x|\p{L}[\p{L}-]*\/(?:s|sec|min|h|day)|\/\s?(?:s|sec|min|h|day))(?![\p{L}\p{N}])`;
 
 const LO_INCLUSIVE = ["≥", ">=", "at\\s+least", "no\\s+(?:less|fewer)\\s+than", "not\\s+(?:less|fewer)\\s+than", "minimum(?:\\s+of)?", "min\\.?", "en\\s+az", "asgari", "mindestens", "wenigstens", "al\\s+menos", "como\\s+mínimo", "au\\s+moins", "au\\s+minimum"];
@@ -583,8 +583,8 @@ function isShortCell(line: Line | undefined): line is Line {
  * Which column the label sits in, counted from the row's first cell.
  *
  * The header row is the run of short cells before the first label: when it
- * is wider than a row, the label is not the first column ("Variety | Week |
- * Note" — the week labels the row, the variety's name comes first). A
+ * is wider than a row, the label is not the first column ("Tool | Code |
+ * Use" — the code labels the row, the tool's name comes first). A
  * row-index column ("2", "3", …) in front of every label says the same.
  */
 function labelColumn(doc: Document, run: readonly Line[], stride: number): number {
@@ -996,9 +996,9 @@ const LABEL_MENTION_RE = /(?<![\p{L}\p{N}])([A-Z]{1,4}-?)(\d{1,3})(?![\p{N}.])/g
 
 /**
  * A numbered series the document defines only in part. Reported from what
- * the document SAYS — a stated span ("G-01 to G-07") that the definitions
+ * the document SAYS — a stated span ("G-01 to G-09") that the definitions
  * stop short of, or holes in a series that is otherwise complete — and never
- * invented: a sparse series ("W3, W11, W38…") is a schedule, not a list with
+ * invented: a sparse series ("T4, T9, T15…") is a schedule, not a list with
  * gaps.
  */
 function numberingGapsOf(doc: Document, labels: readonly string[]): NumberingGap[] {
@@ -1524,7 +1524,7 @@ function referenceSpecificity(reference: SectionReference): number {
 /**
  * Does a plan exclusion name this heading? The item before its colon must BE
  * the heading's name or a whole-word part of it. An item that only mentions a
- * heading ("events beyond the core rules") excludes nothing: a row excluded by
+ * heading ("events beyond the orchard rules") excludes nothing: a row excluded by
  * mistake is never checked, while a row queued by mistake waits for a person.
  */
 function exclusionNames(item: string, heading: string): boolean {

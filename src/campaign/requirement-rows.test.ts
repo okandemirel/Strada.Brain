@@ -357,58 +357,60 @@ describe("extractRequirementRows — German, Spanish and French documents", () =
 /**
  * Tables that lost their pipes in a PDF conversion: every cell on a line of
  * its own, the label alone on one. A converted GDD's numbered rules and
- * phase tables reach the extractor in this shape and no other, so nothing
+ * coded tables reach the extractor in this shape and no other, so nothing
  * else in this file reads them.
  */
 const FLATTENED = [
   "# Orchard Seasons — Game Design Document",
   "",
-  "2. THE ORCHARD",
-  "2.1 Season Phases",
-  "Each season moves through these phases in order.",
+  "2. TOOLS",
+  "2.7 Tool Codes",
+  "Tool",
   "Code",
-  "Phase",
-  "What happens",
-  "S1",
-  "Dormancy",
-  "The player marks branches to prune; no tree grows during this phase.",
-  "S2",
-  "Grafting",
-  "Every graft placed this season must be joined to a pruned branch.",
-  "S3",
-  "Harvest",
-  "Each tree's yield is weighed in kilograms and added to the store.",
+  "Use",
+  "Pruning saw",
+  "T4",
+  "Cuts limbs thicker than a thumb.",
+  "Grafting knife",
+  "T9",
+  "Opens the bark for a scion.",
   "",
-  "4. SEASON PLAY",
-  "4.5 Grafting rules",
-  "The settled rules are listed here; the full list runs from G-01 to G-07.",
-  "Code",
-  "Rule",
+  "5. SEASON PLAY",
+  "5.6 Grafting rules",
+  "Five rules are settled; the full list runs from G-01 to G-09.",
   "G-01",
-  "Pruning. A branch pruned in winter must not fruit that season.",
+  "A scion must come from a tree of the same family as its rootstock.",
   "G-02",
-  "Growth. Each tree's growth animation must finish within 0.4 s.",
+  "Each graft's healing animation must finish within 0.7 s.",
   "G-03",
-  "Walls. A tree beside the orchard wall must yield half its usual weight.",
+  "A grafted branch bears no fruit until the following season.",
   "G-04",
-  "Tokens. Each harvest adds seed tokens to the store by weight.",
+  "Two grafts may never share one cut.",
+  "G-05",
+  "A failed graft returns its scion to the store.",
   "",
-  "6. VARIETIES",
-  "6.8 Planting Calendar",
-  "Variety",
-  "Week",
-  "Note",
-  "Russet pear",
-  "W3",
-  "Needs a sheltered plot beside the south wall.",
-  "Quince",
-  "W11",
-  "Fruits only after a hard winter.",
+  "7. THE STORE",
+  "7.5 Crate Labels",
+  "Every crate is labelled before it leaves the orchard.",
+  "Crate",
+  "Holds",
+  "Kept in",
+  "C1",
+  "Windfall apples gathered after a gale.",
+  "Cider shed",
+  "C2",
+  "Pears picked firm to ripen indoors.",
+  "Cool cellar",
+  "C3",
+  "Quinces wrapped one by one in paper.",
+  "Loft",
   "",
-  "6.9 Season Journal",
-  "Entry",
-  "See",
-  "Frost damage",
+  "7.6 Field Notes",
+  "Observation",
+  "Plot",
+  "Rule",
+  "Bark split after frost",
+  "North row",
   "G-03",
   "",
 ].join("\n");
@@ -417,45 +419,45 @@ describe("extractRequirementRows — a flattened table: each label alone on a li
   const { rows, numberingGaps } = extractRequirementRows(FLATTENED, GDD);
 
   it("reads every labelled row of a run with the cells after its label, verbatim, under its own heading", () => {
-    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["S1", "S2", "S3", "G-01", "G-02", "G-03", "G-04", "W3", "W11"]);
+    expect(rows.filter((r) => r.label !== undefined).map((r) => r.label)).toEqual(["T4", "T9", "G-01", "G-02", "G-03", "G-04", "G-05", "C1", "C2", "C3"]);
 
     const g1 = byLabel(rows, "G-01");
-    expect(g1.text).toBe("G-01 Pruning. A branch pruned in winter must not fruit that season.");
-    expect(FLATTENED.slice(g1.span.start, g1.span.end)).toBe("G-01\nPruning. A branch pruned in winter must not fruit that season.");
+    expect(g1.text).toBe("G-01 A scion must come from a tree of the same family as its rootstock.");
+    expect(FLATTENED.slice(g1.span.start, g1.span.end)).toBe("G-01\nA scion must come from a tree of the same family as its rootstock.");
     expect(g1.section).toBe("Grafting rules");
-    expect(g1.sectionNumber).toBe("4.5");
+    expect(g1.sectionNumber).toBe("5.6");
     expect(g1.status).toBe("open");
 
-    // Three cells to a row: the label, a name, what it means.
-    const s1 = byLabel(rows, "S1");
-    expect(s1.text).toBe("S1 Dormancy The player marks branches to prune; no tree grows during this phase.");
-    expect(s1.section).toBe("Season Phases");
-    expect(s1.sectionNumber).toBe("2.1");
+    // Three cells to a row: the label and the two cells after it.
+    const c1 = byLabel(rows, "C1");
+    expect(c1.text).toBe("C1 Windfall apples gathered after a gale. Cider shed");
+    expect(c1.section).toBe("Crate Labels");
+    expect(c1.sectionNumber).toBe("7.5");
 
     // The one quantity of a labelled rule is its bounds, and the sentence is not read a second time.
-    expect(byLabel(rows, "G-02").bounds).toEqual({ kind: "range", hi: 0.4, unit: "s" });
-    expect(rows.filter((r) => r.text.includes("must finish within 0.4 s"))).toHaveLength(1);
+    expect(byLabel(rows, "G-02").bounds).toEqual({ kind: "range", hi: 0.7, unit: "s" });
+    expect(rows.filter((r) => r.text.includes("must finish within 0.7 s"))).toHaveLength(1);
 
     // The header row is no row.
-    expect(rows.some((r) => /^(?:Code|Phase|What happens|Rule\b|Variety|Week|Note|Entry|See\b)/.test(r.text))).toBe(false);
+    expect(rows.some((r) => /^(?:Tool|Code|Use|Crate|Holds|Kept in|Observation|Plot|Rule\b)/.test(r.text))).toBe(false);
   });
 
   it("finds the label's column from a header wider than the row: the cell before the label is the row's", () => {
-    expect(byLabel(rows, "W3").text).toBe("Russet pear W3 Needs a sheltered plot beside the south wall.");
-    expect(byLabel(rows, "W11").text).toBe("Quince W11 Fruits only after a hard winter.");
+    expect(byLabel(rows, "T4").text).toBe("Pruning saw T4 Cuts limbs thicker than a thumb.");
+    expect(byLabel(rows, "T9").text).toBe("Grafting knife T9 Opens the bark for a scion.");
   });
 
   it("a lone label in another table refers to a rule; it defines none", () => {
     expect(rows.filter((r) => r.label === "G-03")).toHaveLength(1);
-    expect(rows.some((r) => r.section === "Season Journal")).toBe(false);
+    expect(rows.some((r) => r.section === "Field Notes")).toBe(false);
   });
 
   it("reports the span the document states and the table stops short of, and invents none of it", () => {
     expect(numberingGaps).toEqual([
-      expect.objectContaining({ series: "G-", missing: ["G-05", "G-06", "G-07"] }),
+      expect.objectContaining({ series: "G-", missing: ["G-06", "G-07", "G-08", "G-09"] }),
     ]);
-    expect(numberingGaps[0]!.detail).toContain("G-01 to G-07");
-    expect(rows.some((r) => r.label === "G-05")).toBe(false);
+    expect(numberingGaps[0]!.detail).toContain("G-01 to G-09");
+    expect(rows.some((r) => r.label === "G-06")).toBe(false);
   });
 });
 

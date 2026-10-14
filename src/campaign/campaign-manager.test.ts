@@ -1895,19 +1895,15 @@ describe("CampaignManager", () => {
   };
 
   /** An untidy delivered shape: a thin first scene, scaffolding by name and by size, and a rich scene last. */
-  const REAL_DELIVERED_BUILD: ReadonlyArray<[string, number]> = [
-    ["Assets/Scenes/Orchard.unity", 3],
-    ["Assets/Scenes/Journal.unity", 6],
-    ["Assets/Scenes/GraftSandbox.unity", 5],
-    ["Assets/Scenes/PruningSmokeTest.unity", 2],
-    ["Assets/Scenes/FenceBoundary.unity", 3],
-    ["Assets/InitTestScene7c51e2a0.unity", 5],
-    ["Assets/Scenes/HarvestTestScene.unity", 3],
-    ["Assets/Tools/Scenes/ToolProbe.unity", 1],
-    ["Assets/Scenes/FrostVerified.unity", 3],
-    ["Assets/Scenes/SeasonReview.unity", 4],
-    ["Assets/Scenes/Season7Verification.unity", 5],
-    ["Assets/Scenes/FullOrchard.unity", 17],
+  const UNTIDY_DELIVERED_BUILD: ReadonlyArray<[string, number]> = [
+    ["Assets/Scenes/Gatehouse.unity", 4],
+    ["Assets/Scenes/Ledger.unity", 7],
+    ["Assets/Scenes/RootstockSandbox.unity", 9],
+    ["Assets/InitTestScene3f90b6d1.unity", 6],
+    ["Assets/Scenes/Trellis.unity", 2],
+    ["Assets/Scenes/HedgeTestScene.unity", 8],
+    ["Assets/Scenes/Cellar.unity", 1],
+    ["Assets/Scenes/WholeOrchard.unity", 21],
   ];
 
   /** Walk the ladder to the final sprint (task_3 in flight). */
@@ -1967,8 +1963,8 @@ describe("CampaignManager", () => {
     expect(tasks.submitted[0]!.prompt).not.toContain("MEASURED NOW");
   });
 
-  it("delivers the real delivered shape and discloses every enabled scene", async () => {
-    buildSettings(REAL_DELIVERED_BUILD, ["Assets/Scenes/Unused.unity"]);
+  it("delivers an untidy delivered shape and discloses every enabled scene", async () => {
+    buildSettings(UNTIDY_DELIVERED_BUILD, ["Assets/Scenes/Unused.unity"]);
     const campaign = await reachFinalSprint();
 
     settleMilestone("green, shipping");
@@ -1981,12 +1977,12 @@ describe("CampaignManager", () => {
     // The build's FIRST enabled scene is what a person opens; the richest is
     // named beside it (Codex 2026-09-11 C#26).
     expect(report).toContain("FIRST enabled scene");
-    expect(report).toContain("FullOrchard.unity");
-    expect(report).toContain("11 other scenes are enabled");
-    expect(report).toContain("8 of them");
-    expect(report).toContain("Season7Verification.unity");
-    // The three that match neither rule are NOT called scaffolding.
-    expect(report).toContain("3 match neither rule");
+    expect(report).toContain("WholeOrchard.unity");
+    expect(report).toContain("7 other scenes are enabled");
+    expect(report).toContain("5 of them");
+    expect(report).toContain("RootstockSandbox.unity");
+    // The two that match neither rule are NOT called scaffolding.
+    expect(report).toContain("2 match neither rule");
     // Untidy is disclosed, never refused — deleting a user's scenes is not
     // this system's call.
     expect(storage.get(campaign.id)!.milestones[2]!.sceneHygieneUnresolved).toBeUndefined();
@@ -2060,7 +2056,7 @@ describe("CampaignManager", () => {
     // Measured 2026-09-03: the delivered project had no README at all, and
     // the report — a chat message — was the only thing that ever named the
     // entry scene.
-    buildSettings(REAL_DELIVERED_BUILD);
+    buildSettings(UNTIDY_DELIVERED_BUILD);
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
     writeFileSync(
       join(projectRoot, "ProjectSettings", "ProjectVersion.txt"),
@@ -2081,11 +2077,11 @@ describe("CampaignManager", () => {
 
     const readme = readFileSync(join(projectRoot, "HOW_TO_RUN.md"), "utf8");
     expect(readme).toContain("6000.3.22f1");
-    expect(readme).toContain("Assets/Scenes/FullOrchard.unity");
+    expect(readme).toContain("Assets/Scenes/WholeOrchard.unity");
     expect(readme).toContain("plan a growing season on the walled orchard grid");
     expect(readme).toContain("179 of 179");
     expect(readme).toContain("-testPlatform PlayMode");
-    expect(readme).toContain("Season7Verification.unity");
+    expect(readme).toContain("RootstockSandbox.unity");
     expect(readme).not.toContain("Unknown");
 
     const report = messages.find((m) => m.text.includes("Campaign delivery"))!.text;
@@ -2097,7 +2093,7 @@ describe("CampaignManager", () => {
     // restart, or in another browser, the portal had milestone titles and
     // nothing else. The package is a row keyed by the campaign.
     runRecordOnSettle = { total: 179, passed: 179, failed: 0, skipped: 0, unfiltered: true };
-    buildSettings(REAL_DELIVERED_BUILD);
+    buildSettings(UNTIDY_DELIVERED_BUILD);
     mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
     writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 6000.3.22f1\n");
     const gdd = "# GDD\n\nCore loop: plan a growing season on the walled orchard grid, then end the turn and weigh the harvest.\n";
@@ -2356,10 +2352,10 @@ describe("CampaignManager", () => {
   });
 
   it("refuses to deliver a tree that does not compile, and says so first", async () => {
-    // Measured live 2026-09-04 21:37: Sprint 7 was committed green (1296
-    // files, f674e8d) and the campaign delivered while the tree carried 37
-    // compile errors — found seconds later by the real-tree guardian, and by
-    // no gate at all. Every other gate reads what a run REPORTED; none asked
+    // Measured live 2026-09-04 21:37: the final sprint was committed green
+    // and the campaign delivered while the tree carried dozens of compile
+    // errors — found seconds later by the real-tree guardian, and by no gate
+    // at all. Every other gate reads what a run REPORTED; none asked
     // the compiler.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
@@ -2368,7 +2364,7 @@ describe("CampaignManager", () => {
     settleMilestone("sprint B done");
     await waitFor(() => expect(tasks.submitted).toHaveLength(3));
 
-    compileVerdict = { ok: false, ran: true, errors: 37, detail: "Headless compile failed with 37 error(s)." };
+    compileVerdict = { ok: false, ran: true, errors: 33, detail: "Headless compile failed with 33 error(s)." };
     // An UNFILTERED green — the strongest evidence a sprint can bring. It is
     // still not delivery while the project does not build.
     tasks.verifications.set("task_3", {
@@ -2383,7 +2379,7 @@ describe("CampaignManager", () => {
     // The compiler leads the bounce: a suite run means nothing until it builds.
     const prompt = tasks.submitted[3]!.prompt;
     expect(prompt).toContain("THE PROJECT DOES NOT COMPILE");
-    expect(prompt).toContain("37 error(s)");
+    expect(prompt).toContain("33 error(s)");
     expect(prompt.indexOf("THE PROJECT DOES NOT COMPILE")).toBeLessThan(
       prompt.indexOf("DELIVERY VERIFICATION REQUIRED"),
     );
@@ -2644,7 +2640,7 @@ describe("CampaignManager", () => {
     //   🏁 Campaign delivery — game built, 1 sprint did NOT land green
     // directly above
     //   REFUSAL STANDS, bounce budget spent: The shipped scenes render NOTHING
-    //   … 360 assets that no enabled scene reaches
+    //   … (the assets that no enabled scene reaches)
     // The findings were right; the first line a person reads said the opposite.
     writeSlopProject();
     const campaign = await runLadderToDelivery();
@@ -2758,14 +2754,14 @@ describe("CampaignManager", () => {
 
     tasks.progressBlocks.set(
       "task_1",
-      "\n\nPREVIOUS ATTEMPT PROGRESS (verify before redoing any of it):\n- Assets/Scripts/Board.cs",
+      "\n\nPREVIOUS ATTEMPT PROGRESS (verify before redoing any of it):\n- Assets/Scripts/Grove.cs",
     );
     tasks.emit("task:failed", "task_1", "compile exploded");
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
 
     // The SUBMITTED prompt carries the progress block…
     expect(tasks.submitted[1]!.prompt).toContain("PREVIOUS ATTEMPT PROGRESS");
-    expect(tasks.submitted[1]!.prompt).toContain("Assets/Scripts/Board.cs");
+    expect(tasks.submitted[1]!.prompt).toContain("Assets/Scripts/Grove.cs");
     // …but the persisted milestone prompt does not (no accumulation).
     const fresh = storage.get(campaign.id)!;
     expect(fresh.milestones[0]!.prompt).not.toContain("PREVIOUS ATTEMPT PROGRESS");
@@ -2780,11 +2776,11 @@ describe("CampaignManager", () => {
     tasks.emit(
       "task:failed",
       "task_1",
-      "Transient failure — worker crashed mid-epoch. Board.cs does not compile",
+      "Transient failure — worker crashed mid-epoch. Grove.cs does not compile",
     );
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
     const prompt1 = storage.get(campaign.id)!.milestones[0]!.prompt;
-    expect(prompt1).toContain("Board.cs does not compile");
+    expect(prompt1).toContain("Grove.cs does not compile");
     expect(prompt1).not.toContain("Transient failure —");
   });
 
@@ -2834,7 +2830,7 @@ describe("CampaignManager", () => {
     git("commit", "-qm", "baseline");
     const campaign = manager.startFromGdd(ctx, readFileSync(join(projectRoot, "docs", "Game_GDD.md"), "utf8"), "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
-    writeFileSync(join(projectRoot, "Board.cs"), "class Board {}\n"); // the sprint did work
+    writeFileSync(join(projectRoot, "Grove.cs"), "class Grove {}\n"); // the sprint did work
 
     type SpawnOptions = { args?: string[]; cwd?: string };
     const proto = ChildProcess.prototype as unknown as { spawn: (this: ChildProcess, options: SpawnOptions) => unknown };
@@ -5214,7 +5210,7 @@ describe("CampaignManager", () => {
   });
 
   it("schedules one gap sprint per audit finding, art first, and moves past a spent one", async () => {
-    // Measured 2026-09-07: art, audio and a third gap in ONE remediation
+    // Measured 2026-09-07: three gaps, one of them art, in ONE remediation
     // sprint; four attempts, the time-box narrowed three of them to something
     // that was never the art, and the campaign delivered with all three open.
     tasks = new FakeTaskManager();
@@ -5225,9 +5221,9 @@ describe("CampaignManager", () => {
       auditCoverage: vi
         .fn()
         .mockResolvedValueOnce([
-          "Audio production: the wind ambience and the graft chime are not covered",
-          "Art production: blossom sprites and fence tiles are not covered",
-          "Season planner: the pruning-order preview is not covered",
+          "Frost warning: the overnight alert is not covered",
+          "Blossom sprites: the flowering stage has no sprite sheet",
+          "Harvest ledger: the season's weight tally is not covered",
         ])
         .mockResolvedValue([]),
     } as unknown as CampaignPlanner;
@@ -5261,11 +5257,11 @@ describe("CampaignManager", () => {
     const ids = storage.get(campaign.id)!.milestones.map((m) => m.id);
     expect(ids).toEqual(["m1", "m2", "m3", "mcov1", "mcov1-2", "mcov1-3"]);
     const first = storage.get(campaign.id)!.milestones[3]!;
-    expect(first.title).toContain("Art production");
-    expect(first.prompt).toContain("- Art production");
-    expect(first.prompt).not.toContain("Audio production");
+    expect(first.title).toContain("Blossom sprites");
+    expect(first.prompt).toContain("- Blossom sprites");
+    expect(first.prompt).not.toContain("Frost warning");
 
-    // The art sprint spends both attempts: the campaign moves to the audio gap.
+    // The art sprint spends both attempts: the campaign moves to the next gap.
     tasks.emit("task:failed", "task_4", "no art was made");
     await waitFor(() => expect(tasks.submitted).toHaveLength(5), { timeout: 15_000 });
     tasks.emit("task:failed", "task_5", "no art was made");
@@ -5274,7 +5270,7 @@ describe("CampaignManager", () => {
     expect(after.state).toBe("executing");
     expect(after.milestones[3]!.status).toBe("failed");
     expect(after.currentMilestone).toBe(4);
-    expect(tasks.submitted[5]!.prompt).toContain("Audio production");
+    expect(tasks.submitted[5]!.prompt).toContain("Frost warning");
     expect(messages.at(-1)!.text).toContain("Moving on to");
   });
 
@@ -5814,7 +5810,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-art-gate.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: blossom sprites are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Blossom sprites: the flowering stage has no sprite sheet"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -5858,7 +5854,7 @@ describe("CampaignManager", () => {
     expect(bounced.placeholderArtAtStart).toEqual({ sprites: 100, placeholders: 95 });
     expect(tasks.submitted.at(-1)!.prompt).toContain("ART NOT PRODUCED: when this sprint began, 95 of 100");
     expect(tasks.submitted.at(-1)!.prompt).toContain("unity_generate_sprite");
-    // The in-place rule (measured 2026-09-09: 12 *_Real.png beside the placeholders, count unchanged).
+    // The in-place rule (measured 2026-09-09: real sprites written under new names beside the placeholders, count unchanged).
     expect(tasks.submitted.at(-1)!.prompt).toContain("SAME name and the SAME path as the placeholder");
     expect(bounced.attempts).toBe(1); // a bounce is not a spent attempt
 
@@ -6023,7 +6019,7 @@ describe("CampaignManager", () => {
     // A document that states one DOES ask for it.
     const withWin = (manager as unknown as {
       playerRunSpec(c: { gddText: string }): { outcomeRequired?: boolean };
-    }).playerRunSpec({ gddText: "# GDD\n\nWin condition: clear every blocker. A round lasts 60-90 seconds." } as never);
+    }).playerRunSpec({ gddText: "# GDD\n\nWin condition: harvest every tree. A round lasts 60-90 seconds." } as never);
     expect(withWin.outcomeRequired).toBe(true);
     // …and the ACTION budget the document states, with headroom: the runner
     // stopped every session at its own sixty actions, so a session with a
@@ -7510,7 +7506,7 @@ describe("CampaignManager", () => {
       { ...staged.milestones[0]!, status: "green" as const },
       { id: "mcov1", title: "Coverage 1 — Save", prompt: "close save", status: "running" as const, attempts: 2, taskId: "task_s1", coverageGap: "Save: absent" },
       { id: "mcov2", title: "Coverage 2 — Audio", prompt: "close audio", status: "green" as const, attempts: 1, coverageGap: "Audio: absent" },
-      { id: "mcov3", title: "Coverage 3 — Story", prompt: "close story", status: "pending" as const, attempts: 0, coverageGap: "Story: absent" },
+      { id: "mcov3", title: "Coverage 3 — Weather", prompt: "close weather", status: "pending" as const, attempts: 0, coverageGap: "Weather: absent" },
       { id: "mfinal-1", title: "Final delivery proofs", prompt: "prove it", status: "pending" as const, attempts: 0 },
     ];
     staged.currentMilestone = 1;
@@ -7520,7 +7516,7 @@ describe("CampaignManager", () => {
     tasks.emit("task:failed", "task_s1", "gap sprint gave up");
     await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
     expect(storage.get(campaign.id)!.milestones[storage.get(campaign.id)!.currentMilestone]!.id).toBe("mcov3");
-    expect(tasks.submitted.at(-1)!.prompt).toContain("close story");
+    expect(tasks.submitted.at(-1)!.prompt).toContain("close weather");
 
     // …and when only finals are left, it is the LAST one, not an older failed
     // one sitting earlier in the ladder — which advanced back into work that
@@ -7619,7 +7615,7 @@ describe("CampaignManager", () => {
     ];
     staged.currentMilestone = 2;
     staged.state = "executing";
-    staged.pendingCoverageGaps = ["Story: absent"];
+    staged.pendingCoverageGaps = ["Weather: absent"];
     storage.save(staged);
     tasks.emit("task:failed", "task_g1", "gap sprint gave up");
     await waitFor(() => expect(tasks.submitted.length).toBeGreaterThan(3));
@@ -7684,7 +7680,7 @@ describe("CampaignManager", () => {
       { id: "mfinal-new", title: "Final delivery proofs", prompt: "prove it again", status: "pending" as const, attempts: 0 },
     ];
     staged.currentMilestone = 3;
-    staged.pendingCoverageGaps = ["Story: absent"];
+    staged.pendingCoverageGaps = ["Weather: absent"];
     storage.save(staged);
 
     tasks.emit("task:failed", "task_3", "gap sprint gave up");
@@ -8213,7 +8209,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-art-retry.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: blossom sprites are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Blossom sprites: the flowering stage has no sprite sheet"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8261,7 +8257,7 @@ describe("CampaignManager", () => {
     storage = new CampaignStorage(join(dir, "campaigns-art-added.db"));
     const planner = {
       planMilestones: vi.fn().mockResolvedValue(LADDER),
-      auditCoverage: vi.fn().mockResolvedValue(["Art production: blossom sprites are not covered"]),
+      auditCoverage: vi.fn().mockResolvedValue(["Blossom sprites: the flowering stage has no sprite sheet"]),
     } as unknown as CampaignPlanner;
     manager = new CampaignManager({
       storage,
@@ -8688,9 +8684,9 @@ describe("CampaignManager", () => {
     // Measured live 2026-09-04 16:18. reviveAtCurrentMilestone cleared
     // deliveryVerificationBounced while deliveryVerificationBounces stayed at
     // 2 of 2, so `spent < maxMilestoneAttempts` was false and the delivery
-    // gate could not fire. Sprint 7 shipped green on a verdict carrying no
-    // unfiltered flag, minutes after an unfiltered run reported 32 of 185
-    // failing.
+    // gate could not fire. The final sprint shipped green on a verdict
+    // carrying no unfiltered flag, minutes after an unfiltered run of the same
+    // suite reported dozens of failures.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
     settleMilestone("sprint A done");
@@ -9120,9 +9116,9 @@ describe("CampaignManager", () => {
     // "The previous attempt ended…" block into the persisted sprint prompt.
     const campaign = manager.startFromGdd(ctx, "# GDD", "docs/Game_GDD.md");
     await waitFor(() => expect(tasks.submitted).toHaveLength(1));
-    tasks.emit("task:failed", "task_1", "compile exploded in Board.cs");
+    tasks.emit("task:failed", "task_1", "compile exploded in Grove.cs");
     await waitFor(() => expect(tasks.submitted).toHaveLength(2));
-    await failUntilStopped(campaign.id, "compile exploded in Board.cs again");
+    await failUntilStopped(campaign.id, "compile exploded in Grove.cs again");
 
     const beforeRevive = tasks.submitted.length;
     expect(await manager.tryHandleRevive("cli-local", "kampanya devam")).toBe(true);
@@ -9568,7 +9564,7 @@ describe("CampaignManager", () => {
     it("a tree that still does not compile after the delivery bounces is NOT delivered", async () => {
       writeBuiltProject();
       const campaign = await runLadderToDelivery();
-      compileVerdict = { ok: false, ran: true, errors: 37, detail: "37 error(s)" };
+      compileVerdict = { ok: false, ran: true, errors: 33, detail: "33 error(s)" };
       for (let i = 0; i < 4 && storage.get(campaign.id)!.state === "executing"; i++) {
         const before = tasks.submitted.length;
         settleMilestone(`shipping it (round ${i})`);
@@ -9583,7 +9579,7 @@ describe("CampaignManager", () => {
       expect(storage.get(campaign.id)!.lastError).toContain("does not compile");
       const report = messages.map((m) => m.text).find((t) => t.includes("NOT DELIVERED"))!;
       expect(report.split("\n")[0]).toContain("does not compile");
-      expect(report.split("\n")[0]).toContain("37 error(s)");
+      expect(report.split("\n")[0]).toContain("33 error(s)");
     });
 
     it("the second delivery bounce carries the CURRENT reason, not the first one", async () => {
@@ -9619,7 +9615,7 @@ describe("CampaignManager", () => {
       storage = new CampaignStorage(join(dir, "campaigns-audio-gap.db"));
       const planner = {
         planMilestones: vi.fn().mockResolvedValue(LADDER),
-        auditCoverage: vi.fn().mockResolvedValueOnce(["Audio production: no SFX cue list implemented"]).mockResolvedValue([]),
+        auditCoverage: vi.fn().mockResolvedValueOnce(["Orchard sound: no wind or graft cue list implemented"]).mockResolvedValue([]),
       } as unknown as CampaignPlanner;
       manager = new CampaignManager({
         storage, planner, taskManager: tasks as unknown as TaskManager,

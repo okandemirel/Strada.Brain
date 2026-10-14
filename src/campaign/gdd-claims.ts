@@ -116,9 +116,9 @@ const BOOT_RE =
 const BOOT_REVERSED_RE =
   /\b(?:under|below|within|less\s+than|no\s+more\s+than|at\s+most)\s*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|secs?|seconds?|min(?:ute)?s?)\b[^.;\n]{0,40}?\b(?:to\s+)?(?:load(?:ing)?|boot(?:ing)?|start-?up|launch|first\s+frame|interactive)\b/gi;
 /**
- * A count with its separators and an optional "+": "20 levels", "2,400+
- * levels", "1.200 Level" — a four-digit catalogue used to match nothing at
- * all, so a document asking for 2,400 levels stated no level count and the
+ * A count with its separators and an optional "+": "20 levels", "6,250+
+ * levels", "1.875 Level" — a four-digit catalogue used to match nothing at
+ * all, so a document asking for thousands of levels stated no level count and the
  * delivery was measured against whatever smaller number the prose held
  * (Codex 2026-09-12 U#F3).
  */
@@ -178,7 +178,7 @@ function countValue(digits: string): number {
  * by exactly 20 and failed on 21 (Codex 2026-09-12 U#F3).
  */
 export function countComparator(text: string, at: number, matched: string, qualifier: string): "min" | "max" | "eq" {
-  // "2,400+", "2,400 or more" — the qualifier sits between the number and the
+  // "6,250+", "6,250 or more" — the qualifier sits between the number and the
   // noun, so the count regex carries it.
   if (qualifier.includes("+") || /\bor\s+more\b/i.test(qualifier)) return "min";
   if (/\bor\s+(?:fewer|less)\b/i.test(qualifier)) return "max";
@@ -455,10 +455,9 @@ export function extractSessionAllowanceSeconds(gddText: string): number | undefi
   const lines = text.split(/\r?\n/).map((l) => l.replace(/^[\s•\t|-]+|[\s|]+$/g, ""));
   for (let i = 0; i < lines.length; i++) {
     if (!DURATION_LABEL_RE.test(lines[i] ?? "")) continue;
-    // WITHIN THE CLAUSE THE LABEL INTRODUCES. A round length followed, after
-    // a semicolon, by how long an evening's sitting runs gave the sitting as
-    // the session allowance, because the sentence goes on to talk about
-    // something other than one round.
+    // WITHIN THE CLAUSE THE LABEL INTRODUCES. A label whose line went on,
+    // after a semicolon, to a figure about something other than one round
+    // gave that figure as the session allowance.
     // …AND EVERY CLAUSE THAT IS STILL ABOUT A SESSION. "6–13 min in a calm
     // season; up to 37 min in a storm season" lost the longer case to the
     // first semicolon, so the run cut a legal long round short (Codex

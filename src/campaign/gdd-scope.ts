@@ -6,7 +6,7 @@
  * milestones" — whatever the document asked for: a long campaign with a deep
  * unlock schedule and a one-mechanic prototype were planned into the same range, and
  * nothing recorded which sections of the document a sprint claimed to cover,
- * so "was section 7 ever planned?" could only be answered by a later LLM
+ * so "was this section ever planned?" could only be answered by a later LLM
  * audit over titles. This module counts what is countable — headings,
  * scheduled elements, a level count, screens, and whether the document asks
  * for audio, saving, onboarding, settings, performance targets — and turns
@@ -45,8 +45,7 @@ export interface GddScope {
  * "INTRODUCTION" and a worker was asked to build one (measured live
  * 2026-09-12). Anchored at both ends: "Introduction Cinematic" and "Scope of
  * the Map Editor" are work, and only a heading that is ENTIRELY apparatus is
- * dropped. A heading about the market may go on to name the titles the game
- * is compared with; that is still apparatus.
+ * dropped.
  */
 export const TRIVIAL_HEADING_RE =
   /^(?:about this document|acknowledg(?:e)?ments|appendix(?:\s+[a-z0-9])?|approvals?|bibliography|change ?log|competitive analysis|(?:comparable|competitor|reference) titles|confidentiality|contents|conventions|credits|disclaimer|document (?:control|conventions|history)|executive summary|glossary|index|introduction|legal|market (?:analysis|position(?:ing)?)(?: (?:and )?(?:comparable|competitor|reference) titles)?|overview of this document|prepared by|purpose(?: of this document)?|references|(?:revision|version) history|scope|sign off|summary|table of contents|terminology)$/i;

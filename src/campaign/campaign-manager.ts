@@ -243,10 +243,10 @@ export interface CampaignManagerOptions {
    * tool registry of its own; bootstrap wires the same unity_verify_change the
    * real-tree guardian uses.
    *
-   * Measured live 2026-09-04 21:37: Sprint 7 was committed green (1296 files,
-   * f674e8d) and the campaign delivered, while the tree carried 37 compile
-   * errors — found seconds later by the guardian, not by any gate. Every other
-   * gate reads what an agent REPORTED; nothing asked the compiler.
+   * Measured live 2026-09-04 21:37: the final sprint was committed green and
+   * the campaign delivered, while the tree carried dozens of compile errors —
+   * found seconds later by the guardian, not by any gate. Every other gate
+   * reads what an agent REPORTED; nothing asked the compiler.
    *
    * Absent (or `ran: false`) means the check is DISCLOSED as not run, never
    * treated as a pass.
@@ -2113,9 +2113,9 @@ export class CampaignManager {
     // 16:18: the boolean above was reset on revival while
     // deliveryVerificationBounces stayed at 2 of 2, so `deliveryBouncesSpent <
     // maxMilestoneAttempts` was false and the delivery gate could not fire.
-    // Sprint 7 shipped green on "PlayMode verification passed: 184 of 185
-    // tests ran clean" — a verdict carrying NO unfiltered flag, recorded
-    // minutes after an unfiltered run had reported 32 of 185 failing. The
+    // The final sprint shipped green on a "PlayMode verification passed"
+    // verdict carrying NO unfiltered flag, recorded minutes after an
+    // unfiltered run of the same suite had reported dozens of failures. The
     // reset above was written when the gate was a boolean; the counter that
     // replaced it was never added here, so "fresh budget = fresh gates" had
     // quietly stopped being true.
@@ -3026,8 +3026,8 @@ export class CampaignManager {
     // THE FINAL SPRINT OWNS BUILD HYGIENE. The planner is told this too, but
     // a planner instruction is a suggestion an LLM may drop; this append is
     // deterministic, so the sprint that delivers ALWAYS carries the
-    // requirement. Measured 2026-09-03: the delivered tree left 14 scenes
-    // enabled in Build Settings and the report named none of them.
+    // requirement. Measured 2026-09-03: the delivered tree left most of its
+    // scenes enabled in Build Settings and the report named none of them.
     if (campaign.currentMilestone === campaign.milestones.length - 1) {
       // The CURRENT wording, not the first one persisted. Measured 2026-09-08
       // 06:00: a campaign planned before the "disable, do not delete" change
@@ -3052,7 +3052,8 @@ export class CampaignManager {
           "\n\nBUILD HYGIENE (final sprint): when you are done, the FIRST enabled scene in Build Settings " +
           "must be the entry scene a person opens to play the game, and every scene enabled after it must be " +
           "one the game itself loads (menu, levels, results). Every verification or scaffolding scene " +
-          "(InitTestScene*, *Verification, *Verified, *SmokeTest*, Sandbox*) must be DISABLED in Build " +
+          "(the test runner's InitTestScene*, and any scene named for a check, a probe or a sandbox rather " +
+          "than for the game) must be DISABLED in Build " +
           "Settings. Do NOT delete scene files that existed before this sprint: " +
           "the write-back carries only deletions of files the system itself wrote, so deleting a " +
           "pre-existing scene costs a turn and changes nothing (measured 2026-09-08: twelve such deletes, " +
@@ -4381,8 +4382,8 @@ export class CampaignManager {
       // can be won. A green from a filter is the sprint
       // choosing which tests count (audited 2026-09-03).
       // ASK THE COMPILER, not the agent. Every other gate reads what a run
-      // REPORTED; this one measures. Sprint 7 was committed green (1296 files,
-      // f674e8d) and the campaign delivered while the tree carried 37 compile
+      // REPORTED; this one measures. The final sprint was committed green and
+      // the campaign delivered while the tree carried dozens of compile
       // errors — found seconds later by the real-tree guardian, and by no gate
       // at all (measured live 2026-09-04 21:37). A verifier that could not run
       // is recorded as NOT RUN and never as a pass.
@@ -4833,9 +4834,9 @@ export class CampaignManager {
           ];
         }
         // SCENE HYGIENE GATE. Measured on the delivered test-game tree
-        // 2026-09-03: 14 scenes enabled in Build Settings, most of them
-        // single-purpose verification scaffolding, and the person who opened
-        // the delivery could not find the game. The COUNT always reaches the
+        // 2026-09-03: most of its scenes enabled in Build Settings, most of
+        // those single-purpose verification scaffolding, and the person who
+        // opened the delivery could not find the game. The COUNT always reaches the
         // report (see describeEntryPoint); this gate refuses delivery only in
         // the two cases where there is nothing to open at all — no enabled
         // scene, or no enabled scene whose file can be read and holds
@@ -5011,10 +5012,10 @@ export class CampaignManager {
         // check still refuses after its bounce budget is spent, the campaign
         // used to declare `done` and disclose the refusal as a caveat —
         // measured live 2026-09-04 21:37: "🏁 Campaign delivery — game built"
-        // above "REFUSAL STANDS … The shipped scenes render NOTHING … 360
-        // assets no enabled scene reaches". The disclosure was honest and the
-        // headline was not: the one sentence a person reads first said the
-        // opposite of the evidence under it. Stop and hand it to a person
+        // above "REFUSAL STANDS … The shipped scenes render NOTHING", with
+        // the assets no enabled scene reaches listed under it. The disclosure
+        // was honest and the headline was not: the one sentence a person reads
+        // first said the opposite of the evidence under it. Stop and hand it to a person
         // instead; every finding still travels in the report.
         // The compiler is held to the same rule (review 2026-09-07): with the
         // delivery bounces spent, a tree that still does not build was
@@ -9046,10 +9047,10 @@ export class CampaignManager {
         return undefined;
       }
       // ONE SPRINT PER GAP, ART FIRST. Measured 2026-09-07: one remediation
-      // sprint carried "Art production …", "Audio production …" and "Story
-      // and theme content …" together; four attempts, three of them narrowed
-      // by the time-box to a single item that was never the art, and the
-      // campaign delivered with all three gaps open. A gap is a sprint's
+      // sprint carried three of the audit's gaps together, one of them art;
+      // four attempts, three of them narrowed by the time-box to a single item
+      // that was never the art, and the campaign delivered with all three
+      // gaps open. A gap is a sprint's
       // worth of work; the audit's list is a ladder, not a prompt.
       const round = priorRounds + 1;
       // ONE SPRINT PER REQUIREMENT: the planner's schema accepts a repeated
@@ -9121,8 +9122,8 @@ export class CampaignManager {
    * every submit.
    *
    * Measured 2026-09-04 10:32: the refusal ("the shipped scenes render
-   * NOTHING … 100 prefabs, 62 models and 198 sprites no enabled scene
-   * reaches") was computed only inside the delivery-gate bounce, so the
+   * NOTHING", with the prefabs, models and sprites no enabled scene reaches)
+   * was computed only inside the delivery-gate bounce, so the
    * persisted m7 prompt held none of it — no "render NOTHING", no
    * CreatePrimitive, no unbound art. Every sprint resubmitted by an outage, a
    * self-revival, a time-box escalation or a restart therefore ran as blind
@@ -9431,7 +9432,7 @@ export class CampaignManager {
       "Produce real art NOW, before anything else: unity_generate_sprite with provider \"local\" (the installed " +
       "model draws a real sprite in under a minute). Call it with the SAME name and the SAME path as the placeholder " +
       "file: that overwrites the placeholder and keeps its .meta GUID, so every binding survives and no bind call is " +
-      "needed — a new file beside the placeholder (e.g. <Name>_Real.png) leaves this count unchanged. Or " +
+      "needed — a new file beside the placeholder (e.g. <Name>_v2.png) leaves this count unchanged. Or " +
       "unity_my_assets_cloud action \"purchases\" → \"download\" → unity_import_asset_package for owned packs. " +
       "Then bind what you made. This sprint is judged by that count dropping, not by a report."
     );
@@ -9885,8 +9886,8 @@ export class CampaignManager {
     const frames = this.countCaptureFiles();
     lines.push("", `Captured frames on disk: ${frames}`);
 
-    // HOW TO RUN IT. Measured 2026-09-03: the delivered project carried 20
-    // scenes, 14 of them enabled in the build, most of them single-purpose
+    // HOW TO RUN IT. Measured 2026-09-03: the delivered project had most of
+    // its scenes enabled in the build, most of those single-purpose
     // verification scaffolding — and the report never said which one is the
     // game. A person cannot open a delivery they cannot find.
     // The look disclosure rides with the entry-point block: both answer "what
@@ -10153,7 +10154,7 @@ export class CampaignManager {
    * Write HOW_TO_RUN.md at the project root and return the report line that
    * names it.
    *
-   * Measured 2026-09-03: the delivered tree had 20 scenes, no README of any
+   * Measured 2026-09-03: the delivered tree had many scenes, no README of any
    * kind, and the delivery report — a chat message that scrolls away — was
    * the only thing that ever said which scene to open. The project itself
    * said nothing to the person who opened it.

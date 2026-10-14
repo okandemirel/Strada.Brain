@@ -257,7 +257,7 @@ export interface RequirementRow {
   gddRevision: number;
 }
 
-/** A numbered series the GDD defines only in part (a stated span "G-01 to G-07", four defined). Reported, never invented. */
+/** A numbered series the GDD defines only in part (a stated span "G-01 to G-09", five defined). Reported, never invented. */
 export interface NumberingGap {
   series: string;
   missing: string[];

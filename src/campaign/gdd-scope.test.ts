@@ -15,15 +15,11 @@ import {
 
 const BIG = `# Orchard Seasons
 ## Contents
-## 1. Orchard Map
-The orchard is a walled grid of plots.
-## 2. Saving and Options
-The journal is saved to the season slot after each harvest. An onboarding season walks the player through pruning. An options menu sets text size.
-## 3. Planning Phase
-### 3.1 Pruning Orders
-## 4. Sound
+## 1. Planning Phase
+### 1.1 Pruning Orders
+## 2. Sound
 A wind-and-birdsong soundtrack plays under every season.
-## 5. Varieties by Year
+## 3. Varieties by Year
 | Year | Variety | Note |
 |---|---|---|
 | Y1 | Russet Pear | hardy |
@@ -33,12 +29,16 @@ A wind-and-birdsong soundtrack plays under every season.
 | Y5 | Greengage | |
 | Y6 | Bramley | cooking |
 | Y7 | Morello | shade |
-## 6. Campaign
-The campaign runs 53 levels, one per season.
-## 7. Screens
-An orchard map screen, an inventory screen, a leaderboard and a pause menu.
-## 8. Technical Targets
+## 4. Saving and Options
+The journal is saved to the season slot after each harvest. An onboarding season walks the player through pruning. An options menu sets text size.
+## 5. Load Times and Stores
 The season map loads in under 4 seconds. Ships to Steam and the App Store.
+## 6. Orchard Map
+The orchard is a walled grid of plots.
+## 7. Campaign
+The campaign runs 53 levels, one per season.
+## 8. Screens
+An orchard map screen, an inventory screen, a leaderboard and a pause menu.
 ## Credits
 ## Appendix C
 `;
@@ -47,9 +47,9 @@ describe("extractHeadings", () => {
   it("keeps section headings in order and drops document apparatus", () => {
     const h = extractHeadings(BIG);
     expect(h[0]).toBe("Orchard Seasons");
-    expect(h).toContain("3. Planning Phase");
-    expect(h).toContain("3.1 Pruning Orders");
-    expect(h).toContain("8. Technical Targets");
+    expect(h).toContain("1. Planning Phase");
+    expect(h).toContain("1.1 Pruning Orders");
+    expect(h).toContain("5. Load Times and Stores");
     expect(h).not.toContain("Contents");
     expect(h).not.toContain("Credits");
     expect(h).not.toContain("Appendix C");
@@ -175,8 +175,8 @@ describe("headingClaimedBy — one containment rule for coverage and for row own
   it("exports the apparatus and work-demand rules the row extractor shares", () => {
     expect(TRIVIAL_HEADING_RE.test(normalizeHeading("9. Revision History"))).toBe(true);
     expect(TRIVIAL_HEADING_RE.test(normalizeHeading("2.1 Season Phases"))).toBe(false);
-    // A market heading that goes on to name competing titles is still front matter.
-    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("Market Analysis and Competitor Titles"))).toBe(true);
+    // A market-analysis heading is front matter too.
+    expect(TRIVIAL_HEADING_RE.test(normalizeHeading("Market Analysis"))).toBe(true);
     expect(WORK_DEMAND_RE.test("Build an interactive credits screen.")).toBe(true);
     expect(WORK_DEMAND_RE.test("This document describes the game.")).toBe(false);
   });
