@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { deflateSync } from "node:zlib";
-import { detectCampaignIntent } from "./campaign-intake.js";
+import { detectCampaignIntent, type CampaignIntent } from "./campaign-intake.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
+
+/** A build that starts at once from the document at `path`: the one form that is plainly a request for it. */
+const now = (path: string): CampaignIntent => ({ kind: "gdd-from-docs", path });
+/** A build from the document at `path` that the user confirms at the approval gate first; `others` are the rest offered. */
+const confirm = (path: string, ...others: string[]): CampaignIntent => ({ kind: "gdd-to-confirm", path, ...(others.length > 0 ? { others } : {}) });
 
 function msg(text: string, attachments?: IncomingMessage["attachments"]): IncomingMessage {
   return {
@@ -119,8 +124,9 @@ describe("what the message actually pointed at (Codex 2026-09-12 AD#6)", () => {
   it("still means the repository's document when the message names neither", () => {
     expect(detectCampaignIntent(msg("Build the game in the GDD"))).toEqual({ kind: "gdd-from-docs" });
     expect(detectCampaignIntent(msg("GDD'deki oyunu yap"))).toEqual({ kind: "gdd-from-docs" });
-    // A marker with nothing behind it is a reference, not a design.
-    expect(detectCampaignIntent(msg("Build this game. GDD: see above."))).toEqual({ kind: "gdd-from-docs" });
+    // A marker with nothing behind it is a reference, not a design — to one the build is not aimed at, so the
+    // repository's GDD is confirmed before anything is built from it.
+    expect(detectCampaignIntent(msg("Build this game. GDD: see above."))).toEqual({ kind: "gdd-to-confirm" });
   });
 });
 
@@ -206,37 +212,37 @@ describe("a message that names the design document by its path", () => {
     ({ chatId: "c", text, attachments: [] }) as never;
 
   it.each([
-    ["Build this game: docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Build the game in docs/Quillmoor_GDD.md, sprint by sprint, until it is done.", "docs/Quillmoor_GDD.md"],
-    ["build the game from the GDD at docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Build this game: quill-moor-gdd.md", "quill-moor-gdd.md"],
-    ["Build this game: docs/QuillmoorGDD.md", "docs/QuillmoorGDD.md"],
-    ["Make this game: design/quillmoor-notes.docx", "design/quillmoor-notes.docx"],
-    ["Develop my game from docs/quillmoor.markdown", "docs/quillmoor.markdown"],
-    ["Build the game described in ./quillmoor.txt", "./quillmoor.txt"],
-    ["Build the game in /Users/someone/Desktop/Quillmoor_GDD.pdf", "/Users/someone/Desktop/Quillmoor_GDD.pdf"],
-    ["Build the game in ~/Desktop/Quillmoor_GDD.rtf", "~/Desktop/Quillmoor_GDD.rtf"],
-    ["Build the game in C:\\Games\\Quillmoor_GDD.odt", "C:\\Games\\Quillmoor_GDD.odt"],
-    ['Build the game in "docs/Quill Moor GDD.md"', "docs/Quill Moor GDD.md"],
-    ["docs/Quillmoor_GDD.md oyununu baştan sona yap", "docs/Quillmoor_GDD.md"],
-    ["Bu oyunu yap: docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Quillmoor_GDD.odt'deki oyunu baştan sona yap", "Quillmoor_GDD.odt"],
-    ["docs/quillmoor.pdf dosyasındaki oyunu geliştir", "docs/quillmoor.pdf"],
-    ["GDD'li dosya docs/quillmoor.txt, bu oyunu yap", "docs/quillmoor.txt"],
-    ["Bu oyunu yap: docs/Kuşkonmaz_Tasarımı.md", "docs/Kuşkonmaz_Tasarımı.md"],
-    ["Quillmoor_GDD.md’deki oyunu baştan sona yap", "Quillmoor_GDD.md"],
+    ["Build this game: docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
+    ["Build the game in docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
+    ["Build the game in docs/Quillmoor_GDD.md, sprint by sprint, until it is done.", now("docs/Quillmoor_GDD.md")],
+    ["build the game from the GDD at docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
+    ["Build this game: quill-moor-gdd.md", now("quill-moor-gdd.md")],
+    ["Build this game: docs/QuillmoorGDD.md", now("docs/QuillmoorGDD.md")],
+    ["Make this game: design/quillmoor-notes.docx", confirm("design/quillmoor-notes.docx")],
+    ["Develop my game from docs/quillmoor.markdown", confirm("docs/quillmoor.markdown")],
+    ["Build the game described in ./quillmoor.txt", confirm("./quillmoor.txt")],
+    ["Build the game in /Users/someone/Desktop/Quillmoor_GDD.pdf", now("/Users/someone/Desktop/Quillmoor_GDD.pdf")],
+    ["Build the game in ~/Desktop/Quillmoor_GDD.rtf", now("~/Desktop/Quillmoor_GDD.rtf")],
+    ["Build the game in C:\\Games\\Quillmoor_GDD.odt", now("C:\\Games\\Quillmoor_GDD.odt")],
+    ['Build the game in "docs/Quill Moor GDD.md"', now("docs/Quill Moor GDD.md")],
+    ["docs/Quillmoor_GDD.md oyununu baştan sona yap", now("docs/Quillmoor_GDD.md")],
+    ["Bu oyunu yap: docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
+    ["Quillmoor_GDD.odt'deki oyunu baştan sona yap", now("Quillmoor_GDD.odt")],
+    ["docs/quillmoor.pdf dosyasındaki oyunu geliştir", confirm("docs/quillmoor.pdf")],
+    ["GDD'li dosya docs/quillmoor.txt, bu oyunu yap", now("docs/quillmoor.txt")],
+    ["Bu oyunu yap: docs/Kuşkonmaz_Tasarımı.md", now("docs/Kuşkonmaz_Tasarımı.md")],
+    ["Quillmoor_GDD.md’deki oyunu baştan sona yap", now("Quillmoor_GDD.md")],
     // Beside a style sheet or a changelog, the design — wherever it stands.
-    ["Build the game in docs/art-style.md and docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Following docs/art-style.md, build the game in docs/quillmoor.md", "docs/quillmoor.md"],
-    ["CHANGELOG.md'yi güncel tut, docs/quillmoor.md'deki oyunu baştan sona yap", "docs/quillmoor.md"],
+    ["Build the game in docs/art-style.md and docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
+    ["Following docs/art-style.md, build the game in docs/quillmoor.md", confirm("docs/quillmoor.md")],
+    ["CHANGELOG.md'yi güncel tut, docs/quillmoor.md'deki oyunu baştan sona yap", confirm("docs/quillmoor.md")],
     // Named alone, it is the one the message meant, whatever it is called.
-    ["Build this game: docs/README.md", "docs/README.md"],
+    ["Build this game: docs/README.md", confirm("docs/README.md")],
     // A workbook is a format the document extractor reads; this sentence was an idea to draft.
-    ["Build this game: design/quillmoor-balance.xlsx", "design/quillmoor-balance.xlsx"],
-    ["Build this game: **docs/quillmoor.md**", "docs/quillmoor.md"],
-  ])("%s → that path", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+    ["Build this game: design/quillmoor-balance.xlsx", confirm("design/quillmoor-balance.xlsx")],
+    ["Build this game: **docs/quillmoor.md**", confirm("docs/quillmoor.md")],
+  ])("%s → %j", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   /**
@@ -246,43 +252,44 @@ describe("a message that names the design document by its path", () => {
    * manager finds it or says it could not.
    */
   it.each([
-    ["Quillmoor_GDD'deki oyunu yap", "Quillmoor_GDD"],
-    ["Build the game in QuillmoorGDD", "QuillmoorGDD"],
-    ["Build the game in the quillmoor_game_design_document", "quillmoor_game_design_document"],
-    ["Build the game in docs/Quillmoor_GDD", "docs/Quillmoor_GDD"],
-    ["Build the game in docs/Quillmoor_GDD.", "docs/Quillmoor_GDD"],
-    ["Build the game in docs/design/GDD", "docs/design/GDD"],
-    ["Build this game: docs/Quillmoor_GDD.pptx", "docs/Quillmoor_GDD.pptx"],
-    ["Build this game: design/quillmoor-deck.pptx", "design/quillmoor-deck.pptx"],
-    ["Build this game: docs/Quillmoor_GDD.html", "docs/Quillmoor_GDD.html"],
-    ["Build this game: https://example.com/files/Quillmoor_GDD.md", "https://example.com/files/Quillmoor_GDD.md"],
-    ["Bu oyunu yap: https://example.com/d/quillmoor.pdf", "https://example.com/d/quillmoor.pdf"],
-    ["https://example.com/files/Quillmoor_GDD.md'deki oyunu yap", "https://example.com/files/Quillmoor_GDD.md"],
+    ["Quillmoor_GDD'deki oyunu yap", now("Quillmoor_GDD")],
+    ["Build the game in QuillmoorGDD", now("QuillmoorGDD")],
+    ["Build the game in the quillmoor_game_design_document", now("quillmoor_game_design_document")],
+    ["Build the game in docs/Quillmoor_GDD", now("docs/Quillmoor_GDD")],
+    ["Build the game in docs/Quillmoor_GDD.", now("docs/Quillmoor_GDD")],
+    ["Build the game in docs/design/GDD", now("docs/design/GDD")],
+    ["Build this game: docs/Quillmoor_GDD.pptx", now("docs/Quillmoor_GDD.pptx")],
+    ["Build this game: design/quillmoor-deck.pptx", confirm("design/quillmoor-deck.pptx")],
+    ["Build this game: docs/Quillmoor_GDD.html", now("docs/Quillmoor_GDD.html")],
+    ["Build this game: https://example.com/files/Quillmoor_GDD.md", now("https://example.com/files/Quillmoor_GDD.md")],
+    ["Bu oyunu yap: https://example.com/d/quillmoor.pdf", confirm("https://example.com/d/quillmoor.pdf")],
+    ["https://example.com/files/Quillmoor_GDD.md'deki oyunu yap", now("https://example.com/files/Quillmoor_GDD.md")],
     // A download copy was read as the name before its "(1)" — the original beside it.
-    ["Build this game: docs/Quillmoor_GDD (1).md", "docs/Quillmoor_GDD (1).md"],
-    ["Build the game in docs/Quillmoor_GDD (final copy).md", "docs/Quillmoor_GDD (final copy).md"],
-    ["Quillmoor_GDD (2).md'deki oyunu yap", "Quillmoor_GDD (2).md"],
-    ["Build the game in docs/Quill Moor GDD (1).md", "docs/Quill Moor GDD (1).md"],
+    ["Build this game: docs/Quillmoor_GDD (1).md", now("docs/Quillmoor_GDD (1).md")],
+    ["Build the game in docs/Quillmoor_GDD (final copy).md", now("docs/Quillmoor_GDD (final copy).md")],
+    ["Quillmoor_GDD (2).md'deki oyunu yap", now("Quillmoor_GDD (2).md")],
+    ["Build the game in docs/Quill Moor GDD (1).md", now("docs/Quill Moor GDD (1).md")],
     // A name with a character the path pattern did not know, or in bold, was no name at all.
-    ["Build this game: docs/Quill+Moor_GDD.md", "docs/Quill+Moor_GDD.md"],
-    ["Build this game: docs/Quill&Moor_GDD.md", "docs/Quill&Moor_GDD.md"],
-    ["Build this game: docs/Quill#Moor_GDD.md", "docs/Quill#Moor_GDD.md"],
-    ["Build this game: docs/Quillmoor_GDD[v2].md", "docs/Quillmoor_GDD[v2].md"],
+    ["Build this game: docs/Quill+Moor_GDD.md", now("docs/Quill+Moor_GDD.md")],
+    ["Build this game: docs/Quill&Moor_GDD.md", now("docs/Quill&Moor_GDD.md")],
+    ["Build this game: docs/Quill#Moor_GDD.md", now("docs/Quill#Moor_GDD.md")],
+    ["Build this game: docs/Quillmoor_GDD[v2].md", now("docs/Quillmoor_GDD[v2].md")],
     // …while a Markdown link is its target, not its text.
-    ["Build the game in [Quillmoor_GDD.md](docs/design/Quillmoor_GDD.md)", "docs/design/Quillmoor_GDD.md"],
-    ["Build this game: **docs/Quillmoor_GDD.md**", "docs/Quillmoor_GDD.md"],
-    ["Bu oyunu yap: <docs/Quillmoor_GDD.md>", "docs/Quillmoor_GDD.md"],
+    ["Build the game in [Quillmoor_GDD.md](docs/design/Quillmoor_GDD.md)", now("docs/design/Quillmoor_GDD.md")],
+    ["Build this game: **docs/Quillmoor_GDD.md**", now("docs/Quillmoor_GDD.md")],
+    ["Bu oyunu yap: <docs/Quillmoor_GDD.md>", now("docs/Quillmoor_GDD.md")],
     // A section anchor is no part of the file's name.
-    ["Build the game in docs/Quillmoor_GDD.md#combat", "docs/Quillmoor_GDD.md"],
-  ])("%s → the document it names, %s, not the repository's other design", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+    ["Build the game in docs/Quillmoor_GDD.md#combat", now("docs/Quillmoor_GDD.md")],
+  ])("%s → the document it names, %j, not the repository's other design", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   it.each([
     // "the GDD" itself, and a word built on it, are no name.
     ["Build the game in the GDD", { kind: "gdd-from-docs" }],
     ["GDD'deki oyunu yap", { kind: "gdd-from-docs" }],
-    ["Build the game following the GDD/TDD split", { kind: "gdd-from-docs" }],
+    // …and "the GDD" the build is not plainly aimed at is confirmed first.
+    ["Build the game following the GDD/TDD split", { kind: "gdd-to-confirm" }],
     // A link beside an idea is a reference, like a path.
     [
       "Build this game from scratch: a lantern city where the fog retreats from every lit street; mood board at https://example.com/board",
@@ -488,25 +495,25 @@ describe("a named document is the design only when the build is aimed at it", ()
 
   it.each([
     // The name that says GDD wins over another design-looking document…
-    ["Build the game in docs/notes.md and docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Following docs/notes.md, build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
+    ["Build the game in docs/notes.md and docs/Quillmoor_GDD.md", confirm("docs/Quillmoor_GDD.md", "docs/notes.md")],
+    ["Following docs/notes.md, build the game in docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
     // …the one the build is aimed at over a GDD the message turns away…
-    ["Don't use docs/Old_GDD.md, build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["docs/Old_GDD.md'yi kullanma, docs/Quillmoor_GDD.md'deki oyunu yap", "docs/Quillmoor_GDD.md"],
+    ["Don't use docs/Old_GDD.md, build the game in docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
+    ["docs/Old_GDD.md'yi kullanma, docs/Quillmoor_GDD.md'deki oyunu yap", now("docs/Quillmoor_GDD.md")],
     // …a design over a style sheet named beside it…
-    ["Build the game in docs/art-style.md and docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Build the game in docs/art-style.md and docs/quillmoor.md", confirm("docs/quillmoor.md")],
     // …and a path written with spaces is the whole path, not its last word.
-    ["Build the game in docs/Quill Moor GDD.md", "docs/Quill Moor GDD.md"],
-    ["docs/Quill Moor GDD.md'deki oyunu yap", "docs/Quill Moor GDD.md"],
+    ["Build the game in docs/Quill Moor GDD.md", now("docs/Quill Moor GDD.md")],
+    ["docs/Quill Moor GDD.md'deki oyunu yap", now("docs/Quill Moor GDD.md")],
     // The document a short build instruction names is the design.
-    ["Bu oyunu yap, tasarım docs/Quillmoor_GDD.md içinde", "docs/Quillmoor_GDD.md"],
-    ["docs/quillmoor.md'ye göre oyunu baştan sona yap", "docs/quillmoor.md"],
-    ["Build the game per docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Bu oyunu yap, tasarım docs/Quillmoor_GDD.md içinde", now("docs/Quillmoor_GDD.md")],
+    ["docs/quillmoor.md'ye göre oyunu baştan sona yap", confirm("docs/quillmoor.md")],
+    ["Build the game per docs/quillmoor.md", confirm("docs/quillmoor.md")],
     // A build aimed at the design document itself, with only an adverb for build intent.
-    ["Implement the GDD at docs/quillmoor.md end-to-end", "docs/quillmoor.md"],
-    ["GDD'yi baştan sona uygula: docs/quillmoor.md", "docs/quillmoor.md"],
-  ])("%s → %s", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+    ["Implement the GDD at docs/quillmoor.md end-to-end", now("docs/quillmoor.md")],
+    ["GDD'yi baştan sona uygula: docs/quillmoor.md", now("docs/quillmoor.md")],
+  ])("%s → %j", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   it("a GDD the message names beside its idea is still the design when it says so", () => {
@@ -652,21 +659,21 @@ describe("a build the message turns down or asks about", () => {
   });
 
   it.each([
-    ["Can you build the game in docs/quillmoor.md?", "docs/quillmoor.md"],
-    ["Could you please build this game: docs/Quillmoor_GDD.md?", "docs/Quillmoor_GDD.md"],
-    ["Please build the game in docs/quillmoor.md", "docs/quillmoor.md"],
+    ["Can you build the game in docs/quillmoor.md?", confirm("docs/quillmoor.md")],
+    ["Could you please build this game: docs/Quillmoor_GDD.md?", now("docs/Quillmoor_GDD.md")],
+    ["Please build the game in docs/quillmoor.md", confirm("docs/quillmoor.md")],
     // A polite word makes the question mark a request, in either language.
-    ["Please build this game: docs/Quillmoor_GDD.md?", "docs/Quillmoor_GDD.md"],
-    ["Lütfen bu oyunu yap: docs/Quillmoor_GDD.md?", "docs/Quillmoor_GDD.md"],
-    ["Build the game in docs/quillmoor.md. Can you keep me posted?", "docs/quillmoor.md"],
-    ["Build the game in docs/quillmoor.md, okay?", "docs/quillmoor.md"],
-    ["If you can, build the game in docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Don't build the game in docs/Old_GDD.md; build the game in docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Don't wait for me, build the game in docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Bu oyunu yap: docs/quillmoor.md, tamam mı?", "docs/quillmoor.md"],
-    ["docs/quillmoor.md'deki oyunu yazar mısın?", "docs/quillmoor.md"],
-  ])("%s → %s (asked for, politely or plainly)", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+    ["Please build this game: docs/Quillmoor_GDD.md?", now("docs/Quillmoor_GDD.md")],
+    ["Lütfen bu oyunu yap: docs/Quillmoor_GDD.md?", now("docs/Quillmoor_GDD.md")],
+    ["Build the game in docs/quillmoor.md. Can you keep me posted?", confirm("docs/quillmoor.md")],
+    ["Build the game in docs/quillmoor.md, okay?", confirm("docs/quillmoor.md")],
+    ["If you can, build the game in docs/quillmoor.md", confirm("docs/quillmoor.md")],
+    ["Don't build the game in docs/Old_GDD.md; build the game in docs/Quillmoor_GDD.md", now("docs/Quillmoor_GDD.md")],
+    ["Don't wait for me, build the game in docs/quillmoor.md", confirm("docs/quillmoor.md")],
+    ["Bu oyunu yap: docs/quillmoor.md, tamam mı?", confirm("docs/quillmoor.md")],
+    ["docs/quillmoor.md'deki oyunu yazar mısın?", confirm("docs/quillmoor.md")],
+  ])("%s → %j (asked for, politely or plainly)", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   it("an idea whose own sentence carries a question further on is still the idea", () => {
@@ -706,18 +713,18 @@ describe("a build aimed only at a document that sits beside the design", () => {
     ({ chatId: "c", text, attachments: [] }) as never;
 
   it.each([
-    ["Build this game: docs/art-style.md (design: docs/Quillmoor_GDD.md)", "docs/Quillmoor_GDD.md"],
-    ["Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Build the game in docs/art-style.md; the design is docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Build the game in CHANGELOG.md; the GDD is in docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Build the game per docs/art-style.md, see docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Bu oyunu yap: docs/art-style.md, tasarım docs/quillmoor.md", "docs/quillmoor.md"],
-    ["docs/art-style.md'deki oyunu yap, docs/Quillmoor_GDD.md'ye de bak", "docs/Quillmoor_GDD.md"],
+    ["Build this game: docs/art-style.md (design: docs/Quillmoor_GDD.md)", now("docs/Quillmoor_GDD.md")],
+    ["Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md", confirm("docs/Quillmoor_GDD.md")],
+    ["Build the game in docs/art-style.md; the design is docs/quillmoor.md", now("docs/quillmoor.md")],
+    ["Build the game in CHANGELOG.md; the GDD is in docs/quillmoor.md", now("docs/quillmoor.md")],
+    ["Build the game per docs/art-style.md, see docs/quillmoor.md", confirm("docs/quillmoor.md")],
+    ["Bu oyunu yap: docs/art-style.md, tasarım docs/quillmoor.md", now("docs/quillmoor.md")],
+    ["docs/art-style.md'deki oyunu yap, docs/Quillmoor_GDD.md'ye de bak", confirm("docs/Quillmoor_GDD.md")],
     // Named as the design, with no style sheet beside it, it is the design too.
-    ["Please build this game, design is in docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Bu oyunu yap, tasarım docs/quillmoor.md içinde", "docs/quillmoor.md"],
-  ])("%s → the design beside it, %s", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+    ["Please build this game, design is in docs/quillmoor.md", now("docs/quillmoor.md")],
+    ["Bu oyunu yap, tasarım docs/quillmoor.md içinde", now("docs/quillmoor.md")],
+  ])("%s → the design beside it, %j", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   it.each([
@@ -737,9 +744,6 @@ describe("a build aimed only at a document that sits beside the design", () => {
     "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md hariç",
     "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md geçersiz",
     "docs/art-style.md'deki oyunu yap, docs/Old_GDD.md'yi görmezden gel",
-    // …or there are two, and the message does not say which.
-    "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md or docs/Fernwick_GDD.md",
-    "Build the game per docs/art-style.md, see docs/quillmoor.md and docs/fernwick.md",
     // A GDD the message turns away is no design when nothing is aimed either.
     "Build the game, don't use docs/Old_GDD.md",
     "Build the game, but not from docs/Old_GDD.md",
@@ -747,6 +751,14 @@ describe("a build aimed only at a document that sits beside the design", () => {
     "Build this game. The art design is in docs/art-style.md",
   ])("%s → no campaign (no design the message settled on)", (text) => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  // Two designs beside it, and the message does not say which: the first is offered at the gate, the other named.
+  it.each([
+    ["Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md or docs/Fernwick_GDD.md", confirm("docs/Quillmoor_GDD.md", "docs/Fernwick_GDD.md")],
+    ["Build the game per docs/art-style.md, see docs/quillmoor.md and docs/fernwick.md", confirm("docs/quillmoor.md", "docs/fernwick.md")],
+  ])("%s → %j (two candidates)", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   /**
@@ -765,13 +777,13 @@ describe("a build aimed only at a document that sits beside the design", () => {
   });
 
   it.each([
-    ["Build the game per docs/BUILD.md, see docs/Quillmoor_GDD.md", "docs/Quillmoor_GDD.md"],
-    ["Build the game in docs/BUILD.md and docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Build the game per docs/Quillmoor_Build_GDD.md", "docs/Quillmoor_Build_GDD.md"],
-    ["Build the game per docs/city-builder.md", "docs/city-builder.md"],
-    ["Build this game: docs/deck-building.md", "docs/deck-building.md"],
-  ])("%s → %s (a design beside build instructions, or one only named like them)", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+    ["Build the game per docs/BUILD.md, see docs/Quillmoor_GDD.md", confirm("docs/Quillmoor_GDD.md")],
+    ["Build the game in docs/BUILD.md and docs/quillmoor.md", confirm("docs/quillmoor.md")],
+    ["Build the game per docs/Quillmoor_Build_GDD.md", now("docs/Quillmoor_Build_GDD.md")],
+    ["Build the game per docs/city-builder.md", confirm("docs/city-builder.md")],
+    ["Build this game: docs/deck-building.md", confirm("docs/deck-building.md")],
+  ])("%s → %j (a design beside build instructions, or one only named like them)", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   // Named alone, a style sheet, a changelog or a licence is still no design (none of these built on main).
@@ -784,9 +796,9 @@ describe("a build aimed only at a document that sits beside the design", () => {
     expect(detectCampaignIntent(msg(text))).toBeUndefined();
   });
 
-  it("a readme, which may hold the design, is still built when it is named alone or beside a style sheet", () => {
-    expect(detectCampaignIntent(msg("Build this game: docs/README.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/README.md" });
-    expect(detectCampaignIntent(msg("Build the game in docs/art-style.md and docs/README.md"))).toEqual({ kind: "gdd-from-docs", path: "docs/README.md" });
+  it("a readme, which may hold the design, is still offered when it is named alone or beside a style sheet", () => {
+    expect(detectCampaignIntent(msg("Build this game: docs/README.md"))).toEqual(confirm("docs/README.md"));
+    expect(detectCampaignIntent(msg("Build the game in docs/art-style.md and docs/README.md"))).toEqual(confirm("docs/README.md"));
   });
 
   /**
@@ -795,23 +807,31 @@ describe("a build aimed only at a document that sits beside the design", () => {
    * "P ile oyunu yap" and the plain Turkish order "Oyunu P'ye göre yap" were
    * ordinary tasks, while the same sentences with docs/Quillmoor_GDD.md built.
    */
-  it.each([
-    ["Build the game using docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Build the game following docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Build this game with the design in docs/quillmoor.md", "docs/quillmoor.md"],
-    ["Build the game (docs/quillmoor.md)", "docs/quillmoor.md"],
-    ["docs/quillmoor.md: build this game end to end", "docs/quillmoor.md"],
-    ["docs/quillmoor.md — build the game from it", "docs/quillmoor.md"],
-    ["docs/quillmoor.md ile oyunu yap", "docs/quillmoor.md"],
-    ["docs/quillmoor.md'yi kullanarak oyunu yap", "docs/quillmoor.md"],
-    ["docs/quillmoor.md dosyasına göre oyunu yap", "docs/quillmoor.md"],
-    ["Oyunu docs/quillmoor.md'ye göre yap", "docs/quillmoor.md"],
-    ["Oyunu docs/quillmoor.md'den yap", "docs/quillmoor.md"],
-    ["Bu oyunu docs/quillmoor.md dosyasına göre baştan sona geliştir", "docs/quillmoor.md"],
-    ["Şu oyunu yapar mısın: docs/quillmoor.md", "docs/quillmoor.md"],
-    ["docs/quillmoor.md'deki oyunu yapar mısın?", "docs/quillmoor.md"],
-  ])("%s → %s (the build is aimed at it)", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+  const AIMED_FORMS = [
+    "Build the game using P",
+    "Build the game following P",
+    "Build the game (P)",
+    "Build the game (P) and send me the APK",
+    "P: build this game end to end",
+    "P — build the game from it",
+    "P ile oyunu yap",
+    "P'yi kullanarak oyunu yap",
+    "P dosyasına göre oyunu yap",
+    "Oyunu P'ye göre yap",
+    "Oyunu P'den yap",
+    "Bu oyunu P dosyasına göre baştan sona geliştir",
+    "Şu oyunu yapar mısın: P",
+    "P'deki oyunu yapar mısın?",
+  ];
+  // …the connective decides that the build is aimed at P; the name decides whether it starts at once.
+  it.each(AIMED_FORMS)("%s, P a design's name → that design, at once", (form) => {
+    expect(detectCampaignIntent(msg(form.replace("P", "docs/Quillmoor_GDD.md")))).toEqual(now("docs/Quillmoor_GDD.md"));
+  });
+  it.each(AIMED_FORMS)("%s, P any other name → that document, confirmed first", (form) => {
+    expect(detectCampaignIntent(msg(form.replace("P", "docs/quillmoor.md")))).toEqual(confirm("docs/quillmoor.md"));
+  });
+  it("…and a document the message calls the design starts at once, whatever its name", () => {
+    expect(detectCampaignIntent(msg("Build this game with the design in docs/quillmoor.md"))).toEqual(now("docs/quillmoor.md"));
   });
 
   it.each([
@@ -834,22 +854,117 @@ describe("a build aimed only at a document that sits beside the design", () => {
    * built docs/GDD.md — another file — with no gate.
    */
   it.each([
-    ["Build the game in Quill Moor GDD.md", "Quill Moor GDD.md"],
-    ["Build the game from the Quill Moor GDD.md", "Quill Moor GDD.md"],
-    ["Bu oyunu yap: Quill Moor GDD.md", "Quill Moor GDD.md"],
-    ["Quill Moor GDD.md'deki oyunu yap", "Quill Moor GDD.md"],
-    ["Thanks! Quill Moor GDD.md'deki oyunu yap", "Quill Moor GDD.md"],
+    ["Build the game in Quill Moor GDD.md", now("Quill Moor GDD.md")],
+    ["Build the game from the Quill Moor GDD.md", now("Quill Moor GDD.md")],
+    ["Bu oyunu yap: Quill Moor GDD.md", now("Quill Moor GDD.md")],
+    ["Quill Moor GDD.md'deki oyunu yap", now("Quill Moor GDD.md")],
+    ["Thanks! Quill Moor GDD.md'deki oyunu yap", now("Quill Moor GDD.md")],
     // The words a sentence builds with are no part of the name, nor is its capitalised first word.
-    ["Fetch GDD.md and build the game from it", "GDD.md"],
-    ["Build The Game In GDD.md", "GDD.md"],
-    ["Build the game in GDD.md", "GDD.md"],
-    ["Build the game in my GDD.md", "GDD.md"],
-  ])("%s → the whole name, %s", (text, path) => {
-    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs", path });
+    ["Fetch GDD.md and build the game from it", confirm("GDD.md")],
+    ["Build The Game In GDD.md", now("GDD.md")],
+    ["Build the game in GDD.md", now("GDD.md")],
+    ["Build the game in my GDD.md", now("GDD.md")],
+  ])("%s → the whole name, %j", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
   });
 
   it("an idea written beside the style sheet the build is aimed at is the design", () => {
     const text = "Build this game from scratch per docs/art-style.md: a beekeeper moves her hives between meadows as the seasons turn.";
     expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
   });
+});
+
+/**
+ * A build aimed at a document was checked only by the text BEFORE the
+ * document, never by the rest of its clause: "Make the game (docs/perf.md
+ * explains the frame drops) faster", "Build the game (docs/troubleshooting.md
+ * has the fix) and send me the APK" and "Build this game: docs/notes.md is
+ * where I keep my todo list" each answered "Building from … Sprint 1 starts
+ * now" with no approval gate, and "following P" did the same for a procedure
+ * document. A build starts at once only in the one plain form — a whole-game
+ * build asked for, aimed at one document whose name (or the message) says it
+ * is the design, the document ending its clause; any other whole-game build
+ * that points at a document is confirmed at the approval gate first; a
+ * feature request is no campaign.
+ */
+describe("a document the build names, read to the end of its clause", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+  const IDEA = "idea";
+
+  it.each([
+    // "Make the game … faster" is causative through a parenthesis too: a feature request.
+    ["Make the game (docs/perf.md explains the frame drops) faster", undefined],
+    ["Make the game (docs/Quillmoor_GDD.md has the new level) longer", undefined],
+    ["Make the game (per docs/perf.md) faster", undefined],
+    // A document with only a qualifier after it, and nothing else to build from.
+    ["Make the game in docs/perf.md faster", undefined],
+    ["Bu oyunu yap: docs/notlar.md yapılacaklar listem", undefined],
+    // Inside a parenthesis only its closing bracket may follow the document.
+    ["Build the game (docs/setup.md, step 4 fails)", undefined],
+    ["Build the game (docs/Quillmoor_GDD.md, step 4 fails)", confirm("docs/Quillmoor_GDD.md")],
+    // The document is the subject of its own predicate, not what the build is aimed at: the sentence is an idea, drafted at the gate (as on main).
+    ["Build the game (docs/troubleshooting.md has the fix) and send me the APK", IDEA],
+    ["Make the game: docs/perf.md explains the frame drops, fix them", IDEA],
+    ["Build this game: docs/notes.md is where I keep my todo list", IDEA],
+    ["Build the game for Android. The design is in docs/ui-mockups.md for the buttons.", IDEA],
+    // A design with a qualifier after its name, or "the GDD" the build is not aimed at, is confirmed first.
+    ["Build the game in docs/Quillmoor_GDD.md for the buttons", confirm("docs/Quillmoor_GDD.md")],
+    ["Make the game in docs/Quillmoor_GDD.md faster", confirm("docs/Quillmoor_GDD.md")],
+    ["Bu oyunu yap: docs/Quillmoor_GDD.md'de hata var", confirm("docs/Quillmoor_GDD.md")],
+    // A document named together with the one the build is aimed at is held to its own clause too.
+    ["Build the game in docs/art-style.md and docs/Quillmoor_GDD.md has the new levels", IDEA],
+    ["Build the game (the GDD has the fix) and send me the APK", { kind: "gdd-to-confirm" }],
+    ["Build the game and fix the GDD typo", { kind: "gdd-to-confirm" }],
+    ["Make the game in the GDD faster", { kind: "gdd-to-confirm" }],
+    ["Bu oyunu yap, GDD'de hata var", { kind: "gdd-to-confirm" }],
+  ])("%s → %j, never an immediate build", (text, expected) => {
+    const intent = detectCampaignIntent(msg(text));
+    expect(intent).toEqual(expected === IDEA ? { kind: "idea", ideaText: text } : expected);
+  });
+
+  // A procedure cited with "using" or "following" is no design by its name: the user confirms it first.
+  it.each([
+    ["Build the game following docs/android-signing.md", "docs/android-signing.md"],
+    ["Build the game using docs/unity-setup.md", "docs/unity-setup.md"],
+    ["Build the game following docs/coding-standards.md", "docs/coding-standards.md"],
+    ["Build my game using docs/test-plan.md", "docs/test-plan.md"],
+    ["docs/unity-setup.md'yi kullanarak oyunu yap", "docs/unity-setup.md"],
+  ])("%s → %s, confirmed first", (text, path) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(confirm(path));
+  });
+
+  // What says design is the name's own word for it — never a part's design.
+  it.each([
+    ["Build this game: docs/Quillmoor-Design.md", now("docs/Quillmoor-Design.md")],
+    ["Build the game in docs/game-design.docx", now("docs/game-design.docx")],
+    ["Bu oyunu yap: docs/Oyun_Tasarımı.md", now("docs/Oyun_Tasarımı.md")],
+    ["Build this game: docs/ui-design.md", confirm("docs/ui-design.md")],
+    ["Build this game: docs/level-design.md", confirm("docs/level-design.md")],
+    ["Bu oyunu yap: docs/Arayüz_Tasarımı.md", confirm("docs/Arayüz_Tasarımı.md")],
+  ])("%s → %j", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
+  });
+
+  // The clause ends — a stop, a comma, "and", a closing bracket, the platform, an adverb, a new line: the build starts at once.
+  it.each([
+    "Build the game in docs/Quillmoor_GDD.md for Android",
+    "Build the game in docs/Quillmoor_GDD.md and send me the APK",
+    "Build the game (docs/Quillmoor_GDD.md) and send me the APK",
+    "Build the game in docs/Quillmoor_GDD.md now",
+    "Build the game in docs/Quillmoor_GDD.md from scratch, then ship it",
+    "Build the game in docs/Quillmoor_GDD.md - it is the latest",
+    "Build this game: docs/Quillmoor_GDD.md\nThanks!",
+    "Bu oyunu yap: docs/Quillmoor_GDD.md, sonra APK'yı gönder",
+    "docs/Quillmoor_GDD.md'deki oyunu yap ve APK'yı gönder",
+  ])("%s → that design, at once", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(now("docs/Quillmoor_GDD.md"));
+  });
+
+  it.each(["Build the game in the GDD for Android", "Build the game in the GDD, then send me the APK", "GDD'deki oyunu yap ve APK'yı gönder"])(
+    "%s → the repository's GDD, at once",
+    (text) => {
+      expect(detectCampaignIntent(msg(text))).toEqual({ kind: "gdd-from-docs" });
+    },
+  );
 });

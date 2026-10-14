@@ -10361,14 +10361,133 @@ describe("CampaignManager", () => {
     });
 
     // A build aimed at the style sheet answered "Building from `docs/art-style.md` … Sprint 1 starts now".
-    it("builds the design named beside a style sheet the build is aimed at, not the style sheet", async () => {
+    // The build is aimed at the style sheet and the design is only "seen": the design is offered at the gate, never started from.
+    it("holds the design named beside a style sheet the build is aimed at for confirmation, not the style sheet", async () => {
       writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
       writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
       expect(await say("chat-beside", "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md")).toBe(true);
       const campaign = storage.listActive().find((c) => c.chatId === "chat-beside");
+      expect(campaign?.state).toBe("awaiting-approval");
       expect(campaign?.gddPath).toBe("docs/Quillmoor_GDD.md");
-      expect(campaign?.gddText).toBe(DESIGN);
+      expect(told("chat-beside")).toContain("`docs/Quillmoor_GDD.md`");
       expect(told("chat-beside")).not.toContain("art-style.md");
+      expect(told("chat-beside")).not.toContain("Building from");
+    });
+
+    /**
+     * A build checked only by the words BEFORE its document started at once
+     * whatever followed it: "Build the game following docs/android-signing.md"
+     * and "Build the game (docs/troubleshooting.md has the fix) and send me
+     * the APK" each answered "Building from … Sprint 1 starts now", with no
+     * approval gate. Only the plain form starts at once; any other build that
+     * points at a document stops at the gate the idea path uses, on that
+     * document, and plans only on the user's "evet".
+     */
+    describe("a build not plainly aimed at its design waits at the approval gate", () => {
+      const planMilestones = (): ReturnType<typeof vi.fn> =>
+        (manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones;
+      const atTheGate = (chatId: string, path: string): void => {
+        const campaign = storage.listActive().find((c) => c.chatId === chatId);
+        expect(campaign?.state).toBe("awaiting-approval");
+        expect(campaign?.gddPath).toBe(path);
+        const said = told(chatId);
+        expect(said).toContain(`\`${path}\``);
+        expect(said).toContain("evet/onay");
+        expect(said).not.toContain("Building from");
+        expect(tasks.submitted).toHaveLength(0);
+        expect(planMilestones()).not.toHaveBeenCalled();
+      };
+
+      it("holds a procedure the build follows at the gate, and plans from it only once the user approves", async () => {
+        const signing = "# Signing\n\nKeystore steps.\n" + "k".repeat(400);
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), signing);
+        expect(await say("chat-follow", "Build the game following docs/android-signing.md")).toBe(true);
+        atTheGate("chat-follow", "docs/android-signing.md");
+
+        expect(await say("chat-follow", "evet")).toBe(true);
+        await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+        expect(planMilestones()).toHaveBeenCalled();
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-follow");
+        expect(campaign?.gddText).toBe(signing);
+        expect(told("chat-follow")).toContain("GDD approved");
+      });
+
+      it("revives an expired gate back onto the same document, never into planning it unconfirmed", async () => {
+        tasks = new FakeTaskManager();
+        storage.close();
+        storage = new CampaignStorage(join(dir, "campaigns-confirm-expiry.db"));
+        manager = new CampaignManager({
+          storage,
+          planner: { planMilestones: vi.fn().mockResolvedValue(LADDER), auditCoverage: vi.fn().mockResolvedValue([]) } as unknown as CampaignPlanner,
+          taskManager: tasks as unknown as TaskManager,
+          messenger: async (chatId, text) => { messages.push({ chatId, text }); },
+          projectRoot,
+          retryAdoptionGraceMs: 10,
+          completedSettleDelayMs: 0,
+          approvalTimeoutMs: 300,
+        });
+        manager.attachEvents();
+        writeFileSync(join(projectRoot, "docs", "android-signing.md"), "# Signing\n\n" + "k".repeat(400));
+        expect(await say("chat-expiry", "Build the game following docs/android-signing.md")).toBe(true);
+        const id = storage.listActive().find((c) => c.chatId === "chat-expiry")!.id;
+        await waitFor(() => expect(storage.get(id)!.state).toBe("cancelled"));
+        expect(await manager.tryHandleRevive("chat-expiry", "kampanya devam")).toBe(true);
+        expect(storage.get(id)!.state).toBe("awaiting-approval");
+        expect(storage.get(id)!.gddPath).toBe("docs/android-signing.md");
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
+      it("holds a design with a qualifier after its name at the gate", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        expect(await say("chat-qualified", "Build the game in docs/Quillmoor_GDD.md for the buttons")).toBe(true);
+        atTheGate("chat-qualified", "docs/Quillmoor_GDD.md");
+      });
+
+      it("holds the newest GDD in docs/ at the gate for \"the GDD\" the build is not aimed at", async () => {
+        expect(await say("chat-bare", "Build the game and fix the GDD typo")).toBe(true);
+        atTheGate("chat-bare", "docs/Game_GDD.md");
+      });
+
+      it("offers the first of two designs and names the other", async () => {
+        writeFileSync(join(projectRoot, "docs", "art-style.md"), "# Art style\n\n" + "s".repeat(400));
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        writeFileSync(join(projectRoot, "docs", "Fernwick_GDD.md"), "# Fernwick\n\n" + "f".repeat(400));
+        expect(await say("chat-two-designs", "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md or docs/Fernwick_GDD.md")).toBe(true);
+        atTheGate("chat-two-designs", "docs/Quillmoor_GDD.md");
+        expect(told("chat-two-designs")).toContain("`docs/Fernwick_GDD.md`");
+      });
+
+      it("refuses a document it cannot read, as a build that starts at once does, and holds nothing", async () => {
+        expect(await say("chat-gate-missing", "Build the game using docs/missing-notes.md")).toBe(true);
+        expect(told("chat-gate-missing")).toContain("could not read `docs/missing-notes.md`");
+        expect(storage.hasActiveForChat("chat-gate-missing")).toBe(false);
+        expect(tasks.submitted).toHaveLength(0);
+      });
+
+      it("starts nothing for a feature request whose document sits in a parenthesis", async () => {
+        writeFileSync(join(projectRoot, "docs", "perf.md"), "# Frame drops\n\n" + "p".repeat(400));
+        expect(await say("chat-faster", "Make the game (docs/perf.md explains the frame drops) faster")).toBe(false);
+        expect(told("chat-faster")).toBe("");
+        expect(storage.hasActiveForChat("chat-faster")).toBe(false);
+      });
+
+      it("drafts the sentence at the gate when its document is the subject of its own predicate", async () => {
+        writeFileSync(join(projectRoot, "docs", "troubleshooting.md"), "# Fixes\n\n" + "t".repeat(400));
+        const text = "Build the game (docs/troubleshooting.md has the fix) and send me the APK";
+        expect(await say("chat-predicate", text)).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-predicate");
+        expect(campaign?.ideaText).toBe(text);
+        expect(campaign?.gddPath).toBeUndefined();
+        expect(told("chat-predicate")).toContain("Game idea received");
+        expect(told("chat-predicate")).not.toContain("Building from");
+      });
+
+      it("still builds at once from a design the build is plainly aimed at", async () => {
+        writeFileSync(join(projectRoot, "docs", "Quillmoor_GDD.md"), DESIGN);
+        expect(await say("chat-plain", "Build the game in docs/Quillmoor_GDD.md and send me the APK")).toBe(true);
+        expect(told("chat-plain")).toContain("Building from `docs/Quillmoor_GDD.md`");
+        expect(storage.listActive().find((c) => c.chatId === "chat-plain")?.state).not.toBe("awaiting-approval");
+      });
     });
 
     it("starts nothing when the only design beside the style sheet is one the message turns away", async () => {
@@ -10563,6 +10682,18 @@ describe("CampaignManager", () => {
         expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf.md"), "utf8")).toBe(PROSE);
         expect(readFileSync(join(projectRoot, "docs", "Quillmoor_GDD.pdf")).equals(bytes)).toBe(true);
         expect(told("chat-pdf")).toContain("Building from the text of `docs/Quillmoor_GDD.pdf`, kept as `docs/Quillmoor_GDD.pdf.md`");
+      });
+
+      it("held at the gate, is kept as its text and approved from it, never from the PDF's bytes", async () => {
+        writeFileSync(join(projectRoot, "docs", "quillmoor-notes.pdf"), pdf(`(${PROSE})`));
+        expect(await say("chat-pdf-gate", "Build the game using docs/quillmoor-notes.pdf")).toBe(true);
+        const campaign = storage.listActive().find((c) => c.chatId === "chat-pdf-gate");
+        expect(campaign?.state).toBe("awaiting-approval");
+        expect(campaign?.gddPath).toBe("docs/quillmoor-notes.pdf.md");
+        expect(readFileSync(join(projectRoot, "docs", "quillmoor-notes.pdf.md"), "utf8")).toBe(PROSE);
+        expect(told("chat-pdf-gate")).toContain("`docs/quillmoor-notes.pdf`");
+        expect(await say("chat-pdf-gate", "onay")).toBe(true);
+        await waitFor(() => expect(storage.get(campaign!.id)?.gddText).toBe(PROSE));
       });
 
       /**

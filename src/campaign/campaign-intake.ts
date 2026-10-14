@@ -7,8 +7,11 @@
  *   1. A document attachment that extracts to text (the GDD itself) — sharing
  *      the file IS the instruction ("direkt bir GDD paylaşıldığında").
  *   2. Free text asking for the game IN an existing GDD ("GDD'deki oyunu yap",
- *      "build the game in the GDD", "Bu oyunu yap: docs/Foo.md") → build from
- *      docs/, or from the document whose path the message named.
+ *      "build the game in the GDD", "Bu oyunu yap: docs/Foo_GDD.md") → build
+ *      from docs/, or from the document whose path the message named — at
+ *      once only in the one plain form (see designAmong); any other
+ *      whole-game build that points at a document is confirmed at the
+ *      approval gate first.
  *   3. Free text with an end-to-end build intent around a game idea
  *      ("şöyle bir oyun yap", "build this game: ...") → idea mode, which
  *      drafts the GDD first and stops at the single approval gate.
@@ -23,7 +26,14 @@ import { extractDocumentText } from "../agents/tools/document-text.js";
 export type CampaignIntent =
   | { kind: "idea"; ideaText: string }
   | { kind: "gdd-attachment"; gddText: string; sourceName: string }
+  /** Build at once from the document the message named — or, with no path, the newest GDD under docs/. */
   | { kind: "gdd-from-docs"; path?: string }
+  /**
+   * A whole-game build pointed at a document in any other form: the user
+   * confirms the document at the approval gate before Sprint 1. `others` are
+   * the further documents the message offered as the design.
+   */
+  | { kind: "gdd-to-confirm"; path?: string; others?: string[] }
   /** A document arrived with the request but no design could be read from it. */
   | { kind: "gdd-unreadable"; sourceName: string; reason: string };
 
@@ -137,7 +147,7 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
       // …UNLESS THE CAPTION ASKS FOR WORK ON THE DOCUMENT: "fix the typo in
       // this" with Foo_GDD.md attached was an immediate build of the game.
       const asksForWork = WORK_ON_DOCUMENT_RE.test(text);
-      const prose = proseOf(withoutEmphasis(text));
+      const prose = proseOf(withoutMarkup(text));
       // …AND AN ADVERB BESIDE THAT WORK IS NO BUILD: "Read it end to end",
       // "Rewrite this from scratch" and "bunu baştan sona oku" built the game
       // from the document they asked to have read or rewritten.
@@ -166,7 +176,7 @@ export function detectCampaignIntent(msg: IncomingMessage): CampaignIntent | und
 
 /** Steps 2 and 3: what the message's own text asks for. */
 function intentFromText(text: string): CampaignIntent | undefined {
-  const plain = withoutEmphasis(text);
+  const plain = withoutMarkup(text);
   const named = namedDocumentsIn(plain);
   const prose = proseOf(plain, named);
   if (!asksToBuild(prose)) return undefined;
@@ -192,9 +202,14 @@ function intentFromText(text: string): CampaignIntent | undefined {
   // whole-game build is the user's task, not a campaign.
   const wholeGame = asksForWholeGame(prose);
   if (named.length > 0 && !wholeGame) return undefined;
+  // …AND AT ONCE ONLY IN THE PLAIN FORM (designAmong). "Build the game
+  // following docs/android-signing.md" and "Build the game
+  // (docs/troubleshooting.md has the fix) and send me the APK" started an
+  // ungated build from those documents: a build aimed at one that is not
+  // plainly the design is confirmed at the gate the idea path stops at.
   const design = designAmong(plain, named);
   if (design === null) return undefined;
-  if (design) return { kind: "gdd-from-docs", path: design };
+  if (design) return design.now ? { kind: "gdd-from-docs", path: design.path } : toConfirm(design);
   // A document the message only mentions is no part of what it asks for.
   const rest = withoutDocuments(plain, named);
   if (speaksOfTheGdd(rest)) {
@@ -207,13 +222,20 @@ function intentFromText(text: string): CampaignIntent | undefined {
     // end to end" and "GDD'yi baştan sona oku" built whatever design docs/
     // held, with no approval gate. A message about the document without a
     // whole-game build is the user's task, not an idea to draft from either.
-    return wholeGame ? { kind: "gdd-from-docs" } : undefined;
+    // …AND IS HELD TO ITS CLAUSE AS A PATH IS: "Build the game and fix the
+    // GDD typo" built whatever docs/ held, at once.
+    if (!wholeGame) return undefined;
+    return aimsAtTheGdd(rest) ? { kind: "gdd-from-docs" } : { kind: "gdd-to-confirm" };
   }
 
   if (rest.trim().length < MIN_IDEA_LENGTH) return undefined;
 
   // 3. A written game idea with build intent.
   return { kind: "idea", ideaText: text };
+}
+
+function toConfirm(design: Design): CampaignIntent {
+  return { kind: "gdd-to-confirm", path: design.path, ...(design.others.length > 0 ? { others: design.others } : {}) };
 }
 
 /** The first document the message carried bytes for, and why no design came out of it. */
@@ -424,10 +446,14 @@ function namedDocumentsIn(text: string): NamedDocument[] {
 /**
  * The message with Markdown emphasis blanked to the same length, so every
  * position still holds: "Build this game: **docs/Foo_GDD.md**" named no path,
- * and its GDD was a bare "the GDD" — discovery built another document.
+ * and its GDD was a bare "the GDD" — discovery built another document. A
+ * link keeps only its target, so the build is aimed at the document the
+ * link opens, ended by the bracket that closed it.
  */
-function withoutEmphasis(text: string): string {
-  return text.replace(/\*/g, " ");
+function withoutMarkup(text: string): string {
+  return text
+    .replace(/\*/g, " ")
+    .replace(/\[([^\]\n]*)\]\(([^()\s]+)\)/g, (_link, label: string, target: string) => `${" ".repeat(label.length + 3)}${target} `);
 }
 
 /** Each span blanked to its own length, so every position still holds. */
@@ -462,13 +488,15 @@ const BUILD_GAME_TR =
  * Whole-game build intent, which BUILD_INTENT_RE alone is not: it also takes
  * an adverb ("baştan sona oku", "end-to-end tests", "rewrite from scratch")
  * and a feature request. "Make the game <adjective / verb>" is causative, so
- * only a build's own shape may follow "make the game"; "develop the game
- * further" is work on a game that exists.
+ * only a build's own shape may follow "make the game" — past a parenthesis
+ * too: "Make the game (docs/perf.md explains the frame drops) faster" built
+ * the game from docs/perf.md, ungated. "Develop the game further" is work on
+ * a game that exists.
  */
 const WHOLE_GAME_BUILD_RE = new RegExp(
   [
     String.raw`(?<![\p{L}\p{N}_])(?:build|develop)\s+(?:this|the|a|my)\s+game(?![\p{L}\p{N}_'’])(?!\s+(?:further|more|beyond|better)(?![\p{L}]))`,
-    String.raw`(?<![\p{L}\p{N}_])make\s+(?:this|the|a|my)\s+game(?=\s*(?:$|[:.,;!?()—–])|\s+(?:in|from|at|per|about|where|set|called|named|that|which|for|exactly|fully|completely|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)|end[- ]?to[- ]?end)(?![\p{L}]))`,
+    String.raw`(?<![\p{L}\p{N}_])make\s+(?:this|the|a|my)\s+game(?=(?:\s*\([^()\n]*\))?(?:\s*(?:$|[:.,;!?)—–])|\s+(?:in|from|at|per|about|where|set|called|named|that|which|for|exactly|fully|completely|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)|end[- ]?to[- ]?end)(?![\p{L}])))`,
     BUILD_GDD_EN,
     BUILD_GDD_TR,
     BUILD_GAME_TR,
@@ -546,14 +574,16 @@ function asksToBuild(prose: string): boolean {
  * game: P", "build the game in / from / per / using / following P", "build
  * the game (P)", "build the game from the GDD at P", "Bu oyunu yap: P".
  * "With P" is how a build goes ("with docs/ui-notes.md in mind") unless P is
- * called the design: "with the design in P".
+ * called the design: "with the design in P". The groups say when it is:
+ * `gdd`, the build is of the GDD itself ("implement the GDD at P"); `design`,
+ * P is introduced as the design ("from the GDD at P").
  */
 const BUILDS_FROM_NEXT_RE = new RegExp(
-  `(?:${BUILD_GAME_EN}|${BUILD_GDD_EN}|${BUILD_GDD_TR}|${BUILD_GAME_TR})(?:\\s+${BUILD_ADVERB})*` +
+  `(?:${BUILD_GAME_EN}|(?<gdd>${BUILD_GDD_EN}|${BUILD_GDD_TR})|${BUILD_GAME_TR})(?:\\s+${BUILD_ADVERB})*` +
     String.raw`(?:\s*[:(]|\s+(?:in|from|at|per|using|following|with(?=\s+(?:the|this|that|my|our)\s+(?:GDD|game\s+design|design))|(?:described|defined|outlined|specified|documented|written)\s+in|based\s+on|according\s+to|as\s+(?:described|specified|defined|outlined|written)\s+in))` +
     String.raw`(?:\s+(?:the|this|that|my|our))?` +
-    String.raw`(?:\s+(?:GDD|game\s+design\s+doc(?:ument)?|design(?:\s+doc(?:ument)?)?|document|doc|spec(?:ification)?|file)(?:\s+(?:at|in)|\s*:)?)?` +
-    String.raw`\s*["'\x60“‘(]?$`,
+    String.raw`(?:\s+(?:(?<design>GDD|game\s+design\s+doc(?:ument)?|design(?:\s+doc(?:ument)?)?)|document|doc|spec(?:ification)?|file)(?:\s+(?:at|in)|\s*:)?)?` +
+    String.raw`\s*["'\x60“‘(<]?$`,
   "iu",
 );
 
@@ -593,7 +623,7 @@ const GDD_NAMES_NEXT_RES = [GDD_ACRONYM_RE, GDD_SPELLED_RE].map(
   (re) =>
     new RegExp(
       `(?:${re.source})` +
-        String.raw`(?:['’]\p{L}+)?(?:\s+(?:dosya(?:sı)?|belge(?:si)?|file|document|doc))?(?:\s+(?:is\s+(?:at|in)|at|in|is)|\s*[:=(—–-])?\s*["'\x60“‘(]?$`,
+        String.raw`(?:['’]\p{L}+)?(?:\s+(?:dosya(?:sı)?|belge(?:si)?|file|document|doc))?(?:\s+(?:is\s+(?:at|in)|at|in|is)|\s*[:=(—–-])?\s*["'\x60“‘(<]?$`,
       re.flags,
     ),
 );
@@ -604,7 +634,7 @@ const GDD_NAMES_NEXT_RES = [GDD_ACRONYM_RE, GDD_SPELLED_RE].map(
  * design: "the art design is in P" names the style sheet.
  */
 const DESIGN_NAMES_NEXT_RE =
-  /(?:^|[,;:(—–]\s*|[.!?]\s+|(?<![\p{L}])(?:and|ve)\s+)(?:(?:the|its|our|my)\s+)?(?:(?:game\s+)?design(?:\s+(?:doc(?:ument)?|file|spec))?\s*(?:(?:is|lives|sits)(?:\s+(?:in|at))?|at|in|[:=—–])|(?:oyunun\s+)?tasarım(?:ı)?(?:\s+(?:dosyası|belgesi))?\s*[:=—–]?)\s*["'\x60“‘(]?$/iu;
+  /(?:^|[,;:(—–]\s*|[.!?]\s+|(?<![\p{L}])(?:and|ve)\s+)(?:(?:the|its|our|my)\s+)?(?:(?:game\s+)?design(?:\s+(?:doc(?:ument)?|file|spec))?\s*(?:(?:is|lives|sits)(?:\s+(?:in|at))?|at|in|[:=—–])|(?:oyunun\s+)?tasarım(?:ı)?(?:\s+(?:dosyası|belgesi))?\s*[:=—–]?)\s*["'\x60“‘(<]?$/iu;
 
 /** "P and Q", "P, Q", "P ve Q": named together, aimed at together. */
 const NAMED_TOGETHER_RE = /^\s*["'`”’)]?\s*(?:,\s*(?:(?:and|or|ve|veya)\s+)?|\s+(?:and|or|ve|veya|&|\+)\s+)["'`“‘(]?$/iu;
@@ -624,73 +654,183 @@ function turnedAway(prose: string, doc: Pick<NamedDocument, "at" | "end">): bool
 }
 
 /**
- * The design among the documents the message names: one the build is aimed
- * at (and one named together with it); beside them, the one whose name says
- * GDD, else the first that is not a style sheet, changelog or readme. A GDD
- * named anywhere else is the design when the message asks for "the GDD" or
- * holds nothing else to build from — otherwise it is a reference beside an
- * idea, and the idea is the design. A path the build is not aimed at was
- * taken anyway: an idea that mentioned docs/art-style.md was built from it.
- *
- * …AND A BUILD AIMED ONLY AT A STYLE SHEET OR A CHANGELOG IS AIMED AT NO
- * DESIGN. "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md"
- * built the style sheet, ungated: the design is then the one named beside it
- * — the only GDD, else the only other document — unless the message turns it
- * away or names two, and then there is no campaign to start (the user's task
- * asks which). Named alone, with nothing else to build from, a readme is
- * still the document the message meant; a style sheet, a changelog or a
- * licence is no design at all; and build or release instructions make the
- * build the player build — `null` says no campaign, however long the message
- * is (it is no idea to draft either).
+ * What may follow a document for the build to be aimed at it plainly: the
+ * end of its clause — a stop, a comma, "and", a closing bracket, a line
+ * break, the end — after a closing quote, a section anchor or a Turkish case
+ * ending, with at most an adverb of the build or the platform it is for in
+ * between. The build was checked only by the words BEFORE its document:
+ * "Build the game (docs/troubleshooting.md has the fix) and send me the APK"
+ * and "Build this game: docs/notes.md is where I keep my todo list" built
+ * from a document that is the subject of its own predicate, and "Make the
+ * game in docs/perf.md faster" from one the build only qualifies.
  */
-function designAmong(text: string, named: readonly NamedDocument[]): string | null | undefined {
+const BUILD_PLATFORM = String.raw`android|ios|iphone|ipad|mobile|pc|mac(?:os)?|windows|linux|desktop|web(?:gl)?|the\s+web|browsers?|steam|switch|consoles?|me|us`;
+const ENDS_ITS_CLAUSE_RE = new RegExp(
+  String.raw`^["'\x60”’>]*(?:#[^\s,;)]*)?(?:['’]\p{L}+)?` +
+    String.raw`(?:[^\S\n]+(?:${BUILD_ADVERB}|now|please|lütfen|hemen|şimdi|içinde|for\s+(?:${BUILD_PLATFORM}))(?![\p{L}]))*` +
+    String.raw`[^\S\n]*(?:$|[\n.!?,;)—–]|-\s|(?:and|then|but|or|ve|sonra|ama|fakat)(?![\p{L}]))`,
+  "iu",
+);
+
+function endsItsClause(after: string): boolean {
+  return ENDS_ITS_CLAUSE_RE.test(after);
+}
+
+/**
+ * …and a document inside a parenthesis is followed by the bracket that
+ * closes it: "(P)", never "(P, step 4 fails)".
+ */
+function documentEndsItsClause(text: string, doc: Span): boolean {
+  const after = text.slice(doc.end);
+  if (!/\([^()]*$/.test(text.slice(Math.max(0, doc.at - 300), doc.at))) return endsItsClause(after);
+  const close = /^["'\x60”’>]*\)/.exec(after);
+  return close !== null && endsItsClause(after.slice(close[0].length));
+}
+
+interface Span {
+  at: number;
+  end: number;
+}
+
+interface Aim {
+  /** The message calls the document the design ("the GDD at P", "design: P"), whatever its name. */
+  called: boolean;
+}
+
+/**
+ * How a build the message asks for is aimed at the document at
+ * `doc.at`..`doc.end`, when it is — and only when the document ends its
+ * clause. A build aimed at a document counts only when it is asked for:
+ * "Don't build the game in docs/Old_GDD.md; build the game in
+ * docs/New_GDD.md".
+ */
+function aimAt(text: string, prose: string, doc: Span, wholeGame: boolean): Aim | undefined {
+  const after = text.slice(doc.end);
+  const before = BUILDS_FROM_NEXT_RE.exec(text.slice(0, doc.at));
+  if (before && buildIsAsked(prose, before.index, doc.at) && documentEndsItsClause(text, doc)) {
+    return { called: before.groups?.gdd !== undefined || before.groups?.design !== undefined };
+  }
+  const game = GAME_IN_PREVIOUS_RE.exec(after);
+  if (game && buildIsAsked(prose, doc.at, doc.end + game[0].length) && endsItsClause(after.slice(game[0].length))) return { called: false };
+  const next = BUILDS_FROM_PREVIOUS_RE.exec(after);
+  if (next && buildIsAsked(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length)) return { called: false };
+  const object = GAME_BEFORE_RE.exec(text.slice(0, doc.at));
+  const verb = object && BY_DOCUMENT_AFTER_RE.exec(after);
+  if (object && verb && buildIsAsked(prose, object.index, doc.end + verb[0].length) && endsItsClause(after.slice(verb[0].length))) return { called: false };
+  const called = wholeGame && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => re.test(text.slice(0, doc.at)));
+  return called && documentEndsItsClause(text, doc) ? { called } : undefined;
+}
+
+/**
+ * The words a document's name says it is the game's design by — unless a
+ * word before makes it one part's design ("ui-design", "Arayüz_Tasarımı").
+ */
+const DESIGN_WORDS = new Set(["design", "gamedesign", "tasarım", "tasarımı", "tasarim", "tasarimi"]);
+const PART_WORDS = new Set([
+  "art", "ui", "ux", "level", "levels", "sound", "audio", "visual", "technical", "tech", "system", "systems", "software", "api", "data",
+  "database", "network", "interface", "graphic", "graphics", "logo", "web", "character",
+  "sanat", "arayüz", "seviye", "ses", "görsel", "teknik", "sistem", "karakter", "veri",
+]);
+
+/** A document whose own name says it is the game's design: GDD, game design, tasarım. */
+function nameSaysDesign(path: string): boolean {
+  if (refersToGdd(path.split(/[\\/]/).pop()!)) return true;
+  const words = documentWords(path);
+  return words.some((word, i) => DESIGN_WORDS.has(word) && !PART_WORDS.has(words[i - 1] ?? ""));
+}
+
+/** The document a build is to be made from, whether it starts at once, and the others the message offered. */
+interface Design {
+  path: string;
+  now: boolean;
+  others: string[];
+}
+
+function offered(docs: readonly NamedDocument[], design: NamedDocument, now = false): Design {
+  return { path: design.path, now, others: docs.filter((doc) => doc !== design).map((doc) => doc.path) };
+}
+
+/**
+ * The design among the documents the message names, and whether the build
+ * starts from it at once.
+ *
+ * AT ONCE ONLY IN THE PLAIN FORM: a whole-game build asked for, aimed at one
+ * document that could hold the design (no style sheet, changelog, licence,
+ * readme or build instructions beside it counts), whose name says it is the
+ * design or which the message calls that, and which ends its clause. Every
+ * other document the build points at is offered at the approval gate first:
+ * one with any other name ("following docs/android-signing.md"), one of two
+ * the build is aimed at together, and one only named beside the documents it
+ * is aimed at.
+ *
+ * Beside them: a build aimed only at a style sheet or a changelog is aimed at
+ * no design. "Build the game per docs/art-style.md, see docs/Quillmoor_GDD.md"
+ * built the style sheet, ungated; the design offered is then the one named
+ * beside it — a GDD first, else any other document — unless the message
+ * turns it away. A GDD named anywhere else is the design when the message
+ * asks for "the GDD" or holds nothing else to build from — otherwise it is a
+ * reference beside an idea, and the idea is the design. Named alone, with
+ * nothing else to build from, a readme may still hold the design; a style
+ * sheet, a changelog or a licence is no design at all; and build or release
+ * instructions make the build the player build — `null` says no campaign,
+ * however long the message is (it is no idea to draft either).
+ */
+function designAmong(text: string, named: readonly NamedDocument[]): Design | null | undefined {
   if (named.length === 0) return undefined;
   const prose = proseOf(text, named);
   const wholeGame = asksForWholeGame(prose);
-  // A build aimed at a document counts only when it is asked for: "Don't
-  // build the game in docs/Old_GDD.md; build the game in docs/New_GDD.md".
-  const aimed = named.map((doc) => {
-    const before = BUILDS_FROM_NEXT_RE.exec(text.slice(0, doc.at));
-    if (before && buildIsAsked(prose, before.index, doc.at)) return true;
-    const after = GAME_IN_PREVIOUS_RE.exec(text.slice(doc.end));
-    if (after && buildIsAsked(prose, doc.at, doc.end + after[0].length)) return true;
-    const next = BUILDS_FROM_PREVIOUS_RE.exec(text.slice(doc.end));
-    if (next && buildIsAsked(prose, doc.end + next[0].length - next[1]!.length, doc.end + next[0].length)) return true;
-    const object = GAME_BEFORE_RE.exec(text.slice(0, doc.at));
-    const verb = object && BY_DOCUMENT_AFTER_RE.exec(text.slice(doc.end));
-    if (object && verb && buildIsAsked(prose, object.index, doc.end + verb[0].length)) return true;
-    return wholeGame && [...GDD_NAMES_NEXT_RES, DESIGN_NAMES_NEXT_RE].some((re) => re.test(text.slice(0, doc.at)));
-  });
+  const aims = named.map((doc) => aimAt(text, prose, doc, wholeGame));
+  // "P and Q", "P ve Q": named together, aimed at together — as long as the
+  // one the aim spreads to ends its clause too.
   for (let spread = true; spread; ) {
     spread = false;
     for (let i = 1; i < named.length; i++) {
-      if (aimed[i - 1] !== aimed[i] && NAMED_TOGETHER_RE.test(text.slice(named[i - 1]!.end, named[i]!.at))) {
-        aimed[i - 1] = aimed[i] = true;
-        spread = true;
-      }
+      if (!aims[i - 1] === !aims[i] || !NAMED_TOGETHER_RE.test(text.slice(named[i - 1]!.end, named[i]!.at))) continue;
+      const to = aims[i] ? i - 1 : i;
+      if (!documentEndsItsClause(text, named[to]!)) continue;
+      aims[to] = { called: false };
+      spread = true;
     }
   }
-  const aimedDocs = named.filter((_, i) => aimed[i]);
-  const design = aimedDocs.find((doc) => refersToGdd(doc.path)) ?? aimedDocs.find((doc) => !isSupportDocument(doc.path));
-  if (design) return design.path;
+  const aimedDocs = named.filter((_, i) => aims[i]);
+  const designs = aimedDocs.filter((doc) => refersToGdd(doc.path) || !isSupportDocument(doc.path));
+  if (designs.length > 0) {
+    const design = designs.find((doc) => refersToGdd(doc.path)) ?? designs[0]!;
+    return offered(designs, design, designs.length === 1 && (aims[named.indexOf(design)]!.called || nameSaysDesign(design.path)));
+  }
   const playerBuild = aimedDocs.length > 0 && aimedDocs.every((doc) => isBuildInstructions(doc.path));
   const rest = withoutDocuments(text, named);
   if (!wholeGame || !(speaksOfTheGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
   const beside = named.filter((doc) => !aimedDocs.includes(doc));
   const candidates = beside.filter((doc) => !turnedAway(prose, doc));
   const gdds = candidates.filter((doc) => refersToGdd(doc.path));
-  if (gdds.length > 0) return gdds.length === 1 ? gdds[0]!.path : undefined;
+  if (gdds.length > 0) return offered(gdds, gdds[0]!);
   if (aimedDocs.length === 0) return undefined;
-  const designs = candidates.filter((doc) => !isSupportDocument(doc.path));
-  if (designs.length > 0) return designs.length === 1 ? designs[0]!.path : undefined;
+  const others = candidates.filter((doc) => !isSupportDocument(doc.path));
+  if (others.length > 0) return offered(others, others[0]!);
   if (beside.some((doc) => !isSupportDocument(doc.path))) return undefined;
-  return playerBuild ? null : aimedDocs.find((doc) => !isNeverTheDesign(doc.path))?.path;
+  if (playerBuild) return null;
+  const readme = aimedDocs.find((doc) => !isNeverTheDesign(doc.path));
+  return readme && offered([readme], readme);
+}
+
+const BUILDS_THE_GDD_RE = new RegExp(`${BUILD_GDD_EN}|${BUILD_GDD_TR}`, "giu");
+
+/** Whether a build the message asks for is aimed plainly at "the GDD" it speaks of (see aimAt). */
+function aimsAtTheGdd(text: string): boolean {
+  const words = withoutCodeFiles(text);
+  const references = GDD_REFERENCES_RES.flatMap((re) => [...words.matchAll(re)].map((m) => ({ at: m.index, end: m.index + m[0].length })));
+  if (references.some((ref) => !turnedAway(words, ref) && aimAt(words, words, ref, true))) return true;
+  return [...words.matchAll(BUILDS_THE_GDD_RE)].some((m) => {
+    const end = m.index + m[0].length;
+    return buildIsAsked(words, m.index, end) && endsItsClause(words.slice(end));
+  });
 }
 
 /** The design document the message names, when it names one. */
 export function documentPathIn(text: string): string | undefined {
-  const plain = withoutEmphasis(text);
-  return designAmong(plain, namedDocumentsIn(plain)) ?? undefined;
+  const plain = withoutMarkup(text);
+  return designAmong(plain, namedDocumentsIn(plain))?.path;
 }
 
 /** The reference followed by a "GDD:" marker, read exactly as refersToGdd reads one. */
