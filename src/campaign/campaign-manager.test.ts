@@ -5877,6 +5877,12 @@ describe("CampaignManager", () => {
     const bounced = storage.get(campaign.id)!.milestones.at(-1)!;
     expect(bounced.artBounced).toBe(true);
     expect(bounced.placeholderArtAtStart).toEqual({ sprites: 100, placeholders: 95 });
+    // EVERY milestone carries the count it started from, not only the
+    // remediation sprint. Measured 2026-10-14: a campaign that never needed
+    // an mcov sprint recorded no art count anywhere, so "are the placeholders
+    // going away?" had no answer for it.
+    const all = storage.get(campaign.id)!.milestones;
+    expect(all.filter((m) => m.placeholderArtAtStart !== undefined)).toHaveLength(all.length);
     expect(tasks.submitted.at(-1)!.prompt).toContain("ART NOT PRODUCED: when this sprint began, 95 of 100");
     expect(tasks.submitted.at(-1)!.prompt).toContain("unity_generate_sprite");
     // The in-place rule (measured 2026-09-09: real sprites written under new names beside the placeholders, count unchanged).

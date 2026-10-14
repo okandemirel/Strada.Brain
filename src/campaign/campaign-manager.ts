@@ -3157,7 +3157,13 @@ export class CampaignManager {
     // A remediation sprint is judged on what it changes, so record what it
     // starts from. First submission only: a bounce must be measured against
     // the same baseline, not against its own failed attempt.
-    if (milestone.id.startsWith("mcov") && milestone.placeholderArtAtStart === undefined) {
+    // EVERY milestone, not only the remediation sprints. Measured 2026-10-14:
+    // a whole campaign recorded no art count anywhere, because only an "mcov"
+    // sprint ever asked — so "are the placeholders going away?" could not be
+    // answered for a campaign that never needed one. First submission only,
+    // for the same reason as before: a bounce is measured against the
+    // baseline, not against its own failed attempt.
+    if (milestone.placeholderArtAtStart === undefined) {
       const art = this.measurePlaceholderArt(campaign);
       if (art) milestone.placeholderArtAtStart = art;
     }
