@@ -165,7 +165,7 @@ export const UNITY_EXCLUDED_DIRS = new Set(["Library", "Temp", "Logs", "obj", "B
  * while the tool context carries the lexical one (/var/…), so a plain
  * `relative()` began with ".." and every file the agent wrote in a lease
  * was judged "outside the project" — no .meta on write, the .meta left
- * behind on delete (eleven orphaned scene metas), none moved on rename.
+ * behind on delete (orphaned scene metas), none moved on rename.
  */
 function projectRoots(projectPath: string): string[] {
   const lexical = normalize(projectPath);

@@ -1,7 +1,7 @@
 /**
  * One empty answer is not an outage.
  *
- * Measured 2026-08-22, run 39: OpenCode returned six empty responses inside
+ * Measured in a live run: OpenCode returned six empty responses inside
  * nine seconds and the run ended with "All providers failed". Probed directly
  * two minutes later, the same provider answered normally — the condition was
  * transient and had already passed while the task was being torn down.

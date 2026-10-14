@@ -18,8 +18,8 @@
  *     was lost, and the task settles green. Silent, permanent from the user's
  *     point of view.
  *   - Calling derived output "authored" only costs a false alarm: a goal fails
- *     over a file the project rebuilds for itself (measured live 2026-09-16
- *     19:03, twice on the same generated NuGet graph).
+ *     over a file the project rebuilds for itself (measured in a live
+ *     campaign, on a generated NuGet restore graph).
  *
  * Both have happened. So the rule takes a NAME the toolchain actually writes,
  * in a PLACE the toolchain actually writes it — never a bare directory name.
@@ -39,8 +39,8 @@ const FRAMEWORK_DIR = /^net(?:standard|coreapp)?[0-9][0-9.]*(?:-[a-z0-9.]+)?$/i;
  * directory that happens to be called obj — and source is the category where a
  * wrong "derived" verdict destroys hand-written work.
  *
- * Measured 2026-09-17: `Assets/obj/SampleGame.Runtime.AssemblyInfo.cs`, an
- * authored file, matched the intermediate-name list below and was reported as
+ * A deliberately authored `<Assembly>.AssemblyInfo.cs` directly under a game's
+ * own obj/ folder matched the intermediate-name list below and was reported as
  * "nothing the run authored was lost".
  */
 const AUTHORED_SOURCE = /\.(?:cs|vb|fs)$/i;
@@ -57,7 +57,7 @@ const INTERMEDIATE_NAME = new RegExp(
     // NuGet's restore graph, written into obj/ beside the rest: it was not in
     // this list, so it travelled with every lease, the project restored its own
     // copy, and the two CONFLICTED — which failed the goal that had done the
-    // work (measured live 2026-09-16 19:03).
+    // work (measured in a live campaign).
     "|.+\\.(?:csproj|vbproj|fsproj)\\.nuget\\.dgspec\\.json" +
     "|.+\\.(?:csproj|vbproj|fsproj)\\.(?:nuget\\.g\\.(?:props|targets)|CopyComplete|FileListAbsolute\\.txt)" +
     "|.+\\.(?:assets|AssemblyInfoInputs|CoreCompileInputs|GeneratedMSBuildEditorConfig)\\.(?:cache|editorconfig)" +
@@ -69,12 +69,12 @@ const INTERMEDIATE_NAME = new RegExp(
 /**
  * Compiler output, at ANY depth.
  *
- * Path-only excludes used to look at a path's FIRST segment, so
- * `Tools/GameCoreBuild/obj/Debug/…` and its `bin/Debug/…` twin travelled
- * with every lease — and since the project builds them too, all thirteen came
- * back as CONFLICTS and the whole commit published nothing (measured live
- * 2026-09-12 11:26 and 11:51). These are derived from the sources beside them;
- * nothing is lost by leaving them where they were built.
+ * Path-only excludes used to look at a path's FIRST segment, so a nested tool
+ * project's `Tools/<Project>/obj/Debug/…` and its `bin/Debug/…` twin travelled
+ * with every lease. Since the project builds them too, every one came back as
+ * a conflict and the commit published nothing (measured in a live campaign).
+ * These are derived from the sources beside them; nothing is lost by leaving
+ * them where they were built.
  *
  * `obj/` is .NET's own name for its intermediate directory; `bin/` is only
  * derived when it holds a build configuration, so a repository's own `bin/`

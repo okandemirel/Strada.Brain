@@ -1,6 +1,6 @@
 /**
- * One acceptance measurement (GDD-drift W08's run, wired by W09): a record is
- * admitted only when it is this run's, ran exactly the tests asked for,
+ * One acceptance measurement: a record is admitted only when it is this
+ * run's, ran exactly the tests asked for,
  * skipped none, and adds up; failures past the 50-name cap are run again in
  * chunks until every one is named; a failure that passes on its one re-run is
  * flaky; a tree that moved measured nothing. Invented names only.

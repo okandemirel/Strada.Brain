@@ -31,10 +31,10 @@ function fetchFor(opts: { body?: Buffer; downloadStatus?: number; seen?: Array<{
     if (url.includes("legacy-package-download-info")) {
       return new Response(JSON.stringify({
         result: { download: {
-          url: "https://cdn.test/signed/frogs.unitypackage?sig=1",
-          filename_safe_package_name: "Plump Frogs Pack",
-          filename_safe_publisher_name: "Soak Games",
-          filename_safe_category_name: "3D Characters",
+          url: "https://cdn.test/signed/gears.unitypackage?sig=1",
+          filename_safe_package_name: "Brass Gear Kit",
+          filename_safe_publisher_name: "Tollgate Tools",
+          filename_safe_category_name: "3D Props",
         } },
       }), { status: 200 });
     }
@@ -62,7 +62,7 @@ describe("unity_my_assets_cloud download", () => {
     const result = await tool.execute({ action: "download", productId: "12345" }, ctx);
     expect(result.isError).toBeFalsy();
 
-    const expected = join(cache, "Soak Games", "3D Characters", "Plump Frogs Pack.unitypackage");
+    const expected = join(cache, "Tollgate Tools", "3D Props", "Brass Gear Kit.unitypackage");
     expect(existsSync(expected)).toBe(true);
     expect(readFileSync(expected).equals(PKG)).toBe(true);
     expect(String(result.content)).toContain(expected);
@@ -85,7 +85,7 @@ describe("unity_my_assets_cloud download", () => {
     const cache = root();
     const client = new UnityAssetStoreClient(LINK, fetchFor({ body: Buffer.alloc(0) }));
     await expect(client.downloadPackage("12345", cache)).rejects.toThrow(/empty body/);
-    expect(existsSync(join(cache, "Soak Games"))).toBe(false);
+    expect(existsSync(join(cache, "Tollgate Tools"))).toBe(false);
   });
 
   it("reports a failed download with its status", async () => {

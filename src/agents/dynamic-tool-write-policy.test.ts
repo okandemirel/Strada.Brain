@@ -6,11 +6,11 @@
  * read as non-write and skipped read-only mode, the plan-review gate and write
  * confirmation alike.
  *
- * Measured: an agent registered `dynamic_write_minified_file` — a shell-backed
- * file writer — and the policy answered "non-write operations execute without
- * interactive confirmation". It wrote five .asmdef files through a shell, which
- * ate the JSON quoting, and reported success on all five. The run ended with
- * four assembly definitions Unity cannot parse.
+ * Measured in a live campaign: an agent registered `dynamic_write_minified_file`,
+ * a shell-backed file writer, and the policy answered "non-write operations
+ * execute without interactive confirmation". It wrote .asmdef files through a
+ * shell, which ate the JSON quoting, reported success on each, and left
+ * assembly definitions Unity cannot parse.
  */
 
 import { describe, it, expect } from "vitest";

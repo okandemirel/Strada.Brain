@@ -10,7 +10,7 @@ import { isOutageCausedSettle, RECENT_PROVIDER_FAILURE_MS } from "./campaign-man
  * endpoint that never answered.
  */
 describe("was it the provider layer that stopped the run", () => {
-  const BLOCKED = "Blocked:\n[goal_1788537967016_79ce7acf] blocked:provider_unavailable";
+  const BLOCKED = "Blocked:\n[goal_1000000000000_0a0b0c0d] blocked:provider_unavailable";
 
   it("trusts the executor's own marker with no second opinion", () => {
     // coolingMs 0 is exactly the live case: the registry disagreed.
@@ -64,8 +64,7 @@ describe("was it the provider layer that stopped the run", () => {
    * killed for inactivity, and by the time the campaign asked, the chain had
    * ANSWERED again — so `lastFailureAt` was cleared, no failure was on
    * record, and the sprint was charged two attempts for the provider's
-   * outage. The campaign then ended: "NOT DELIVERED — Session Design blocked
-   * after 2 attempts".
+   * outage.
    */
   it("a failure DURING the attempt explains the attempt, even after the chain heals", () => {
     const STALL = "The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.";

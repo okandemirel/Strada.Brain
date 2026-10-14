@@ -317,7 +317,7 @@ describe("a read-only request is not an exploration-only failure (Codex review 2
       "Please summarize the delivery report",
       "Report on placeholder art coverage",
     ]) expect(isReadOnlyRequest(t), t).toBe(true);
-    for (const t of ["Build the move-list panel", "Deliver the art the GDD schedules", "Fix the compile error in HintService"]) {
+    for (const t of ["Build the move-list panel", "Deliver the board and piece sprites the design names", "Fix the compile error in HintService"]) {
       expect(isReadOnlyRequest(t), t).toBe(false);
     }
   });

@@ -11,8 +11,8 @@
  * Measured: the supported setup flow runs `git submodule add` for Strada.Core
  * and Strada.MCP and never commits. A task started straight after setup got a
  * workspace with no .gitmodules and no framework — the submodule checkout has
- * nothing to check out from a HEAD that predates the install. The run produced
- * 42 files that imitate a Strada module and reference none of its APIs.
+ * nothing to check out from a HEAD that predates the install — and wrote code
+ * that imitates a Strada module without referencing its APIs.
  *
  * These run against a real git repository: the whole point is what git actually
  * puts in a worktree, which a mocked runner cannot tell us.
@@ -78,11 +78,11 @@ describe("workspaces carry the user's uncommitted work", () => {
     const root = committedRepo();
     writeFileSync(join(root, ".gitmodules"), "[submodule \"Strada.Core\"]\n");
     mkdirSync(join(root, "Assets", "New"), { recursive: true });
-    writeFileSync(join(root, "Assets", "New", "Board.cs"), "// new\n");
+    writeFileSync(join(root, "Assets", "New", "Lantern.cs"), "// new\n");
 
     const lease = await leaseFor(root);
     expect(existsSync(join(lease.path, ".gitmodules"))).toBe(true);
-    expect(readFileSync(join(lease.path, "Assets", "New", "Board.cs"), "utf8")).toBe("// new\n");
+    expect(readFileSync(join(lease.path, "Assets", "New", "Lantern.cs"), "utf8")).toBe("// new\n");
     await lease.release();
   });
 
@@ -146,11 +146,11 @@ describe("workspaces carry the user's uncommitted work", () => {
     // The default runner keeps the TAIL once output passes its cap, which is
     // right for logs and wrong for a command whose output IS the data.
     //
-    // Measured: a Unity project with 9002 uncommitted paths — 8796 of them under
-    // an untracked Library/ — had its first ~180 entries cut away. Gone with them
-    // were .gitmodules, both submodules and every Assets/Modules file. The
-    // workspace was seeded with Unity's cache and none of the project's code, git
-    // exited 0, and nothing reported it.
+    // Measured: a Unity project with thousands of uncommitted paths, nearly all
+    // under an untracked Library/, had the head of its listing cut away —
+    // .gitmodules, the submodules and every Assets/Modules file went with it.
+    // The workspace was seeded with Unity's cache and none of the project's
+    // code, git exited 0, and nothing reported it.
     const root = committedRepo();
     writeFileSync(join(root, "Assets", "New.cs"), "// new\n");
 

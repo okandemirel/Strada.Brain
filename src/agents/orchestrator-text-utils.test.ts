@@ -378,7 +378,12 @@ describe("orchestrator-text-utils", () => {
       const jpeg = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsL";
       expect(sanitizePromptInjection(`img: ${jpeg} end`)).toBe("img: [base64:60ch] end");
       // A real absolute path with the same slashes is left alone.
-      expect(sanitizePromptInjection("see /private/var/folders/fd/strada/Assets/Art/Generated/Frog.png now")).toContain("/Assets/Art/Generated/Frog.png");
+      expect(sanitizePromptInjection("see /private/var/folders/qz/strada/Assets/Art/Generated/Signpost.png now")).toContain("/Assets/Art/Generated/Signpost.png");
+      // With no extension right after the run, only the leading-slash rule
+      // tells this absolute directory from a slash-prefixed blob.
+      const directory = "/private/var/folders/qz/strada/Assets/Art/Generated/Signposts/Weathered";
+      expect(directory.length).toBeGreaterThan(60);
+      expect(sanitizePromptInjection(`see ${directory} now`)).toBe(`see ${directory} now`);
     });
 
     it("does NOT flag a pure SHA-256 hex digest as base64", () => {
@@ -477,16 +482,16 @@ describe("orchestrator-text-utils", () => {
       // error whose entire purpose is to name the correct root; the agent
       // retried blindly until the circuit breaker disabled git_status.
       const out = sanitizeRetrievalContent(
-        "Path resolves outside the project directory (/var/folders/fd/vvqxld2x6k709xn2svhnkwl40000gn/T/strada-workspaces/task-2b4261e9f03c17f4/Assets)",
+        "Path resolves outside the project directory (/var/folders/qz/abcd1234efgh5678ijkl90000gn/T/strada-workspaces/task-5e0a93c1b7d4f268/Assets)",
         "unit-test",
       );
-      expect(out).toContain("strada-workspaces/task-2b4261e9f03c17f4");
+      expect(out).toContain("strada-workspaces/task-5e0a93c1b7d4f268");
       expect(out).not.toContain("[REDACTED]");
     });
 
     it("still redacts a real sk- key at a word boundary", () => {
-      const out = sanitizeRetrievalContent("token is sk-2b4261e9f03c17f4abcd ok", "unit-test");
-      expect(out).not.toContain("sk-2b4261e9f03c17f4abcd");
+      const out = sanitizeRetrievalContent("token is sk-9f1c0e7a4b6d2385wxyz ok", "unit-test");
+      expect(out).not.toContain("sk-9f1c0e7a4b6d2385wxyz");
     });
 
     it("warns via logger when carriers are detected", () => {

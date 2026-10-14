@@ -5,9 +5,9 @@
  * over one bad minute. Applied to a billing-cycle exhaustion it guarantees the
  * opposite: measured 2026-08-21, Kimi returned "You've reached your usage limit
  * for this billing cycle. Your quota will be refreshed in the next cycle." and
- * was recorded down for fifteen minutes. Run 35 booted after that window had
- * lapsed, the supervisor saw a live provider, and handed it three of four
- * tasks — every one of which died on the same 403.
+ * was recorded down for fifteen minutes. The next run booted after that window
+ * had lapsed, the supervisor saw a live provider, and handed it most of its
+ * tasks, every one of which died on the same 403.
  *
  * The provider said when it would be back. Believe it.
  */

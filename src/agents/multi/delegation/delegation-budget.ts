@@ -5,9 +5,8 @@
  * one day, every one a timeout at exactly its configured 60 000 ms, plus one
  * analysis at 180 000 — the only live model was a queued free endpoint
  * (first byte 4-70 s, ~30 tokens/s), so the fixed budget could never be
- * met, each attempt first seeded a workspace lease up to the lease cap
- * (2000 files), and the "verifier" the delivery report waited for never
- * verified anything.
+ * met, each attempt first seeded a workspace lease up to the lease cap, and
+ * the review the parent waited for never happened.
  *
  * Rule: consecutive timeouts of a type double its budget (capped); once the
  * type has timed out repeatedly AT the cap, the delegation is refused up

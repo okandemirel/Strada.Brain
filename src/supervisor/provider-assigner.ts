@@ -71,9 +71,9 @@ export class ProviderAssigner {
    * The descriptors are built once, at bootstrap. A provider that runs out of
    * quota an hour into a run stays `healthy` in that snapshot forever, so goals
    * keep being assigned to it — and each one fails, falls back, and blocks.
-   * Measured 2026-08-21, run 30: Kimi was out of quota before the run started,
-   * the descriptor said nothing about it, and five goals were handed to it and
-   * died. OpenCode was healthy throughout and got none of them.
+   * Measured 2026-08-21 in a live campaign: Kimi was out of quota before the
+   * run started, the descriptor said nothing about it, and goal after goal was
+   * handed to it and died. OpenCode was healthy throughout and got none of them.
    */
   private readonly isLive: (providerName: string) => boolean;
 

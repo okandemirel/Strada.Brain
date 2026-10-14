@@ -116,11 +116,10 @@ export function wireMessageHandler(
     //
     // The seeding used to live in Orchestrator.handleMessage, and this path
     // never calls it: the message goes to the router, which submits a task.
-    // Measured 2026-08-20 across four runs — the request named
-    // /Users/okan/Downloads/SampleGame_GDD.docx and every read of it came back
-    // "Path resolves outside the project directory", because the authorization
-    // was derived in a method the CLI never reaches. Seeding here covers every
-    // channel wired through this handler, not just the one that was measured.
+    // A request that named a file outside the project had every read of it
+    // refused ("Path resolves outside the project directory"), because the
+    // authorization was derived in a method the CLI never reaches. Seeding
+    // here covers every channel wired through this handler.
     orchestrator.seedUserAuthorizedPaths(
       normalizedMsg.chatId,
       extractUserAuthorizedPaths(typeof normalizedMsg.text === "string" ? normalizedMsg.text : ""),

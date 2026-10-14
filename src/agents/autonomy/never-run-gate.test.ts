@@ -1,11 +1,10 @@
 /**
  * Assembled is not the same as running.
  *
- * Measured on a real project: breaking one reference to {fileID: 0} leaves a
- * scene that opens without complaint and a bootstrapper that logs
- * "[Strada][Bootstrap] No configuration assigned!" the moment play starts. The
- * headless play-mode run went from passing to failing on that one change, and
- * nothing that reads the scene file could tell the difference.
+ * Breaking one reference to {fileID: 0} leaves a scene that opens without
+ * complaint and a bootstrapper that logs "[Strada][Bootstrap] No configuration
+ * assigned!" the moment play starts. A headless play-mode run fails on that
+ * one change, and nothing that reads the scene file can tell the difference.
  *
  * So the last gate asks whether the run ever started the game.
  */

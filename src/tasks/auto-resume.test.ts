@@ -1,9 +1,9 @@
 /**
  * A run that stops with work left has to have a reason.
  *
- * Measured 2026-08-21, run 37: five nodes, one completed, four failed. The task
- * blocked, the episode was marked terminal, and the process sat idle for
- * seventy-one minutes until I looked. Everything needed to carry on was in
+ * Measured in a live run: most of a plan's nodes failed, the task blocked,
+ * the episode was marked terminal, and the process sat idle until someone
+ * looked. Everything needed to carry on was in
  * place — prepareTreeForRetry keeps completed nodes and resets the rest,
  * retryGoalRoot resubmits the tree — and the only caller was a button in the
  * dashboard.
@@ -111,7 +111,7 @@ describe("picking a blocked goal back up", () => {
 
   it("hands the failure reasons to the replan, not just the fact of failure", () => {
     // A fresh decomposition that is not told what blocked the last one is just
-    // a reshuffle. Run 40 stalled on two nodes whose reasons were already in
+    // a reshuffle. A later run stalled on two nodes whose reasons were already in
     // nodeResults; this is what carries them into the next plan.
     const source = readFileSync("src/tasks/background-executor.ts", "utf8");
     const method = source.slice(source.indexOf("private autoResumeBlockedGoal("));
@@ -171,12 +171,12 @@ describe("stripRetryMachinery", () => {
       "Transient failure — worker crashed. Auto-retry 9/10 in ~600s. Restart re-arm — failure retries still at 8/10.",
     );
     expect(cleaned).toBe("worker crashed.");
-    expect(stripRetryMachinery("Reaped: no progress signal for 60 minutes. Placeholders now 231."))
-      .toBe("Placeholders now 231.");
+    expect(stripRetryMachinery("Reaped: no progress signal for 60 minutes. Pending migrations now 3."))
+      .toBe("Pending migrations now 3.");
   });
 
   it("leaves a real report alone", () => {
-    const report = "Sprint 3 delivered: 24 sprites replaced, measured placeholderSprites 231.";
+    const report = "Stage two delivered: 9 migrations applied, measured pendingMigrations 0.";
     expect(stripRetryMachinery(report)).toBe(report);
   });
 });

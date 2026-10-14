@@ -60,8 +60,8 @@ describe("the quota notice", () => {
   it("is what a failed terminal actually consults", () => {
     // The decision above is proved; without this, routing the terminal back to
     // provider_abort would restore the wrong sentence and fail nothing. The
-    // reason-to-sentence mapping moved to terminal-outcome.ts (GDD-drift W01);
-    // the orchestrator must still hand it the registry's answer.
+    // reason-to-sentence mapping moved to terminal-outcome.ts; the orchestrator
+    // must still hand it the registry's answer.
     const source = readFileSync("src/agents/orchestrator.ts", "utf8");
     const line = source.split("\n").find((l) => l.includes("terminalMessageKeyOf(") && l.includes("return"));
 

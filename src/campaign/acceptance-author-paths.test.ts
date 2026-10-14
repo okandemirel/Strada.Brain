@@ -1,6 +1,6 @@
 /**
  * The writer's compile repair reads a compile error's file the way the judge
- * does (W06 review, closed by W09): the editor reports an absolute path, or a
+ * does: the editor reports an absolute path, or a
  * path in another case, and an exact comparison left such an error unrepaired
  * while `attributeRun` charged it to the file as a check fault. Invented rows.
  */

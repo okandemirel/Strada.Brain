@@ -471,11 +471,11 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
   });
 
   it("a policy-none run (real-tree repair) is set up with the conformance guard off", async () => {
-    // Measured 2026-09-08 14:03: the real-tree guardian's compile repair was
-    // handed "[STRADA NO CAMERA] … add a camera to the scene spec you pass to
+    // Measured in a live campaign: a real-tree compile repair was handed
+    // "[STRADA NO CAMERA] … add a camera to the scene spec you pass to
     // unity_scene_build" and spent its next turns on scene analysis and a
-    // failed unity_scene_build on the user's real project. A repair on the
-    // real tree is maintenance; delivery gates do not apply to it.
+    // failed unity_scene_build on the real project. A repair on the real tree
+    // is maintenance; delivery gates do not apply to it.
     const provider = mkScriptedProvider();
     const h = buildHarness(provider);
     const toSetupInput = (
@@ -524,11 +524,10 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
   });
 
   it("a sub-goal worker (goalContext set) never re-decomposes its own task", async () => {
-    // Measured 2026-09-08 04:48 and 05:00 (test-game sprint): supervisor-dispatched
-    // node workers each started in PLANNING and re-decomposed their task text into
-    // a fresh 12- and 3-node tree under a new root — 4-7 minutes apiece — and each
-    // overwrote the parent's activeGoalTrees entry. The parent planner already
-    // decided the node's shape.
+    // Measured in a live campaign: supervisor-dispatched node workers each
+    // started in PLANNING and re-decomposed their task text into a fresh tree
+    // under a new root, each overwriting the parent's activeGoalTrees entry.
+    // The parent planner already decided the node's shape.
     const provider = mkScriptedProvider();
     const h = buildHarness(provider);
     const setupInput = (
@@ -545,7 +544,7 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
         "runProactiveGoalDecomposition",
       )
       .mockImplementation(async (o: { agentState: AgentState }) => o.agentState);
-    const state = createInitialState("enhance GameBootstrapper to Strada.ModuleBootstrapper<TConfig>");
+    const state = createInitialState("move the tide-gauge reader behind an ISensorFeed interface");
 
     const out = await h.port.decomposeGoalsIfPlanning({ agentState: state, responseText: "plan", chatId: "chat-1" });
 
@@ -553,7 +552,7 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(decompSpy).not.toHaveBeenCalled();
   });
 
-  it("a policy-none run (real-tree repair) never plans itself into nodes — one agent (measured 2026-09-09 15:18: a 4-error repair became a 5-node tree)", async () => {
+  it("a policy-none run (real-tree repair) never plans itself into nodes — one agent", async () => {
     const provider = mkScriptedProvider();
     const h = buildHarness(provider);
     const setupInput = (
@@ -570,7 +569,7 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
         "runProactiveGoalDecomposition",
       )
       .mockImplementation(async (o: { agentState: AgentState }) => o.agentState);
-    const state = createInitialState("The REAL project tree does not compile. Errors: CS0246 ×4. Fix the root cause directly.");
+    const state = createInitialState("The REAL project tree does not compile. Errors: CS0103 ×2. Fix the root cause directly.");
 
     const out = await h.port.decomposeGoalsIfPlanning({ agentState: state, responseText: "plan", chatId: "chat-1" });
 
@@ -580,7 +579,7 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(h.port.debugRunContext().goalsDecomposed).toBe(false);
   });
 
-  it("the provider's reported input tokens reach the next compaction check, with the turn's tool-schema chars (2026-09-09: 73k-token turns, no compaction)", async () => {
+  it("the provider's reported input tokens reach the next compaction check, with the turn's tool-schema chars (turns past the window must compact)", async () => {
     const provider = mkScriptedProvider();
     provider.chat
       .mockResolvedValueOnce(resp({ text: "first", stopReason: "end_turn" }))
@@ -1887,7 +1886,7 @@ describe("run teardown — the ended run stops publishing its build state", () =
       .mockResolvedValueOnce(resp({ text: "done", stopReason: "end_turn" })); // REFLECTING→terminal
     const redCompile = mkTool("unity_verify_change");
     (redCompile.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
-      content: "error CS0103: The name 'Board' does not exist",
+      content: "error CS0103: The name 'Sundial' does not exist",
       isError: true,
     });
     const h = buildHarness(provider, [mkTool("file_read"), redCompile]);

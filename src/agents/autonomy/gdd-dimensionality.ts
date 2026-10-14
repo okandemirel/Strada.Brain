@@ -1,15 +1,16 @@
 /**
  * GDD dimensionality — what the design asks for, against what the scenes hold.
  *
- * Audited 2026-09-03. A test GDD asked for 3D; the delivered entry scene had
- * no mesh renderers and bound none of the project's imported models. Nothing
- * in the pipeline ever compared the two.
+ * Nothing compared the dimensionality a design document states with what the
+ * shipped scenes contain — mesh renderers, bound models, sprite renderers,
+ * camera projection.
  *
  * The expectation is DERIVED FROM THE GDD TEXT, never hardcoded: the terms
  * below are counted across the whole document and reported with their own
- * excerpts. It is deliberately not "the first heading that matches" — a
- * look-conformance gate was refused on review 2026-09-02 for quoting the GDD's
- * table of contents that way.
+ * excerpts. It is deliberately not "the first heading that matches": a
+ * document's table of contents repeats its headings, so the first heading
+ * that matches is often a contents line rather than a statement. Every
+ * mention is counted and its excerpts shown.
  *
  * This never refuses. A design that asks for 3D can legitimately be met
  * without a single mesh renderer, and no file scan can tell that apart from
@@ -37,10 +38,9 @@ export interface DimensionalityDisclosure {
 }
 
 /**
- * Terms that state a game's dimensionality. Matched with word boundaries over
- * the WHOLE document and reported with counts and excerpts — never "the first
- * heading that matches", which is how a look-conformance gate ended up reading
- * the GDD's table of contents (refused on review 2026-09-02).
+ * Terms that state a game's dimensionality or camera projection — not its art
+ * style. Matched with word boundaries over the WHOLE document and reported
+ * with counts and excerpts (see the module comment).
  */
 const DIMENSION_TERMS: ReadonlyArray<{ term: string; re: RegExp }> = [
   { term: "3D", re: /\b3-?D\b/giu },
@@ -48,7 +48,6 @@ const DIMENSION_TERMS: ReadonlyArray<{ term: string; re: RegExp }> = [
   { term: "isometric", re: /\bisometric\b/giu },
   { term: "orthographic", re: /\borthographic\b/giu },
   { term: "perspective", re: /\bperspective\b/giu },
-  { term: "pixel art", re: /\bpixel[- ]art\b/giu },
 ];
 
 export function describeDimensionality(
@@ -85,7 +84,7 @@ export function describeDimensionality(
   }
   if (signals.length === 0) {
     lines.push(
-      "Dimensionality: the GDD states none of 3D / 2D / isometric / orthographic / perspective / pixel art — " +
+      "Dimensionality: the GDD states none of 3D / 2D / isometric / orthographic / perspective — " +
         "nothing to compare the scenes against.",
     );
     return { asksFor3D: false, signals, lines };
@@ -94,9 +93,7 @@ export function describeDimensionality(
   lines.push(
     `Dimensionality the GDD states: ${signals.map((s) => `${s.term} ×${s.count}`).join(", ")}.`,
   );
-  // EVERY recorded excerpt, not the first match. A look-conformance gate was
-  // refused on review 2026-09-02 for quoting the GDD's table of contents
-  // because it took the first heading that matched; showing the count and the
+  // EVERY recorded excerpt, not the first match: showing the count and the
   // excerpts lets the reader see a contents line for what it is.
   const three = signals.find((s) => s.term === "3D");
   for (const excerpt of three?.excerpts ?? []) lines.push(`GDD says: ${excerpt}`);

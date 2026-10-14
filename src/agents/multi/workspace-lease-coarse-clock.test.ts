@@ -101,28 +101,28 @@ function readingHead(whenReadingHead: () => void): WorkspaceCommandRunner {
   };
 }
 
-const rel = join("Assets", "Scripts", "Board.cs");
+const rel = join("Assets", "Scripts", "Route.cs");
 
 describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
   it("an agent's same-length rewrite inside the seed's tick is the agent's work, and is published", async () => {
     await startOfTick();
-    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    writeFileSync(join(source, rel), "class Route {}", "utf8");
     const lease = await new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false }).acquireLease({
       label: "t",
       forceTempCopy: true,
     });
-    writeFileSync(join(lease.path, rel), "class BOARD {}", "utf8");
+    writeFileSync(join(lease.path, rel), "class ROUTE {}", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.written).toEqual([rel]);
-    expect(readFileSync(join(source, rel), "utf8")).toBe("class BOARD {}");
+    expect(readFileSync(join(source, rel), "utf8")).toBe("class ROUTE {}");
   });
 
   it("a person's same-length save inside the tick, after the seed was read, is not overwritten", async () => {
     await startOfTick();
-    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    writeFileSync(join(source, rel), "class Route {}", "utf8");
     gitAt(source, "init", "-q");
     gitAt(source, "add", "-A");
     gitAt(source, "commit", "-qm", "init");
@@ -132,7 +132,7 @@ describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
       preferGitWorktree: false,
       commandRunner: readingHead(() => writeFileSync(join(source, rel), "class Mine  {}", "utf8")),
     }).acquireLease({ label: "t", forceTempCopy: true });
-    writeFileSync(join(lease.path, rel), "class Board { int agent; }", "utf8");
+    writeFileSync(join(lease.path, rel), "class Route { int agent; }", "utf8");
 
     const result = await lease.commit();
     await lease.release();
@@ -145,7 +145,7 @@ describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
   it("a file whose copy kept an old mtime is fresh by its ctime, and a save that puts the mtime back is still seen", async () => {
     await startOfTick();
     const hourAgo = new Date(Date.now() - 3_600_000);
-    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    writeFileSync(join(source, rel), "class Route {}", "utf8");
     utimesSync(join(source, rel), hourAgo, hourAgo);
     gitAt(source, "init", "-q");
     gitAt(source, "add", "-A");
@@ -159,7 +159,7 @@ describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
         utimesSync(join(source, rel), hourAgo, hourAgo);
       }),
     }).acquireLease({ label: "t", forceTempCopy: true });
-    writeFileSync(join(lease.path, rel), "class Board { int agent; }", "utf8");
+    writeFileSync(join(lease.path, rel), "class Route { int agent; }", "utf8");
 
     const result = await lease.commit();
     await lease.release();
@@ -170,14 +170,14 @@ describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
 
   it("a person's same-length save inside the tick, while the lease was being seeded, is not overwritten", async () => {
     await startOfTick();
-    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    writeFileSync(join(source, rel), "class Route {}", "utf8");
     const manager = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
     // After the copy, before the post-seed snapshot of the project: the
     // lease's own snapshot is the first stat under the lease root.
     fsClock.beforeStatUnder = { prefix: leaseRoot, run: () => writeFileSync(join(source, rel), "class Mine  {}", "utf8") };
     const lease = await manager.acquireLease({ label: "t", forceTempCopy: true });
-    expect(readFileSync(join(lease.path, rel), "utf8")).toBe("class Board {}");
-    writeFileSync(join(lease.path, rel), "class Board { int agent; }", "utf8");
+    expect(readFileSync(join(lease.path, rel), "utf8")).toBe("class Route {}");
+    writeFileSync(join(lease.path, rel), "class Route { int agent; }", "utf8");
 
     const result = await lease.commit();
     await lease.release();
@@ -202,12 +202,12 @@ describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
 
   it("a person's same-length save inside the tick while seeding is not overwritten when the seed outlasts the settle window", async () => {
     await startOfTick();
-    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    writeFileSync(join(source, rel), "class Route {}", "utf8");
     const manager = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
     slowSeed("class Mine  {}");
     const lease = await manager.acquireLease({ label: "t", forceTempCopy: true });
-    expect(readFileSync(join(lease.path, rel), "utf8")).toBe("class Board {}");
-    writeFileSync(join(lease.path, rel), "class Board { int agent; }", "utf8");
+    expect(readFileSync(join(lease.path, rel), "utf8")).toBe("class Route {}");
+    writeFileSync(join(lease.path, rel), "class Route { int agent; }", "utf8");
 
     const result = await lease.commit();
     await lease.release();
@@ -218,28 +218,28 @@ describe("a lease commit on a filesystem whose clock ticks coarsely", () => {
 
   it("a file nobody saved while a slow seed ran is still the agent's to publish", async () => {
     await startOfTick();
-    writeFileSync(join(source, rel), "class Board {}", "utf8");
+    writeFileSync(join(source, rel), "class Route {}", "utf8");
     const manager = new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
     slowSeed();
     const lease = await manager.acquireLease({ label: "t", forceTempCopy: true });
-    writeFileSync(join(lease.path, rel), "class Board { int agent; }", "utf8");
+    writeFileSync(join(lease.path, rel), "class Route { int agent; }", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(result.conflicts).toEqual([]);
     expect(result.written).toEqual([rel]);
-    expect(readFileSync(join(source, rel), "utf8")).toBe("class Board { int agent; }");
+    expect(readFileSync(join(source, rel), "utf8")).toBe("class Route { int agent; }");
   });
 
   it("a deletion does not take a file a person saved inside the tick after the seed was read", async () => {
     await startOfTick();
-    const scene = join("Assets", "InitTestScene4abd18f9.unity");
+    const scene = join("Assets", "InitTestScene0e93b2d6.unity");
     writeFileSync(join(source, scene), "scene", "utf8");
     writeFileSync(join(source, `${scene}.meta`), "meta", "utf8");
     gitAt(source, "init", "-q");
     gitAt(source, "add", "-A");
-    gitAt(source, "commit", "-qm", "campaign: Sprint 1 — foundations");
+    gitAt(source, "commit", "-qm", "campaign: Sprint 1 — project setup");
     const lease = await new WorkspaceLeaseManager({
       projectRoot: source,
       leaseRoot,

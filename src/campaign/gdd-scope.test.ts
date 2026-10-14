@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  entryScreenInDocument,
   extractHeadings,
   headingClaimedBy,
   measureGddScope,
@@ -180,6 +181,33 @@ describe("headingClaimedBy — one containment rule for coverage and for row own
     expect(WORK_DEMAND_RE.test("Build an interactive credits screen.")).toBe(true);
     expect(WORK_DEMAND_RE.test("This document describes the game.")).toBe(false);
   });
+
+  it("reads a heading JOINED out of apparatus terms, whichever terms a document joins", () => {
+    // One compound was spelled out for one document's front matter, so every
+    // other joining of the same apparatus words came back as build work.
+    for (const apparatus of [
+      "Glossary & References",
+      "Credits and Acknowledgements",
+      "Competitive Analysis & Comparable Titles",
+      "Purpose, Scope and Terminology",
+      "Revision History & Approvals",
+    ]) {
+      expect({ apparatus, trivial: TRIVIAL_HEADING_RE.test(normalizeHeading(apparatus)) })
+        .toEqual({ apparatus, trivial: true });
+    }
+    // …while a heading that merely CONTAINS an apparatus word is work, joined
+    // or not: only a heading made ENTIRELY of apparatus terms is dropped.
+    for (const work of [
+      "Market Stall Haggling",
+      "Scope of the Map Editor",
+      "Glossary Terminal and Lore Codex",
+      "Credits Cinematic & Dedication Wall",
+      "Index Finger Gestures",
+    ]) {
+      expect({ work, trivial: TRIVIAL_HEADING_RE.test(normalizeHeading(work)) })
+        .toEqual({ work, trivial: false });
+    }
+  });
 });
 
 describe("a numbered heading may open with any capital letter, not only A-Z (W04)", () => {
@@ -194,5 +222,35 @@ describe("a numbered heading may open with any capital letter, not only A-Z (W04
       "6. Ámbito del juego",
       "Texto.",
     ].join("\n"))).toEqual(["Çiçeklenme Takvimi", "Übersicht der Obstsorten", "Écrans", "Ámbito del juego"]);
+  });
+});
+
+/**
+ * The screen a document says the game OPENS ON. The system told every final
+ * sprint to make the entry scene play by itself; a document may name a menu,
+ * a lobby or a hub instead, and what must then be proven is the ROUTE from
+ * that screen into play (Codex 2026-09-12 V, Job 3.9).
+ *
+ * Generic wording only: the reader is held against invented documents here, so
+ * no one game's boot sentence is the only one it can read.
+ */
+describe("entryScreenInDocument — the screen the document opens on", () => {
+  it("names the screen a boot sentence routes to, whatever the verb and preposition", () => {
+    expect(entryScreenInDocument("The app launches into the lobby.")).toBe("lobby");
+    expect(entryScreenInDocument("Sousaphone Rally boots to the main menu, never straight into a parade.")).toBe("main menu");
+    expect(entryScreenInDocument("After a crash the game resumes at the hub.")).toBe("hub");
+    // A cold launch is read by the same verb, with no prefix of its own.
+    expect(entryScreenInDocument("A cold launch opens on the dashboard.")).toBe("dashboard");
+  });
+
+  it("falls back to a sentence that names the first screen without a boot verb", () => {
+    expect(entryScreenInDocument("The title screen is the first screen a visitor sees.")).toBe("title screen");
+    expect(entryScreenInDocument("The lobby is the landing view for every returning diver.")).toBe("lobby");
+  });
+
+  it("names nothing when the document never says where the game opens", () => {
+    expect(entryScreenInDocument("The crane starts at dawn on the pier.")).toBeUndefined();
+    expect(entryScreenInDocument("A parade lap lasts four minutes.")).toBeUndefined();
+    expect(entryScreenInDocument(undefined)).toBeUndefined();
   });
 });

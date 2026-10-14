@@ -467,10 +467,10 @@ export class SelfVerification {
           this.buildGateEmissions = 0;
         }
         // A compile is not a test run. unity_verify_change says so itself —
-        // "Test assemblies are NOT built by this check" — and measured
-        // 2026-08-21 an agent read that sentence nineteen times, wrote two
-        // test files, and never ran one. Only a tool that RUNS tests settles
-        // whether the tests a run wrote actually pass.
+        // "Test assemblies are NOT built by this check" — and an agent can
+        // read that sentence again and again, write test files and never run
+        // one. Only a tool that RUNS tests settles whether the tests a run
+        // wrote actually pass.
         if (runsTests(executedTool.toolName, executedTool.input)) {
           this.testRunAttempts++;
           if (ok) {
@@ -546,8 +546,8 @@ export class SelfVerification {
 
   // isRedundantVerification() and its dirtySinceLastVerify flag were deleted
   // (audited 2026-09-02): the method claimed "Consumers surface this as
-  // guidance" and had no consumer outside its own test, so the measured
-  // 11-compiles-in-2h waste read as mitigated while nothing mitigated it.
+  // guidance" and had no consumer outside its own test, so the
+  // redundant-recompile waste read as mitigated while nothing mitigated it.
   // Wiring it would have been a hazard — only .cs/.csproj/.sln/.props/.targets
   // mutations set the flag, so an .asmdef, .shader or .prefab edit would have
   // read as "a recompile is guaranteed identical". The BATCH IT guidance in
@@ -632,8 +632,8 @@ export class SelfVerification {
         // This run never saw the worker's compile, so the parent's last clean
         // verdict does not cover these files: they are pending, by name, and
         // the build state is unknown again (audited 2026-09-02 — the success
-        // branch used to leave lastBuildOk=true and pendingFiles empty, so
-        // twelve delegated .cs files were approved under a "clean" check).
+        // branch used to leave lastBuildOk=true and pendingFiles empty, so a
+        // worker's delegated .cs files were approved under a "clean" check).
         this.pendingFiles.add(file);
         this.lastBuildOk = null;
       }
@@ -731,7 +731,7 @@ export class SelfVerification {
     } else if (buildGateOpen) {
       lines.push(
         hasCsFiles
-          ? `\nUse unity_verify_change to verify compilation and check the Unity console — it compiles headlessly and needs no bridge. Do not use dotnet_build: a Unity project has no .sln until the Editor has been opened once.\nBATCH IT: a headless compile costs minutes, so finish the whole logical unit (all files of the change) BEFORE verifying — do not compile after each individual edit. Measured 2026-09-01: an edit→compile→edit→compile rhythm produced ~11 compiles in two hours and ~15 tool operations an hour.`
+          ? `\nUse unity_verify_change to verify compilation and check the Unity console — it compiles headlessly and needs no bridge. Do not use dotnet_build: a Unity project has no .sln until the Editor has been opened once.\nBATCH IT: a headless compile costs minutes, so finish the whole logical unit (all files of the change) BEFORE verifying — do not compile after each individual edit.`
           : `\nRun the most relevant verification tool or command before declaring the task complete.`,
       );
     }
@@ -830,7 +830,7 @@ export function looksLikeTestFile(path: string): boolean {
   if (/(?:^|\/)[Tt]ests?\//u.test(normalized)) {
     return true;
   }
-  // Case matters in the filename: ScoringServiceTests.cs is a test file and
+  // Case matters in the filename: LedgerParserTests.cs is a test file and
   // Latest.cs is not, and lowercasing first makes them the same string.
   return /Tests?\.(?:cs|ts|tsx|js)$/u.test(normalized)
     || /\.(?:test|spec)\.(?:ts|tsx|js)$/u.test(normalized);

@@ -1,7 +1,7 @@
 /**
  * The registry and the assigner must mean the same provider.
  *
- * Measured 2026-08-21, runs 30-34: Kimi was out of quota, the health file said
+ * Measured across several live runs: Kimi was out of quota, the health file said
  * so ("kimi (moonshot)": down, eight-hour cooldown), and the supervisor handed
  * it goal after goal anyway. ProviderAssigner canonicalizes a provider's name
  * before asking about it — it asked `isAvailable("kimi")` — while the registry

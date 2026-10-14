@@ -7,13 +7,12 @@
  * registers — so the agent was told to search a vault that could only answer
  * with Strada.Brain's files.
  *
- * Measured: `vault_search` for "ModuleConfig Service SystemBase IComponent
- * EntityMediator" returned `no vault hits`; another returned five hits from
- * Strada.Brain's own analysis notes, carrying the hint "No vault indexed for
- * projectPath". The agent tried two or three times per run and then stopped
- * asking. One run spent 105 file_read, 21 list_directory and 12 glob_search
- * calls on a project whose 668 files — 341 of them Strada.Core sources — sat
- * indexed and unused.
+ * Measured in a live campaign: `vault_search` for core framework type names
+ * returned `no vault hits`; another query answered only from Strada.Brain's own
+ * analysis notes, carrying the hint "No vault indexed for projectPath". The
+ * agent tried a few times per run and then stopped asking, falling back to
+ * dozens of file_read, list_directory and glob_search calls on a project whose
+ * files, Strada.Core sources included, sat indexed and unused.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -26,13 +25,13 @@ import type { IVault } from "../../vault/vault.interface.js";
 
 describe("vault usage hint", () => {
   it("states what is indexed, with counts the agent can check", () => {
-    const hint = buildToolUsageHints({ indexedFileCount: 668, frameworkFileCount: 341 });
+    const hint = buildToolUsageHints({ indexedFileCount: 2907, frameworkFileCount: 1214 });
 
-    expect(hint).toContain("668");
-    expect(hint).toContain("341");
+    expect(hint).toContain("2907");
+    expect(hint).toContain("1214");
     expect(hint).toMatch(/vault_search/);
-    // Framework sources are the payoff case: 341 files the agent would
-    // otherwise grep through one at a time.
+    // Framework sources are the payoff case: files the agent would otherwise
+    // grep one at a time.
     expect(hint).toMatch(/Strada\.Core/);
   });
 
@@ -137,8 +136,8 @@ describe("the hint reaches the system prompt with real counts", () => {
     // would not catch the orchestrator failing to call it with counts.
     const orchestrator = orchestratorWithVault(
       vaultWith([
-        "Assets/Modules/SampleGame/Domain/GridPosition.cs",
-        "Assets/Modules/SampleGame/Domain/BoardSize.cs",
+        "Assets/Modules/ApiaryModule/Scripts/HiveState.cs",
+        "Assets/Modules/ApiaryModule/Scripts/NectarLedger.cs",
         "Packages/Submodules/Strada.Core/Runtime/Modules/ModuleConfig.cs",
       ]),
     );
@@ -193,12 +192,12 @@ describe("the hint follows the vault's live state (cold boot)", () => {
     registry.register(vault);
     let finishInit!: () => void;
     registry.trackInit(vault, new Promise<void>((resolve) => { finishInit = resolve; }));
-    files.push({ path: "Assets/Game/Bootstrap.cs", indexedAt: 1 });
+    files.push({ path: "Assets/Apiary/ApiaryBootstrap.cs", indexedAt: 1 });
     expect(systemPromptOf(orchestrator)).toMatch(/still being indexed/i);
     expect(systemPromptOf(orchestrator)).not.toMatch(/NOT indexed/i);
 
     files.push(
-      { path: "Assets/Game/Board.cs", indexedAt: 1 },
+      { path: "Assets/Apiary/Swarm.cs", indexedAt: 1 },
       { path: "Packages/Submodules/Strada.Core/Runtime/Modules/ModuleConfig.cs", indexedAt: 1 },
     );
     finishInit();

@@ -6,11 +6,10 @@ import { extractCoreLoop, readUnityVersion, renderHowToRun, suiteCommand, testPl
 import { assessSceneHygiene } from "./scene-hygiene.js";
 
 /**
- * The person who opened the delivered test-game tree (2026-09-03) had a long
- * list of scenes, no README, and no idea what the game's verb was. Everything this
- * file writes must be MEASURED — the Unity version off ProjectVersion.txt,
- * the entry scene off Build Settings, the suite off the milestone's own
- * verdict, the verb off the GDD — and anything unmeasured must say so.
+ * Everything this file writes must be MEASURED — the Unity version off
+ * ProjectVersion.txt, the entry scene off Build Settings, the suite off the
+ * milestone's own verdict, the verb off the GDD — and anything unmeasured must
+ * say so.
  */
 const dirs: string[] = [];
 function tmp(): string {
@@ -22,8 +21,8 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** A real GDD's shape (invented text): a flattened table row, its label alone on one line. */
-const REAL_GDD = [
+/** A converted design document's shape (invented text): a flattened table row, its label alone on one line. */
+const FLATTENED_TABLE_GDD = [
   "TRENCH SALVAGE — DESIGN NOTES",
   "Sections: crew, the turn and its core loop, salvage prices",
   "",
@@ -46,7 +45,7 @@ describe("core-loop extraction", () => {
     // Three lines name the loop before its field does: the contents line, the
     // section title, and "Core loop owner: ...", a different field whose
     // value would put an ownership note in the play instructions.
-    expect(extractCoreLoop(REAL_GDD)).toBe(
+    expect(extractCoreLoop(FLATTENED_TABLE_GDD)).toBe(
       "Plot a dive route, then winch salvage aboard before the air runs out. Each haul is weighed and sold at the next port.",
     );
   });
@@ -108,7 +107,7 @@ describe("unity version", () => {
 
 describe("HOW_TO_RUN.md rendering", () => {
   const measured = {
-    projectRoot: "/tmp/SampleGame",
+    projectRoot: "/tmp/TrenchSalvage",
     unityVersion: "6000.0.41f1",
     entryScene: "Assets/Scenes/DiveCampaign.unity",
     entryObjects: 47,
@@ -116,7 +115,7 @@ describe("HOW_TO_RUN.md rendering", () => {
     unclassified: ["Assets/Scenes/Drydock.unity"],
     otherEnabled: 3,
     coreLoop: "Plot a dive route, then winch salvage aboard before the air runs out.",
-    gddPath: "docs/SampleGame_GDD.md",
+    gddPath: "docs/TrenchSalvage_Design.md",
     suiteVerdict: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)",
     suiteUnfiltered: true,
     testPlatform: "PlayMode",
@@ -130,7 +129,7 @@ describe("HOW_TO_RUN.md rendering", () => {
     expect(text).toContain("Assets/Scenes/DiveCampaign.unity");
     expect(text).toContain("EditorBuildSettings.asset");
     expect(text).toContain("Plot a dive route, then winch salvage aboard");
-    expect(text).toContain("docs/SampleGame_GDD.md");
+    expect(text).toContain("docs/TrenchSalvage_Design.md");
     expect(text).toContain("83 of 83");
     expect(text).toContain("-testPlatform PlayMode");
     // The scaffolding list is the "what can be removed" section.

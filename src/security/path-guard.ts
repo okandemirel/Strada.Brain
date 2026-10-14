@@ -243,11 +243,11 @@ export function leaseOwnerRootOf(projectRoot: string): string | undefined {
 
 /**
  * An absolute path into the lease's REAL checkout, rewritten into the lease.
- * Measured 2026-09-08 07:17-07:27: five file_read/list_directory calls in
- * ten minutes refused as "outside the project directory" because the model
- * named the checkout it knows (/Users/…/SampleGame/Assets/…) while the
- * run's project was its lease under the temp directory. The MCP tools have
- * redirected that case since 2026-09-07; the built-in tools refused it.
+ * Measured in a live run: file_read/list_directory calls were refused as
+ * "outside the project directory" because the model named the checkout it
+ * knows (/Users/…/<project>/Assets/…) while the run's project was its lease
+ * under the temp directory. The MCP tools have redirected that case since
+ * 2026-09-07; the built-in tools refused it.
  */
 export function redirectRealCheckoutPath(projectRoot: string, absolutePath: string): string | undefined {
   if (!isAbsolute(absolutePath)) return undefined;
@@ -433,10 +433,10 @@ export async function validatePath(
       // The old loop's own comment said as much ("it's valid (just missing
       // parent)"), and then the code rejected it anyway.
       //
-      // Cost of that contradiction, measured: file_write could not create a
-      // file in a directory that did not already exist. An agent asked for a
-      // layered set of scripts made 42 write attempts, 38 were refused with
-      // "Parent directory does not exist", and it ended up cramming every type
+      // Cost of that contradiction, measured in a live run: file_write could
+      // not create a file in a directory that did not already exist, so an
+      // agent asked for a layered set of scripts had most of its writes refused
+      // with "Parent directory does not exist" and ended up cramming every type
       // into the one file that happened to sit in an existing directory.
       //
       // Audited 2026-09-02: this branch used to `return { valid: true }` right

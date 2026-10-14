@@ -4,8 +4,8 @@
  * The file tools refuse such a write up front; this is the boundary for every
  * other way a worker changes its workspace — shell commands, Strada.MCP's
  * tools, a commit. The vendored framework is upstream's code at a recorded
- * commit: measured on the test game, runs had left 53 reports inside the
- * vendored Strada.Core and 79 inside Strada.MCP, and patched Core locally.
+ * commit: measured in a live campaign, runs had left their own reports inside
+ * the vendored Strada.Core and Strada.MCP, and patched Core locally.
  * The package is still seeded, because a worker reads it.
  */
 
@@ -22,9 +22,9 @@ beforeAll(() => {
 });
 
 const CORE_FILE = join("Packages", "Submodules", "Strada.Core", "Runtime", "Service.cs");
-const CORE_NOTE = join("Packages", "Submodules", "Strada.Core", "docs", "sprint-report.md");
+const CORE_NOTE = join("Packages", "Submodules", "Strada.Core", "docs", "retro.md");
 const ORIGINAL = "namespace Fw { public class Service {} }\n";
-const BOARD = join("Assets", "Scripts", "Board.cs");
+const ROUTE = join("Assets", "Scripts", "Route.cs");
 
 let source: string;
 let leaseRoot: string;
@@ -55,14 +55,14 @@ describe("a lease's writes into a framework package are refused", () => {
     writeFileSync(join(lease.path, CORE_FILE), "namespace Fw { public class Service { /* patched */ } }\n", "utf8");
     mkdirSync(join(lease.path, "Packages", "Submodules", "Strada.Core", "docs"), { recursive: true });
     writeFileSync(join(lease.path, CORE_NOTE), "# what this run did", "utf8");
-    writeFileSync(join(lease.path, BOARD), "board", "utf8");
+    writeFileSync(join(lease.path, ROUTE), "route", "utf8");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(readFileSync(join(source, CORE_FILE), "utf8")).toBe(ORIGINAL);
     expect(existsSync(join(source, CORE_NOTE))).toBe(false);
-    expect(result.written).toEqual([BOARD]);
+    expect(result.written).toEqual([ROUTE]);
     expect([...(result.refusedFrameworkPackage ?? [])].sort()).toEqual([CORE_FILE, CORE_NOTE].sort());
     expect(result.conflicts).toEqual(expect.arrayContaining([CORE_FILE, CORE_NOTE]));
     expect(readFileSync(join(result.conflictsQuarantinedUnder!, CORE_NOTE), "utf8")).toBe("# what this run did");
@@ -75,18 +75,18 @@ describe("a lease's writes into a framework package are refused", () => {
     const lease = await new WorkspaceLeaseManager({ projectRoot: source, leaseRoot }).acquireLease({ label: "t" });
     expect(lease.kind).toBe("git-worktree");
     writeFileSync(join(lease.path, CORE_FILE), "namespace Fw { public class Service { /* patched */ } }\n", "utf8");
-    writeFileSync(join(lease.path, BOARD), "board", "utf8");
+    writeFileSync(join(lease.path, ROUTE), "route", "utf8");
     gitAt(lease.path, "add", "-A");
-    gitAt(lease.path, "commit", "-qm", "feat: board, and patch the framework");
+    gitAt(lease.path, "commit", "-qm", "feat: route, and patch the framework");
 
     const result = await lease.commit();
     await lease.release();
 
     expect(readFileSync(join(source, CORE_FILE), "utf8")).toBe(ORIGINAL);
     expect(result.refusedFrameworkPackage).toEqual([CORE_FILE]);
-    expect(result.written).toEqual([BOARD]);
+    expect(result.written).toEqual([ROUTE]);
     expect(result.commitsReplayed?.replayed).toBe(1);
-    expect(gitAt(source, "show", "--name-only", "--format=", "HEAD")).toBe("Assets/Scripts/Board.cs");
+    expect(gitAt(source, "show", "--name-only", "--format=", "HEAD")).toBe("Assets/Scripts/Route.cs");
     expect(gitAt(source, "show", "HEAD:Packages/Submodules/Strada.Core/Runtime/Service.cs")).toBe(ORIGINAL.trim());
   });
 
@@ -98,9 +98,9 @@ describe("a lease's writes into a framework package are refused", () => {
     gitAt(source, "commit", "-qm", "vendor the framework as plain files");
     const lease = await new WorkspaceLeaseManager({ projectRoot: source, leaseRoot }).acquireLease({ label: "t" });
     writeFileSync(join(lease.path, CORE_FILE), "namespace Fw { public class Service { /* patched */ } }\n", "utf8");
-    writeFileSync(join(lease.path, BOARD), "board", "utf8");
+    writeFileSync(join(lease.path, ROUTE), "route", "utf8");
     gitAt(lease.path, "add", "-A");
-    gitAt(lease.path, "commit", "-qm", "feat: board, and patch the framework");
+    gitAt(lease.path, "commit", "-qm", "feat: route, and patch the framework");
     writeFileSync(join(lease.path, CORE_FILE), ORIGINAL, "utf8");
     gitAt(lease.path, "add", "-A");
     gitAt(lease.path, "commit", "-qm", "chore: undo the framework patch");
@@ -108,7 +108,7 @@ describe("a lease's writes into a framework package are refused", () => {
     const result = await lease.commit();
     await lease.release();
 
-    expect(result.written).toEqual([BOARD]);
+    expect(result.written).toEqual([ROUTE]);
     expect(gitAt(source, "log", "--format=%s", "--", "Packages/Submodules/Strada.Core")).toBe(
       "vendor the framework as plain files",
     );

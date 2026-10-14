@@ -435,8 +435,7 @@ export async function handleBgEndTurn(
       visibleText: surfacedText,
       newState: agentState,
       // terminal_failure = an honest "could not do it" report; it must settle
-      // the task as failed, not completed (the false-green chain the campaign
-      // audit traced).
+      // the task as failed, never as completed.
       status: rawBoundary.kind === "plan_review" ? "blocked" : "failed",
     };
   }
@@ -901,8 +900,8 @@ export async function handleInteractiveEndTurn(
     //
     // audited 2026-09-02: terminal_failure was missing from this arm, so an
     // honest "I could not do it" fell into 4c and was recorded "approved" and
-    // settled completed. The background path maps it to failed (the
-    // false-green chain the campaign audit traced); so does this one now.
+    // settled completed. The background path maps it to failed; so does this
+    // one now.
     if (
       (visibilityDecision.kind === "plan_review" ||
         visibilityDecision.kind === "blocked" ||
@@ -940,12 +939,8 @@ export async function handleInteractiveEndTurn(
     // Approved by every verifier, and still not delivered.
     //
     // The conformance gates are asks, and an ask must be able to give up or it
-    // becomes a loop. But going quiet was being read as satisfied: measured on
-    // a live run, [STRADA NOTHING DRAWN] fired until it gave up, then fell
-    // silent, and the run reported success for a game whose captured frames
-    // were all identical. Its own last words were "say the game does not
-    // render rather than reporting it as delivered" — advice with nothing
-    // behind it.
+    // becomes a loop. See not-delivered-report.ts: an ask that gave up is not
+    // an ask that was satisfied.
     //
     // Blocked rather than failed: nothing went wrong, the work simply stopped
     // short of what was asked for, and blocked is the outcome the resume and

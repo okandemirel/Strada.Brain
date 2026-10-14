@@ -1,14 +1,14 @@
 /**
  * Sound, motion and effects: the GDD's asks against the shipped scenes.
- * Until 2026-09-10 a silent, static delivery against a cue list read as
- * complete — nothing counted an AudioSource, an Animator or a ParticleSystem.
+ * Without these counts a silent, static delivery against a cue list reads as
+ * complete — nothing else counts an AudioSource, an Animator or a ParticleSystem.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import os from "node:os";
 import { assessBuiltAsSpecified } from "./built-as-specified.js";
-import { describeMedia, audioCuesNamed } from "./gdd-media.js";
+import { describeMedia, audioCuesNamed, deniesSoundAnywhere } from "./gdd-media.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -183,9 +183,9 @@ describe("a cue list is a list (Codex 2026-09-12 R#12)", () => {
 });
 
 /**
- * Measured by Codex 2026-09-12 (V) on a measured campaign's document: one
- * accessibility sentence switched the audio gate off entirely, on a project
- * whose imported clips no shipped scene reached.
+ * A promise that the game stays playable without sound is an accessibility
+ * requirement, not a request for silence; read as a denial it would switch
+ * the audio gate off for a document that also specifies sound.
  */
 describe("an accessibility promise is not a request for silence (Codex 2026-09-12 V)", () => {
   it("does not exempt a game whose document promises it stays playable without sound", () => {
@@ -227,6 +227,40 @@ describe("an accessibility promise is not a request for silence (Codex 2026-09-1
     const report = assessBuiltAsSpecified(root);
     const silent = describeMedia("# GDD\n\nNo music. No audio. No sound effects. Silent by design.", report);
     expect(silent.refusal).toBeUndefined();
+  });
+
+  it("a sound-accessibility sentence does not exempt; a plain denial still does", () => {
+    // Deaf players are promised a game they can finish without sound: that
+    // asks for visual cues, not for silence.
+    expect(deniesSoundAnywhere("Deaf players can finish the heist without sound because every alarm flashes on screen.")).toBe(false);
+    expect(deniesSoundAnywhere("No music. No audio. Silent by design.")).toBe(true);
+
+    const root = project();
+    buildSettings(root, ["Assets/Scenes/Main.unity"]);
+    put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO());
+    put(root, "Assets/Audio/vault-hum.wav", "RIFF", CLIP);
+    const report = assessBuiltAsSpecified(root);
+    const heist =
+      "The heist soundtrack is a jazz trio. Guard radios carry recorded voice-over chatter, and the vault ambience " +
+      "was taped in a bank basement. Deaf players can finish the heist without sound because every alarm flashes on screen.";
+    expect(describeMedia(heist, report).refusal).toContain("the delivery is silent");
+  });
+
+  it("'no <sound>-only <thing>' denies a kind of content, not sound", () => {
+    expect(deniesSoundAnywhere("The rally has no music-only stages.")).toBe(false);
+    expect(deniesSoundAnywhere("The rally has no music.")).toBe(true);
+
+    // No sentence here asks for sound in a form the positive patterns read,
+    // so the compound word is the only thing that could exempt the game.
+    const root = project();
+    buildSettings(root, ["Assets/Scenes/Main.unity"]);
+    put(root, "Assets/Scenes/Main.unity", HEADER + CAMERA + SPRITE + AUDIO());
+    put(root, "Assets/Audio/engine.wav", "RIFF", CLIP);
+    const report = assessBuiltAsSpecified(root);
+    const rally =
+      "The rally has no music-only stages. The soundtrack was recorded by a brass band, engine audio was taped " +
+      "at a gravel circuit, and the crowd ambience comes from the same session.";
+    expect(describeMedia(rally, report).refusal).toContain("the delivery is silent");
   });
 
   it("a SHARED clip is not a missing cue (Codex 2026-09-12 U#F8)", () => {

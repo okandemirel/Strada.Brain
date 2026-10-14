@@ -1,11 +1,11 @@
 /**
  * A run that every verifier approved, reporting what it did not deliver.
  *
- * Measured on one run: [STRADA NOTHING DRAWN] kept firing, fell silent when
- * its ask budget ran out, and the task finished `failed: false` with a
- * one-line success message for a game whose captured frames were all
- * identical. The gates are asks and an ask must be able to give up; what must
- * not give up is the accounting of whether the thing asked for exists.
+ * Measured in a live campaign: a delivery gate that asks ([STRADA NOTHING
+ * DRAWN]) exhausted its ask budget and fell silent, and the task finished
+ * `failed: false` with a success message while the condition it asked about
+ * was still unmet. The gates are asks and an ask must be able to give up; what
+ * must not give up is the accounting of whether the thing asked for exists.
  *
  * Blocked, not failed: nothing went wrong, the work simply stopped short, and
  * blocked is what the resume and replan paths already read as "more to do".

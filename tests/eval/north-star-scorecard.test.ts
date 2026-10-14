@@ -154,7 +154,7 @@ namespace Invented.Beacon
       "PlayerSettings:",
       "  defaultScreenOrientation: 0",
       "  companyName: Invented Studio",
-      "  productName: Beacon Keeper",
+      "  productName: Thistle Mill",
       "  allowedAutorotateToLandscapeRight: 0",
       "  allowedAutorotateToLandscapeLeft: 0",
       "  applicationIdentifier:",
@@ -585,7 +585,9 @@ describe("north-star scorecard: a run that did everything", () => {
       D: VERDICT.NOT_MEASURED,
       E: VERDICT.NOT_MEASURED,
       F: VERDICT.NOT_MEASURED,
-      G: VERDICT.PASS,
+      // The proof fixture's spec states no orientation, frame rate or render
+      // pipeline, and a value the spec does not state is not measured.
+      G: VERDICT.NOT_MEASURED,
       // No store holds assumption records: a missing mechanism fails, it is not "not measured".
       H: VERDICT.FAIL,
       I: VERDICT.NOT_MEASURED,

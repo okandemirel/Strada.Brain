@@ -1,13 +1,10 @@
 /**
  * Built-as-specified — what the SHIPPED scenes actually render.
  *
- * Audited 2026-09-03. A campaign delivered "game build complete" (every sprint
- * green, captured frames as evidence) for a project whose entry scene holds
- * ZERO MeshFilter/MeshRenderer components, whose runtime scripts build the
- * visible world with GameObject.CreatePrimitive, and which already carried
- * prefabs, pngs and fbx/obj models that nothing binds (all measured). What the
- * user opened was a few engine primitives on an empty background. Nothing in
- * the pipeline ever asked what the delivered scenes contain.
+ * A delivery can be reported complete while its entry scene places no
+ * renderer, its visible world is engine primitives built at runtime, and its
+ * imported art is bound by nothing. Nothing else in the pipeline asks what the
+ * shipped scenes contain.
  *
  * This module MEASURES that, from the files Unity itself reads:
  *   - the enabled scenes in ProjectSettings/EditorBuildSettings.asset,
@@ -142,15 +139,15 @@ const RENDERER_CLASSES: ReadonlySet<string> = new Set([
 
 /**
  * Renderers that draw UI or video, not the game world. They are counted and
- * reported, but the "renders NOTHING" refusal looks past them: review
- * 2026-09-07 — one HUD Text (a CanvasRenderer) on the audited test-game
- * shape lifted the refusal while the world was still CreatePrimitive cubes.
+ * reported, but the "renders NOTHING" refusal looks past them (review
+ * 2026-09-07): a single HUD text (one CanvasRenderer) over a world of
+ * CreatePrimitive cubes must not lift the refusal.
  */
 const NON_WORLD_RENDERER_CLASSES: ReadonlySet<string> = new Set(["CanvasRenderer", "VideoPlayer"]);
 
 /**
  * UI renderers that amount to a game rather than a HUD. One label over a world
- * of engine primitives is a HUD (measured 2026-09-07); several of them BOUND
+ * of engine primitives is a HUD; several of them BOUND
  * TO THE PROJECT'S OWN ART is what a card game, a visual novel or an FMV
  * interface looks like. Bare renderers with nothing in them are neither
  * (Codex 2026-09-11 C#16).
@@ -262,12 +259,9 @@ export interface SceneStructure {
    * What the scene FILE itself holds, placed prefabs excluded: GameObject and
    * PrefabInstance documents, and the MonoBehaviour classes on them.
    *
-   * Audited 2026-09-04: the refusal could say "the shipped scenes render
-   * NOTHING" and the sprint still had nowhere to start, because the number it
-   * was given was a zero. The measured entry scene held a camera and a
-   * `GameBootstrapper` whose config listed no modules, and no prefab instance —
-   * and naming that is the difference between "something is wrong" and "this is
-   * the scene you have to fill".
+   * A refusal that gives only a renderer count of zero leaves the sprint
+   * nowhere to start; naming what the entry scene holds (objects, placed
+   * prefabs, scripts) tells it which scene it has to fill.
    */
   readonly gameObjects: number;
   readonly prefabInstances: number;
@@ -292,19 +286,16 @@ export interface ArtInventory {
   readonly models: number;
   readonly sprites: number;
   /**
-   * Sprite textures whose PNG compresses below PLACEHOLDER_BYTES_PER_PIXEL —
-   * flat procedural shapes, not drawn art. Measured 2026-09-06 on a campaign
-   * lease: nearly every sprite sat under the threshold, every one produced by
-   * the procedural generator and every one counted as "a sprite texture" by
-   * the line below. A project whose art was almost all solid squares had
-   * passed this gate as art-complete.
+   * Sprite textures that measure as flat procedural shapes (classifyPngBytes),
+   * not drawn art. Without this count, a project whose sprites are all
+   * generated solid shapes would count each one as a sprite texture and pass
+   * as art-complete.
    */
   readonly placeholderSprites: number;
   /**
-   * Audio clips under Assets/, and what their bytes say. Measured 2026-09-07
-   * on a campaign project: a handful of WAVs, most of them sub-second blips
-   * and some byte-identical to another — counted nowhere, while the design
-   * document called for sound the project did not have.
+   * Audio clips under Assets/ and what their bytes say: duplicates by content
+   * and sub-second blips are counted, so a clip count alone cannot pass for
+   * the sound a design asks for.
    */
   readonly audio: number;
   /** Clips whose bytes equal another clip's — the same sound under two names. */
@@ -482,10 +473,9 @@ interface Tally {
    */
   scripts: Set<string>;
   /**
-   * Sound, motion and effects (2026-09-10): the GDD's audio, animation and
-   * VFX asks were measured by nothing — a delivery could ship silent, static
-   * scenes against a document that asks for sound and motion and read as
-   * complete.
+   * Sound, motion and effects (2026-09-10): a design document's audio,
+   * animation and VFX asks were measured by nothing — a delivery could ship
+   * silent, static scenes and read as complete.
    */
   audioSources: number;
   /** AudioSources whose m_audioClip points at a project asset. */
@@ -786,8 +776,8 @@ export function readEnabledBuildScenes(projectRoot: string, io: BuiltAsSpecified
  *
  * Only mechanical markers: Unity's own generated InitTestScene<guid>, and
  * anything under a Tests/ or Editor/ folder. Deliberately NOT a name list —
- * excusing a scene because it is called "Rehearsal…" would let the next
- * delivery pass by renaming its empty scene.
+ * excusing a scene because of its name would let the next delivery pass by
+ * renaming its empty scene.
  */
 export function isScaffoldingScene(scenePath: string): boolean {
   const norm = scenePath.replace(/\\/g, "/");
@@ -1240,9 +1230,8 @@ export function assessBuiltAsSpecified(
       } else if (grade === "placeholder") {
         // The ones a shipped scene reaches go FIRST: they are what the player
         // sees, and the ones the sprint should replace before any art nothing
-        // shows yet (measured 2026-09-07: a sprint wired several scene-bound
-        // sprites that were all placeholders while the refusal listed unbound
-        // ones).
+        // shows yet. A refusal that lists unbound placeholders first sends the
+        // sprint to art nobody sees while the bound ones stay on screen.
         if (bound) boundPlaceholderPaths.push(rel);
         else placeholderSpritePaths.push(rel);
       } else realSpritePaths.push(rel);
@@ -1510,10 +1499,7 @@ export async function assessBuiltAsSpecifiedAsync(
  *        nothing by any route; or
  *    A2. runtime scripts build the visible world with GameObject.
  *        CreatePrimitive — what the player sees is engine primitives, not the
- *        project's art. This is the audited delivery exactly (measured): no
- *        renderer placed in any non-scaffolding scene, several scripts
- *        calling CreatePrimitive, and nothing but engine primitives on
- *        screen.
+ *        project's art.
  *    Bare "places nothing" is NOT enough on its own: a game that instantiates
  *    its prefabs from a config at runtime legitimately ships scenes with no
  *    placed renderer, and refusing that would be a false accusation. That case
@@ -1599,8 +1585,9 @@ function structuralRefusal(
     report.primitiveCallSites >= 2 || (report.referencedOnlyRenderers === 0 && report.primitiveScripts.length > 0);
   // A card game, a visual novel or an FMV game draws through canvases and
   // video, and refusing them for holding no MeshRenderer imposed one genre's
-  // architecture on every GDD (Codex 2026-09-11 B#16). The measured hole stays
-  // shut: a HUD label over CreatePrimitive cubes is still primitives-as-world.
+  // architecture on every GDD (Codex 2026-09-11 B#16). The primitives case
+  // stays refused: a HUD label over CreatePrimitive cubes is still
+  // primitives-as-world.
   // …and only when the scenes bind the project's OWN art: eight bare
   // CanvasRenderers with nothing in them withdrew the refusal (Codex
   // 2026-09-11 C#16). One VideoPlayer playing a project clip is a game too.
@@ -1647,14 +1634,28 @@ function structuralRefusal(
 }
 
 /**
- * Compressed bytes per pixel below which a PNG is a flat shape rather than art.
+ * The fallback reading, for a PNG whose pixels this file cannot decode
+ * (interlaced, a bit depth below 8, or past the decode budget): do its
+ * compressed IDAT bytes fit within what a flat shape of the same size costs?
  *
- * Measured 2026-09-06 across a campaign lease's sprites: the procedural ones
- * all sat under 0.1, the drawn ones well above it, and nothing in between. A
- * real drawn sprite cannot compress to a tenth of a byte per pixel; a solid
- * square with an outline always does.
+ * Deflate stores a run of identical pixels as back-references, so a flat
+ * shape pays for where its colour changes, not for its area: a few bytes
+ * wherever a scanline crosses an outline, plus the stream's own fixed cost —
+ * a term that grows with width + height — and about one back-reference of two
+ * or three bytes per 258 bytes of run, roughly 0.04 byte per RGBA pixel. Drawn
+ * art (texture, shading, anti-aliased edges) changes colour at nearly every
+ * pixel and pays per pixel instead. The budget is those two terms with room
+ * for the encoder's choices. A per-pixel threshold alone does not hold at
+ * sprite sizes: an interlaced 32 px disc with an outline compresses to about
+ * 0.2 byte per pixel, because at that size its outline is most of the image.
+ *
+ * A perfectly smooth, untextured gradient saved with predictive filters can
+ * fall under the budget too, which is why the decoded pixels are read first
+ * and this is only the fallback.
  */
 export const PLACEHOLDER_BYTES_PER_PIXEL = 0.1;
+/** Bytes a flat shape may spend per pixel of width + height: its outline crossings and the stream's fixed cost. */
+export const PLACEHOLDER_BYTES_PER_OUTLINE = 4;
 
 /** The rule, in words, for every message that names a placeholder-grade sprite. */
 export const PLACEHOLDER_GRADE_RULE = "at most 12 distinct colours and edges only along outlines";
@@ -1909,7 +1910,8 @@ function pngIdatBytes(bytes: Uint8Array): number {
 /**
  * True only for a PNG that was read, decoded and measured as flat shapes.
  * When the pixels cannot be decoded (interlaced, exotic depth, oversized)
- * the IDAT bytes-per-pixel heuristic decides. Unreadable is not placeholder.
+ * the compressed-size budget decides (PLACEHOLDER_BYTES_PER_PIXEL). Unreadable
+ * is not placeholder.
  */
 /**
  * What a PNG on disk actually is. THREE states, not two: "not placeholder" was
@@ -1933,7 +1935,9 @@ export function classifyPngBytes(bytes: Uint8Array): PngGrade {
       ? "placeholder"
       : "art";
   }
-  return pngIdatBytes(bytes) / (dims.width * dims.height) < PLACEHOLDER_BYTES_PER_PIXEL ? "placeholder" : "art";
+  const flatShapeBudget =
+    PLACEHOLDER_BYTES_PER_PIXEL * dims.width * dims.height + PLACEHOLDER_BYTES_PER_OUTLINE * (dims.width + dims.height);
+  return pngIdatBytes(bytes) < flatShapeBudget ? "placeholder" : "art";
 }
 
 export function classifyPng(absPath: string): PngGrade {
@@ -1979,7 +1983,7 @@ function placeholderArtRefusal(
     `A solid square is not a delivered game. Replace them with real art: unity_generate_sprite with provider "local" (the open-weights ` +
     `model on this machine) called with the SAME name and the SAME path as the placeholder file — that overwrites it and keeps ` +
     `its .meta GUID, so every binding survives and no bind call is needed; a new file beside the placeholder (e.g. <Name>_v2.png) ` +
-    `leaves this count unchanged (measured 2026-09-09: the placeholder count was the same before and after). Or a purchased ` +
+    `leaves this count unchanged. Or a purchased ` +
     `package via unity_my_assets_cloud (search → download) and unity_import_asset_package — then bind the imported ` +
     `sprites where the placeholders are bound.`
   );

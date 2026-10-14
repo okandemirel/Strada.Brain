@@ -4,10 +4,9 @@ import { basename as pathBasename, dirname as pathDirname, join as pathJoin, rel
 /**
  * What is actually in the directory the caller aimed at.
  *
- * Measured on the run of 2026-08-20: the agent wrote
- * docs/SampleGame_GDD_StructuredSummary.md and then tried three times to read
- * docs/Fernbrook_StructuredBrief.md — its own file, misremembered. "File not
- * found" ends there; the names beside it turn the miss into one correction.
+ * Measured in a live campaign: the agent wrote a summary document, then kept
+ * trying to read it back under a name it misremembered. "File not found" ends
+ * there; the names beside it turn the miss into one correction.
  */
 export async function nearbyNames(fullPath: string): Promise<string> {
   try {
@@ -45,12 +44,11 @@ const MAX_DIRECTORIES_SCANNED = 2000;
 /**
  * The same filename, somewhere else in the project.
  *
- * Measured 2026-08-21 across one run: of seven file_read misses, six named a
- * file that existed under exactly that name in a different directory —
- * BoardState.cs sought in Scripts/Data and living in Scripts/Models,
- * IInputService.cs sought in Services and living in Interfaces. For those, the
- * neighbouring names are worse than useless: they describe a directory the
- * file was never in.
+ * Measured in a live campaign: most file_read misses named a file that existed
+ * under exactly that name in a different directory, such as a model class
+ * looked for under a data folder or an interface looked for under a services
+ * folder. For those, the neighbouring names are worse than useless: they
+ * describe a directory the file was never in.
  */
 export async function sameNameElsewhere(
   projectRoot: string,

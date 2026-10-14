@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // The scope directive every plan node's worker receives.
 //
-// Measured 2026-09-09 14:12-14:40 on the user's project: a node whose whole
-// task was "Run unity_delivery_measure … output the list" made the call at
-// 14:15, then spent 25 minutes reading set-piece views and tests, writing two
-// files and running unity_verify_change — work no node had asked for, on a
+// Measured in a live campaign: a node whose whole task was "Run
+// unity_delivery_measure … output the list" made the call, then spent 25
+// minutes reading unrelated views and tests, writing two files and running
+// unity_verify_change — work no node had asked for, on a
 // budget the batch nodes behind it needed. The node prompt carried the task,
 // its completed dependencies and its time budget, but nothing that said
 // "this task and nothing else".

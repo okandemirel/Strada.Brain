@@ -90,7 +90,7 @@ export interface NodeResult {
   /**
    * How the node's run ended, as data. `status` says what the supervisor
    * made of the node; this says why the run stopped — before it existed a
-   * run that stopped on a loop came back as a plain "ok" (GDD-drift W01).
+   * run that stopped on a loop came back as a plain "ok".
    */
   readonly terminalKey?: import("../agents/autonomy/terminal-key.js").TerminalKey;
   /**
@@ -136,7 +136,7 @@ export interface VerificationVerdict {
    * and no review happened. The reply was empty or an unterminated reasoning
    * block, no reviewer was healthy, or the call threw. These used to come back
    * as "flag_issues", which the report counts as verified, so a node nobody
-   * had read read as reviewed (GDD-drift W02).
+   * had read read as reviewed.
    */
   readonly unanswered?: "empty" | "reasoning-only" | "no-healthy-verifier" | "threw";
 }

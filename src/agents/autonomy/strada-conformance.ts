@@ -292,10 +292,9 @@ const MODULE_PATH_RE = /(^|\/)Modules\/([^/]+)\//i;
  * Without the first the module is never registered with the framework; without
  * the second the code cannot compile against it at all.
  *
- * Measured: a greenfield task hand-wrote a whole module's files under
- * Assets/Modules/GameModule/Scripts/{Domain,Models,Services} with neither. The
- * directory looked right and the module did not exist as far as Strada was
- * concerned.
+ * Measured: a greenfield task hand-wrote a whole module's files with neither.
+ * The directory looked right and the module did not exist as far as Strada
+ * was concerned.
  *
  * This checks the OUTCOME rather than which tool was used, so hand-writing
  * stays legitimate as long as the result is complete.
@@ -512,10 +511,9 @@ const ASSETS_UNSOURCED_GATE_LIMIT = 2;
  * visual asset, and is that asset bound into a prefab. Asked twice, like the
  * sibling above — the fix it names is concrete and cheap to attempt.
  *
- * This is the gate for the measured "prefab yapısı sözde oluşturulsa bile
- * sahneler hep boş" failure (2026-08-26): code and even prefab
- * FILES existed while no element had art and nothing rendered. SPEC SCOPE
- * checks code against the schedule; this checks the schedule against ART.
+ * Code and prefab files can exist while no scheduled element has art and
+ * nothing renders. SPEC SCOPE checks code against the schedule; this checks
+ * the schedule against art.
  */
 const ELEMENT_ASSET_COVERAGE_GATE_LIMIT = 2;
 
@@ -679,7 +677,7 @@ export class StradaConformanceGuard {
   private census: { generation: number; at: number; values: Map<string, unknown> } | null = null;
   /** Bumped by every trackToolCall(), tracked or not: any tool may have written. */
   private generation = 0;
-  /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
+  /** Module roots this run wrote C# into, e.g. "Assets/Modules/Quarry". */
   private readonly touchedModuleRoots = new Set<string>();
   /**
    * Renderables this run wrote under Assets/: scenes, prefabs, materials,
@@ -1079,19 +1077,13 @@ export class StradaConformanceGuard {
    * spawns. Unity records the link by script guid — the .cs.meta names the
    * guid, an .asset points back at it — so that is what this follows rather
    * than the class name, which appears nowhere in the asset.
-   *
-   * Measured 2026-08-22: a project full of prefabs, a config declaring
-   * GameObject fields, zero assets pointing at its guid, and a project whose
-   * entire PlayMode suite passed while every captured frame was empty sky.
    */
   /**
    * References in a module's assets that resolve to nothing.
    *
-   * Measured 2026-08-22: a module's config asset pointed its prefab field at
-   * one guid while the prefab config it meant had another. The C# turned the
-   * resulting null into an empty ScriptableObject, so the spawner received no
-   * prefabs, nothing was logged, and a fully passing test suite sat over a
-   * game that drew an empty sky.
+   * A reference to a guid nothing declares resolves to null; code that
+   * substitutes CreateInstance for null turns that into an empty object, and
+   * nothing spawns or logs.
    *
    * Unity's built-in guids (the all-zero forms carried by every prefab) and
    * anything a package owns are not dangling. Flagging those would bury the one
@@ -1101,17 +1093,13 @@ export class StradaConformanceGuard {
    * Has anything ever been seen on screen?
    *
    * Frames are captured by unity_playmode_verify into <project>/Recordings.
-   * Measured across a full session: every one of them byte-for-byte identical
-   * and all of them empty sky, while the test suite kept growing and reported
-   * green throughout. Tests prove the simulation; only a frame
-   * proves the game, and nothing here had ever asked for one.
+   * Tests prove the simulation; only a captured frame proves the game is
+   * drawn, and identical frames prove nothing is.
    */
   /**
-   * The design document is the checklist. Measured 2026-08-24:
-   * the GDD schedules its elements in a literal table; runs delivered a
-   * subset and called it done because no gate compared code against spec.
-   * Fires only after real code exists (module roots touched) so early boots
-   * are not nagged.
+   * The design document is the checklist: no other gate compares code
+   * against what the document schedules. Fires only after real code exists
+   * (module roots touched) so early boots are not nagged.
    */
   private specScopePrompt(): string | null {
     // An outcome rule keys on whether game code was written at all, not on the
@@ -1131,10 +1119,10 @@ export class StradaConformanceGuard {
         .map((m) => `${m.name} (${m.unlock})`)
         .join(", ");
       const rest = report.missing.length > 8 ? ` — and ${report.missing.length - 8} more` : "";
-      // THE DOCUMENT'S OWN TERMS. The wording this ask used to carry named
-      // one test vehicle's rule labels, module layout and level structure,
-      // and was sent to every game; a sprint told to build content its
-      // design never asked for builds it (GDD-drift trace M4, 2026-10-11).
+      // THE DOCUMENT'S OWN TERMS. The ask uses only the document's own
+      // terms: wording that carries one design's labels, layout or structure
+      // would reach every game, and a sprint told to build content its design
+      // never asked for builds it.
       // …AND WHERE THEY ARE. A campaign's GDD that no file holds is not "the
       // design document": the one a run finds in the repo is another one
       // (review gdd-W10). A run that serves no campaign found its document
@@ -1203,10 +1191,10 @@ export class StradaConformanceGuard {
     // 2s tolerance is for filesystem timestamp granularity, as in
     // prerender-frames.ts.
     //
-    // Measured 2026-09-07 07:49: Recordings/ held many thousands of frames from
-    // earlier runs; the 400-file sample above never reached this run's own
-    // frames in a fresh subfolder, and a run that had just captured a varied
-    // picture was told "no frame has been captured in this run". A capture
+    // Recordings/ can hold many thousands of frames from earlier runs; the
+    // 400-file sample above never reached this run's own frames in a fresh
+    // subfolder, and a run that had just captured a varied picture was told
+    // "no frame has been captured in this run". A capture
     // is found by WHEN it was written, so the walk starts from the
     // directories written since the run began, not from the oldest files.
     const since = this.startedAtMs - 2_000;
@@ -1230,15 +1218,10 @@ export class StradaConformanceGuard {
     if (digests.size === 0) return null;
     if (digests.size === 1) return `all ${frames.length} captured frames are identical`;
 
-    // Two ways a game can fake "drawing", both measured:
-    //   1. HUD-only variation — the sampled frames differed ONLY in one HUD
-    //      element changing over an empty sky (well under a quarter distinct).
-    //   2. Scene-census gaming — a runtime-construction project keeps the scene
-    //      YAML minimal by design (the game world spawns from code), so a bare
-    //      renderer census false-flags the architecture itself.
-    // The rule that survives both: sampled frames must differ SUBSTANTIVELY
-    // (>= 25% distinct digests) AND, when the scene is too sparse to explain
-    // that variety, the sparsity is named instead of silently accepted.
+    // Frames can differ only because an overlay changes over an empty scene;
+    // a project that builds its world from code keeps its scene file minimal,
+    // so a bare renderer census misjudges it. Require at least a quarter
+    // distinct digests and name the census as context.
     const sampled = Math.min(frames.length, 60);
     const distinctRatio = digests.size / sampled;
     if (distinctRatio >= 0.25) return null;
@@ -1256,7 +1239,7 @@ export class StradaConformanceGuard {
    *
    * Counts MeshRenderer/SpriteRenderer occurrences and top-level GameObjects
    * in scene YAML. Cheap text census, not a Unity import — enough to tell a
-   * populated scene from a skybox with a HUD on it.
+   * populated scene from an empty one with an overlay drawn over it.
    */
 
   private danglingAssetReferences(): string[] {
@@ -1518,19 +1501,16 @@ export class StradaConformanceGuard {
    * The other gates standing open, named but not spelled out.
    *
    * getPrompt returns one gate, so a run hears about the second problem only
-   * after the first closes. Measured 2026-08-21: an agent told to stop
-   * reimplementing spent that time building yet another service-and-system
-   * pair for rendering — it never heard that nothing in the project could
-   * render at all, because that gate was behind this one.
+   * after the first closes: an agent told to stop reimplementing can spend
+   * that time building yet another service-and-system pair for rendering,
+   * never hearing that nothing in the project can render at all, because that
+   * gate is behind this one.
    */
   private alsoOpen(): string {
     // Only one direction is reachable: the rendering gate is returned first, so
     // a run reaches the reimplementation gate only once views exist and there is
     // nothing left to mention. The reverse — reimplementation still open while
-    // nothing renders — is the case measured on 2026-08-21, when an agent told
-    // to stop reimplementing spent that time building yet another
-    // service-and-system pair for rendering, never having heard that nothing in
-    // the project could render at all.
+    // nothing renders — is the case this note exists for (see the doc above).
     return this.cached("bypass", () => this.assessBypass()).length === 0
       ? ""
       : " Also still true, and not fixed by adding views: this project reimplements " +
@@ -1586,17 +1566,15 @@ export class StradaConformanceGuard {
    * written out, a mesh generated — on the theory that the moment to ask "does
    * the user already have one of these" is just before making one.
    *
-   * A measured run showed that theory is half the problem. The agent
-   * originated no art at all: it wrote C# files, assembly definitions,
-   * ScriptableObjects, a scene, and zero sprites, zero prefabs, zero meshes.
-   * Then it played the game and captured nothing but identical frames. The
-   * gate never fired, because nothing triggered it, and both the silence and
-   * the empty scene looked correct.
+   * That theory is half the problem. A run can originate no art at all — C#
+   * files, assembly definitions, ScriptableObjects and a scene, but no sprite,
+   * prefab or mesh — then play the game and capture nothing but identical
+   * frames. Nothing triggers the gate then, and both the silence and the empty
+   * scene look correct.
    *
-   * So there are two ways to arrive here and only one was covered. The second —
-   * a game that has been assembled and run and has nothing in it to draw — is
-   * the one that actually happened, and it is the one [STRADA NOTHING DRAWN]
-   * reports the symptom of without ever naming the cause.
+   * So there are two ways to arrive here. The second — a game that has been
+   * assembled and run and has nothing in it to draw — is the one [STRADA
+   * NOTHING DRAWN] reports the symptom of without ever naming the cause.
    */
   private assetsUnsourcedReason(): string | null {
     if (this.searchedOwnedAssets) return null;
@@ -1836,32 +1814,25 @@ export class StradaConformanceGuard {
       );
     }
 
-    // A run that wrote module code and produced no scene delivered a library.
-    // Measured: several modules, dozens of C# files and their test assemblies,
-    // all compiling, with no .unity, no ScriptableObject asset and no bootstrapper —
-    // and it reported success. Every rule above passed, because they all read
-    // the shape of code. This one reads the artifacts.
+    // A run that wrote module code and produced no scene delivered a library:
+    // modules and their test assemblies can all compile with no .unity, no
+    // ScriptableObject asset and no bootstrapper, and every rule above passes,
+    // because they all read the shape of code. This one reads the artifacts.
     //
     // Only when the run actually wrote module code: a question about the project
     // owes nobody a scene.
-    // A game that is assembled and renders nothing. Measured 2026-08-21 on a
-    // delivered project: plenty of C# files, prefabs and passing play-mode
-    // tests, and zero MonoBehaviours, zero uses of Strada.Core's view layer, a
-    // near-empty scene. Every service was correct and a player would
-    // have seen an empty screen. The tests passed because they call services
-    // directly and never go through a scene, so nothing above this line could
-    // have caught it.
+    // A game that is assembled and renders nothing. Tests that call services
+    // directly pass without a scene, so a project with no view layer or no
+    // camera can be green and draw nothing.
     const views = this.cached("views", () => this.assessViews());
     // Ahead of the view question: a scene with no camera draws nothing at all,
-    // so views would not help. Measured 2026-08-21: every prefab carried a
-    // SpriteRenderer and the only scene held next to nothing and no Camera.
+    // so views would not help.
     const cameraAsk = views && views.camerslessScenes.length > 0 ? this.ask("no-camera", GATE_ASK_LIMIT) : null;
     if (views && cameraAsk) {
       return (
         "[STRADA NO CAMERA] " +
         `${views.camerslessScenes.join(", ")} holds no Camera, so nothing in it is drawn — ` +
-        "not the prefabs, not a view layer, nothing. Every prefab in this project already " +
-        "carries a renderer, so this is the first thing between the game and a picture. Add a " +
+        "not the prefabs, whatever they carry, and not a view layer. Add a " +
         "camera to the scene spec you pass to unity_scene_build." +
         this.alsoOpen() +
         lastAskNote(cameraAsk)
@@ -1887,13 +1858,10 @@ export class StradaConformanceGuard {
       );
     }
 
-    // Written its own version of something the framework ships. Measured
-    // 2026-08-21: a crowd of hand-rolled public events against 0 uses of
-    // Communication, dozens of Debug.Log calls against 0 uses of StradaLog —
-    // only a handful of Strada.Core's public types used at all. The project
-    // took SystemBase for a tick, [Inject] for wiring, a ModuleConfig for
-    // registration, and wrote a plain C# game inside the shell. Every rule here passed, because none of them
-    // asked what the framework was for.
+    // Written its own version of something the framework ships. A project can
+    // take SystemBase, [Inject] and ModuleConfig and still hand-roll the events
+    // and logging the framework provides, and no shape rule asks what the
+    // framework was for.
     const bypasses = this.cached("bypass", () => this.assessBypass());
     const bypassAsk = bypasses.length > 0 ? this.ask("reimplemented", GATE_ASK_LIMIT) : null;
     if (bypassAsk) {
@@ -1924,9 +1892,8 @@ export class StradaConformanceGuard {
         `project has: ${dangling.join("; ")}. Unity resolves such a field to null, and a config ` +
         "written as `_field != null ? _field : CreateInstance<...>()` turns that null into an " +
         "empty object silently — no error, no warning, and nothing spawned at run time. Point the " +
-        "field at the asset that exists, or create the asset the guid names. Measured: a project " +
-        "whose every test passed drew an empty sky because one reference pointed at a guid " +
-        "that had never existed." +
+        "field at the asset that exists, or create the asset the guid names. A passing suite " +
+        "does not catch this: tests that call services directly never load the asset." +
         lastAskNote(danglingAsk)
       );
     }
@@ -1944,9 +1911,7 @@ export class StradaConformanceGuard {
         "unity_scene_build creates it: its spec takes assets as {id, type, path, fields}, and a " +
         "field of kind \"prefab\" resolves to a saved prefab asset rather than a scene instance. " +
         "Create the asset, assign every prefab field, and give the scene something that reads it. " +
-        "Measured: a project full of prefabs, a config with GameObject fields, no asset instance, " +
-        "a fully passing PlayMode suite, and captured frames that were all the " +
-          "same empty sky." +
+        "A passing PlayMode suite does not show this." +
           (lastAsk
             ? " This is the last time this is asked. If it is still unbound when you finish, the " +
               "game does not render and must be reported that way rather than as delivered."
@@ -1966,8 +1931,8 @@ export class StradaConformanceGuard {
         "needs no Unity Editor open. The spec must carry three things or it assembles an empty " +
         "scene: an asset of type Strada.Core.Bootstrap.GameBootstrapperConfig, an object with a " +
         "Strada.Core.Bootstrap.GameBootstrapper component, and that component's _gameConfig field " +
-        "with kind \"reference\" pointing at the asset id. Measured: a run called the tool twice " +
-        "and produced a scene containing no bootstrapper at all, because its spec named neither. " +
+        "with kind \"reference\" pointing at the asset id. A spec that names neither assembles a " +
+        "scene with no bootstrapper at all, however many times the tool is called. " +
         "Anything the game spawns at runtime belongs in the same spec as an object with a " +
         "prefabPath and keepInScene: false. If that tool is not among the ones you have, this " +
         "project's Strada.MCP submodule predates it: say so plainly rather than reporting the " +
@@ -1978,10 +1943,9 @@ export class StradaConformanceGuard {
 
     // A test assembly that contains no test satisfies every rule above: the
     // .asmdef exists, its name matches its module, and the coverage rule is
-    // looking for exactly that name. Measured on two full runs: every test
-    // assembly directory held zero .cs files. The headless PlayMode run over
-    // one of them executed 0 tests and Unity still wrote result="Passed",
-    // because nothing failed.
+    // looking for exactly that name. A test assembly directory can hold no .cs
+    // file at all, and a headless PlayMode run over it executes 0 tests while
+    // Unity still writes result="Passed", because nothing failed.
     //
     // Counting the container rather than its contents is the same mistake as
     // counting compile errors without checking that anything compiled.
@@ -2044,8 +2008,8 @@ export class StradaConformanceGuard {
         "Run unity_my_assets_cloud — it searches the Asset Store packages already downloaded on this " +
         "machine, needs no Editor, no login and no network, and reports what is inside each " +
         "package rather than only its name. A model the user bought beats one that has to be " +
-        "made, and it has been measured: an owned 3D model package sat unread on disk while the " +
-        "scene shipped empty." +
+        "made: art the user already owns costs nothing to use and is easy to miss, because " +
+        "nothing else asks for it." +
         (lastAsk
           ? " This is the last time this is asked. If the tool is not among the ones you have, " +
             "this project's Strada.MCP submodule predates it — say so rather than shipping a " +
@@ -2055,12 +2019,10 @@ export class StradaConformanceGuard {
     }
 
     // Per-element art coverage: a run can clear "assets sourced" and "frames
-    // differ" while its scheduled elements have no sprites at all — measured
-    // 2026-08-26: prefab structures existed on paper, scenes
-    // stayed empty, and no gate ever forced the target game's own assets to
-    // exist. SPEC SCOPE checks code against the schedule; this gate checks
-    // the schedule against ART — each element needs a sprite that exists AND
-    // is bound into something that renders it.
+    // differ" while its scheduled elements have no art. SPEC SCOPE checks code
+    // against the schedule; this checks the schedule against art — each
+    // element needs art that exists and is bound into something that renders
+    // it.
     const coverage = this.cached("element-coverage", () => this.elementAssetCoverageReason());
     const coverageAsk = coverage !== null ? this.ask("element-assets", ELEMENT_ASSET_COVERAGE_GATE_LIMIT) : null;
     if (coverageAsk) {
@@ -2091,11 +2053,11 @@ export class StradaConformanceGuard {
       return (
         this.cached("spec-scope", () => this.specScopePrompt()) ??
         `[STRADA NOTHING DRAWN] This game has never been observed to render: ${notDrawn}. ` +
-        "A passing suite proves the simulation, not the picture — measured: a whole suite went " +
-        "green while every captured frame was the same empty sky. Run " +
+        "A passing suite proves the simulation, not the picture. Run " +
         "unity_playmode_verify with captureFrames set, then read what came back: frames that are " +
         "all identical, or one flat colour, mean nothing is being drawn however many tests pass. " +
-        "Start a level the design describes, capture, and check the frames differ from each other." +
+        "Drive the game into the play its design describes, whatever the design calls that, then " +
+        "capture and check the frames differ from each other." +
         (lastAsk
           ? " This is the last time this is asked. If no frame has differed by the time you " +
             "finish, say the game does not render rather than reporting it as delivered."
@@ -2155,9 +2117,6 @@ function isInsideFrameworkPath(filePath: string, deps?: StradaDepsStatus): boole
   if (frameworkPaths.length === 0) return false;
   return frameworkPaths.some((fp) => normalized.includes(fp));
 }
-
-/** A believable game scene instantiates at least this many renderers. */
-export const MIN_PLAYFIELD_RENDERERS = 6;
 
 /** Text census of renderers across a project's scenes. Exported for tests. */
 export function countSceneRenderersImpl(projectPath: string): {

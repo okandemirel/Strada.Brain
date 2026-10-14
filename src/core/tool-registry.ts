@@ -243,13 +243,13 @@ export class ToolRegistry {
         });
       }
     } catch (error) {
-      // Not a warning line and nothing else. Measured 2026-08-23: a Unity
-      // project whose vendored Strada.MCP had never had `npm install` run in it
-      // threw "Cannot find package 'zod'" here, and the run continued with ZERO
-      // Unity tools — no scene build, no play-mode verification, no asset
-      // lookup. Two runs died that way, and the only trace was this one warn
-      // among 847 info lines. A run that cannot touch Unity at all must say so
-      // where the user reads, not where the log rotates.
+      // Not a warning line and nothing else. Measured in a live campaign: a
+      // vendored Strada.MCP whose dependencies were never installed threw
+      // "Cannot find package 'zod'" here, and runs continued with ZERO Unity
+      // tools — no scene build, no play-mode verification, no asset lookup —
+      // while the only trace was one warn buried among the info lines. A run
+      // that cannot touch Unity at all must say so where the user reads, not
+      // where the log rotates.
       const detail = error instanceof Error ? error.message : String(error);
       // A refused location is an operator decision to make, not a broken
       // install: say which, so the fix offered is the right one.

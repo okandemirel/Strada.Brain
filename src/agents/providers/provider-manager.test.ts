@@ -167,9 +167,9 @@ describe("ProviderManager", () => {
   });
 
   it("a STRICT chain admits no provider outside it (measured live 2026-09-11)", () => {
-    // A project pinned to its own accounts ran over a thousand worker turns on
-    // a provider the chain excludes, because something asked for it by name and
-    // the requested primary always went to the head of the chain. The strict
+    // A project pinned to its own accounts ran its worker turns on a provider
+    // the chain excludes, because something asked for it by name and the
+    // requested primary always went to the head of the chain. The strict
     // flag governed only the boot-time auto-append.
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     preferenceState.set("chat-1", {

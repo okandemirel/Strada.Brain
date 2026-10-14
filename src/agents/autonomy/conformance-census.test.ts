@@ -42,23 +42,23 @@ afterEach(() => {
 function project(): { root: string; configs: string[] } {
   const root = mkdtempSync(join(os.tmpdir(), "conformance-census-"));
   roots.push(root);
-  const moduleRoot = join(root, "Assets", "Modules", "RenderingModule");
+  const moduleRoot = join(root, "Assets", "Modules", "TideModule");
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
-  writeFileSync(join(scripts, "RenderingModuleConfig.cs"), "public class RenderingModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Game.Modules.Rendering.asmdef"), '{"name":"Game.Modules.Rendering"}');
-  writeFileSync(join(moduleRoot, "RenderingModuleConfig.asset"), "%YAML 1.1");
+  writeFileSync(join(scripts, "TideModuleConfig.cs"), "public class TideModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Modules.Tide.asmdef"), '{"name":"Game.Modules.Tide"}');
+  writeFileSync(join(moduleRoot, "TideModuleConfig.asset"), "%YAML 1.1");
   const tests = join(moduleRoot, "Tests", "Runtime");
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, "Game.Modules.Rendering.Tests.asmdef"), '{"name":"Game.Modules.Rendering.Tests"}');
-  writeFileSync(join(tests, "RenderingTests.cs"), "[Test] public void It() {}");
+  writeFileSync(join(tests, "Game.Modules.Tide.Tests.asmdef"), '{"name":"Game.Modules.Tide.Tests"}');
+  writeFileSync(join(tests, "TideTests.cs"), "[Test] public void It() {}");
 
   const configs: string[] = [];
   for (let i = 0; i < CONFIGS; i++) {
-    const path = join(scripts, `PrefabsConfig${i}.cs`);
+    const path = join(scripts, `BuoyConfig${i}.cs`);
     writeFileSync(
       path,
-      `public class PrefabsConfig${i} : ScriptableObject {\n    [SerializeField] private GameObject _prefab;\n}`,
+      `public class BuoyConfig${i} : ScriptableObject {\n    [SerializeField] private GameObject _prefab;\n}`,
     );
     writeFileSync(`${path}.meta`, `fileFormatVersion: 2\nguid: ${String(i + 1).padStart(32, "a")}\n`);
     configs.push(path);
@@ -94,7 +94,7 @@ describe("the conformance census (AUT-15)", () => {
     const prompt = guard.getPrompt();
 
     expect(prompt).toContain("[STRADA PREFABS UNBOUND]");
-    for (let i = 0; i < CONFIGS; i++) expect(prompt).toContain(`PrefabsConfig${i}`);
+    for (let i = 0; i < CONFIGS; i++) expect(prompt).toContain(`BuoyConfig${i}`);
     // The pack's assets, the module's config asset, and its own dangling check.
     expect(syncReads(".asset")).toBeLessThanOrEqual(PACK_ASSETS + 3);
   });
@@ -113,14 +113,14 @@ describe("the conformance census (AUT-15)", () => {
 
     // A tool call is a new generation: the project may have changed.
     writeFileSync(
-      join(root, "Assets", "Modules", "RenderingModule", "Prefabs0.asset"),
+      join(root, "Assets", "Modules", "TideModule", "Buoys0.asset"),
       `%YAML 1.1\n  m_Script: {fileID: 11500000, guid: ${String(1).padStart(32, "a")}, type: 3}\n`,
     );
-    guard.trackToolCall("file_write", { path: "Assets/Modules/RenderingModule/Prefabs0.asset" }, false);
+    guard.trackToolCall("file_write", { path: "Assets/Modules/TideModule/Buoys0.asset" }, false);
     const after = guard.getPrompt() ?? "";
     expect(syncReads(".asset")).toBeGreaterThan(0);
-    expect(after).not.toContain("PrefabsConfig0 ");
-    expect(after).toContain("PrefabsConfig1");
+    expect(after).not.toContain("BuoyConfig0 ");
+    expect(after).toContain("BuoyConfig1");
   });
 
   it("does the reading in prepare(), off the event loop, and getPrompt() then reads no sidecar or asset", async () => {

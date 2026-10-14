@@ -3,10 +3,10 @@
  *
  * Strada.Core, Strada.Modules and Strada.MCP are vendored into a project at a
  * recorded commit; they are upstream's code. Runs wrote into them anyway:
- * measured on the test game, 53 run reports inside the vendored Strada.Core and
- * 79 inside the vendored Strada.MCP, plus a local Strada.Core patch upstream
- * never had — and the framework vaults then served those notes back as if
- * they were the framework. Reading them stays allowed; writing is refused.
+ * measured in a live campaign, run reports landed inside the vendored
+ * Strada.Core and Strada.MCP, plus a local Strada.Core patch upstream never
+ * had — and the framework vaults then served those notes back as if they
+ * were the framework. Reading them stays allowed; writing is refused.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

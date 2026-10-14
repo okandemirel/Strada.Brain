@@ -237,7 +237,7 @@ DONE`,
   it("hard-blocks completion when build tools are unavailable but verification debt is outstanding", () => {
     // The old behavior collapsed missing tooling to not_applicable, which let
     // a disconnected Unity bridge delete the build gate and approve unverified
-    // compilable changes (how the test game's milestones went green on UNKNOWN).
+    // compilable changes (measured: milestones went green on an UNKNOWN compile status).
     const plan = planVerifierPipeline({
       prompt: "fix the level editor",
       draft: "I updated the ArrowLevelEditorWindow.cs file to fix the issue.",
@@ -529,8 +529,8 @@ DONE`,
     it.each([
       "Done. Implemented WeatherService, TrellisView and the greenhouse loader, and recreated the scarecrow prefab, which had gone missing.",
       "All three systems are implemented and the PlayMode tests pass. I removed a stale reference that caused a compile error.",
-      "Wired the HUD. Nothing is missing now.",
-      "The build requires Unity 2022.3, which the project uses. Shipped the greenhouse loader.",
+      "Wired the pause menu. Nothing is missing now.",
+      "The build requires the Input System package, which the project already lists. Shipped the greenhouse loader.",
     ])("does not read a completion draft as a failure report: %s", (draft) => {
       expect(isTerminalFailureReport(draft)).toBe(false);
     });
@@ -590,7 +590,7 @@ DONE`,
 
 describe("work evidence (audited 2026-09-10: one read call and no change was approved by the whole pipeline)", () => {
   const base = (overrides: Record<string, unknown>) => ({
-    prompt: "Implement the PlaythroughDriver adapter and register it",
+    prompt: "Implement the greenhouse's IPlaythroughDriver adapter and register it",
     draft: "Implemented and registered the adapter.\nDONE",
     state: createState({
       stepResults: [{ toolName: "file_read", success: true, summary: "Read IrrigationModuleConfig.cs", timestamp: Date.now() - 500 }],
@@ -655,8 +655,8 @@ describe("work evidence (audited 2026-09-10: one read call and no change was app
 
   it("one mutation is evidence", () => {
     const plan = planVerifierPipeline(base({
-      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote PlaythroughDriver.cs", timestamp: Date.now() - 500 }] }),
-      verificationState: { pendingFiles: new Set(), touchedFiles: new Set(["Assets/PlaythroughDriver.cs"]), hasCompilableChanges: false, lastBuildOk: null, lastVerificationAt: null },
+      state: createState({ stepResults: [{ toolName: "file_write", success: true, summary: "Wrote GreenhousePlaythroughAdapter.cs", timestamp: Date.now() - 500 }] }),
+      verificationState: { pendingFiles: new Set(), touchedFiles: new Set(["Assets/GreenhousePlaythroughAdapter.cs"]), hasCompilableChanges: false, lastBuildOk: null, lastVerificationAt: null },
     }));
     expect(plan.gate ?? "").not.toContain("NO WORK EVIDENCE");
   });

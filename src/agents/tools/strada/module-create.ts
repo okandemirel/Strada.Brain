@@ -27,7 +27,7 @@ export class ModuleCreateTool implements ITool {
     properties: {
       name: {
         type: "string",
-        description: "Module name (e.g., 'Inventory', 'Combat', 'UI'). A trailing 'Module' is accepted and not repeated, so 'Board' and 'BoardModule' produce the same module.",
+        description: "Module name (e.g., 'Inventory', 'Combat', 'UI'). A trailing 'Module' is accepted and not repeated, so 'Inventory' and 'InventoryModule' produce the same module.",
       },
       path: {
         type: "string",
@@ -104,10 +104,10 @@ export class ModuleCreateTool implements ITool {
       };
     }
 
-    // "BoardModule" is what a module is called, so callers pass it — and every
+    // "InventoryModule" is what a module is called, so callers pass it — and every
     // name below is composed off this one. Left raw it produced
-    // BoardModuleModuleConfig, an asset menu to match, and a
-    // BoardModuleModule/ folder. The suffix names the kind of thing, not this
+    // InventoryModuleModuleConfig, an asset menu to match, and a
+    // InventoryModuleModule/ folder. The suffix names the kind of thing, not this
     // particular one, so it is stripped here and re-added where it belongs.
     // Anchored: "Modulator" keeps its tail.
     const rawName = String(input["name"] ?? "");
@@ -225,9 +225,9 @@ export class ModuleCreateTool implements ITool {
       // Tests default ON, unlike everything else here: the framework declares
       // RuntimeTests and EditorTests as module component types and the agent is
       // told a module must carry its own Tests/Runtime to exist. Defaulting off
-      // contradicted both — measured, a run produced three sound modules and not
-      // one test folder, because the agent had no reason to pass a flag it was
-      // never told it needed.
+      // contradicted both — measured, a from-scratch run produced its modules
+      // without a single test folder, because the agent had no reason to pass a
+      // flag it was never told it needed.
       const includeTests = input["include_tests"] !== false;
 
       // ComponentType names, as the framework spells them.
@@ -329,7 +329,7 @@ export class ModuleCreateTool implements ITool {
       // code alone — it used to truncate every template path it shared.
       //
       // "Already there" is judged by what the module declares, not by the
-      // template's own path: an IBoardService in Scripts/Interfaces (where the
+      // template's own path: an IInventoryService in Scripts/Interfaces (where the
       // framework's layout files it) is the same type a stub in
       // Scripts/Services would declare a second time.
       const existing = await readModuleSources(fullBase);

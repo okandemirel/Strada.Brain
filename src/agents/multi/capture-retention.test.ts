@@ -25,7 +25,7 @@ function capture(name: string, ageMinutes: number, frames = 3, marked = true): v
 
 describe("pruneCaptureEntries", () => {
   it("keeps the newest entries and reports what it removed", () => {
-    // Measured 2026-09-07: 441 entries, 32,760 frames, 1.2 GB, nothing ever removed.
+    // Nothing ever removed an entry; retention keeps the newest and reports the rest.
     for (let i = 0; i < 30; i++) capture(`old_${String(i).padStart(2, "0")}`, 60 * 24 + i);
     capture("this_run", 1);
     capture("last_run", 30);

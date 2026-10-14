@@ -267,7 +267,7 @@ export function optionalFolderPaths(declared: DeclaredFolder[]): string[] {
 /**
  * One-line framework-presence status for startup notices.
  *
- * Measured 2026-08-23 (test-game run): nothing told a run AT START that the
+ * Measured 2026-08-23 in a live run: nothing told a run AT START that the
  * target was a Strada.Core project — the agent discovered the framework only
  * by tripping over strada_create_module's error, and one earlier run built a
  * vanilla dotnet project beside it instead. The runtime knows this fact the

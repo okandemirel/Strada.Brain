@@ -49,7 +49,7 @@ const GDD = [
   "## 1. Overview",
   "A small ferry carries lanterns across a dark lake.",
   "",
-  "## 2. Core Rules",
+  "## 2. Crossing Law",
   "EF-1: The ferry must stop at every lit pier.",
   "EF-2: A rider must board only from a lit pier.",
   "EF-3: The ferry must never sink while a rider is aboard.",
@@ -62,7 +62,7 @@ const GDD = [
 
 const LADDER = {
   milestones: [
-    { title: "Sprint A — Rules", prompt: "build the ferry's rules", coveredSections: ["Core Rules"] },
+    { title: "Sprint A — Rules", prompt: "build the ferry's rules", coveredSections: ["Crossing Law"] },
     { title: "Sprint B — Mood", prompt: "build the lake's mood", coveredSections: ["Overview"] },
     { title: "Sprint C — Screens", prompt: "build the dock menu", coveredSections: ["Screens"] },
   ],
@@ -892,7 +892,7 @@ describe("the system repairs its own checks, never charged (W09)", () => {
 });
 
 describe("the final milestone (scope gate on, W09)", () => {
-  const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Core Rules", "Screens"] }] };
+  const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Crossing Law", "Screens"] }] };
 
   /** Spend the final milestone's delivery bounces so the gate decides on this settle. */
   const atTheGate = (h: Harness, id: string, fields: Partial<Campaign["milestones"][number]> = {}): void => {
@@ -1048,7 +1048,7 @@ describe("partial delivery (scope gate on, W09)", () => {
 });
 
 describe("a check the independent review called weak (scope gate on, W09 + W13)", () => {
-  const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Core Rules", "Screens"] }] };
+  const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Crossing Law", "Screens"] }] };
   const reviewText = (weakChecks: Array<{ rid: string; why: string }>): string =>
     ["VERDICT: NOT DELIVERABLE", "BLOCKERS: 1. a weak check", JSON.stringify({ weakChecks, missing: [] })].join("\n");
 
@@ -1301,7 +1301,7 @@ describe("the time box (scope gate on, W09)", () => {
   }, 60_000);
 
   it("never splits the last planned milestone into one after it: its rows stay, half of them first", async () => {
-    const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Core Rules", "Screens"] }] };
+    const ONE_RUNG = { milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Crossing Law", "Screens"] }] };
     const h = build("on", { ladder: ONE_RUNG, milestoneTimeBoxMs: 60_000, failing: () => true });
     const campaign = await start(h);
     const stored = h.storage.get(campaign.id)!;

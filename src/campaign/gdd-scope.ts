@@ -46,9 +46,54 @@ export interface GddScope {
  * 2026-09-12). Anchored at both ends: "Introduction Cinematic" and "Scope of
  * the Map Editor" are work, and only a heading that is ENTIRELY apparatus is
  * dropped.
+ *
+ * ONE FLAT LIST OF TERMS, joined generically. A compound spelled out for one
+ * document's own front matter ("Market Analysis and Comparable Titles") read
+ * that document and no other: "Glossary & References" or "Credits and
+ * Acknowledgements" — the same shape in any other design document — came back
+ * as build work. A heading is apparatus when every one of its terms is, in
+ * any order, joined by "and", "&" or a comma (the punctuation is already a
+ * space after `normalizeHeading`).
  */
-export const TRIVIAL_HEADING_RE =
-  /^(?:about this document|acknowledg(?:e)?ments|appendix(?:\s+[a-z0-9])?|approvals?|bibliography|change ?log|competitive analysis|(?:comparable|competitor|reference) titles|confidentiality|contents|conventions|credits|disclaimer|document (?:control|conventions|history)|executive summary|glossary|index|introduction|legal|market (?:analysis|position(?:ing)?)(?: (?:and )?(?:comparable|competitor|reference) titles)?|overview of this document|prepared by|purpose(?: of this document)?|references|(?:revision|version) history|scope|sign off|summary|table of contents|terminology)$/i;
+const APPARATUS_TERMS = [
+  "about this document",
+  "acknowledg(?:e)?ments",
+  "appendix(?:\\s+[a-z0-9])?",
+  "approvals?",
+  "bibliography",
+  "change ?log",
+  "comparable titles",
+  "competitive analysis",
+  "competitor titles",
+  "confidentiality",
+  "contents",
+  "conventions",
+  "copyright",
+  "credits",
+  "disclaimer",
+  "document (?:control|conventions|history)",
+  "executive summary",
+  "glossary",
+  "index",
+  "introduction",
+  "legal",
+  "market (?:analysis|position(?:ing)?)",
+  "overview of this document",
+  "purpose(?: of this document)?",
+  "reference titles",
+  "references",
+  "(?:revision|version) history",
+  "scope",
+  "sign off",
+  "summary",
+  "table of contents",
+  "terminology",
+].join("|");
+
+export const TRIVIAL_HEADING_RE = new RegExp(
+  `^(?:${APPARATUS_TERMS})(?:\\s+(?:and\\s+)?(?:${APPARATUS_TERMS}))*$`,
+  "i",
+);
 
 /**
  * A section ASKING for something, as opposed to describing it: an imperative
@@ -218,7 +263,7 @@ export function headingClaimedBy(heading: string, claims: readonly string[]): bo
  * proven then is not auto-start but the ROUTE from that screen into play.
  */
 const BOOTS_TO_SCREEN_RE =
-  /\b(?:cold\s+)?(?:boots?|booting|launch(?:es|ing)?|starts?|opens?|resumes?)\b[^.\n;]{0,30}?\b(?:to|into|at|on)\s+(?:the\s+)?(home|main\s+menu|menu|title(?:\s+screen)?|start\s+screen|lobby|hub|dashboard|map)\b/i;
+  /\b(?:boots?|booting|launch(?:es|ing)?|starts?|opens?|resumes?)\b[^.\n;]{0,30}?\b(?:to|into|at|on)\s+(?:the\s+)?(home|main\s+menu|menu|title(?:\s+screen)?|start\s+screen|lobby|hub|dashboard|map)\b/i;
 const ENTRY_SCREEN_RE =
   /\b(home|main\s+menu|title\s+screen|start\s+screen|lobby|hub)\b[^.\n]{0,24}?\b(?:is\s+the\s+(?:entry|first|landing)|screen\s+is\s+(?:the\s+)?(?:entry|first))/i;
 

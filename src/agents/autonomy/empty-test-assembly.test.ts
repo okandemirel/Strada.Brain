@@ -33,23 +33,23 @@ const deps = {
  */
 function project(testBody: string | null): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), "empty-tests-"));
-  const moduleRoot = join(root, "Assets", "Modules", "QuarryModule");
+  const moduleRoot = join(root, "Assets", "Modules", "ApiaryModule");
   const scripts = join(moduleRoot, "Scripts");
   mkdirSync(scripts, { recursive: true });
 
-  const configPath = join(scripts, "QuarryModuleConfig.cs");
-  writeFileSync(configPath, "public class QuarryModuleConfig : ModuleConfig {}");
-  writeFileSync(join(scripts, "Game.Modules.Quarry.asmdef"), '{"name":"Game.Modules.Quarry"}');
-  writeFileSync(join(moduleRoot, "QuarryModuleConfig.asset"), "%YAML 1.1");
+  const configPath = join(scripts, "ApiaryModuleConfig.cs");
+  writeFileSync(configPath, "public class ApiaryModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Modules.Apiary.asmdef"), '{"name":"Game.Modules.Apiary"}');
+  writeFileSync(join(moduleRoot, "ApiaryModuleConfig.asset"), "%YAML 1.1");
 
   const tests = join(moduleRoot, "Tests", "Runtime");
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, "Game.Modules.Quarry.Tests.asmdef"), '{"name":"Game.Modules.Quarry.Tests"}');
-  if (testBody !== null) writeFileSync(join(tests, "QuarryTests.cs"), testBody);
+  writeFileSync(join(tests, "Game.Modules.Apiary.Tests.asmdef"), '{"name":"Game.Modules.Apiary.Tests"}');
+  if (testBody !== null) writeFileSync(join(tests, "ApiaryTests.cs"), testBody);
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
-  writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+  writeFileSync(join(scenes, "Apiary.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
 
   return { root, configPath };
 }
@@ -68,19 +68,19 @@ describe("a test assembly with nothing in it", () => {
     const prompt = promptFor(root, configPath);
 
     expect(prompt).toContain("[STRADA TEST ASSEMBLY EMPTY]");
-    expect(prompt).toContain("Game.Modules.Quarry.Tests");
+    expect(prompt).toContain("Game.Modules.Apiary.Tests");
   });
 
   it("is caught when the sources declare no test", () => {
     // Compiles, is not empty on disk, and still runs nothing.
-    const { root, configPath } = project("public static class QuarryHelpers { }");
+    const { root, configPath } = project("public static class ApiaryHelpers { }");
 
     expect(promptFor(root, configPath)).toContain("[STRADA TEST ASSEMBLY EMPTY]");
   });
 
   it("stays quiet for an assembly that declares a test", () => {
     const { root, configPath } = project(
-      "public class QuarryTests { [Test] public void Boots() { } }",
+      "public class ApiaryTests { [Test] public void Boots() { } }",
     );
 
     expect(promptFor(root, configPath) ?? "").not.toContain("[STRADA TEST ASSEMBLY EMPTY]");
@@ -88,7 +88,7 @@ describe("a test assembly with nothing in it", () => {
 
   it("accepts a UnityTest, which is what a play-mode check declares", () => {
     const { root, configPath } = project(
-      "public class QuarryTests { [UnityTest] public IEnumerator Boots() { yield return null; } }",
+      "public class ApiaryTests { [UnityTest] public IEnumerator Boots() { yield return null; } }",
     );
 
     expect(promptFor(root, configPath) ?? "").not.toContain("[STRADA TEST ASSEMBLY EMPTY]");
@@ -96,17 +96,17 @@ describe("a test assembly with nothing in it", () => {
 
   it("accepts a parameterised test", () => {
     const { root, configPath } = project(
-      "public class QuarryTests { [TestCase(1)] public void Scores(int n) { } }",
+      "public class ApiaryTests { [TestCase(1)] public void Scores(int n) { } }",
     );
 
     expect(promptFor(root, configPath) ?? "").not.toContain("[STRADA TEST ASSEMBLY EMPTY]");
   });
 
   it("says nothing about a non-test assembly with no tests in it", () => {
-    // Game.Modules.Quarry holds no [Test] either; only assemblies whose name
+    // Game.Modules.Apiary holds no [Test] either; only assemblies whose name
     // claims to be a test assembly are held to this.
-    const { root, configPath } = project("public class QuarryTests { [Test] public void A() { } }");
+    const { root, configPath } = project("public class ApiaryTests { [Test] public void A() { } }");
 
-    expect(promptFor(root, configPath) ?? "").not.toContain("Game.Modules.Quarry (");
+    expect(promptFor(root, configPath) ?? "").not.toContain("Game.Modules.Apiary (");
   });
 });

@@ -6,12 +6,11 @@ import { createLogger } from "../utils/logger.js";
 createLogger("error", "/tmp/strada-cancel-blocked-test.log");
 
 /**
- * Measured live 2026-09-03: a delivered campaign's sweep logged 33
- * cancellations while the database recorded 9, and its sprint work came back
- * seven times — because every straggler was BLOCKED, and cancel() only
- * accepted active tasks. A blocked task is parked, not finished: a
- * continuation is waiting to revive it, and cancelling is how a deliberate
- * stop is expressed.
+ * Measured in a live campaign: the retirement sweep logged cancellations the
+ * database never recorded, and the retired work kept coming back — because
+ * every straggler was BLOCKED, and cancel() only accepted active tasks. A
+ * blocked task is parked, not finished: a continuation is waiting to revive
+ * it, and cancelling is how a deliberate stop is expressed.
  */
 describe("cancelling a parked task", () => {
   function managerWith(status: TaskStatus) {

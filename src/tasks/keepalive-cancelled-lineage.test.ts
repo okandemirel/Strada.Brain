@@ -2,12 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { BackgroundExecutor } from "./background-executor.js";
 
 /**
- * Measured live 2026-09-03: three times after the campaign delivered (09:19,
- * 09:37, 09:53) the mission keep-alive revived a blocked pre-delivery task
- * and resubmitted the sprint against a game that had already shipped — each
- * one able to write to the project the user was inspecting. The campaign
- * cancels its lineages when it finishes; a deliberate stop must outrank a
- * keep-alive.
+ * Measured in a live campaign: after the campaign finished, the mission
+ * keep-alive revived a blocked task from before the finish and resubmitted its
+ * work against a project the campaign had already closed. The campaign cancels
+ * its lineages when it finishes; a deliberate stop must outrank a keep-alive.
  */
 describe("mission keep-alive vs a cancelled lineage", () => {
   function harness(tipStatus: string) {
@@ -51,10 +49,9 @@ describe("mission keep-alive vs a cancelled lineage", () => {
   });
 
   it("the goal auto-resume abandons a cancelled lineage too", () => {
-    // Measured live 2026-09-03 10:35: with the keep-alive guarded, the same
-    // delivered campaign's sprint work came back through "Replanning a
-    // stalled goal instead of replaying it" — three fresh tasks against a
-    // game that had already shipped.
+    // With the keep-alive guarded, the work of a cancelled lineage still came
+    // back through the stalled-goal replan path, so the goal auto-resume must
+    // honour the same cancel.
     const { executor, internals } = harness("cancelled");
     const replan = vi.fn();
     (internals.taskManager as { replanGoalRoot?: unknown }).replanGoalRoot = replan;
@@ -73,9 +70,9 @@ describe("mission keep-alive vs a cancelled lineage", () => {
   });
 
   it("a cancel ANYWHERE in the ancestry retires the lineage", async () => {
-    // Measured live 2026-09-03 10:45, a sixth resurrection: once a
-    // continuation minted a fresh task after the cancel, the lineage TIP was
-    // that new task and the chain walked straight around a tip-only guard.
+    // Once a continuation minted a fresh task after the cancel, the lineage
+    // TIP was that new task, and the chain walked straight around a tip-only
+    // guard.
     vi.useFakeTimers();
     try {
       const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
@@ -123,10 +120,10 @@ describe("mission keep-alive vs a cancelled lineage", () => {
   });
 
   it("an ancestor the campaign cancelled only to resubmit (superseded) is history, not a stop order", async () => {
-    // Measured 2026-09-08 15:19: attempt 1 of a revived sprint descended from
-    // four tasks the campaign had cancelled before resubmitting, so its
-    // keep-alive retry was "abandoned — the lineage was cancelled" 30 s after
-    // a provider probe blocked it, and the campaign charged an attempt.
+    // A revived sprint descended from tasks the campaign had cancelled only in
+    // order to resubmit them (superseded). Its keep-alive retry was abandoned
+    // as "the lineage was cancelled" right after a provider probe blocked it,
+    // and the campaign charged an attempt for it.
     vi.useFakeTimers();
     try {
       const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;

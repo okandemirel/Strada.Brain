@@ -4,13 +4,13 @@
  * Uses async child_process to avoid blocking the event loop.
  * The synchronous collect() returns cached results; refresh runs in background.
  *
- * 2026-09-10: the observation used to be "N uncommitted change(s) detected"
- * with N first, re-emitted on every increase. Measured that evening: the
+ * The observation used to be "N uncommitted change(s) detected" with N
+ * first, re-emitted on every increase. Measured in a live campaign: the
  * daemon's own play-throughs wrote captures under Recordings/, N grew by one
  * every few minutes, the scorer's dedup (first 60 chars of the summary) saw a
  * new observation each time, and AgentCore spawned an investigation of the
- * "1118 uncommitted changes" every cycle — an investigation that then ran in
- * a worktree lease and measured a clean tree. Now: Strada's own output is
+ * "N uncommitted changes" every cycle — an investigation that then ran in a
+ * worktree lease and measured a clean tree. Now: Strada's own output is
  * counted apart, the summary starts with a stable phrase, the observation
  * carries the breakdown the investigation would have produced, and it
  * re-fires only on meaningful growth.
@@ -175,7 +175,7 @@ export class GitStateObserver implements Observer {
           files: breakdown.sample,
           sinceLastReport,
           // The measurement's root: an investigation of it must run HERE, not
-          // in a worktree lease seeded from HEAD (measured 2026-09-10 22:31:
+          // in a worktree lease seeded from HEAD (measured in a live campaign:
           // such a task reported a clean tree against this observation).
           measuredIn: this.projectPath,
         },

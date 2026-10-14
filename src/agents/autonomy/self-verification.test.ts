@@ -68,7 +68,7 @@ describe("SelfVerification", () => {
   it("a failing test run keeps the gate open after a clean compile (and a red body beats a green flag)", () => {
     const verifier = new SelfVerification();
 
-    verifier.track("file_write", { path: "Assets/Gameplay/Board.cs" }, {
+    verifier.track("file_write", { path: "Assets/Gameplay/Ledger.cs" }, {
       toolCallId: "tc-w", content: "written", isError: false,
     });
     // Clean headless compile clears the compilable-changes gate…
@@ -81,14 +81,14 @@ describe("SelfVerification", () => {
     // must reopen the gate: measured class — a run declared DONE over a
     // failing suite because nothing tracked the red result.
     verifier.track("unity_playmode_verify", {}, {
-      toolCallId: "tc-t", content: "PlayMode verification FAILED: 5 of 95 tests failed", isError: false,
+      toolCallId: "tc-t", content: "PlayMode verification FAILED: 2 of 7 tests failed", isError: false,
     });
     expect(verifier.needsVerification()).toBe(true);
     expect(verifier.getPrompt()).toContain("[TESTS FAILING]");
 
     // A later green run closes it.
     verifier.track("unity_playmode_verify", {}, {
-      toolCallId: "tc-t2", content: "All 95 tests passed", isError: false,
+      toolCallId: "tc-t2", content: "All 7 tests passed", isError: false,
     });
     expect(verifier.needsVerification()).toBe(false);
   });
@@ -96,14 +96,28 @@ describe("SelfVerification", () => {
   it("carries no redundant-verification predicate that nothing consumes", () => {
     // Audited 2026-09-02: isRedundantVerification() claimed "Consumers surface
     // this as guidance" and had none — its only reads were in this file — so
-    // the measured 11-compiles-in-2h waste read as mitigated while nothing
-    // mitigated it. Wiring it as-is would have been a hazard (only
+    // the redundant-recompile waste read as mitigated while nothing mitigated
+    // it. Wiring it as-is would have been a hazard (only
     // .cs/.csproj/... mutations set its flag, so an .asmdef or .shader edit
     // would read as "a recompile is guaranteed identical"). It was deleted;
     // this pins the deletion so the false claim cannot quietly return.
     const verifier = new SelfVerification();
 
     expect((verifier as unknown as Record<string, unknown>)["isRedundantVerification"]).toBeUndefined();
+  });
+
+  it("asks to batch compiles with a rule, not a measurement from some earlier run", () => {
+    // The guidance goes into every run's prompt: it states what to do and
+    // why, and carries no dated figures from any particular project.
+    const verifier = new SelfVerification();
+    verifier.track("file_write", { path: "Assets/Gameplay/Ledger.cs" }, {
+      toolCallId: "w", content: "written", isError: false,
+    });
+
+    const prompt = verifier.getPrompt();
+    expect(prompt).toContain("BATCH IT: a headless compile costs minutes");
+    expect(prompt).toContain("do not compile after each individual edit.");
+    expect(prompt).not.toMatch(/Measured/u);
   });
 
   it("tracks nested batch_execute mutations and verification results", () => {
@@ -164,7 +178,7 @@ describe("SelfVerification", () => {
   describe("the compile gate's cap is not silent, and exhausting it is not a clean build", () => {
     it("says on the tenth ask that it is the last, and keeps the debt visible afterwards", () => {
       const verifier = new SelfVerification();
-      verifier.track("file_write", { path: "Assets/Game/Board.cs" }, {
+      verifier.track("file_write", { path: "Assets/Game/Ledger.cs" }, {
         toolCallId: "w", content: "written", isError: false,
       });
 
@@ -177,12 +191,12 @@ describe("SelfVerification", () => {
       expect(asks[9]).toMatch(/report .*unverified/u);
       expect(verifier.buildGateExhausted()).toBe(true);
       expect(verifier.getState().buildGateExhausted).toBe(true);
-      expect(verifier.getState().pendingFiles.has("Assets/Game/Board.cs")).toBe(true);
+      expect(verifier.getState().pendingFiles.has("Assets/Game/Ledger.cs")).toBe(true);
     });
 
     it("is not exhausted while the gate is still being asked, nor after a clean pass", () => {
       const verifier = new SelfVerification();
-      verifier.track("file_write", { path: "Assets/Game/Board.cs" }, {
+      verifier.track("file_write", { path: "Assets/Game/Ledger.cs" }, {
         toolCallId: "w", content: "written", isError: false,
       });
       verifier.getPrompt();
@@ -219,7 +233,7 @@ describe("SelfVerification", () => {
       "cp Assets/Scripts/Test.cs Assets/Scripts/Test2.cs",
       "mkdir -p build",
       "cat GAME_DESIGN.md | grep test",
-      "git commit -m 'add board test'",
+      "git commit -m 'add ledger test'",
       "rm -rf Library/Bee/build",
       "grep -rn Test Assets/Scripts",
     ])("does not clear the gate for: %s", (command) => {
@@ -262,7 +276,7 @@ describe("SelfVerification", () => {
   describe("a clean compile does not outlive the next compilable change", () => {
     function cleanlyCompiled(): SelfVerification {
       const verifier = new SelfVerification();
-      verifier.track("file_write", { path: "Assets/Modules/BoardModule/A.cs" }, {
+      verifier.track("file_write", { path: "Assets/Modules/LedgerModule/A.cs" }, {
         toolCallId: "w", content: "written", isError: false,
       });
       verifier.track("unity_verify_change", {}, {
@@ -274,7 +288,7 @@ describe("SelfVerification", () => {
 
     it("re-arms the gate for files a delegated worker wrote", () => {
       const verifier = cleanlyCompiled();
-      const touchedFiles = Array.from({ length: 12 }, (_, i) => `Assets/Modules/BoardModule/W${i}.cs`);
+      const touchedFiles = Array.from({ length: 3 }, (_, i) => `Assets/Modules/LedgerModule/W${i}.cs`);
       verifier.ingestWorkerResult(completedWorker(touchedFiles));
 
       expect(verifier.needsVerification()).toBe(true);
@@ -286,7 +300,7 @@ describe("SelfVerification", () => {
 
     it("re-arms the gate for a direct edit", () => {
       const verifier = cleanlyCompiled();
-      verifier.track("file_write", { path: "Assets/Modules/BoardModule/B.cs" }, {
+      verifier.track("file_write", { path: "Assets/Modules/LedgerModule/B.cs" }, {
         toolCallId: "w2", content: "written", isError: false,
       });
 

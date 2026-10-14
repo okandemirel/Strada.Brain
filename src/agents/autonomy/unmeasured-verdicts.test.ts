@@ -181,7 +181,7 @@ describe("a red Unity Test Framework record is red (autonomy#1)", () => {
 describe("a configuration or listing tool compiles nothing (autonomy#2)", () => {
   it("keeps the compile debt after a build-settings read, a test list or an idle results read", () => {
     for (const [tool, body] of [
-      ["unity_build_settings", "Build Settings:\n  Target: StandaloneOSX\n  Scenes: 2\n{\"scenes\":[\"Assets/Scenes/Main.unity\"]}"],
+      ["unity_build_settings", "Build Settings:\n  Target: StandaloneOSX\n  Scenes: 2\n{\"scenes\":[\"Assets/Scenes/Windmill.unity\"]}"],
       ["unity_test_list", JSON.stringify({ available: true, mode: "edit", tests: [] }, null, 2)],
       ["unity_test_results", JSON.stringify({ status: "idle", runId: null }, null, 2)],
       // A stale green record is no compile of THIS tree either.
@@ -226,7 +226,7 @@ describe("a configuration or listing tool compiles nothing (autonomy#2)", () => 
 
 describe("an inconclusive answer moves nothing (autonomy#3)", () => {
   it("keeps an earlier failed step in the completion review", () => {
-    const v = wrote("Assets/Art/Frog.png");
+    const v = wrote("Assets/Art/Windmill.png");
     const failedAt = Date.now() - 1_000;
     v.track("unity_compile_status", {}, ok('{"status":"unknown"}'));
     expect(v.getState().lastVerificationAt).toBeNull();
@@ -432,17 +432,17 @@ describe("a verifier call that measured nothing is not work done (autonomy#0, re
   it("asks for targeted verification of an error logged after the last verdict, and not of one logged before it", () => {
     const verifiedAt = Date.now() - 5_000;
     const planWithLog = (loggedAt: number) => planVerifierPipeline({
-      prompt: "Add the frog and its sprite",
-      draft: "Added the frog controller and its sprite; the project compiles. Done.",
+      prompt: "Add the windmill and its sprite",
+      draft: "Added the windmill controller and its sprite; the project compiles. Done.",
       state: createState([
-        step("file_write", true, "wrote Assets/Scripts/FrogController.cs", verifiedAt - 1_000),
+        step("file_write", true, "wrote Assets/Scripts/WindmillController.cs", verifiedAt - 1_000),
         step("unity_verify_change", true, "compile green", verifiedAt),
-        step("unity_generate_sprite", true, "generated Assets/Art/Frog.png", verifiedAt + 500),
+        step("unity_generate_sprite", true, "generated Assets/Art/Windmill.png", verifiedAt + 500),
       ]),
       task: DEBUG_TASK,
       verificationState: {
         pendingFiles: new Set<string>(),
-        touchedFiles: new Set(["Assets/Scripts/FrogController.cs"]),
+        touchedFiles: new Set(["Assets/Scripts/WindmillController.cs"]),
         hasCompilableChanges: false,
         lastBuildOk: true,
         lastVerificationAt: verifiedAt,
@@ -452,7 +452,7 @@ describe("a verifier call that measured nothing is not work done (autonomy#0, re
       logEntries: [{
         timestamp: new Date(loggedAt).toISOString(),
         level: "error",
-        message: "NullReferenceException in FrogController.Update",
+        message: "NullReferenceException in WindmillController.Update",
         meta: { chatId: "chat-unmeasured" },
       }],
       chatId: "chat-unmeasured",
@@ -526,7 +526,7 @@ describe("a test run that ran no test has no verdict, wherever it ran (tools#1, 
       ["npx vitest run -t nomatch", VITEST_ALL_FILTERED],
       ["npx vitest run src/zzz --passWithNoTests", VITEST_NO_FILES],
     ] as const) {
-      const v = wrote("Game.Tests/BoardTests.cs");
+      const v = wrote("Game.Tests/WindmillTests.cs");
       v.track("shell_exec", { command }, shellRun(command, stdout));
       expect(v.needsVerification(), command).toBe(true);
       expect(v.getState().lastBuildOk, command).toBeNull();
@@ -540,8 +540,8 @@ describe("a test run that ran no test has no verdict, wherever it ran (tools#1, 
 
   it("still settles on a run where some project ran tests and passed", () => {
     // A filter across a solution: one project matched it, the other did not.
-    const v = wrote("Game.Tests/BoardTests.cs");
-    const command = "dotnet test v2z.slnx --filter FullyQualifiedName~ClearsRow";
+    const v = wrote("Game.Tests/WindmillTests.cs");
+    const command = "dotnet test Windmill.slnx --filter FullyQualifiedName~TurnsSails";
     v.track("shell_exec", { command }, shellRun(command, [
       DOTNET_NO_MATCH.replace(/Game\.Tests/gu, "Empty.Tests"),
       "Passed!  - Failed:     0, Passed:     1, Skipped:     0, Total:     1, Duration: 10 ms - Game.Tests.dll (net10.0)",
@@ -556,13 +556,13 @@ describe("a test run that ran no test has no verdict, wherever it ran (tools#1, 
 
   it("keeps a red red beside a project that ran nothing, masked exit or not", () => {
     const failed = "Failed!  - Failed:     1, Passed:     2, Skipped:     0, Total:     3, Duration: 12 ms - Game.Tests.dll (net10.0)";
-    const red = wrote("Game.Tests/BoardTests.cs");
+    const red = wrote("Game.Tests/WindmillTests.cs");
     red.track("shell_exec", { command: "dotnet test" }, shellRun("dotnet test", `${DOTNET_NO_TESTS}\n${failed}`, 1));
     expect(red.getState().lastBuildOk).toBe(false);
     expect(red.getPrompt()).toContain("[TESTS FAILING]");
     expect(red.getPrompt()).not.toContain("NOT MEASURED");
 
-    const masked = wrote("Game.Tests/BoardTests.cs");
+    const masked = wrote("Game.Tests/WindmillTests.cs");
     const command = "dotnet test 2>&1 | tail -20";
     masked.track("shell_exec", { command }, shellRun(command, `${DOTNET_NO_TESTS}\n${failed}`));
     expect(masked.getState().lastBuildOk).toBe(false);

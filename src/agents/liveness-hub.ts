@@ -4,9 +4,9 @@
  * The stuck-task reaper measures a task's `updated_at`, but tool executions in a
  * decomposed wave run on WORKER orchestrator instances (agent-manager,
  * delegation-manager) whose per-instance `onLiveness` slot nothing ever sets.
- * Measured 2026-08-29: two campaign tasks were reaped at exactly 60 minutes with
- * zero progress rows while their workers ran tools the whole time — the
- * heartbeat existed only on the top-level orchestrator singleton.
+ * Measured 2026-08-29 in a live campaign: tasks were reaped at exactly 60
+ * minutes with zero progress rows while their workers ran tools the whole time
+ * — the heartbeat existed only on the top-level orchestrator singleton.
  *
  * Every orchestrator instance reports tool activity here with the chatId it
  * already has in hand; the background executor subscribes with the task's
@@ -70,9 +70,9 @@ export const LIVENESS_HEARTBEAT_MS = 30_000;
 /**
  * Run a long await while the task's watchdog keeps hearing from it.
  *
- * Measured 2026-09-09 17:45 on the user's project: two goal-decomposition
- * calls of ~640 s each — model turns, not silence — and the inactivity
- * watchdog aborted the mission at 20 minutes of "no progress". Worker turns
+ * Measured 2026-09-09 in a live campaign: two goal-decomposition calls of
+ * ~640 s each — model turns, not silence — and the inactivity watchdog
+ * aborted the mission at 20 minutes of "no progress". Worker turns
  * heartbeat through the runner; decomposition did not. Ticks immediately,
  * then every LIVENESS_HEARTBEAT_MS until `run` settles; `extra` (a node's
  * own liveness hook) is ticked with it.

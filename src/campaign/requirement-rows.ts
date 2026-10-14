@@ -175,7 +175,10 @@ const ASPIRATION_TEXT = [
 const ASPIRATION_PATH = [
   "kpis?", "dau", "mau", "arpu", "arpdau", "arppu", "ltv", "roas", "cpi", "ecpm",
   "d\\d{1,2}\\s+retention", "retention\\s+rate", "conversion\\s+rate", "payer\\s+conversion", "gelir\\s+hedef\\p{L}*",
-  "(?:production|release|development|project|delivery)\\s+schedule", "production\\s+scope", "roadmap", "staffing",
+  // A PRODUCTION FAMILY, not one document's own heading: "Production Scope"
+  // was excluded by name while "Project Scope" and "Release Plan", which mean
+  // the same, stayed open as game rules.
+  "(?:production|release|development|project|delivery)\\s+(?:scope|plans?|planning|schedule|timeline|roadmap)", "roadmap", "staffing",
   "yol\\s+haritası", "hoja\\s+de\\s+ruta", "feuille\\s+de\\s+route",
 ];
 const ASPIRATION_NOUN = [
@@ -186,11 +189,15 @@ const ASPIRATION_NOUN = [
 ];
 /** What may stand beside a business noun in a heading that names only it: "Budget Overview", "Gelir Hedefleri". */
 const ASPIRATION_QUALIFIER = [
-  "and", "or", "targets?", "goals?", "objectives?", "plans?", "planning", "estimates?", "mitigations?", "management", "overview", "structure", "schedule", "timeline",
+  // What a document may put BESIDE a business noun. A family, not a literal:
+  // "Risks & Mitigations" was recognized and "Risks and Countermeasures" was
+  // not, though a heading means the same either way.
+  "and", "or", "targets?", "goals?", "objectives?", "plans?", "planning", "estimates?", "management", "overview", "structure", "schedule", "timeline",
+  "mitigations?", "countermeasures?", "contingenc(?:y|ies)",
   "ve", "hedef\\p{L}*", "plan(?:ı|lama\\p{L}*)", "önlem\\p{L}*", "yönetim\\p{L}*", "yapı\\p{L}*",
   "und", "ziele?", "maßnahmen", "gegenmaßnahmen", "struktur",
-  "y", "objetivos?", "metas?", "planes", "mitigación", "estructura",
-  "et", "objectifs?", "atténuation",
+  "y", "objetivos?", "metas?", "planes", "mitigación", "contramedidas?", "estructura",
+  "et", "objectifs?", "atténuation", "contre[-\\s]?mesures?",
 ];
 
 function wordsRe(words: readonly string[], flags = "iu"): RegExp {
@@ -849,16 +856,46 @@ const SCREEN_GROUP_RE =
   /^(?:(?:ui|game|menu)\s+)?(?:screens?|menus?|popups?)(?:\s+(?:specifications?|specs?|list|definitions?|catalog(?:ue)?|inventory))?$|^(?:ekranlar|menüler|bildschirme|pantallas|écrans)$/iu;
 const SCREEN_WORD_RE =
   /^(?:screens?|popups?|pop-?ups?|menus?|hud|dialog(?:ue)?s?|overlays?|ekran\p{L}*|menü\p{L}*|bildschirm\p{L}*|dialog|pantallas?|menú|écrans?)$/iu;
-const SCREEN_CONTAINER_RE =
-  /(?<![\p{L}])(?:map|flow|specifications?|list|overview|inventory|design|principles|harita|akış|liste|übersicht|mapa|flujo|lista|carte|flux)(?![\p{L}])/iu;
+/** A noun that names a VIEW OF the screens — their map, their flow, their list — rather than one screen. */
+const SCREEN_CONTAINER_WORD_RE =
+  /^(?:map|flow|specifications?|specs?|list|listing|overview|inventory|design|principles|harita\p{L}*|akış\p{L}*|liste\p{L}*|übersicht|mapa|flujo|lista|listado|carte|flux)$/iu;
+/** A screen word in the PLURAL: the thing a genitive container heading is a view OF. */
+const SCREEN_WORD_PLURAL_RE =
+  /^(?:screens|popups|pop-?ups|menus|dialog(?:ue)?s|overlays|ekranlar\p{L}*|menüler\p{L}*|bildschirme\p{L}*|pantallas|menús|écrans)$/iu;
 /** German writes a screen as one compound word: "Hauptmenü", "Ergebnisbildschirm". */
 const SCREEN_COMPOUND_RE = /^\p{L}{3,}(?:bildschirm|menü)$/iu;
 
+/**
+ * A heading ABOUT the screens rather than one OF them.
+ *
+ * THE HEAD NOUN DECIDES, never the mere presence of a word. A container list
+ * matched anywhere in the heading dropped every screen a game actually calls
+ * "Map" or "Inventory" — and "Map Screen", "Inventory Screen", "Overview
+ * Screen" with them — while gdd-scope's screen count read those same words AS
+ * screens, so the two readers of one document disagreed. In en/tr the head is
+ * the LAST word after a screen word ("Screen Map", "Popup Inventory", "Ekran
+ * Akışı"); in de/es/fr it is the FIRST noun of a genitive phrase whose screen
+ * word is PLURAL ("Übersicht der Bildschirme", "Liste des écrans", "Mapa de
+ * pantallas"). A singular screen word as the head is a screen ("Reef Map
+ * Screen", "Map Menu", "Écran des résultats").
+ */
+function isScreenContainer(words: readonly string[]): boolean {
+  if (words.length < 2) return false;
+  const first = words[0]!;
+  const last = words[words.length - 1]!;
+  if (SCREEN_WORD_RE.test(first) && SCREEN_CONTAINER_WORD_RE.test(last)) return true;
+  return SCREEN_CONTAINER_WORD_RE.test(first) && words.slice(1).some((w) => SCREEN_WORD_PLURAL_RE.test(w));
+}
+
 function isScreenTitle(title: string, parent: string | undefined): boolean {
   const plain = normalizeHeading(title.replace(/\([^)]*\)/g, " "));
-  if (plain === "" || SCREEN_GROUP_RE.test(plain) || SCREEN_CONTAINER_RE.test(plain)) return false;
-  if (parent !== undefined && SCREEN_GROUP_RE.test(normalizeHeading(parent))) return true;
+  if (plain === "") return false;
   const words = plain.split(" ");
+  if (SCREEN_GROUP_RE.test(plain) || isScreenContainer(words)) return false;
+  // A CHILD OF A SCREEN GROUP IS A SCREEN, whatever the game calls it: a
+  // screen named "Map" or "Inventory" is exactly what the old container list
+  // threw away.
+  if (parent !== undefined && SCREEN_GROUP_RE.test(normalizeHeading(parent))) return true;
   if (words.length < 2) return SCREEN_COMPOUND_RE.test(plain);
   return SCREEN_WORD_RE.test(words[0]!) || SCREEN_WORD_RE.test(words[words.length - 1]!);
 }

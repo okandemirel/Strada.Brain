@@ -28,8 +28,8 @@ describe("look description", () => {
   });
 
   it("takes the art-direction PROSE, never the table of contents", () => {
-    // The shape that sank the earlier attempt: a TOC entry far above the real
-    // section, both matching the same heading.
+    // A contents page lists the look heading before the section itself; both
+    // lines match the same heading, and only the later one has prose under it.
     const gdd = [
       "Table of contents",
       "31. The climb",

@@ -125,15 +125,13 @@ function isInteractive(mode: RunnerMode): boolean {
 
 /**
  * The status a run reports when a verdict STOPS it before the model said
- * done. "graceful" finalize means the run winds down cleanly — it does not
- * mean the task succeeded. Measured 2026-09-08 10:00-11:53 (test-game
- * sprint, supervisor node workers): eight nodes — "Generate and bind
- * background sprites", "Generate and bind 20 artworks", … — each hit
- * a clock/stall stop with graceful finalize, reported status "completed",
- * and carried as their whole output the localized "the AI provider is not
- * responding" notice. The dispatcher marked all eight done. An interactive
- * chat keeps "completed" (the person read the notice); a background or
- * worker run that was stopped is "failed", with the reason attached.
+ * done. "graceful" finalize means the run winds down cleanly; it does not
+ * mean the task succeeded. Measured in a live campaign: supervisor node
+ * workers stopped by a clock/stall verdict reported "completed" while their
+ * whole output was the localized provider-not-responding notice, and the
+ * dispatcher marked those nodes done. An interactive chat keeps "completed"
+ * (the person read the notice); a stopped background or worker run is
+ * "failed", with the reason attached.
  */
 export function stoppedStatus(
   finalize: "graceful" | "hard",
@@ -526,10 +524,10 @@ export class V2AgentRunner implements AgentRunner {
           let outcome: StepOutcome;
           try {
             // A pending model call is not task silence either: it is bounded by
-            // its own call ceiling and the failure ledger. Measured 2026-09-09
-            // 06:20: the next node's first call sat in network retries with no
-            // byte to keep-alive on, and the executor's 20-minute inactivity
-            // watchdog blocked a sprint that had just committed 44 files.
+            // its own call ceiling and the failure ledger. Measured 2026-09-09:
+            // the next node's first call sat in network retries with no byte to
+            // keep-alive on, and the executor's inactivity watchdog blocked a
+            // run that was still committing work.
             const result = await this.keepAliveWhile(
               gateway.call(
                 {
@@ -1280,13 +1278,12 @@ export class V2AgentRunner implements AgentRunner {
 
   /**
    * A running tool is not silence. The task inactivity watchdog reads the
-   * event stream; a tool that runs for minutes (a local diffusion batch at
-   * 138 s per step, a headless compile) emits nothing, so the watchdog read
-   * it as a stalled task. Measured 2026-09-09 01:38: "Task made no progress
-   * for 1200000ms" while unity_generate_sprite was 16 minutes into a 30-minute
-   * inference at 75% — the task was blocked, the inference killed, and the
-   * campaign charged attempt 2. While a tool batch is in flight the run
-   * heartbeats on the clock every TOOL_HEARTBEAT_MS.
+   * event stream; a tool that runs for minutes (a local image-generation
+   * batch, a headless compile) emits nothing, so the watchdog read it as a
+   * stalled task. Measured in a live campaign: the inactivity watchdog
+   * blocked a task while unity_generate_sprite was still mid-inference, which
+   * killed the inference and charged the task a retry. While a tool batch is
+   * in flight the run heartbeats on the clock every TOOL_HEARTBEAT_MS.
    */
   private async keepAliveWhile<T>(pending: Promise<T>, keepalive?: () => void): Promise<T> {
     if (!keepalive) return pending;

@@ -7,10 +7,9 @@ import { FileDeleteDirectoryTool, isSystemOutputDirectory } from "./file-manage.
 import type { ToolContext } from "./tool.interface.js";
 
 /**
- * Measured live 2026-09-12 03:50: a sprint cleaning up after itself was
- * refused sixteen times in one ten-minute window — "directory contains 51
- * files (limit: 50)" against Artifacts/CometPlayModeCapture and its siblings. A
- * PlayMode capture folder routinely holds more than fifty frames.
+ * Measured in a live campaign: cleaning up PlayMode capture folders was
+ * refused over and over by the flat 50-file cap — "directory contains 51
+ * files (limit: 50)". A capture folder routinely holds more than fifty frames.
  */
 describe("deleting a directory of the system's own output", () => {
   let root: string;
@@ -24,11 +23,25 @@ describe("deleting a directory of the system's own output", () => {
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
   it("names the system's own output directories", () => {
-    expect(isSystemOutputDirectory("Artifacts/CometPlayModeCapture")).toBe(true);
+    expect(isSystemOutputDirectory("Recordings/harbour-run-capture")).toBe(true);
     expect(isSystemOutputDirectory("Recordings/playthrough")).toBe(true);
     expect(isSystemOutputDirectory("Logs")).toBe(true);
     expect(isSystemOutputDirectory("Assets/Art/Generated")).toBe(false);
     expect(isSystemOutputDirectory("Assets/Scripts")).toBe(false);
+  });
+
+  it("claims only roots something here actually writes", () => {
+    // The raised cap exists for folders this system and Unity fill. A root no
+    // part of the toolchain writes is a person's folder whatever it is called,
+    // and naming it here would hand it the 2000-file cap on a guess: the
+    // captures go to Recordings/, which is also where capture-retention.ts
+    // prunes them, and nothing writes an Artifacts/ root.
+    expect(isSystemOutputDirectory("Artifacts/HarbourRunCapture")).toBe(false);
+    expect(isSystemOutputDirectory("Artifacts")).toBe(false);
+    // And the roots that ARE written keep the cap.
+    for (const owned of ["Recordings", "Logs", "Temp", "obj", "Build", "Builds", ".strada"]) {
+      expect(isSystemOutputDirectory(`${owned}/anything`), owned).toBe(true);
+    }
   });
 
   it("does not take a person's folder for output because of its name", () => {
@@ -39,7 +52,7 @@ describe("deleting a directory of the system's own output", () => {
       "Assets/Scripts/Build",
       "Assets/Editor/Build",
       "Assets/Audio/Recordings",
-      "Assets/Prefabs/Artifacts",
+      "Assets/Plugins/Logs",
       "Assets/Models/obj",
       "Assets/Modules/Inventory/temp",
     ]) {
@@ -58,8 +71,8 @@ describe("deleting a directory of the system's own output", () => {
   });
 
   it("removes 51 captured frames, and still refuses 51 of a person's files", async () => {
-    fill("Artifacts/CometPlayModeCapture", 51);
-    const captures = await new FileDeleteDirectoryTool().execute({ path: "Artifacts/CometPlayModeCapture" }, ctx());
+    fill("Recordings/harbour-run-capture", 51);
+    const captures = await new FileDeleteDirectoryTool().execute({ path: "Recordings/harbour-run-capture" }, ctx());
     expect(captures.isError).toBeFalsy();
     expect(captures.content).toContain("51 files removed");
 

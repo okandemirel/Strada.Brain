@@ -2,7 +2,7 @@
  * Measured 2026-09-08 03:54 in a workspace lease under macOS's temp
  * directory: validatePath returns the real path (/private/var/…), the tool
  * context carries the lexical one (/var/…), and shouldGenerateMeta judged
- * every file "outside the project" — no .meta written, eleven scene metas
+ * every file "outside the project" — no .meta written, and the scene metas
  * orphaned by delete. The project root must count in both forms.
  */
 import { describe, it, expect, afterEach } from "vitest";
@@ -28,12 +28,12 @@ function linkedProject(): { real: string; link: string } {
 describe("shouldGenerateMeta across a symlinked project root", () => {
   it("accepts a real file path when the project is given by its symlink (the lease case)", () => {
     const { real, link } = linkedProject();
-    expect(shouldGenerateMeta(join(real, "Assets", "Scenes", "Main.unity"), link)).toBe(true);
+    expect(shouldGenerateMeta(join(real, "Assets", "Levels", "Quarry.unity"), link)).toBe(true);
   });
 
   it("accepts a symlinked file path when the project is given by its real path", () => {
     const { real, link } = linkedProject();
-    expect(shouldGenerateMeta(join(link, "Assets", "Art", "Frog.png"), real)).toBe(true);
+    expect(shouldGenerateMeta(join(link, "Assets", "Art", "Anvil.png"), real)).toBe(true);
   });
 
   it("still refuses what is outside Assets/, in either form", () => {

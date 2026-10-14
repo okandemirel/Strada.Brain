@@ -50,9 +50,10 @@ export interface EngineRunContext {
   /**
    * True for a run on the user's real project tree (workspacePolicy "none" —
    * the real-tree guardian's repairs). Such a run is ONE agent: it never
-   * plans itself into nodes (measured 2026-09-09 15:18: a 4-error compile
-   * repair became a 5-node tree whose first node was "Explore project
-   * structure"), and parallel nodes on the real tree would share no lease.
+   * plans itself into nodes (measured in a live campaign: a small compile
+   * repair on the real tree planned itself into a multi-node tree whose first
+   * node only explored the project structure), and parallel nodes on the real
+   * tree would share no lease.
    */
   readonly realTreeRun?: boolean;
   readonly executionJournal: ReturnType<typeof createAutonomyBundle>["executionJournal"];

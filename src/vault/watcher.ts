@@ -112,9 +112,9 @@ export class VaultWatcher {
         if (rootIsFile) return false;
         // Never hand non-indexable FILES to fs.watch. On macOS every
         // fs.watch(file) pins one FSEvents fd for the process lifetime —
-        // watching every Recordings frame / .asset / dist artifact of a Unity
-        // project accumulated ~11K fds within minutes of boot and spawn
-        // started failing with EBADF (2026-08-26 incident). chokidar only
+        // watching every capture frame, .asset and build artifact of a large
+        // Unity project exhausted the process's descriptor table within minutes
+        // of boot, and spawn started failing with EBADF (2026-08-26 incident). chokidar only
         // consults `ignored` for files it would otherwise register a watcher
         // for, so filtering here keeps the fd table flat; directories pass
         // through so traversal continues. The predicate mirrors the drain-time

@@ -25,12 +25,12 @@ function classify(result: { content: string; isError?: boolean }): { ok: boolean
 
 describe("real-tree compile verdict", () => {
   it("treats a connection loss as UNMEASURED, not as a broken tree", () => {
-    expect(classify({ content: "Error in unity_verify_change (elapsed=5867ms): Connection lost. Input received: {}", isError: true }))
+    expect(classify({ content: "Error in unity_verify_change (elapsed=1500ms): Connection lost. Input received: {}", isError: true }))
       .toEqual({ ok: true, ran: false });
   });
 
   it("treats a real compile failure as red", () => {
-    expect(classify({ content: "Headless compile failed with 4 error(s) (43 compile entries including warnings).", isError: true }))
+    expect(classify({ content: "Headless compile failed with 2 error(s) (9 compile entries including warnings).", isError: true }))
       .toEqual({ ok: false, ran: true });
     expect(classify({ content: "Assets/Modules/A.cs(3,5): error CS1061: no such member", isError: true }))
       .toEqual({ ok: false, ran: true });

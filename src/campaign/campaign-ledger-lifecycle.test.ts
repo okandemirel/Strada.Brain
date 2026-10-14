@@ -1,10 +1,10 @@
 /**
- * The requirement ledger's life (GDD-drift plan W11): read at plan time from
- * the APPROVED text, built once for a campaign that was already running when
- * the scope gate arrived, and read again when a person amends the GDD.
+ * The requirement ledger's life: read at plan time from the APPROVED text,
+ * built once for a campaign that was already running when the scope gate
+ * arrived, and read again when a person amends the GDD.
  *
- * In the measured campaign nothing turned a GDD rule into a row the system owned, so
- * nothing could hold a milestone to one. W04 can read the rows; until a
+ * Before the ledger, nothing turned a GDD rule into a row the system owned, so
+ * nothing could hold a milestone to one. A gate can read the rows; until a
  * campaign holds them, no gate has anything to judge.
  *
  * Every document here is invented.
@@ -152,7 +152,7 @@ function build(mode: ScopeGateMode, extra: Partial<CampaignManagerOptions> = {},
 
 const ctx = { chatId: "chat-1", channelType: "cli", userId: "owner-1" };
 
-/** The ledger's private builder, as a settle (W09) will call it. */
+/** The ledger's private builder, as a settle will call it. */
 const ensureLedger = (manager: CampaignManager, campaign: Campaign): Promise<{ changed: boolean; note?: string }> =>
   (manager as unknown as { ensureLedger(c: Campaign): Promise<{ changed: boolean; note?: string }> }).ensureLedger(campaign);
 
@@ -171,7 +171,7 @@ const byLabel = (rows: readonly RequirementRow[], label: string): RequirementRow
 
 const chunksOf = (text: string): number => splitGddSections(text).length;
 
-describe("the ledger is read at plan time from the approved text (W11)", () => {
+describe("the ledger is read at plan time from the approved text", () => {
   it("shadow: every planned milestone gets its rows, unowned rows are queued, and the chat is told the counts", async () => {
     const { manager, storage, complete, messages, submitted } = build("shadow");
     const started = manager.startFromGdd(ctx, APPROVED, "docs/GDD.md");
@@ -263,7 +263,7 @@ const QUEUED = encodeRequirement({
   lineage: "req-900-0123456789ab",
 });
 
-describe("an in-flight campaign gets its ledger once, at the next revive (W11)", () => {
+describe("an in-flight campaign gets its ledger once, at the next revive", () => {
   it("on: built from gddText (never the edited disk copy), legacy greens kept, the queue's identities and repair budgets carried, counters reset once", async () => {
     const { manager, storage, root, complete, messages } = build("on");
     writeFileSync(join(root, "docs", "GDD.md"), EDITED_ON_DISK);
@@ -569,7 +569,7 @@ describe("an in-flight campaign gets its ledger once, at the next revive (W11)",
   });
 });
 
-describe("a GDD amendment reads the ledger again (W11)", () => {
+describe("a GDD amendment reads the ledger again", () => {
   /** A running campaign whose ledger is built, with LD-1 and LD-2 passing their system-written tests. */
   async function amendable(mode: ScopeGateMode = "shadow") {
     const fixture = build(mode);
@@ -580,7 +580,7 @@ describe("a GDD amendment reads the ledger again (W11)", () => {
     seed.gddSha256 = sha256(APPROVED);
     seed.gddRevision = 1;
     storage.save(seed);
-    // Built the way a settle builds it (W09 calls ensureLedger first).
+    // Built the way a settle builds it (the settle calls ensureLedger first).
     const held = storage.get(seed.id)!;
     expect((await ensureLedger(manager, held)).changed).toBe(true);
     for (const label of ["LD-1", "LD-2"]) {
@@ -705,7 +705,7 @@ describe("a GDD amendment reads the ledger again (W11)", () => {
   });
 });
 
-describe("what the ledger's life must never do (W11)", () => {
+describe("what the ledger's life must never do", () => {
   type RawDb = { prepare(sql: string): { run(...args: unknown[]): unknown; get(...args: unknown[]): unknown } };
   const rawDb = (storage: CampaignStorage): RawDb => (storage as unknown as { db: RawDb }).db;
 

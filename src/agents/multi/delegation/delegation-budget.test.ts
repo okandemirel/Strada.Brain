@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { DELEGATION_TIMEOUT_CAP_MS, resolveDelegationBudget } from "./delegation-budget.js";
 
-// Measured 2026-09-07: 17 code_review delegations, all timeouts at 60 000 ms.
+// Measured in a live campaign: every code_review delegation timed out at exactly its configured 60 000 ms.
 describe("resolveDelegationBudget", () => {
   const t = (durationMs: number) => ({ status: "timeout", durationMs });
   const ok = { status: "completed", durationMs: 12_000 };

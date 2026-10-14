@@ -2,34 +2,37 @@ import { describe, expect, it } from "vitest";
 
 import { completionOmitsNamedDeliverables } from "./completion-review.js";
 
-// The task below has the shape of a continuation prompt measured on a live run,
-// with invented content: this is the case the check exists for.
+// A task that lists its open deliverables: the case the check exists for.
+// Invented content.
 const TASK = [
-  "Continue building the greenhouse described in Greenhouse_Brief.docx.",
+  "Finish the hilltop weather-station simulator; Station_Spec.md is the reference.",
   "",
-  "The brief asks for things the project still does not have:",
-  "- Pollen bursts: 0 files. Build them as the brief describes.",
-  "- Wilt condition: 0 files. A greenhouse where nothing can wilt is not the one in the brief.",
-  "- Graft pairing and a per-bed harvest check: beds have data and no way to grow one through.",
-  "- A PlayMode test that grows a seedling to harvest, and one that lets it wilt.",
+  "Open items from the last review:",
+  "1. A PlayMode test that runs a storm front past the station and checks the logged gusts.",
+  "2. WindVane: 0 files. Wind direction is never sampled.",
+  "3. Barometer drift: readings are taken once at start-up and never corrected.",
+  "4. Uplink retry with backoff after the modem drops its link.",
+  "5. Solar charge model: the battery level is a constant.",
 ].join("\n");
 
 describe("completionOmitsNamedDeliverables", () => {
   it("names the deliverables a completion claim walked past", () => {
-    const draft = "Done. The wilt condition is implemented and graft pairing works.";
+    const draft = "Done. Barometer drift is corrected every ten minutes and the uplink backoff doubles per retry.";
 
     const missing = completionOmitsNamedDeliverables(TASK, draft);
 
-    expect(missing).toContain("Pollen bursts");
+    expect(missing).toContain("WindVane");
+    expect(missing).toContain("Solar charge model");
     expect(missing.some((m) => m.includes("PlayMode test"))).toBe(true);
-    expect(missing).not.toContain("Wilt condition");
+    expect(missing).not.toContain("Barometer drift");
+    expect(missing).not.toContain("Uplink retry with backoff");
   });
 
   it("stays silent when every deliverable is accounted for", () => {
     const draft = [
-      "Done. Pollen bursts are in, the wilt condition fires when a bed dries out,",
-      "graft pairing feeds the harvest check, and the PlayMode tests grow a seedling",
-      "to harvest and let one wilt.",
+      "Done. The WindVane driver samples direction once a second, barometer drift is corrected",
+      "against the reference sensor, the uplink retries with backoff, the solar charge model drains",
+      "the battery overnight, and a PlayMode test runs a storm front past the station.",
     ].join(" ");
 
     expect(completionOmitsNamedDeliverables(TASK, draft)).toEqual([]);
@@ -37,15 +40,15 @@ describe("completionOmitsNamedDeliverables", () => {
 
   it("accepts a deliverable that is named and reported blocked", () => {
     const draft = [
-      "Done with what I could reach. Pollen bursts, the wilt condition and graft pairing are in.",
-      "The PlayMode test could not run: the test assembly does not build on this machine.",
+      "Done with what I could reach: the WindVane driver, barometer drift, uplink backoff and the solar",
+      "charge model are in. The PlayMode test is blocked: the simulator scene will not load in batch mode here.",
     ].join(" ");
 
     expect(completionOmitsNamedDeliverables(TASK, draft)).toEqual([]);
   });
 
   it("does not fire on a draft that never claims completion", () => {
-    const draft = "Starting on the irrigation module now; nothing is finished yet.";
+    const draft = "Wiring the anemometer next; no item on the list is closed yet.";
 
     expect(completionOmitsNamedDeliverables(TASK, draft)).toEqual([]);
   });
@@ -53,20 +56,20 @@ describe("completionOmitsNamedDeliverables", () => {
   it("does not fire on a task that lists nothing", () => {
     const draft = "Done. Fixed the compile error.";
 
-    expect(completionOmitsNamedDeliverables("Fix the compile error in Seedbed.cs.", draft)).toEqual([]);
+    expect(completionOmitsNamedDeliverables("Fix the compile error in Anemometer.cs.", draft)).toEqual([]);
   });
 
-  it("treats pollen-bursts, pollen bursts and pollenbursts as the same word", () => {
-    const spellings = ["pollen-bursts", "pollen bursts", "pollenbursts", "PollenBursts"];
+  it("treats wind-vane, wind vane and WindVane as the same word", () => {
+    const spellings = ["wind-vane", "wind vane", "windvane", "WindVane", "Wind Vane"];
 
     for (const spelling of spellings) {
-      const draft = `Done. ${spelling}, the wilt condition, graft pairing and the PlayMode tests are all in.`;
+      const draft = `Done. The ${spelling} driver, barometer drift, uplink backoff, the solar charge model and the PlayMode test are all in.`;
       expect(completionOmitsNamedDeliverables(TASK, draft), spelling).toEqual([]);
     }
   });
 
   it("needs two listed deliverables before it objects to anything", () => {
-    const oneItem = "Build the greenhouse.\n- Pollen bursts: 0 files. Build them.";
+    const oneItem = "Finish the station.\n- WindVane: 0 files. Sample the wind direction.";
 
     expect(completionOmitsNamedDeliverables(oneItem, "Done. Fixed the build.")).toEqual([]);
   });
@@ -74,8 +77,8 @@ describe("completionOmitsNamedDeliverables", () => {
   it("reads \"Play Mode\" as the PlayMode deliverable", () => {
     // Unity spells it both ways; a draft that used the other spelling was not silent.
     const draft = [
-      "Done. Pollen bursts, the wilt condition and graft pairing are in,",
-      "and the Play Mode tests grow a seedling to harvest and let one wilt.",
+      "Done. The WindVane driver, barometer drift, uplink backoff and the solar charge model are in,",
+      "and the Play Mode test runs a storm front past the station.",
     ].join(" ");
 
     expect(completionOmitsNamedDeliverables(TASK, draft)).toEqual([]);
@@ -83,12 +86,12 @@ describe("completionOmitsNamedDeliverables", () => {
 
   it("does not quote a sentence fragment back as if it were a name", () => {
     const task = [
-      "- Blight has types but is not wired into watering.",
-      "- A PlayMode test that grows a seedling to harvest.",
+      "- Tide tables load but never reach the chart view.",
+      "- A PlayMode test that plots one full tide cycle.",
     ].join("\n");
 
     const missing = completionOmitsNamedDeliverables(task, "Done. Everything builds.");
 
-    expect(missing).toEqual(["Blight has types", "A PlayMode test"]);
+    expect(missing).toEqual(["Tide tables load", "A PlayMode test"]);
   });
 });

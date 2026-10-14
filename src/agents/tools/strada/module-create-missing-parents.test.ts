@@ -43,15 +43,15 @@ describe("creating the first module in a project", () => {
     const projectPath = emptyProject();
 
     const result = await run(projectPath, {
-      name: "Board",
-      namespace: "Game.Modules.Board",
-      path: "Assets/Modules/BoardModule",
+      name: "Apiary",
+      namespace: "Game.Modules.Apiary",
+      path: "Assets/Modules/ApiaryModule",
     });
 
     expect(result.isError, `refused: ${result.content}`).toBeFalsy();
-    expect(existsSync(join(projectPath, "Assets", "Modules", "BoardModule"))).toBe(true);
+    expect(existsSync(join(projectPath, "Assets", "Modules", "ApiaryModule"))).toBe(true);
     expect(
-      existsSync(join(projectPath, "Assets", "Modules", "BoardModule", "Board.asmdef")),
+      existsSync(join(projectPath, "Assets", "Modules", "ApiaryModule", "Apiary.asmdef")),
     ).toBe(true);
   });
 

@@ -20,12 +20,11 @@ import { MAX_SESSIONS_PER_RUN } from "../campaign/producer-evidence.js";
  * Words that make an instruction CONDITIONAL: the tool runs only in a case
  * that may not arise.
  *
- * Measured live 2026-09-11 18:34 onward: a mission said "call
- * unity_generate_sprite … repeat batches until the measured count is below
- * 200". The count was already 0, so the run correctly generated nothing — and
- * this gate failed the node for a call the situation did not call for, every
- * round, for hours. A gate that demands an action the work does not need is
- * the unsatisfiable gate this whole review week has been about.
+ * Measured live 2026-09-11: a mission told the worker to call a generator and
+ * repeat batches until a measured count fell below a threshold; the threshold
+ * already held, so the run correctly generated nothing — and this gate failed
+ * the node every round for hours. A gate that demands an action the work does
+ * not need is the unsatisfiable gate this whole review week has been about.
  *
  * "until it passes" is NOT in here: that governs how often, not whether.
  */
@@ -34,7 +33,7 @@ const CONDITIONAL_RE =
 
 /**
  * A procedure that REPEATS UNTIL A MEASURED THRESHOLD: "repeat batches until
- * the measured count is below 200". When the threshold already holds, the
+ * the measured count is below 3". When the threshold already holds, the
  * work inside the loop correctly does not run, so the tools named inside it
  * cannot each be demanded — but the node must still have MEASURED something,
  * which is what the rule below keeps.
@@ -134,8 +133,8 @@ export interface DeclaredEvidence {
    * One entry per DECLARATION, with its arguments kept together.
    *
    * Flattening them let separate calls satisfy separate arguments of one
-   * declaration — `unity_build_player target="Android" scene="Boot"` was
-   * accepted by an Android/Other call beside an iOS/Boot one, which is the
+   * declaration — `unity_build_player target="Android" scene="Atrium"` was
+   * accepted by an Android/Other call beside an iOS/Atrium one, which is the
    * combination-nobody-made defect the prose path already refuses (Codex
    * 2026-09-12 S#13).
    */
@@ -152,7 +151,7 @@ export function declaredEvidence(prompt: string): DeclaredEvidence {
     const at = line.indexOf(REQUIRED_EVIDENCE_PREFIX);
     if (at < 0) continue;
     // SPLIT OUTSIDE QUOTES. A value with a semicolon in it —
-    // scene="Assets/Scenes/Boot;Intro.unity" — was cut in half and the whole
+    // scene="Assets/Scenes/Atrium;Cellar.unity" — was cut in half and the whole
     // declaration lost its arguments (Codex 2026-09-12 T#12).
     const declarations: string[] = [];
     {
@@ -240,7 +239,7 @@ export interface RequiredToolArgument {
 /**
  * One instruction's arguments, kept together.
  *
- * `run X with target "Android" and scene "Boot"` is ONE demand: a call that
+ * `run X with target "Android" and scene "Atrium"` is ONE demand: a call that
  * used the target of one instruction and the scene of another satisfies
  * neither, and flattening every named value into independent sets accepted
  * exactly that combination (Codex 2026-09-12 Q#10).
@@ -333,9 +332,9 @@ export function thresholdLoopTools(prompt: string): Set<string> {
     }
     if (last < 0) continue;
     // The threshold's own sentence is the body: "call unity_generate_sprite
-    // and repeat until the count is below 200". When that sentence names no
+    // and repeat until the count is below 3". When that sentence names no
     // tool at all — "…call A, then call B. Repeat until the count is below
-    // 200." — the body is the sentence before it, and no further (M#2).
+    // 3." — the body is the sentence before it, and no further (M#2).
     const found = namesIn(sentences[last]!);
     if (found.length > 0) {
       for (const tool of found) tools.add(tool);

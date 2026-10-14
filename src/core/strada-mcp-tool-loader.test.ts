@@ -348,10 +348,9 @@ export function bootstrap() {
 });
 
 /**
- * Measured 2026-09-07 (campaign mcov1, attempt 2): refused six times by the
- * path guard for reading the real checkout, a sub-agent passed that checkout
- * as projectPath to unity_playmode_verify and verified a tree without the
- * run's edits — reported as "the game renders in the real project path".
+ * A sub-agent refused by the path guard for reading the real checkout passed
+ * that checkout as projectPath to a Unity verification tool and verified a
+ * tree without the run's edits, reporting the wrong tree as resolution.
  */
 describe("a projectPath outside the run's project is refused, not noted", () => {
   const lease = "/tmp/strada-workspaces/task-1";

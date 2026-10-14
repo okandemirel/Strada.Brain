@@ -27,7 +27,7 @@ export function parseSupervisorVerificationVerdict(
 ): VerificationVerdict {
   const trimmed = responseText?.trim() ?? "";
   // An empty reply, like the three "unanswered" cases below, reviewed
-  // nothing. As a flag it counted as verified (GDD-drift W02); as a skip it
+  // nothing. As a flag it counted as verified; as a skip it
   // counts as not verified and the aggregator still shows the reason.
   if (!trimmed) {
     return {
@@ -38,9 +38,9 @@ export function parseSupervisorVerificationVerdict(
     };
   }
 
-  // A thinking model that leaks its block. Measured 2026-09-07 (campaign
-  // mcov1, attempt 2): five verifier replies in one task began "<reasoning>
-  // Here's a thinking process:" and ended mid-sentence at the token cap.
+  // A thinking model that leaks its block. Measured in a live campaign:
+  // several verifier replies in one task began "<reasoning> Here's a thinking
+  // process:" and ended mid-sentence at the token cap.
   // Each was pasted, 240 chars of it, as a "VERIFIER FLAG" on a node that
   // nobody had reviewed. A terminated block is stripped so a verdict after it
   // still parses; an unterminated one is named for what it is. A closed block

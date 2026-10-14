@@ -11,7 +11,7 @@ function pkg(overrides: Partial<DeliveryPackage> = {}): DeliveryPackage {
     schemaVersion: 1,
     campaignId: 'camp_1',
     taskId: 'task_9',
-    title: 'Sprint D — Delivery',
+    title: 'Stage 4 — Delivery',
     projectRoot: '/proj',
     campaignState: 'done',
     assembledAt: NOW - 60_000,
@@ -41,13 +41,13 @@ function pkg(overrides: Partial<DeliveryPackage> = {}): DeliveryPackage {
         summary: '2 lines: 1 met, 1 open.',
         source: 'the milestone ladder',
         items: [
-          { text: 'Frogs must flee', state: 'open', source: 'sprint m3', cause: 'the sprint ended failed' },
-          { text: 'at least 60 fps: MET — 61.2 fps', state: 'met', source: 'the GDD claim check' },
+          { text: 'Saved journals reopen after a crash', state: 'open', source: 'sprint m3', cause: 'the sprint ended failed' },
+          { text: 'at least 42 fps: MET — 43.8 fps', state: 'met', source: 'the GDD claim check' },
         ],
         itemsOmitted: 4,
       },
     ],
-    falseGreens: [{ claim: 'Sprint C landed green', rootCause: 'compile NOT measured — no Unity', source: 'sprint m3' }],
+    falseGreens: [{ claim: 'Stage 3 landed green', rootCause: 'compile NOT measured — no Unity', source: 'sprint m3' }],
     receipts: [],
     receiptsNote: 'No producer dispatch was recorded for this sprint.',
     completeness: { of: 7, present: 4, failed: 1, missing: 1, notMeasured: 1 },
@@ -81,7 +81,7 @@ describe('DeliveryPackagePanel', () => {
     expect(diff).toContain('git -C /proj diff --stat abc~1..def')
     expect(diff).toContain('abc123456789 the change itself')
     const checklist = screen.getByTestId('package-piece-checklist').textContent ?? ''
-    expect(checklist).toContain('Frogs must flee')
+    expect(checklist).toContain('Saved journals reopen after a crash')
     expect(checklist).toContain('the sprint ended failed')
     expect(checklist).toContain('+4 more not listed here')
   })
@@ -99,7 +99,7 @@ describe('DeliveryPackagePanel', () => {
   it('shows every false green with its root cause', () => {
     render(<DeliveryPackagePanel view={view()} now={NOW} />)
     const greens = screen.getByTestId('delivery-package-false-greens').textContent ?? ''
-    expect(greens).toContain('Sprint C landed green')
+    expect(greens).toContain('Stage 3 landed green')
     expect(greens).toContain('compile NOT measured — no Unity')
     expect(greens).toContain('sprint m3')
   })

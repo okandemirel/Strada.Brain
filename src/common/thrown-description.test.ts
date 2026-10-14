@@ -5,12 +5,12 @@ import { describeThrown } from "./fetch-with-retry.js";
 /**
  * What was thrown, in words.
  *
- * Measured 2026-08-22, run 47: OpenCode became unreachable and the retry log
- * recorded the reason nine times as `error: "[object Object]"`. Only the first
+ * Measured in a live campaign: the provider became unreachable and every
+ * retry logged its reason as `error: "[object Object]"`. Only the first
  * attempt said anything useful — "fetch failed" — and even that is the wrapper,
  * not the cause: fetch puts the real reason (ECONNREFUSED, ENOTFOUND, a socket
- * timeout) in err.cause. Three hours of retries produced no diagnosable line,
- * and the run died without ever naming what had gone wrong.
+ * timeout) in err.cause. Hours of retries produced no diagnosable line, and
+ * the run died without ever naming what had gone wrong.
  */
 
 describe("describing what was thrown", () => {
@@ -26,7 +26,7 @@ describe("describing what was thrown", () => {
   });
 
   it("never renders an object as [object Object]", () => {
-    // This is the line that appeared nine times.
+    // This is the line every retry logged.
     expect(describeThrown({ errno: -61, code: "ECONNREFUSED", syscall: "connect" })).not.toContain(
       "[object Object]",
     );

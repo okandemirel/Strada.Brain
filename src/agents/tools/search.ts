@@ -414,10 +414,10 @@ export class ListDirectoryTool implements ITool {
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        // file_read has answered a miss with the names beside it since 2026-08-20;
-        // listing a directory is the same question and was still answered with
-        // four words that do not even repeat the path back. Measured 2026-08-21,
-        // 12:12, mid-run: "Error: directory not found", and nothing to try next.
+        // file_read answers a miss with the names beside it; listing a
+        // directory is the same question and was still answered with four
+        // words that do not even repeat the path back. Measured in a live
+        // campaign: "Error: directory not found", and nothing to try next.
         return {
           content: `Error: directory not found: ${relPath}${await nearbyNames(pathCheck.fullPath)}`,
           isError: true,

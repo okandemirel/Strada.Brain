@@ -22,9 +22,9 @@ import {
 import { buildPlanningPrompt } from "./paor-prompts.js";
 
 const GREENFIELD =
-  "Fern Brook adinda 2D bir Unity oyunu gelistir. Dere haritasi, hava durumu, toplama ve puanlama kur.";
+  "Bir aricilik yonetim oyunu gelistir. Kovan denetimi, cicek takvimi ve bal satis defteri kur.";
 const WITH_TARGET =
-  "Assets/Scripts altina Fernbrook namespace'inde Board.cs adli tek bir C# dosyasi yaz.";
+  "Assets/Scripts altina Apiary namespace'inde HiveLedger.cs adli tek bir C# dosyasi yaz.";
 
 describe("buildCreationExecutionDirective", () => {
   it("fires for a creation request that names no files", () => {
@@ -50,15 +50,15 @@ describe("buildCreationExecutionDirective", () => {
 
   it("stays silent when nothing is being created", () => {
     expect(buildCreationExecutionDirective("Bu projede kac tane script var?")).toBe("");
-    expect(buildCreationExecutionDirective("Explain how the board scoring works")).toBe("");
+    expect(buildCreationExecutionDirective("Explain how the honey ledger is kept")).toBe("");
   });
 
   it("recognises creation verbs in both languages the assistant is driven in", () => {
     for (const prompt of [
-      "Build a matching system for the grid",
-      "Bir eslestirme sistemi olustur",
-      "Implement scoring rules",
-      "Puanlama kurallarini yaz",
+      "Build a pollen forecast for the meadow",
+      "Bir kovan takvimi olustur",
+      "Implement swarm alerts",
+      "Bal fiyat kurallarini yaz",
     ]) {
       expect(buildCreationExecutionDirective(prompt), prompt).not.toBe("");
     }

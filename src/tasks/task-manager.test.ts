@@ -463,9 +463,9 @@ describe("TaskManager", () => {
   });
 
   it("replays the nearest non-replay ancestor's prompt, not the stale lineage root's", () => {
-    // Measured 2026-09-08 04:18: a campaign lineage 30 deep, every resubmission
-    // a fresh prompt carrying the latest delivery gate; the replay quoted the
-    // root — 29 sprints old, no gate.
+    // Measured in a live campaign: a deep lineage, every resubmission a fresh
+    // prompt carrying the latest delivery gate; the replay quoted the root,
+    // many sprints old, with no gate.
     const root = buildTask({ id: "task_A" as Task["id"], status: TaskStatus.failed, prompt: "OLD ROOT PROMPT (no gate)" });
     const fresh = buildTask({ id: "task_B" as Task["id"], status: TaskStatus.failed, parentId: "task_A" as Task["id"], prompt: "FRESH PROMPT [DELIVERY GATE — latest measurement]" });
     const replay = buildTask({
@@ -495,7 +495,7 @@ describe("TaskManager", () => {
   });
 
   it("leaves a task submitted by this process alone — it is live, not interrupted", () => {
-    // Measured 2026-09-08 04:18: the campaign submitted attempt 2 sixteen
+    // Measured in a live campaign: the campaign submitted a fresh attempt
     // seconds before recovery ran; recovery paused it and the campaign then
     // replayed it with a prompt that had lost the delivery gate block.
     const oldTask = buildTask({
@@ -990,7 +990,7 @@ describe("pauseTask keeps the rolling checkpoint's files (TSK-14)", () => {
     manager.setCheckpointStore({
       loadByTaskIdSync: vi.fn().mockReturnValue({
         taskId: "task_pause1", chatId: "chat-1", timestamp: 1, stage: "tool_error",
-        lastUserMessage: "test prompt", touchedFiles: ["Assets/Scripts/Board.cs"],
+        lastUserMessage: "test prompt", touchedFiles: ["Assets/Scripts/WeatherVane.cs"],
       }),
       save,
     } as any);
@@ -1000,7 +1000,7 @@ describe("pauseTask keeps the rolling checkpoint's files (TSK-14)", () => {
 
     expect(save).toHaveBeenCalledWith(expect.objectContaining({
       stage: "manual_pause",
-      touchedFiles: ["Assets/Scripts/Board.cs"],
+      touchedFiles: ["Assets/Scripts/WeatherVane.cs"],
     }));
   });
 

@@ -72,13 +72,14 @@ export class ControlLoopTracker {
   private pruneIndex = 0;
 
   static readonly READ_ONLY_STALL_THRESHOLD = 8;
-  /** Measured: a legitimate document read ran to 39 calls; a real spin ran to 108. */
   /**
    * Consecutive read-only calls (DISTINCT ones — repeats trip the 8-call rule)
-   * before the run is told that reading is not progress. Measured 2026-09-08
-   * 17:57-18:44 on a test-game sprint: 14 turns, ~30 vault/file reads, no
-   * write, no gate — the old limit of 60 was ~100 minutes of a 6-hour box at
-   * the provider's 4.5-minute turn pace, and shell greps reset it besides.
+   * before the run is told that reading is not progress. A legitimate in-order
+   * document read stays well under the spin case; a real spin ran past a
+   * hundred. Measured 2026-09-08 17:57-18:44 in a live run: 14 turns, ~30
+   * vault/file reads, no write, no gate — the old limit of 60 was ~100 minutes
+   * of a 6-hour box at the provider's 4.5-minute turn pace, and shell greps
+   * reset it besides.
    */
   static readonly READ_ONLY_STREAK_LIMIT = 24;
   /**
@@ -280,8 +281,8 @@ export class ControlLoopTracker {
    */
   readOnlyStall(): { readonly calls: number; readonly reason: string } | null {
     // Repetition, not reading. Measured 2026-08-20 on two runs: one spent 42
-    // minutes making 171 calls to a single stats tool, and the next read a
-    // design document in 39 pieces. Counting read-only calls alone called both
+    // minutes making 171 calls to a single stats tool, and the next read one
+    // long design document in order. Counting read-only calls alone called both
     // of them stuck — reading a long document in order is progress.
     if (this.sameReadOnlyFingerprintCount >= ControlLoopTracker.READ_ONLY_STALL_THRESHOLD) {
       return {

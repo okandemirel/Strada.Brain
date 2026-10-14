@@ -241,10 +241,10 @@ describe('VaultRegistry disposal', () => {
 
 describe('resolve() accepts a bare id', () => {
   /**
-   * Measured 2026-09-06: every vault_search an agent issued in the test game's
-   * campaign failed with "vault not found: 7d3e0b91 — registered:
-   * unity:7d3e0b91, …" — the id copied from a log line without its kind
-   * prefix. An id that is unambiguous without its prefix is not a wrong id.
+   * Measured 2026-09-06 on a live run: vault_search calls failed with "vault
+   * not found: 7d3e0b91 — registered: unity:7d3e0b91, …" — the id copied
+   * from a log line without its kind prefix. An id that is unambiguous without
+   * its prefix is not a wrong id.
    */
   it('resolves the hash without its kind prefix when it is unambiguous', () => {
     const registry = new VaultRegistry();

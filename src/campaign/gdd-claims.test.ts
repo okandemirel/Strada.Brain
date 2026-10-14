@@ -807,6 +807,27 @@ describe("how long a run may keep playing one session (Codex 2026-09-12 AB)", ()
     expect(extractSessionAllowanceSeconds("Round length\nthe retention study counts players past 97 minutes in total; 31–42 minutes a round")).toBe(2520);
   });
 
+  it("reads a QUALIFIED label, and every subject a document may call a session (W04)", () => {
+    // The label was read for one document's unqualified wording, so a table
+    // that writes the same figure as "Average stage time" read as no duration
+    // at all and the run kept the producer's default.
+    expect(extractSessionAllowanceSeconds("Average stage time\n3–8 min")).toBe(480);
+    expect(extractSessionAllowanceSeconds("Expected level length\n90 s")).toBe(90);
+    expect(extractSessionAllowanceSeconds("Median puzzle duration\n45 s")).toBe(45);
+    expect(extractSessionAllowanceSeconds("Target match time\n2–4 min")).toBe(240);
+    expect(extractSessionAllowanceSeconds("Maximum run length\n11 min")).toBe(660);
+  });
+
+  it("drops a clause that states a RATE rather than a session length (W04)", () => {
+    // A figure per week, per player or per active user is an analytics
+    // statement; taken as the session allowance it let one play-through run
+    // for an afternoon.
+    expect(extractSessionAllowanceSeconds("Round length\n8–12 min; about 70 minutes per week of planning")).toBe(720);
+    expect(extractSessionAllowanceSeconds("Average stage time\n6–9 min; 40 minutes per player across a tournament")).toBe(540);
+    expect(extractSessionAllowanceSeconds("Expected level length\n5–7 min; 22 minutes per DAU in the quarterly report")).toBe(420);
+    expect(extractSessionAllowanceSeconds("Round duration\n4 min; 95 minutes per day for a regular")).toBe(240);
+  });
+
   it("is not a claim: nothing is judged against it", () => {
     const doc = "Round time\n38–49 min, depending on the weather";
     expect(extractNumericClaims(doc).claims.filter((c) => c.kind === "session_seconds")).toEqual([]);

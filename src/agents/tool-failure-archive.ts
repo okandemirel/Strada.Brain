@@ -1,9 +1,9 @@
 /**
  * The full text of a failed tool result, kept on disk.
  *
- * Measured 2026-09-08 03:46: unity_verify_change answered "Headless compile
- * failed with 1559 error(s)" inside a lease whose only changes were four
- * PNGs, two prefabs and a scene. The log kept one line of it; the compile
+ * Measured 2026-09-08 in a live campaign: unity_verify_change answered with a
+ * headless compile failure carrying a large error count, inside a lease whose
+ * only changes were assets — no code. The log kept one line of it; the compile
  * output — which assemblies were missing, which editor ran, which mode the
  * check took — went into the model's context and nowhere else, so the
  * question "why did a package-only compile break" could not be answered
@@ -13,7 +13,8 @@
  * truncation the model sees, so the compile output was still cut; it wrote
  * the tool input verbatim, so a failed shell_exec carrying a bearer token
  * put the token on disk in a 0644 file; unit tests wrote into the user's
- * real ~/.strada; and 82 files appeared in six minutes with no bound. This
+ * real ~/.strada; and files appeared by the dozen within minutes, with no
+ * bound at all. This
  * version archives the untruncated result, redacts both halves, keeps
  * tests in the run's temp root, and caps a day at ARCHIVE_DAY_CAP files.
  */

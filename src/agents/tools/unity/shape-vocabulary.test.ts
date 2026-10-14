@@ -7,9 +7,9 @@ import { MeshGenerateTool } from "./mesh-generate.js";
 import type { ToolContext } from "../tool.interface.js";
 
 /**
- * Measured live 2026-09-03 03:38: the sprint called unity_generate_sprite with
+ * Measured in a live campaign: a worker called unity_generate_sprite with
  * shape "rounded-box" — a unity_generate_mesh word — got "unknown shape", and
- * never retried. One vocabulary slip cost the element its art, and the two
+ * never retried. One vocabulary slip cost a requirement its art, and the two
  * tools share one caller.
  */
 const dirs: string[] = [];
@@ -24,16 +24,16 @@ function project(): { root: string; ctx: ToolContext } {
 describe("the two generators forgive each other's vocabulary", () => {
   it("sprite: a mesh shape is drawn as its flat equivalent and says so", async () => {
     const { root, ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Frog", shape: "rounded-box" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Swatch", shape: "rounded-box" }, ctx);
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).toContain('drawn as sprite shape "rounded"');
     expect(String(r.content)).toContain("unity_generate_mesh");
-    expect(existsSync(join(root, "Assets/Art/Generated/Frog.png"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/Swatch.png"))).toBe(true);
   });
 
   it("sprite: a shape known to neither names the other tool", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Frog", shape: "dodecahedron" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Swatch", shape: "dodecahedron" }, ctx);
     expect(r.isError).toBe(true);
     expect(String(r.content)).toContain("unity_generate_mesh");
     expect(String(r.content)).toContain("square, rounded, circle");
@@ -41,23 +41,23 @@ describe("the two generators forgive each other's vocabulary", () => {
 
   it("mesh: a sprite shape is built as its nearest solid and says so", async () => {
     const { root, ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Frog", shape: "circle" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Swatch", shape: "circle" }, ctx);
     expect(r.isError).toBeFalsy();
     expect(String(r.content)).toContain('built as mesh shape "sphere"');
     expect(String(r.content)).toContain("unity_generate_sprite");
-    expect(existsSync(join(root, "Assets/Art/Generated/Meshes/Frog.obj"))).toBe(true);
+    expect(existsSync(join(root, "Assets/Art/Generated/Meshes/Swatch.obj"))).toBe(true);
   });
 
   it("mesh: a shape known to neither names the other tool", async () => {
     const { ctx } = project();
-    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Frog", shape: "hexagon" }, ctx);
+    const r = await new MeshGenerateTool({ localAvailable: () => false }).execute({ name: "Swatch", shape: "hexagon" }, ctx);
     expect(r.isError).toBe(true);
     expect(String(r.content)).toContain("unity_generate_sprite");
   });
 
   it("a native shape carries no note", async () => {
     const { ctx } = project();
-    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Frog", shape: "circle" }, ctx);
+    const r = await new SpriteGenerateTool({ localAvailable: () => false }).execute({ name: "Swatch", shape: "circle" }, ctx);
     expect(String(r.content)).not.toContain("Note:");
   });
 });

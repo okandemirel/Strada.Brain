@@ -74,9 +74,9 @@ describe("AgentCore — a goal about the working tree runs in the working tree (
       expect(taskManager.submit).toHaveBeenCalledTimes(1);
       return taskManager.submit.mock.calls[0]![3];
     };
-    // Measured 22:31: "investigate the 1118 uncommitted changes" ran in a
-    // worktree lease seeded from HEAD and reported a clean tree.
-    expect(await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 1118 — 1000 untracked", "Investigate the uncommitted changes and categorize them")).toMatchObject({ origin: "daemon", workspacePolicy: "none" });
+    // Measured in a live campaign: an investigation of the uncommitted changes
+    // ran in a worktree lease seeded from HEAD and reported a clean tree.
+    expect(await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 57 — 31 untracked", "Investigate the uncommitted changes and categorize them")).toMatchObject({ origin: "daemon", workspacePolicy: "none" });
     const build = await run("build", "Build broken: 3 compile errors");
     expect(build).toMatchObject({ origin: "daemon" });
     expect(build.workspacePolicy).toBeUndefined();
@@ -85,7 +85,7 @@ describe("AgentCore — a goal about the working tree runs in the working tree (
     const goalAboutTree = await run("build", "Build broken: 3 compile errors", "Investigate the uncommitted working-tree changes", [["git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", 60]]);
     expect(goalAboutTree).toMatchObject({ workspacePolicy: "none" });
     // …and a build goal keeps its lease even when a git observation was on the list.
-    const goalAboutBuild = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Fix the compile errors in Board.cs", [["build", "Build broken: 3 compile errors", 60]]);
+    const goalAboutBuild = await run("git", "Uncommitted changes in the project's working tree (outside Strada's own output): 40", "Fix the compile errors in WeatherStation.cs", [["build", "Build broken: 3 compile errors", 60]]);
     expect(goalAboutBuild.workspacePolicy).toBeUndefined();
     // "Review the staged changes" is about the tree; "Add a git status button"
     // is ordinary work that merely says git (Codex 2026-09-11 C#27).

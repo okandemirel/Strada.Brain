@@ -1359,10 +1359,10 @@ export async function resolveVerifierIntervention(
   const conformanceGate = params.stradaConformance.getPrompt();
   if (conformanceGate !== null) {
     // Gates were invisible: their text goes into the model's context and nowhere
-    // else, so after a 68-minute run that delivered a library there was no way
-    // to tell whether the rule that exists to stop exactly that had fired, had
-    // been ignored, or had never been reached. The tag alone is enough to
-    // answer that, and cheap enough to log every time.
+    // else, so after a run that reported success there was no way to tell
+    // whether the rule meant to stop it had fired, had been ignored, or had
+    // never been reached. The tag alone is enough to answer that, and cheap
+    // enough to log every time.
     getLogger().info("Conformance gate raised", {
       gate: /^\[([A-Z0-9 .]+)\]/.exec(conformanceGate)?.[1] ?? "untagged",
       // The tag answers "did it fire". It does not answer "at what", and one

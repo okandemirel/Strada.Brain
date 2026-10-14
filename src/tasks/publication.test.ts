@@ -37,27 +37,26 @@ describe("what a lease commit delivered (Codex 2026-09-12 AE#4)", () => {
 /**
  * OUTPUT A COMPILER REGENERATES IS NOT WORK THAT WAS LOST.
  *
- * Measured live 2026-09-16 19:03: two goals that had done real work were
- * failed because `Tools/GameCoreBuild/obj/SampleGame.Core.csproj.nuget.dgspec.json`
- * — a NuGet restore graph the project rebuilds for itself — conflicted with
- * the lease's copy. 261 authored files published in one of them.
+ * Measured in a live campaign: goals that had done real work were failed
+ * because a NuGet restore graph under a build project's obj/ folder, which the
+ * project regenerates on its own, conflicted with the lease's copy.
  */
 describe("a conflict on generated output", () => {
   it("is disclosed, and the publication stands", () => {
     const verdict = judgePublication({
-      written: Array.from({ length: 261 }, (_unused, i) => `Assets/Scripts/File${i}.cs`),
-      conflicts: ["Tools/GameCoreBuild/obj/SampleGame.Core.csproj.nuget.dgspec.json"],
+      written: Array.from({ length: 12 }, (_unused, i) => `Assets/Scripts/File${i}.cs`),
+      conflicts: ["Build/LedgerHost/obj/Ledger.Host.csproj.nuget.dgspec.json"],
       quarantined: 1,
     });
     expect(verdict.loss).toBeUndefined();
     expect(verdict.note).toContain("the project builds these for itself");
-    expect(verdict.note).toContain("SampleGame.Core.csproj.nuget.dgspec.json");
+    expect(verdict.note).toContain("Ledger.Host.csproj.nuget.dgspec.json");
   });
 
   it("…while a conflict on anything the run AUTHORED is still a loss", () => {
     const mixed = judgePublication({
       written: ["Assets/Scripts/Other.cs"],
-      conflicts: ["Tools/X/obj/Core.csproj.nuget.dgspec.json", "Assets/Scripts/Rules.cs"],
+      conflicts: ["Build/X/obj/Host.csproj.nuget.dgspec.json", "Assets/Scripts/Rules.cs"],
       quarantined: 2,
     });
     expect(mixed.loss).toContain("1 file(s) the run changed did not reach the project");
@@ -74,17 +73,17 @@ describe("a conflict on generated output", () => {
   it("an authored AssemblyInfo.cs in the game's own obj/ folder is a LOSS, not a note", () => {
     const verdict = judgePublication({
       written: ["Assets/Scripts/Other.cs"],
-      conflicts: ["Assets/obj/SampleGame.Runtime.AssemblyInfo.cs"],
+      conflicts: ["Assets/obj/Ledger.Runtime.AssemblyInfo.cs"],
       quarantined: 1,
     });
     expect(verdict.note).toBeUndefined();
-    expect(verdict.loss).toContain("Assets/obj/SampleGame.Runtime.AssemblyInfo.cs");
+    expect(verdict.loss).toContain("Assets/obj/Ledger.Runtime.AssemblyInfo.cs");
     expect(verdict.loss).toContain("did not reach the project");
   });
 
   it("…and the same file where the compiler really writes it is disclosed, not lost", () => {
     const verdict = judgePublication({
-      conflicts: ["Tools/X/obj/Debug/net8.0/SampleGame.Runtime.AssemblyInfo.cs"],
+      conflicts: ["Build/X/obj/Debug/net8.0/Ledger.Runtime.AssemblyInfo.cs"],
       quarantined: 1,
     });
     expect(verdict.loss).toBeUndefined();
@@ -93,7 +92,7 @@ describe("a conflict on generated output", () => {
 
   it("and a generated file that could not even be preserved is still a loss", () => {
     const gone = judgePublication({
-      conflicts: ["Tools/X/obj/Core.csproj.nuget.dgspec.json"],
+      conflicts: ["Build/X/obj/Host.csproj.nuget.dgspec.json"],
       quarantined: 0,
     });
     expect(gone.loss).toContain("exist ONLY in the workspace");

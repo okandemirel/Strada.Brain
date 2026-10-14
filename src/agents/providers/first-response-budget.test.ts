@@ -146,7 +146,7 @@ describe("what OpenCode declares", () => {
 /**
  * The probe that is the only way out of cooldown.
  *
- * It was a flat 15s. Measured 2026-08-23 on run 54: OpenCode's queue returns
+ * It was a flat 15s. Measured in a live run: OpenCode's queue returns
  * first bytes between 2.7s and 70s, it declares 300s for that reason, and the
  * probe timed out at 15s. Every provider went to cooldown, the probe could never
  * clear it, and the task died with "All providers are in cooldown. Try again

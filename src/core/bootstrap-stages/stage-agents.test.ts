@@ -440,7 +440,7 @@ describe("initializeMultiAgentDelegationStage — the root orchestrator's delega
     const tool = addTool.mock.calls.map(([t]) => t as ExecutableTool).find((t) => t.name === "delegate_code_review")!;
     const options = createDelegationManager.mock.calls[0]![0] as { getAgentBudgetCap: (id: string) => number | undefined };
     const parentFor = async (chatId: string): Promise<string> => {
-      await tool.execute({ task: "review Board.cs" }, { chatId, projectPath: "/tmp/game", workingDirectory: "/tmp/game", readOnly: false });
+      await tool.execute({ task: "review OrchardLedger.cs" }, { chatId, projectPath: "/tmp/game", workingDirectory: "/tmp/game", readOnly: false });
       return delegate.mock.calls.at(-1)![0].parentAgentId;
     };
     return { parentFor, options };

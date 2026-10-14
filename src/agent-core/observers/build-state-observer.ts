@@ -27,13 +27,13 @@ export class BuildStateObserver implements Observer {
    * @param repairOwnedElsewhere True while another subsystem owns repairing
    *   this build — today, the real-tree guardian.
    *
-   *   Measured live 2026-09-04/05: the guardian and a queue of AgentCore
-   *   "investigate the build failure" tasks both repaired the SAME Unity tree,
-   *   and each one's half-finished edits became the other's new error list.
-   *   The compile-error count oscillated between 4 and 40 for eight hours and
-   *   no convergence guard could bite, because the guard counts one owner's
-   *   rounds while six agents share the tree. With one owner it went 26 → 2 in
-   *   ten minutes.
+   *   Measured in a live campaign: the guardian and a queue of AgentCore
+   *   "investigate the build failure" tasks both repaired the same project
+   *   tree, and each one's half-finished edits became the other's new error
+   *   list. The error count oscillated instead of converging, and no
+   *   convergence guard could bite, because the guard counts one owner's
+   *   rounds while several agents share the tree. With a single owner the
+   *   tree converged within minutes.
    */
   constructor(
     private readonly buildState: BuildStateRef,
@@ -59,13 +59,13 @@ export class BuildStateObserver implements Observer {
     this.lastReportedKey = key;
 
     if (state.lastBuildOk === false) {
-      // A FAILURE WITH NOTHING PENDING NAMES NOTHING TO FIX. Measured live
-      // 2026-09-05: "Build failed with 0 pending file(s)" was raised nine
-      // times at priority 85, and each one became a task telling an agent to
-      // "investigate the current build failure … and rerun the build" with no
-      // file to look at. Those agents went looking for something to repair and
-      // edited the Unity project instead. The state is still reported — it is
-      // real — but it is not actionable work until something names what broke.
+      // A FAILURE WITH NOTHING PENDING NAMES NOTHING TO FIX. Measured in a
+      // live campaign: raised at priority 85, each such observation became a
+      // task telling an agent to "investigate the current build failure … and
+      // rerun the build" with no file to look at, and those agents went looking
+      // for something to repair and edited the project instead. The state is
+      // still reported — it is real — but it is not actionable work until
+      // something names what broke.
       if (ownedElsewhere) {
         return [
           createObservation(

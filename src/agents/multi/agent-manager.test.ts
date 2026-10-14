@@ -567,8 +567,8 @@ describe("AgentManager", () => {
 
     it("shutdown names every un-submitted message it drops", async () => {
       const { m, submitter } = bufferingManager();
-      await m.routeMessage(makeMsg({ text: "build the shop screen" }));
-      await m.routeMessage(makeMsg({ text: "and the inventory panel" }));
+      await m.routeMessage(makeMsg({ text: "chart the greenhouse humidity log" }));
+      await m.routeMessage(makeMsg({ text: "and flag the dry beds" }));
       expect(submitter).not.toHaveBeenCalled();
       expect(sendText).not.toHaveBeenCalled();
 
@@ -581,7 +581,7 @@ describe("AgentManager", () => {
         expect.objectContaining({
           messages: 2,
           chatIds: ["chat-1"],
-          sample: expect.arrayContaining([expect.stringContaining("build the shop screen")]),
+          sample: expect.arrayContaining([expect.stringContaining("chart the greenhouse humidity log")]),
         }),
       );
     });
@@ -589,7 +589,7 @@ describe("AgentManager", () => {
     it("stopAgent tells the user which buffered messages were not started", async () => {
       const { m, submitter } = bufferingManager();
       try {
-        await m.routeMessage(makeMsg({ text: "build the shop screen" }));
+        await m.routeMessage(makeMsg({ text: "chart the greenhouse humidity log" }));
         const agent = m.getAllAgents()[0]!;
 
         await m.stopAgent(agent.id);
@@ -597,7 +597,7 @@ describe("AgentManager", () => {
         expect(submitter).not.toHaveBeenCalled();
         expect(sendText).toHaveBeenCalledWith(
           "chat-1",
-          expect.stringMatching(/1 message.*not started.*build the shop screen/s),
+          expect.stringMatching(/1 message.*not started.*chart the greenhouse humidity log/s),
         );
         expect(loggerWarn.mock.calls.some(([msg]) => /buffered.*dropped/i.test(String(msg)))).toBe(true);
       } finally {

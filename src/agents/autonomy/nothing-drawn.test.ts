@@ -7,13 +7,9 @@ import { StradaConformanceGuard } from './strada-conformance.js';
 /**
  * A game nobody has seen draw anything is not delivered.
  *
- * Measured across this whole session: every captured frame byte-for-byte
- * identical, all of them an empty background — while the suite kept growing and
- * reported green each time. Runs reported success on a project that has never been
- * observed to render, and the only reason anyone knew otherwise was that a person
- * opened a PNG and looked at it.
- *
- * Tests prove the simulation. Only a frame proves the game.
+ * Identical captured frames mean nothing new was drawn, and a growing green
+ * suite proves the simulation, not the picture. Tests prove the simulation;
+ * only a frame proves the game.
  */
 
 const deps = {
@@ -58,7 +54,7 @@ function project(frames: string[], renderers = 0): { root: string; configPath: s
   if (renderers > 0) {
     let body = '';
     for (let i = 0; i < renderers; i++) {
-      body += `--- !u!1 &${i + 10}\nGameObject:\n  m_Name: Cube${i}\n`;
+      body += `--- !u!1 &${i + 10}\nGameObject:\n  m_Name: Prop${i}\n`;
       body += `--- !u!212 &${i + 500}\nMeshRenderer:\n  m_GameObject: {fileID: ${i + 10}}\n`;
     }
     writeFileSync(join(scenes, 'Main.unity'), body);
@@ -85,17 +81,32 @@ describe('a game that has never been seen to draw', () => {
     expect(prompt).toContain('identical');
   });
 
+  it('asks for the play the design describes, naming no level structure of its own', () => {
+    // This gate is sent to every game, and plenty of games have no levels: an
+    // endless kelp-farm tide sandbox runs until the player stops, a two-player
+    // tile duel has rounds, a museum walk has neither. An instruction to
+    // "start a level" is one such a game cannot carry out, so the ask must
+    // defer to the design's own word for its unit of play.
+    const { root, configPath } = project(Array.from({ length: 12 }, () => 'same-pixels'));
+
+    const prompt = promptFor(root, configPath);
+
+    expect(prompt).toContain('[STRADA NOTHING DRAWN]');
+    expect(prompt).toContain('the play its design describes, whatever the design calls that');
+    expect(prompt).not.toMatch(/\blevel\b/i);
+  });
+
   it("finds this run's frames behind thousands of older ones", () => {
-    // Measured 2026-09-07 07:49: many thousands of frames from earlier runs
-    // in Recordings/, this run's own in a fresh subfolder — the 400-file
-    // sample never reached them and the run was told it drew nothing.
+    // Recordings/ can hold thousands of frames from earlier runs, with this
+    // run's own in a fresh subfolder. A fixed-size sample of the folder used
+    // to stop short of them, and the run was told it drew nothing.
     const old = Array.from({ length: 500 }, () => 'stale-pixels');
     const { root, configPath } = project(old);
     const rec = join(root, 'Recordings');
     const past = new Date(Date.now() - 3 * 60 * 60_000);
     for (const f of readdirSync(rec)) utimesSync(join(rec, f), past, past);
     utimesSync(rec, past, past);
-    const fresh = join(rec, 'DuskPass');
+    const fresh = join(rec, 'latest-run');
     mkdirSync(fresh);
     for (let i = 0; i < 12; i++) writeFileSync(join(fresh, `frame_${i}.png`), `varied-${i}-${'x'.repeat(i * 7)}`);
 
@@ -110,11 +121,11 @@ describe('a game that has never been seen to draw', () => {
     expect(promptFor(root, configPath)).toContain('[STRADA NOTHING DRAWN]');
   });
 
-  it('objects when frame variety is HUD-level (below the distinctiveness bar)', () => {
-    // Measured 2026-08-24: a run of frames with only a few distinct — the only
-    // variety was one HUD element changing over an otherwise static frame. The gate
-    // requires >= 25% distinct digests as evidence of real drawing.
-    const frames = [...Array(10).fill('same-pixels'), 'hud-label-changed'];
+  it('objects when frame variety is below the distinctiveness bar', () => {
+    // Frames in which only a small overlay changes over a static picture vary
+    // too little; the gate requires >= 25% distinct digests as evidence of
+    // real drawing.
+    const frames = [...Array(10).fill('same-pixels'), 'overlay-changed'];
     const { root, configPath } = project(frames);
 
     const prompt = promptFor(root, configPath);
@@ -123,8 +134,8 @@ describe('a game that has never been seen to draw', () => {
   });
 
   it('stays quiet when frames differ substantively from a sparse scene', () => {
-    // Runtime-construction architecture: scene YAML stays minimal, the
-    // playfield spawns from code — substantive frame variety is the evidence.
+    // A scene whose content is built from code at runtime holds few renderers
+    // in its YAML, so substantive frame variety is the evidence.
     const { root, configPath } = project(['a', 'b', 'c', 'd'], 0);
 
     expect(promptFor(root, configPath)).not.toContain('[STRADA NOTHING DRAWN]');
@@ -156,15 +167,15 @@ describe('a game that has never been seen to draw', () => {
 });
 
 /**
- * What counts as "this sprint made something to look at".
+ * What counts as "this run made something to look at".
  *
- * Audited 2026-09-02: the gate's entry condition asked only whether COMPILABLE
- * code had been written into Assets/. An art-and-scene sprint — the kind that
- * writes a sprite under Assets/Art and a scene under Assets/Scenes and no C# at
- * all — wrote nothing compilable, so the gate never applied and the run could
- * capture a run of identical frames and still report the sprint delivered.
+ * An entry condition that asks only whether COMPILABLE code was written into
+ * Assets/ misses a run that writes a sprite under Assets/Art and a scene under
+ * Assets/Scenes and no C# at all: it wrote nothing compilable, so the gate
+ * would never apply and the run could capture identical frames and still
+ * report the work delivered.
  */
-describe('a sprint that wrote assets rather than code', () => {
+describe('a run that wrote assets rather than code', () => {
   /** Only renderables: a sprite and a scene, no .cs anywhere. */
   function assetOnlyRun(root: string, frames: string[]): StradaConformanceGuard {
     const art = join(root, 'Assets', 'Art');
@@ -217,16 +228,49 @@ describe('a sprint that wrote assets rather than code', () => {
 });
 
 describe('nothingDrawn — differing frames are not proof of drawing', () => {
-  it('the scene census counts renderers a playfield needs', async () => {
-    const { countSceneRenderersImpl, MIN_PLAYFIELD_RENDERERS } = await import('./strada-conformance.js');
-    const root = mkdtempSync(join(os.tmpdir(), 'strada-hudonly-'));
+  it('the scene census reports zero renderers for a scene that holds only a bootstrapper', async () => {
+    const { countSceneRenderersImpl } = await import('./strada-conformance.js');
+    const root = mkdtempSync(join(os.tmpdir(), 'strada-census-'));
     try {
       const scenes = join(root, 'Assets', 'Scenes');
       mkdirSync(scenes, { recursive: true });
       writeFileSync(join(scenes, 'Main.unity'), '--- !u!1 &1\nGameObject:\n  m_Name: Boot\n');
-      const census = countSceneRenderersImpl(root);
-      expect(census.renderers).toBe(0);
-      expect(census.renderers).toBeLessThan(MIN_PLAYFIELD_RENDERERS);
+
+      expect(countSceneRenderersImpl(root)).toEqual({ scenes: 1, gameObjects: 1, renderers: 0 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('counts both sprite and mesh renderers in a scene that does hold content', async () => {
+    // Invented scene: a kelp-farm diorama with one sprite-drawn float and one
+    // mesh-drawn trawler, plus a camera object that draws nothing itself.
+    const { countSceneRenderersImpl } = await import('./strada-conformance.js');
+    const root = mkdtempSync(join(os.tmpdir(), 'strada-census-'));
+    try {
+      const scenes = join(root, 'Assets', 'Scenes');
+      mkdirSync(scenes, { recursive: true });
+      writeFileSync(
+        join(scenes, 'KelpFarm.unity'),
+        [
+          '--- !u!1 &11',
+          'GameObject:',
+          '  m_Name: TideCamera',
+          '--- !u!1 &12',
+          'GameObject:',
+          '  m_Name: MarkerFloat',
+          '--- !u!212 &13',
+          'SpriteRenderer:',
+          '--- !u!1 &14',
+          'GameObject:',
+          '  m_Name: Trawler',
+          '--- !u!23 &15',
+          'MeshRenderer:',
+          '',
+        ].join('\n'),
+      );
+
+      expect(countSceneRenderersImpl(root)).toEqual({ scenes: 1, gameObjects: 3, renderers: 2 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

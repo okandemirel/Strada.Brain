@@ -5,15 +5,14 @@
  * shell_exec guards its working directory through path-guard, and then hands the
  * command string to bash untouched. An absolute path inside the command walks
  * straight past that guard — and the task text routinely carries one, because
- * "add a level editor to ~/Documents/Games/SampleGame" is an ordinary way to ask.
+ * "add a level editor to <the user's project path>" is an ordinary way to ask.
  *
- * Measured across two from-scratch runs, and unchanged by telling the agent
- * about it in the preamble:
- *   mkdir -p /Users/…/SampleGame/Assets/Scripts/Board
- *   Unity -batchmode -quit -projectPath /Users/…/SampleGame
+ * Measured in live runs, and unchanged by telling the agent about it in the
+ * preamble:
+ *   mkdir -p <source>/Assets/Scripts/<Folder>
+ *   Unity -batchmode -quit -projectPath <source>
  * The first wrote into the user's project instead of the lease; the second
- * compiled a tree holding none of the agent's work and reported zero errors in
- * 5.8 seconds, which the agent read as a clean build.
+ * compiled a tree holding none of the agent's work and reported a clean build.
  *
  * The two paths name the same project, so the source path is not a different
  * place — it is a stale name for this one. Rewriting it is what the agent meant,
@@ -59,17 +58,17 @@ const ctx = (): ToolContext =>
 describe("a command naming the source project", () => {
   it("writes into the workspace instead", async () => {
     const result = await tool.execute(
-      { command: mkdirP(`${sourceProject}/Assets/Modules/BoardModule`) },
+      { command: mkdirP(`${sourceProject}/Assets/Modules/CartographyModule`) },
       ctx(),
     );
 
     expect(result.isError).toBeFalsy();
     expect(
-      existsSync(join(workspace, "Assets", "Modules", "BoardModule")),
+      existsSync(join(workspace, "Assets", "Modules", "CartographyModule")),
       "the agent's directory did not land in its workspace",
     ).toBe(true);
     expect(
-      existsSync(join(sourceProject, "Assets", "Modules", "BoardModule")),
+      existsSync(join(sourceProject, "Assets", "Modules", "CartographyModule")),
       "the agent wrote into the user's project",
     ).toBe(false);
   });
@@ -86,11 +85,11 @@ describe("a command naming the source project", () => {
   });
 
   it("reads the workspace's file, not the source project's", async () => {
-    writeFileSync(join(sourceProject, "Assets", "Board.cs"), "// stale\n");
-    writeFileSync(join(workspace, "Assets", "Board.cs"), "// the agent's work\n");
+    writeFileSync(join(sourceProject, "Assets", "Compass.cs"), "// stale\n");
+    writeFileSync(join(workspace, "Assets", "Compass.cs"), "// the agent's work\n");
 
     const result = await tool.execute(
-      { command: `cat ${sourceProject}/Assets/Board.cs` },
+      { command: `cat ${sourceProject}/Assets/Compass.cs` },
       ctx(),
     );
 

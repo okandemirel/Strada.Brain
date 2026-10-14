@@ -10946,9 +10946,27 @@ export function stripTimeBoxDirectives(prompt: string): string {
     .replace(/\n\nTIME BOX EXHAUSTED \([^)]*\):[^\n]*/g, "");
 }
 
+/**
+ * Visual-asset nouns, as whole words. A CLOSED list: an open stem reads
+ * another trade's words as art — "background music" is audio, "save data
+ * model" is a C# type, "artifact" and "artillery" are neither — and each of
+ * those used to reorder a sprint around art that was never missing. The words
+ * are the ones any game's art is described with, not one game's asset names.
+ */
+const ART_GAP_RE =
+  /\b(?:art|artwork|sprites?|textures?|mesh(?:es)?|materials?|shaders?|animations?|vfx|particles?|icons?|tilesets?|tilemaps?|portraits?|visuals?|graphics|illustrations?)\b/i;
+
+/**
+ * Nouns that are art in one trade and something else in another: a model is
+ * also a data class, a background is also music or a backstory. They count
+ * only with an art word beside them.
+ */
+const QUALIFIED_ART_GAP_RE =
+  /\b(?:3-?d|low[- ]poly|character|creature|prop|environment)[\s-]models?\b|\bbackgrounds?[\s-](?:plates?|images?)\b/i;
+
 /** A gap the audit phrased as art: it goes first, because everything visible depends on it. */
 export function isArtGap(item: string): boolean {
-  return /\b(art|sprite|visual|illustration|skin|mascot|background|artwork|animation|vfx|texture|model)/i.test(item);
+  return ART_GAP_RE.test(item) || QUALIFIED_ART_GAP_RE.test(item);
 }
 
 function coverageGapItems(milestone: CampaignMilestone): string[] {

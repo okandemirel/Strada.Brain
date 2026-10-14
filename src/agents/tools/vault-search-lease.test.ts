@@ -8,12 +8,12 @@
  * missed on every leased task and the search silently downgraded to "query all
  * registered vaults".
  *
- * Measured on a live run: `vault_search` for "MatchResolver ScoreService
- * Fernbrook" returned 10 hits `searched=[unity:5b4164ac, self:strada-brain,
- * knowledge:57dbef1a]` carrying the hint "No vault indexed for projectPath". It
- * found the project's code only because the fallback happened to include the
- * project vault — while spending the token budget on Strada.Brain's own source
- * as well, and telling the operator the project was unindexed.
+ * Measured on a live run: a leased `vault_search` answered from every
+ * registered vault (the project's, Strada.Brain's own source and a knowledge
+ * vault) with the hint "No vault indexed for projectPath". It found the
+ * project's code only because the fallback happened to include the project
+ * vault — while spending the token budget on Strada.Brain's own source as
+ * well, and telling the operator the project was unindexed.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -81,7 +81,7 @@ async function search(context: ToolContext): Promise<string> {
     tool as unknown as {
       execute(input: unknown, ctx: ToolContext): Promise<{ content: string }>;
     }
-  ).execute({ query: "MatchResolver" }, context);
+  ).execute({ query: "QuarryLedger" }, context);
   return String(result.content);
 }
 

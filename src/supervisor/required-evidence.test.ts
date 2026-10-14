@@ -63,7 +63,7 @@ describe("required evidence named by the task", () => {
     expect(missingRequiredEvidence(prompt, [{ toolName: "unity_playthrough", success: true }]))
       .toEqual([{ tool: "unity_playthrough", attempts: 1, argument: { key: "sessions", value: "all" } }]);
     // An ordinary mention manufactures no requirement.
-    expect(requiredToolArguments('unity_playthrough is a tool; the scene is named "Main".')).toEqual([]);
+    expect(requiredToolArguments('unity_playthrough is a tool; the scene is named "Atrium".')).toEqual([]);
   });
 
   it("the argument gate is narrow, same-call, and knows the unfiltered flag (Codex 2026-09-11 D#9-11, D#14)", () => {
@@ -94,7 +94,7 @@ describe("required evidence named by the task", () => {
       { toolName: "unity_test_run", success: true, args: JSON.stringify({ filter: "Smoke" }) },
     ])).toHaveLength(1);
     expect(missingRequiredEvidence(unfiltered, [
-      { toolName: "unity_test_run", success: true, args: JSON.stringify({ scene: "Main" }) },
+      { toolName: "unity_test_run", success: true, args: JSON.stringify({ scene: "Atrium" }) },
     ])).toEqual([]);
   });
 
@@ -132,15 +132,15 @@ describe("required evidence named by the task", () => {
 });
 
 describe("a tool the situation does not call for is not missing evidence (measured live 2026-09-11)", () => {
-  // The real mission, shortened: a batch procedure that repeats until a
-  // measured count is below a threshold. The count was already 0, so the run
-  // correctly generated nothing — and this gate failed the node every round
-  // for hours, retrying a mission whose goal was already met.
+  // A batch procedure that repeats until a measured count is below a
+  // threshold; when the threshold already holds, the run correctly does
+  // nothing — and this gate failed the node every round for hours, retrying a
+  // mission whose goal was already met.
   const loop =
-    "Mission: replace placeholder art IN PLACE, in batches. Each batch is ONE unit of work: call unity_delivery_measure once " +
-    "and take the first 24 placeholder paths it lists; then call unity_generate_sprite exactly TWICE, each call with `batch` " +
-    "holding 12 items; then call unity_delivery_measure again and report the new number. " +
-    "Repeat batches until the measured count is below 200, then finish with the count you MEASURED.";
+    "Mission: re-encode stale audio stems in batches. Each batch is ONE unit of work: call unity_delivery_measure once " +
+    "and take the first 5 stale paths it lists; then call unity_generate_sprite once, with `batch` " +
+    "holding 5 items; then call unity_delivery_measure again and report the new number. " +
+    "Repeat batches until the measured count is below 3, then finish with the count you MEASURED.";
 
   it("accepts a node that measured and found nothing to do", () => {
     const measuredOnly = [{ toolName: "unity_delivery_measure", success: true }];
@@ -182,8 +182,8 @@ describe("prose formatting does not defeat the evidence gate (Codex 2026-09-11 M
 
   it("a threshold loop waives its OWN tools, not the work beside it", () => {
     const prompt =
-      "Replace placeholder art in batches: call unity_delivery_measure, then call unity_generate_sprite twice. " +
-      "Repeat until the measured count is below 200.\n\n" +
+      "Re-encode stale audio stems in batches: call unity_delivery_measure, then call unity_generate_sprite twice. " +
+      "Repeat until the measured stale count is below 3.\n\n" +
       "Then run unity_build_player for Android and report its artifact.";
 
     // The loop measured and found nothing to do — but the build was not run.
@@ -249,7 +249,7 @@ describe("one parser, clause scope, and a prompt that states its own evidence (C
 
   it("a threshold loop waives its own body, not the work written after it", () => {
     const prompt =
-      "Call unity_generate_sprite for each placeholder and repeat batches until the measured count is below 200. " +
+      "Call unity_generate_sprite for each stale stem and repeat batches until the measured stale count is below 3. " +
       "Then run unity_build_player for the GDD's platform.";
     expect(thresholdLoopTools(prompt)).toEqual(new Set(["unity_generate_sprite"]));
     expect(missingRequiredEvidence(prompt, [
@@ -271,7 +271,7 @@ describe("one parser, clause scope, and a prompt that states its own evidence (C
 
   it("a declared requirement is not waived by a threshold loop", () => {
     const prompt =
-      "Call unity_generate_sprite, then call unity_build_player, and repeat until the placeholder count is below 200.\n\n" +
+      "Call unity_generate_sprite, then call unity_build_player, and repeat until the stale count is below 3.\n\n" +
       `${REQUIRED_EVIDENCE_PREFIX} unity_build_player`;
     // The loop body DID measure — one of its tools ran — so the loop's own
     // tools are waived. The declared one is not one of them.
@@ -290,7 +290,7 @@ describe("conditions and loops reach exactly as far as their own clause (Codex 2
   });
 
   it("a loop written after the work does not waive the work", () => {
-    const prompt = "Run unity_build_player. Call unity_generate_sprite and repeat until the count is below 200.";
+    const prompt = "Run unity_build_player. Call unity_generate_sprite and repeat until the count is below 3.";
     expect(thresholdLoopTools(prompt)).toEqual(new Set(["unity_generate_sprite"]));
     expect(missingRequiredEvidence(prompt, [{ toolName: "unity_generate_sprite", success: true }]).map((s) => s.tool))
       .toEqual(["unity_build_player"]);
@@ -309,33 +309,33 @@ describe("conditions and loops reach exactly as far as their own clause (Codex 2
 
   it("an instruction's arguments are satisfied TOGETHER or not at all", () => {
     const prompt =
-      'Run unity_build_player with target "Android" and scene "Boot". ' +
-      'Run unity_build_player with target "iOS" and scene "Menu".';
+      'Run unity_build_player with target "Android" and scene "Atrium". ' +
+      'Run unity_build_player with target "iOS" and scene "Cellar".';
     // Each instruction answered by its own call: both demands are met.
     expect(missingRequiredEvidence(prompt, [
-      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Boot" }) },
-      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Menu" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Atrium" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Cellar" }) },
     ])).toEqual([]);
     // The values crossed over: every value was used somewhere and neither
     // instruction was actually carried out.
     const crossed = missingRequiredEvidence(prompt, [
-      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Menu" }) },
-      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Boot" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Cellar" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Atrium" }) },
     ]);
     expect(crossed).toHaveLength(1);
-    expect(crossed[0]!.combination).toEqual([{ key: "target", value: "Android" }, { key: "scene", value: "Boot" }]);
-    expect(describeEvidenceShortfall(crossed)).toContain('target "Android" and scene "Boot" in ONE call');
+    expect(crossed[0]!.combination).toEqual([{ key: "target", value: "Android" }, { key: "scene", value: "Atrium" }]);
+    expect(describeEvidenceShortfall(crossed)).toContain('target "Android" and scene "Atrium" in ONE call');
   });
 });
 
 describe("a declaration's own punctuation is not a separator (Codex 2026-09-12 T#12)", () => {
   it("keeps a value that contains a semicolon, and a long one", () => {
-    const semi = `${REQUIRED_EVIDENCE_PREFIX} unity_playthrough scene="Assets/Scenes/Boot;Intro.unity"`;
+    const semi = `${REQUIRED_EVIDENCE_PREFIX} unity_playthrough scene="Assets/Scenes/Atrium;Cellar.unity"`;
     expect(requiredToolArguments(semi)).toEqual([
-      { tool: "unity_playthrough", key: "scene", value: "Assets/Scenes/Boot;Intro.unity" },
+      { tool: "unity_playthrough", key: "scene", value: "Assets/Scenes/Atrium;Cellar.unity" },
     ]);
 
-    const long = "Assets/Scenes/VeryLongDirectoryName/AnotherLevelDeeper/BootAndIntroSequence.unity";
+    const long = "Assets/Scenes/WinterArchive/NorthWing/AtriumAndCellarSequence.unity";
     expect(long.length).toBeGreaterThan(60);
     expect(requiredToolArguments(`${REQUIRED_EVIDENCE_PREFIX} unity_playthrough scene="${long}"`)).toEqual([
       { tool: "unity_playthrough", key: "scene", value: long },
@@ -350,18 +350,18 @@ describe("a declaration's own punctuation is not a separator (Codex 2026-09-12 T
 
 describe("a declaration is one call too (Codex 2026-09-12 S#13)", () => {
   it("does not let separate calls satisfy separate arguments of one declaration", () => {
-    const prompt = `${REQUIRED_EVIDENCE_PREFIX} unity_build_player target="Android" scene="Boot"`;
+    const prompt = `${REQUIRED_EVIDENCE_PREFIX} unity_build_player target="Android" scene="Atrium"`;
     // Every value appears somewhere, and the declaration was never carried out.
     const crossed = missingRequiredEvidence(prompt, [
       { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Other" }) },
-      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Boot" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "iOS", scene: "Atrium" }) },
     ]);
     expect(crossed).toHaveLength(1);
-    expect(crossed[0]!.combination).toEqual([{ key: "target", value: "Android" }, { key: "scene", value: "Boot" }]);
+    expect(crossed[0]!.combination).toEqual([{ key: "target", value: "Android" }, { key: "scene", value: "Atrium" }]);
 
     // One call that carries both satisfies it.
     expect(missingRequiredEvidence(prompt, [
-      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Boot" }) },
+      { toolName: "unity_build_player", success: true, args: JSON.stringify({ target: "Android", scene: "Atrium" }) },
     ])).toEqual([]);
 
     // Two declarations are two calls, as in prose.
@@ -387,9 +387,9 @@ describe("the arguments the producer ran with decide the scope (Codex 2026-09-12
   it("a filter beside the flag is a filtered run, whichever key carries it", () => {
     for (const args of [
       { mode: "play", filter: { testNames: ["Smoke"] }, unfiltered: true },
-      { mode: "play", testFilter: "Board.Tests", unfiltered: true },
+      { mode: "play", testFilter: "Ledger.Tests", unfiltered: true },
       { mode: "play", categoryNames: ["Fast"], unfiltered: true },
-      { mode: "play", assemblyNames: ["SampleGame.Tests"], unfiltered: true },
+      { mode: "play", assemblyNames: ["Orchard.Inventory.Tests"], unfiltered: true },
       { mode: "play", filter: { categoryNames: ["Fast"] }, unfiltered: "true" },
     ]) {
       expect(
@@ -415,7 +415,7 @@ describe("the arguments the producer ran with decide the scope (Codex 2026-09-12
   it("no flag at all: a filter key the check did not know still narrows the run", () => {
     expect(
       missingRequiredEvidence(prompt, [
-        { toolName: "unity_test_run", success: true, args: JSON.stringify({ mode: "play", testFilter: "Board.Tests" }) },
+        { toolName: "unity_test_run", success: true, args: JSON.stringify({ mode: "play", testFilter: "Ledger.Tests" }) },
       ]),
     ).toHaveLength(1);
     // …and a call with no filter key of any kind still proves it.

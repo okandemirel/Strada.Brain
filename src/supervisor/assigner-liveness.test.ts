@@ -1,7 +1,7 @@
 /**
  * A provider that dies mid-run stops receiving work.
  *
- * The descriptors are built once, at bootstrap. Measured 2026-08-21, run 30:
+ * The descriptors are built once, at bootstrap. Measured 2026-08-21 in a live run:
  * Kimi was out of quota before the run even started, the descriptor said
  * nothing about it, and five goals were assigned to it — each failed with a
  * 403, fell back to itself, and blocked. OpenCode was healthy throughout and
@@ -40,8 +40,8 @@ const node = (id: string, task: string) =>
   }) as never;
 
 const nodes = [
-  node("n1", "write the board service"),
-  node("n2", "write the frog service"),
+  node("n1", "write the invoice parser"),
+  node("n2", "write the shipping-rate table"),
   node("n3", "write the scoring service"),
 ] as never[];
 

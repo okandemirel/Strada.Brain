@@ -24,8 +24,8 @@ function campaign(over: Partial<Campaign>): Campaign {
     state: "executing",
     draftAttempts: 0,
     milestones: [
-      { id: "m1", title: "Board", prompt: "p", status: "green" },
-      { id: "m2", title: "Levels", prompt: "p", status: "running" },
+      { id: "m1", title: "Weather cycle", prompt: "p", status: "green" },
+      { id: "m2", title: "Trade caravans", prompt: "p", status: "running" },
     ] as Campaign["milestones"],
     currentMilestone: 1,
     createdAt: NOW - 3_600_000,
@@ -89,7 +89,7 @@ describe("strada status read-out", () => {
     expect(report.campaigns.lastTerminal?.id).toBe("cmp_done");
     const lines = renderStatusReport(report);
     expect(lines[0]).toBe("Health: ok (up 42 s)");
-    expect(lines).toContain('Campaign cmp_active: executing, milestone 2/2 "Levels" (running), updated 2 min ago');
+    expect(lines).toContain('Campaign cmp_active: executing, milestone 2/2 "Trade caravans" (running), updated 2 min ago');
     expect(lines).toContain("Campaign cmp_failed: failed, auto-revive in 15 min — NOT DELIVERED — proofs missing");
     // an active campaign exists, so the terminal one is not repeated as "last"
     expect(lines.some((l) => l.startsWith("Last campaign"))).toBe(false);

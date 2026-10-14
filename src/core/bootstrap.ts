@@ -184,8 +184,8 @@ export function createSupervisorExecuteNodeBridge(params: {
     const startedAt = Date.now();
     // The worker's tool evidence, in the shape deriveTestVerdict reads. Every
     // production NodeResult carried `toolResults: []`, so a supervised sprint
-    // whose Unity node printed "3 of 40 tests failed" produced NO mechanical
-    // verdict and the campaign's red gate never fired (audited 2026-09-02).
+    // whose Unity node reported failing tests produced NO mechanical verdict
+    // and the campaign's red gate never fired (audited 2026-09-02).
     const toNodeToolResults = (
       workerResult?: { toolTrace?: readonly { summary: string; success: boolean; toolCallId?: string; toolName?: string }[] },
     ): NodeResult["toolResults"] =>
@@ -304,10 +304,9 @@ export function createSupervisorExecuteNodeBridge(params: {
         onProgress: (update) => {
           // Every worker event is the PARENT task's liveness. Only node status
           // changes used to re-arm the task inactivity watchdog, so a node that
-          // ran longer than the ceiling on its own tools and calls got its
-          // parent task killed as "no progress": measured 2026-09-09 01:38
-          // (diffusion at 75%), 06:20 (44 files just committed) and 06:57
-          // (sprites generating at 06:54 and 06:58, task aborted at 06:57:57).
+          // ran longer than the ceiling on its own tools and calls (a long
+          // image generation still running, a commit that had just landed) got
+          // its parent task killed as "no progress".
           context.onLiveness?.();
           const narrative = buildTaskProgressSummary(
             { title: node.task, prompt: node.task },
@@ -333,7 +332,7 @@ export function createSupervisorExecuteNodeBridge(params: {
       });
       // HOW THE RUN ENDED rides on every return below. The ok return carried
       // no reason at all, so a node whose run stopped on "loop detected" came
-      // back as a plain "ok" and only its prose said otherwise (GDD-drift W01).
+      // back as a plain "ok" and only its prose said otherwise.
       // No worker result is no terminal to read, not a clean one.
       const terminalKey = result.workerResult
         ? terminalKeyOf(result.workerResult.reason, result.workerResult.status)
@@ -762,7 +761,7 @@ async function bootstrapImpl(
   // Say whether this is a Strada.Core project UP FRONT. The conformance gates
   // catch reimplementations after the fact; a run that never hears the framework
   // exists may build a vanilla dotnet project beside it instead (measured
-  // 2026-08-23 on the test game). One line at start beats a gate at the end.
+  // live 2026-08-23). One line at start beats a gate at the end.
   const frameworkNotice = describeFrameworkInstall(config.unityProjectPath);
   if (frameworkNotice) {
     runtimeStageNotices.push(frameworkNotice);
@@ -1143,8 +1142,9 @@ async function bootstrapImpl(
 
         // The codebases every plan is written against.
         //
-        // Both registrations above are pinned to the Unity project, so the only
-        // thing this system ever indexed was the game it was building. The
+        // Both registrations above are pinned to the configured Unity project,
+        // so the only thing this system ever indexed was the project it was
+        // working on. The
         // frameworks it is supposed to have mastered — and its own source —
         // were searchable nowhere, and the knowledge that should come from
         // reading them arrived instead as prose rules typed into a prompt after
@@ -1831,8 +1831,8 @@ async function bootstrapImpl(
   backgroundExecutor.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   // Settlement hook for the dev-knowledge completion note: the route-level
   // call sites fire when a background task is merely SUBMITTED (planner state
-  // empty → real-work gate rejects), so this note type had written exactly 0
-  // times while the verdict notes wrote 213. Settlement carries the real
+  // empty → real-work gate rejects), so this note type was never written at
+  // all while the verdict notes kept piling up. Settlement carries the real
   // outcome — files touched, node tallies, failure reasons.
   if (devKnowledgeNoteWriter) {
     const writerForHook = devKnowledgeNoteWriter;

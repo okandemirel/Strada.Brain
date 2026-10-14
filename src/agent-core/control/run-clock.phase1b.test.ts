@@ -100,7 +100,7 @@ describe("Phase 1b incident regression — ~70min stall", () => {
     expect(rc.silenceCeilingExceeded()).toBe(true);
   });
 
-  it("a call that keeps producing tokens still dies at its hard ceiling (probe for the 629 s / 1024 s calls measured 2026-09-08)", () => {
+  it("a call that keeps producing tokens still dies at its hard ceiling (probe for calls measured running past it)", () => {
     const clock = new FakeClock(0);
     const rc = openRunClock(
       clock,

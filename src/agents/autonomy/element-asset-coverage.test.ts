@@ -1,12 +1,11 @@
 /**
  * The per-element art-coverage gate.
  *
- * Measured 2026-08-26 (the test game, user-reported): scenes kept shipping empty
- * even when prefab structures nominally existed, and no gate ever forced the
- * TARGET GAME'S OWN assets to exist — the unsourced gate only asks "did you
- * check what the user owns", and the nothing-drawn gate only looks at frames
- * globally. This test pins the gate that closes the gap: every element the
- * GDD schedules must have art, and that art must be bound into a prefab.
+ * A run can pass the assets-sourced and frames-differ gates while the elements
+ * its design schedules have no art: the unsourced gate only asks whether owned
+ * assets were checked, and the nothing-drawn gate only compares frames. This
+ * pins the gate that closes the gap: every element the GDD schedules must have
+ * art, and that art must be bound into a prefab.
  */
 
 import { describe, expect, it } from "vitest";
@@ -29,14 +28,14 @@ const deps = {
 const GATE = "[STRADA ELEMENT ASSETS MISSING]";
 
 const GDD = [
-  "# Test Game GDD",
+  "# Drone Survey GDD",
   "",
-  "## Cave features",
+  "## Survey hazards",
   "",
-  "| Stage | Feature | Effect |",
-  "| ----- | ------- | ------ |",
-  "| Cave 23 | Gas Vent | pushes the drone upward |",
-  "| Cave 38 | Crystal Seam | reveals the map nearby |",
+  "| Arrives | Feature |",
+  "| ------- | ------- |",
+  "| Shaft 7 | Gas Vent |",
+  "| Shaft 19 | Crystal Seam |",
   "",
 ].join("\n");
 
@@ -121,12 +120,9 @@ describe("element asset coverage", () => {
     expect(prompt).toContain("Gas Vent");
     expect(prompt).toContain("Crystal Seam");
     expect(prompt).toContain("unity_generate_sprite");
-    // THE DESIGN'S OWN WORDS, never one game's. The prompt once carried one
-    // game's art direction to every game the system builds (Codex 2026-09-12
-    // R#10, and the standing rule that no vehicle's wording belongs in system
-    // behaviour). This GDD states no look, so the prompt may carry none: no
-    // style word appears unless the design wrote it, and which generator fits
-    // an element is left to the design's own description of it.
+    // The prompt uses the design's own words only: this GDD states no look, so
+    // no style word may appear, and which generator fits an element is left to
+    // the design's description of it.
     expect(prompt).not.toMatch(/cartoon|cel-shaded|low-poly|hand-painted|painterly|watercolou?r|photoreal|voxel|isometric/i);
     expect(prompt).toContain("the design's own description of the element decides which it needs");
   });

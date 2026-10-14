@@ -5,11 +5,10 @@
  * /var or /home as destructive. `2>/dev/null` is the commonest idiom in shell —
  * it throws output away — and it matched.
  *
- * Measured on a live run: the agent proposed
- *   find /Users/okan/…/SampleGame4 -name "Strada.Core" -type d 2>/dev/null | head -20
+ * Measured in a live campaign: the agent proposed
+ *   find <project> -name "Strada.Core" -type d 2>/dev/null | head -20
  * a read-only search, and the safety review answered "shell command looks
- * destructive". Execution stopped, five goals were skipped, and 98 minutes ended
- * with nothing written.
+ * destructive". Execution stopped and the run ended with nothing written.
  *
  * /dev still needs guarding — writing to /dev/sda is exactly what this check is
  * for — so only the discard and standard streams are exempt.
@@ -23,7 +22,7 @@ const shell = (command: string): boolean => isDestructiveOperation("shell_exec",
 describe("redirects under /dev", () => {
   it("allows the read-only search that was blocked", () => {
     expect(
-      shell('find /Users/okan/Documents/SampleGame4 -name "Strada.Core" -type d 2>/dev/null | head -20'),
+      shell('find /work/orchard-survey -name "Strada.Core" -type d 2>/dev/null | head -20'),
     ).toBe(false);
   });
 

@@ -77,25 +77,25 @@ describe("a result that is a document, not a sentence", () => {
 });
 
 describe("a verdict buried under its own evidence", () => {
-  // Measured on unity_verify_change at 23:52: the run's compile check failed and
+  // Measured in a live campaign: unity_verify_change's compile check failed and
   // the log said detail:"message: Mono: successfully reloaded assembly". The
   // verdict sits at the root; the console entries it attaches as evidence each
   // carry a message, and a depth-first reader reaches those first.
   const verifyResult = JSON.stringify({
     status: "failed",
-    summary: { compileIssues: 27, testFailures: 0, buildSuccess: null },
+    summary: { compileIssues: 4, testFailures: 0, buildSuccess: null },
     evidence: {
       console: {
         entries: [
           { message: "Mono: successfully reloaded assembly", type: "Log" },
-          { message: "Assets/Modules/Spawner.cs(14,9): error CS0246", type: "Error" },
+          { message: "Assets/Scripts/Library/ShelfIndex.cs(14,9): error CS0246", type: "Error" },
         ],
       },
     },
   });
 
   it("reports the verdict, not the first line of the log it attached", () => {
-    expect(firstMeaningfulLine(verifyResult)).toBe("status: failed (compileIssues=27)");
+    expect(firstMeaningfulLine(verifyResult)).toBe("status: failed (compileIssues=4)");
   });
 
   it("keeps a stated reason ahead of the verdict when the tool gives one", () => {
@@ -125,21 +125,22 @@ describe("a verdict buried under its own evidence", () => {
 });
 
 describe("what the call was aimed at", () => {
-  // Measured on the run of 2026-08-20: eight minutes of "file_read: file not
-  // found" and "list_directory: directory not found" with no path in any of
-  // them — indistinguishable from progress.
+  // Measured in a live campaign: a stretch of "file_read: file not found" and
+  // "list_directory: directory not found" with no path in any of them —
+  // indistinguishable from progress.
   it("names the path a read missed", () => {
-    expect(failureTarget({ path: "Assets/Modules/Dock/DockModule.cs" })).toBe(
-      "Assets/Modules/Dock/DockModule.cs",
+    expect(failureTarget({ path: "Assets/Scripts/Library/LoanDesk.cs" })).toBe(
+      "Assets/Scripts/Library/LoanDesk.cs",
     );
   });
 
   it("finds the target under whichever key the tool uses", () => {
     expect(failureTarget({ directory: "Assets/Nowhere" })).toBe("Assets/Nowhere");
     expect(failureTarget({ pattern: "**/*.prefab" })).toBe("**/*.prefab");
-    // vault_search: ten empty-target rows in a 45-minute exploration streak (2026-09-08).
-    expect(failureTarget({ query: "where are placeholder sprites bound", vaultId: "self" })).toBe(
-      "where are placeholder sprites bound",
+    // vault_search: a row with an empty target cannot tell one question asked
+    // many times from many questions asked once.
+    expect(failureTarget({ query: "which service writes the save file", vaultId: "self" })).toBe(
+      "which service writes the save file",
     );
   });
 
@@ -182,10 +183,10 @@ describe("a result too long to arrive whole", () => {
   // JSON.parse threw and the reader fell through to the text path — whose
   // first line is "{". The log said a tool had failed and nothing else, for a
   // result whose status and reason were both still in the fragment.
-  const truncated = '{\n  "status": "failed",\n  "reason": "Headless compile failed with 25 error(s).",\n  "compile": {\n    "sou';
+  const truncated = '{\n  "status": "failed",\n  "reason": "Headless compile failed with 3 error(s).",\n  "compile": {\n    "sou';
 
   it("reads the reason out of the fragment", () => {
-    expect(firstMeaningfulLine(truncated)).toBe("reason: Headless compile failed with 25 error(s).");
+    expect(firstMeaningfulLine(truncated)).toBe("reason: Headless compile failed with 3 error(s).");
   });
 
   it("falls back to the status when no reason survived the cut", () => {
@@ -212,15 +213,15 @@ describe("a truncated batch result", () => {
       '{',
       '  "results": [',
       '    { "tool": "file_read", "success": true, "content": "namespace Game {" },',
-      '    { "tool": "file_read", "success": false, "error": "file not found: Assets/Board/BoardState.cs" },',
-      '    { "tool": "file_read", "success": false, "error": "file not found: Assets/Board/CellData.cs" },',
-      '    { "tool": "file_read", "success": true, "content": "public class Scor',
+      '    { "tool": "file_read", "success": false, "error": "file not found: Assets/Library/ShelfIndex.cs" },',
+      '    { "tool": "file_read", "success": false, "error": "file not found: Assets/Library/LoanRecord.cs" },',
+      '    { "tool": "file_read", "success": true, "content": "public class Catal',
     ].join("\n");
 
     const summary = firstMeaningfulLine(truncated);
 
     expect(summary).toContain("2 of 4");
-    expect(summary).toContain("BoardState.cs");
+    expect(summary).toContain("ShelfIndex.cs");
     expect(summary).not.toContain("unreadable");
   });
 
@@ -233,14 +234,14 @@ describe("a truncated batch result", () => {
 
 describe("failureTarget names the scope of a PlayMode run", () => {
   it("keeps the testFilter — an empty run without it cannot be diagnosed", () => {
-    expect(failureTarget({ testFilter: "Game.Modules.Board.Tests", capture: true })).toBe(
-      "Game.Modules.Board.Tests",
+    expect(failureTarget({ testFilter: "Library.Loans.Tests", capture: true })).toBe(
+      "Library.Loans.Tests",
     );
   });
 });
 
 describe("failureTarget names the product of an asset-store call", () => {
   it("keeps the productId", () => {
-    expect(failureTarget({ action: "download-info", productId: "27821" })).toBe("27821");
+    expect(failureTarget({ action: "download-info", productId: "40513" })).toBe("40513");
   });
 });

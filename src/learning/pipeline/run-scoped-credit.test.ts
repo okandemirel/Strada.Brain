@@ -39,7 +39,7 @@ import type { TimestampMs } from "../../types/index.js";
 const CHAT = "chat-shared";
 // Long enough to be a meaningful trigger (isMeaningfulTrigger needs >= 12 letters-ish).
 const ERROR_OUTPUT =
-  "error CS0103: the name BoardController does not exist in the current context";
+  "error CS0103: the name ValveScheduler does not exist in the current context";
 
 function seedShaped(id: string): Instinct {
   return {
@@ -162,10 +162,10 @@ describe("run-scoped instinct credit (round 10 #13, #14)", () => {
     const before = storage.getInstincts({ type: "error_fix" }).length;
 
     await pipeline.handleToolResult(
-      toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: false, input: { file_path: "/src/Board.cs" } }),
+      toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: false, input: { file_path: "/src/Irrigation/Valve.cs" } }),
     );
     await pipeline.handleToolResult(
-      toolEvent({ taskRunId: "run-2", toolName: "file_edit", success: true, input: { file_path: "/src/Board.cs" } }),
+      toolEvent({ taskRunId: "run-2", toolName: "file_edit", success: true, input: { file_path: "/src/Irrigation/Valve.cs" } }),
     );
 
     const after = storage.getInstincts({ type: "error_fix" }).length;
@@ -176,10 +176,10 @@ describe("run-scoped instinct credit (round 10 #13, #14)", () => {
     const before = storage.getInstincts({ type: "error_fix" }).length;
 
     await pipeline.handleToolResult(
-      toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: false, input: { file_path: "/src/Board.cs" } }),
+      toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: false, input: { file_path: "/src/Irrigation/Valve.cs" } }),
     );
     await pipeline.handleToolResult(
-      toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: true, input: { file_path: "/src/Board.cs" } }),
+      toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: true, input: { file_path: "/src/Irrigation/Valve.cs" } }),
     );
 
     const after = storage.getInstincts({ type: "error_fix" }).length;
@@ -253,12 +253,12 @@ describe("run-scoped instinct credit (round 10 #13, #14)", () => {
     // the repair the run actually performed is never learned (#14).
     queue.enqueue(async () => {
       await pipeline.handleToolResult(
-        toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: false, input: { file_path: "/src/Board.cs" } }),
+        toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: false, input: { file_path: "/src/Irrigation/Valve.cs" } }),
       );
     });
     queue.enqueue(async () => {
       await pipeline.handleToolResult(
-        toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: true, input: { file_path: "/src/Board.cs" } }),
+        toolEvent({ taskRunId: "run-1", toolName: "file_edit", success: true, input: { file_path: "/src/Irrigation/Valve.cs" } }),
       );
     });
     pipeline.clearRunInstinctCredits(CHAT, { success: true }, "run-1");

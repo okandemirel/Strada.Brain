@@ -259,8 +259,8 @@ function buildFileGraph(
 
   // Built ONCE per canvas (audited 2026-09-02): the previous per-edge
   // guessFileFromUnresolved() rescanned every file with three regex replaces
-  // each — O(edges x files), measured at ~76 s of synchronous CPU per
-  // regeneration on a 2,826-file / 57,630-edge index, on every watcher batch.
+  // each — O(edges x files), over a minute of synchronous CPU per regeneration
+  // on a large live project index, on every watcher batch.
   const fileByBasename = indexFilesByBasename(files);
 
   for (const e of symbolEdges) {

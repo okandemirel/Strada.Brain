@@ -15,7 +15,7 @@ describe("deriveTestVerdict", () => {
   it("no test-run evidence → undefined verdict", () => {
     const v = deriveTestVerdict([
       { toolName: "unity_test_run", content: "compile green, 0 errors" },
-      { toolName: "unity_test_run", content: "wrote Assets/Board.cs" },
+      { toolName: "unity_test_run", content: "wrote Assets/Scripts/WeatherVane.cs" },
     ]);
     expect(v.testsGreen).toBeUndefined();
   });

@@ -7,12 +7,9 @@ import { StradaConformanceGuard } from './strada-conformance.js';
 /**
  * A reference that resolves to nothing.
  *
- * Measured 2026-08-22: a module config asset carried a reference to a guid
- * that no asset in the project had — the prefab config it was supposed to
- * point at had a different one. The C# hid it behind a property that hands
- * back a fresh empty instance whenever the field is null, so the null becomes
- * an empty config, the spawner gets no prefabs, and nothing is logged. The
- * whole test suite passed over a game that drew an empty background.
+ * Unity resolves a reference to a guid that no asset has as null. Code that
+ * turns null into a fresh empty instance then runs with nothing configured and
+ * logs nothing, and tests can pass over it.
  *
  * Unity's own built-in guids (the all-zero forms) and anything a package owns
  * are not dangling; a check that flagged those would be noise and would train
@@ -28,30 +25,30 @@ const deps = {
 
 function project(refGuid: string, realGuid: string): { root: string; configPath: string } {
   const root = mkdtempSync(join(os.tmpdir(), 'dangling-'));
-  const moduleRoot = join(root, 'Assets', 'Modules', 'DioramaModule');
+  const moduleRoot = join(root, 'Assets', 'Modules', 'ApiaryModule');
   const scripts = join(moduleRoot, 'Scripts');
   mkdirSync(scripts, { recursive: true });
 
-  const configPath = join(scripts, 'DioramaModuleConfig.cs');
-  writeFileSync(configPath, 'public class DioramaModuleConfig : ModuleConfig {}');
-  writeFileSync(join(scripts, 'Game.Modules.Diorama.asmdef'), '{"name":"Game.Modules.Diorama"}');
+  const configPath = join(scripts, 'ApiaryModuleConfig.cs');
+  writeFileSync(configPath, 'public class ApiaryModuleConfig : ModuleConfig {}');
+  writeFileSync(join(scripts, 'Game.Modules.Apiary.asmdef'), '{"name":"Game.Modules.Apiary"}');
   const tests = join(moduleRoot, 'Tests', 'Runtime');
   mkdirSync(tests, { recursive: true });
-  writeFileSync(join(tests, 'Game.Modules.Diorama.Tests.asmdef'), '{"name":"Game.Modules.Diorama.Tests"}');
+  writeFileSync(join(tests, 'Game.Modules.Apiary.Tests.asmdef'), '{"name":"Game.Modules.Apiary.Tests"}');
   writeFileSync(join(tests, 'T.cs'), '[Test] public void It() {}');
 
   // The module config asset, pointing at whatever the caller says.
   writeFileSync(
-    join(moduleRoot, 'DioramaModuleConfig.asset'),
-    `%YAML 1.1\n  _spawnables: {fileID: 11400000, guid: ${refGuid}, type: 2}\n  _builtin: {fileID: 0, guid: 0000000000000000f000000000000000, type: 0}\n`,
+    join(moduleRoot, 'ApiaryModuleConfig.asset'),
+    `%YAML 1.1\n  _hiveTuning: {fileID: 11400000, guid: ${refGuid}, type: 2}\n  _builtin: {fileID: 0, guid: 0000000000000000f000000000000000, type: 0}\n`,
   );
   // The asset that actually exists, with its own guid.
-  writeFileSync(join(moduleRoot, 'DioramaPrefabs.asset'), '%YAML 1.1\n');
-  writeFileSync(join(moduleRoot, 'DioramaPrefabs.asset.meta'), `fileFormatVersion: 2\nguid: ${realGuid}\n`);
+  writeFileSync(join(moduleRoot, 'ApiaryTuning.asset'), '%YAML 1.1\n');
+  writeFileSync(join(moduleRoot, 'ApiaryTuning.asset.meta'), `fileFormatVersion: 2\nguid: ${realGuid}\n`);
 
   const scenes = join(root, 'Assets', 'Scenes');
   mkdirSync(scenes, { recursive: true });
-  writeFileSync(join(scenes, 'Main.unity'), '  _gameConfig: {fileID: 11400000, guid: abc}');
+  writeFileSync(join(scenes, 'Apiary.unity'), '  _gameConfig: {fileID: 11400000, guid: abc}');
   return { root, configPath };
 }
 
@@ -87,7 +84,7 @@ describe('an asset reference that points at nothing', () => {
     const prompt = promptFor(root, configPath);
 
     expect(prompt).toContain('[STRADA REFERENCE DANGLING]');
-    expect(prompt).toContain('DioramaModuleConfig');
+    expect(prompt).toContain('ApiaryModuleConfig');
     expect(prompt).toContain(MISSING.slice(0, 8));
   });
 

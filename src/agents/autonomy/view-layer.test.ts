@@ -17,15 +17,15 @@ import { assessFrameworkBypass, assessViewLayer } from "./scene-wiring.js";
 describe("an imported pack larger than the file budget", () => {
   it("does not hide the scene's missing camera or the project's reimplementation", () => {
     const root = mkdtempSync(join(os.tmpdir(), "view-layer-pack-"));
-    const mod = join(root, "Assets", "Modules", "Board");
+    const mod = join(root, "Assets", "Modules", "Observatory");
     mkdirSync(join(mod, "Prefabs"), { recursive: true });
     writeFileSync(
-      join(mod, "BoardService.cs"),
-      "public class BoardService { " + "public event System.Action Changed; ".repeat(6) + "}",
+      join(mod, "TelescopeService.cs"),
+      "public class TelescopeService { " + "public event System.Action Changed; ".repeat(6) + "}",
     );
-    writeFileSync(join(mod, "Prefabs", "Cube.prefab"), "SpriteRenderer:");
+    writeFileSync(join(mod, "Prefabs", "Lens.prefab"), "SpriteRenderer:");
     mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
-    writeFileSync(join(root, "Assets", "Scenes", "Gameplay.unity"), "GameObject:\nTransform:");
+    writeFileSync(join(root, "Assets", "Scenes", "Dome.unity"), "GameObject:\nTransform:");
     const textures = join(root, "Assets", "ZZThirdParty", "BigPack", "Textures");
     mkdirSync(textures, { recursive: true });
     for (let i = 0; i < 2500; i++) {
@@ -34,7 +34,7 @@ describe("an imported pack larger than the file budget", () => {
     }
 
     const views = assessViewLayer(root);
-    expect(views?.camerslessScenes).toEqual(["Gameplay.unity"]);
+    expect(views?.camerslessScenes).toEqual(["Dome.unity"]);
     expect(views?.hasViews).toBe(false);
     expect(assessFrameworkBypass(root).map((b) => b.what)).toContain("hand-rolled C# events");
   });
@@ -48,15 +48,16 @@ function io(files: Record<string, string>) {
   };
 }
 
-const SERVICE = "namespace Game { public class BoardService : IBoardService { } }";
+const SERVICE = "namespace Stargazing { public class TelescopeService : ITelescopeService { } }";
 
 describe("whether a project can render anything", () => {
   it("reports no views when prefabs exist and nothing drives them", () => {
-    // The measured shape: services and systems, prefabs, and no MonoBehaviour.
+    // Services, systems and prefabs, but no MonoBehaviour and no mediator:
+    // nothing can drive the prefabs.
     const result = assessViewLayer("/p", io({
-      "/p/Assets/Modules/Board/BoardService.cs": SERVICE,
-      "/p/Assets/Modules/Board/BoardSystem.cs": "public class BoardSystem : SystemBase { }",
-      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "",
+      "/p/Assets/Modules/Observatory/TelescopeService.cs": SERVICE,
+      "/p/Assets/Modules/Observatory/TelescopeSystem.cs": "public class TelescopeSystem : SystemBase { }",
+      "/p/Assets/Modules/Observatory/Prefabs/Lens.prefab": "",
     }));
 
     expect(result?.hasViews).toBe(false);
@@ -66,8 +67,8 @@ describe("whether a project can render anything", () => {
 
   it("counts a MonoBehaviour as a view", () => {
     const result = assessViewLayer("/p", io({
-      "/p/Assets/Modules/Board/CubeView.cs": "public class CubeView : MonoBehaviour { }",
-      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "",
+      "/p/Assets/Modules/Observatory/LensView.cs": "public class LensView : MonoBehaviour { }",
+      "/p/Assets/Modules/Observatory/Prefabs/Lens.prefab": "",
     }));
 
     expect(result?.hasViews).toBe(true);
@@ -75,8 +76,8 @@ describe("whether a project can render anything", () => {
 
   it("counts Strada.Core's own bridge as a view", () => {
     const result = assessViewLayer("/p", io({
-      "/p/Assets/Modules/Board/CubeBinding.cs": "public class CubeBinding : EntityMediator { }",
-      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "",
+      "/p/Assets/Modules/Observatory/LensBinding.cs": "public class LensBinding : EntityMediator { }",
+      "/p/Assets/Modules/Observatory/Prefabs/Lens.prefab": "",
     }));
 
     expect(result?.hasViews).toBe(true);
@@ -89,9 +90,9 @@ describe("whether a project can render anything", () => {
 
   it("does not count a test as the project's view layer", () => {
     const result = assessViewLayer("/p", io({
-      "/p/Assets/Tests/PlayMode/BootTest.cs": "public class BootTest : MonoBehaviour { }",
-      "/p/Assets/Modules/Board/BoardService.cs": SERVICE,
-      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "",
+      "/p/Assets/Tests/PlayMode/StartupProbe.cs": "public class StartupProbe : MonoBehaviour { }",
+      "/p/Assets/Modules/Observatory/TelescopeService.cs": SERVICE,
+      "/p/Assets/Modules/Observatory/Prefabs/Lens.prefab": "",
     }));
 
     expect(result?.hasViews).toBe(false);
@@ -99,33 +100,33 @@ describe("whether a project can render anything", () => {
   });
 
   it("reports a scene with no camera", () => {
-    // Measured 2026-08-21: every prefab carried a SpriteRenderer and the only
-    // scene held one GameObject and no Camera. Views would not have helped.
+    // A scene without a Camera renders nothing, however many views the project
+    // has; the gate reports it on its own.
     const result = assessViewLayer("/p", io({
-      "/p/Assets/Modules/Board/CubeView.cs": "public class CubeView : MonoBehaviour { }",
-      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "SpriteRenderer:",
-      "/p/Assets/Scenes/Gameplay.unity": "GameObject:\nTransform:",
+      "/p/Assets/Modules/Observatory/LensView.cs": "public class LensView : MonoBehaviour { }",
+      "/p/Assets/Modules/Observatory/Prefabs/Lens.prefab": "SpriteRenderer:",
+      "/p/Assets/Scenes/Dome.unity": "GameObject:\nTransform:",
     }));
 
-    expect(result?.camerslessScenes).toEqual(["Gameplay.unity"]);
+    expect(result?.camerslessScenes).toEqual(["Dome.unity"]);
   });
 
   it("names a cameraless scene by its file name when the listing holds Windows paths", () => {
     // A Windows walk lists C:\p\Assets\...: the report named the whole path.
     const result = assessViewLayer("C:\\p", io({
-      "C:\\p\\Assets\\Modules\\Board\\CubeView.cs": "public class CubeView : MonoBehaviour { }",
-      "C:\\p\\Assets\\Modules\\Board\\Prefabs\\Cube.prefab": "SpriteRenderer:",
-      "C:\\p\\Assets\\Scenes\\Gameplay.unity": "GameObject:\nTransform:",
+      "C:\\p\\Assets\\Modules\\Observatory\\LensView.cs": "public class LensView : MonoBehaviour { }",
+      "C:\\p\\Assets\\Modules\\Observatory\\Prefabs\\Lens.prefab": "SpriteRenderer:",
+      "C:\\p\\Assets\\Scenes\\Dome.unity": "GameObject:\nTransform:",
     }));
 
-    expect(result?.camerslessScenes).toEqual(["Gameplay.unity"]);
+    expect(result?.camerslessScenes).toEqual(["Dome.unity"]);
   });
 
   it("says nothing about a scene that has one", () => {
     const result = assessViewLayer("/p", io({
-      "/p/Assets/Modules/Board/CubeView.cs": "public class CubeView : MonoBehaviour { }",
-      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "SpriteRenderer:",
-      "/p/Assets/Scenes/Gameplay.unity": "GameObject:\nCamera:\n  m_Enabled: 1",
+      "/p/Assets/Modules/Observatory/LensView.cs": "public class LensView : MonoBehaviour { }",
+      "/p/Assets/Modules/Observatory/Prefabs/Lens.prefab": "SpriteRenderer:",
+      "/p/Assets/Scenes/Dome.unity": "GameObject:\nCamera:\n  m_Enabled: 1",
     }));
 
     expect(result?.camerslessScenes).toEqual([]);

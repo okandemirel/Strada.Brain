@@ -6,10 +6,9 @@ import { tmpdir } from "node:os";
 import { attemptRunId, CampaignManager, capabilityGapWork, closureHolds, coverageRequirementOf, MAX_REPAIRS_PER_REQUIREMENT, repairsForRequirement, withRepairBudget, deliveryFailureKinds, proofSignature, reconcileCapabilityGaps, rememberOwnedTask, OWNERSHIP_LEDGER_LIMIT, unscheduledGaps } from "./campaign-manager.js";
 
 /**
- * Measured live 2026-09-04: told not to audit, the final sprint answered
- * three times with DOCUMENTS — a gap analysis, an entry-scene audit, a
- * "vertical slice" write-up — and its commit touched 0 code, scene, prefab or
- * asset files. The no-work gate sees a dirty tree and passes it.
+ * Measured in a live campaign: a final sprint told not to audit answered with
+ * documents only, and its commits touched no code, scene, prefab or asset
+ * file. The no-work gate sees a dirty tree and passes it.
  */
 const dirs: string[] = [];
 function repo(): string {
@@ -38,15 +37,15 @@ afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, f
 describe("documents are not delivery", () => {
   it("flags a sprint whose only commits are docs", () => {
     const root = repo();
-    commit(root, "docs/GapAnalysis.md");
-    commit(root, "docs/DELIVERY_REPORT.md");
+    commit(root, "docs/Retrospective.md");
+    commit(root, "docs/ReleaseNotes.md");
     expect(judge(root)).toBe(true);
   });
 
   it("passes a sprint that touched code or a scene", () => {
     const root = repo();
     commit(root, "docs/Notes.md");
-    commit(root, "Assets/Modules/Board/Board.cs");
+    commit(root, "Assets/Scripts/Weather/RainEmitter.cs");
     expect(judge(root)).toBe(false);
   });
 

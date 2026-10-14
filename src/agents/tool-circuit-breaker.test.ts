@@ -1,11 +1,11 @@
 /**
  * A tool that fails on different things is not a broken tool.
  *
- * Measured 2026-08-20: an agent probed seven files that did not exist, one in
- * each of seven modules — ordinary exploration, every call a different path —
- * and file_read was taken away for the rest of the run. The breaker counted
- * the tool, not the repetition, so doing the obvious thing seven times looked
- * identical to a tool that had stopped working.
+ * Measured 2026-08-20 in a live campaign: an agent probed several files that
+ * did not exist, each in a different folder — ordinary exploration, every call
+ * a different path — and file_read was taken away for the rest of the run. The
+ * breaker counted the tool, not the repetition, so doing the obvious thing a
+ * few times looked identical to a tool that had stopped working.
  *
  * The opposite failure is real too: a genuinely broken tool fails on every
  * target, and refusing to ever disable it leaves the run hammering it. So the
@@ -36,13 +36,13 @@ describe("what counts as a broken tool", () => {
   it("keeps the tool when each failure is a different target", () => {
     const b = breaker();
 
-    for (const module of ["Frog", "Board", "Level", "Input", "UI", "Scoring", "GameFlow"]) {
-      b.trackToolError("c", "file_read", true, `Assets/Modules/${module}Module/Missing.cs`);
+    for (const name of ["Titration", "Distillation", "Centrifuge", "Spectrometer", "Burette", "Pipette", "Desiccator", "Autoclave", "Fumehood"]) {
+      b.trackToolError("c", "file_read", true, `lab/${name}/missing.ts`);
     }
 
     expect(
-      b.toolIsCircuitBroken("c", "file_read", "Assets/Modules/AnotherModule/Missing.cs"),
-      "seven distinct misses disabled the tool",
+      b.toolIsCircuitBroken("c", "file_read", "lab/Reagents/missing.ts"),
+      "nine distinct misses disabled the tool",
     ).toBeNull();
   });
 

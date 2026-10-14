@@ -9,9 +9,9 @@
  *   1. Idea mode: no GDD yet — the first task WRITES the GDD, then the run
  *      stops at exactly one human gate (the approved design) before building.
  *   2. Sprint-to-sprint drive: when a milestone task lands, the next one is
- *      submitted automatically. Measured 2026-08-26 (the test game): Sprint B→C
- *      advanced only because a person hand-carried a 562-char kick prompt
- *      into the CLI hours later. The campaign is that kick, in code.
+ *      submitted automatically. Measured in a live campaign: a milestone
+ *      advanced only when a person carried the next kick prompt into the CLI
+ *      by hand, hours later. The campaign is that kick, in code.
  *
  * The campaign does NOT re-implement planning/execution/verification — each
  * milestone is submitted to the ordinary task pipeline (goal DAG, supervisor,
@@ -63,7 +63,7 @@ export type MilestoneStatus = "pending" | "running" | "green" | "failed";
 export interface CampaignMilestone {
   /** Stable id inside the campaign ("m1", "m2", ...). */
   id: string;
-  /** Human label, e.g. "Sprint A — Foundations & Core Sim". */
+  /** Human label, e.g. "Milestone 2 — Save slots & options menu". */
   title: string;
   /**
    * For a coverage-remediation sprint, the requirement it exists to close, in
@@ -127,9 +127,8 @@ export interface CampaignMilestone {
   deliveryFailureKinds?: string[];
   /**
    * The full self-contained sprint kick prompt submitted to the task pipeline
-   * when this milestone starts — the same shape as the hand-carried sprint
-   * prompts that drove the test game (scope, verification demands, commit
-   * discipline, delivery expectations).
+   * when this milestone starts — the same shape as a hand-typed sprint prompt
+   * (scope, verification demands, commit discipline, delivery expectations).
    */
   prompt: string;
   status: MilestoneStatus;
@@ -173,9 +172,8 @@ export interface CampaignMilestone {
   testVerdict?: string;
   /**
    * Whether that verdict came from the WHOLE suite rather than a filtered
-   * run. A filtered green is not the suite passing: the delivered test-game
-   * build's filtered runs were green while its one unfiltered run reported
-   * 6 of 173 failing (audited 2026-09-03).
+   * run. A filtered green is not the suite passing: a delivery's filtered runs
+   * were green while its one unfiltered run was red (audited 2026-09-03).
    */
   testVerdictUnfiltered?: boolean;
   /** Where the verdict came from: the NUnit run record the tool wrote, or the tool's prose (2026-09-10). */
@@ -206,9 +204,9 @@ export interface CampaignMilestone {
   /**
    * The project's sprite art when a coverage-remediation sprint was first
    * submitted: how many sprite textures, and how many of them placeholder-grade
-   * (see ArtInventory). Measured 2026-09-07: four remediation attempts, 0 art —
-   * 410 of 429 sprites were flat procedural shapes before and after each one,
-   * and nothing compared the two numbers.
+   * (see ArtInventory). Measured 2026-09-07: remediation attempts added no
+   * art — the placeholder share was the same before and after each one, and
+   * nothing compared the two numbers.
    */
   placeholderArtAtStart?: { sprites: number; placeholders: number };
   /** One-shot flag: completion was bounced once because the placeholder count did not drop. */
@@ -272,9 +270,9 @@ export interface CampaignMilestone {
    */
   deliveryProofsMissing?: string[];
   /**
-   * How many times the scene-hygiene gate has bounced this milestone. The
-   * delivered test-game tree left 14 scenes enabled in Build Settings and the
-   * user could not tell which one is the game (measured 2026-09-03). The gate
+   * How many times the scene-hygiene gate has bounced this milestone. A
+   * delivered tree that leaves many scenes enabled in Build Settings leaves the
+   * user unable to tell which one is the game (measured 2026-09-03). The gate
    * refuses ONLY the unopenable cases — no enabled scene at all, or no entry
    * scene that can be named — because deleting a user's scenes is not this
    * system's decision. Bounded by the milestone's attempt budget.

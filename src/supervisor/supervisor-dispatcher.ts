@@ -49,9 +49,10 @@ export interface DispatcherConfig {
 export const NODE_ABANDON_GRACE_MS = 90_000;
 
 /**
- * A node needs room for this many turns at the MEASURED pace. Measured
- * 2026-09-08: at 162 s per turn a 60-minute budget was eleven turns — all
- * inventory, no generation — and the node's eleven dependents were skipped.
+ * A node needs room for this many turns at the MEASURED pace. Measured in a
+ * live campaign: on a slow provider a fixed 60-minute budget was about ten
+ * turns — all inventory, no generation — and every dependent of the node was
+ * skipped.
  */
 export const MIN_TURNS_PER_NODE = 30;
 /** No pace makes a node's budget longer than this. */
@@ -286,10 +287,10 @@ export class SupervisorDispatcher {
       ...(status === "executing" ? { startedAt: Date.now() } : {}),
       ...(status !== "executing" ? { completedAt: Date.now() } : {}),
       ...(result?.duration ? { elapsed: result.duration } : {}),
-      // The node's own words. Measured 2026-09-07: 215 of 215 goal nodes
+      // The node's own words. Measured in a live campaign: every goal node
       // marked completed carried result="" — the bridge persisted the row's
       // old (empty) result because the event never carried the output, so a
-      // goal that "obtained non-placeholder art" left nothing to check.
+      // completed goal left nothing to check.
       ...(typeof result?.output === "string" && result.output.trim() !== ""
         ? { output: result.output.slice(0, NODE_OUTPUT_PERSIST_CHARS) }
         : {}),
@@ -783,8 +784,7 @@ export class SupervisorDispatcher {
 
         // Non-transient or second attempt: fail. A worker's run settles inside
         // executeNode (the production bridge catches every throw), so what
-        // reaches here is the node's time budget or a throw no worker made
-        // (GDD-drift W01).
+        // reaches here is the node's time budget or a throw no worker made.
         return {
           ...this.makeResult(
             node,
@@ -904,10 +904,10 @@ export class SupervisorDispatcher {
     // unhandled rejections. The winner's error is still surfaced via
     // Promise.race below.
     // STATE THE BUDGET. A node that runs past nodeTimeoutMs is killed with
-    // nothing salvaged and every dependent skipped — measured 2026-09-03 on
-    // Sprint 7: one node spent 70 minutes on 12 headless compiles, hit the
-    // hour, and took 8 sibling nodes down with it. The node never knew it had
-    // a deadline, so it could not choose to land a smaller increment first.
+    // nothing salvaged and every dependent skipped — measured in a live
+    // campaign: one node spent its whole budget on repeated headless compiles
+    // and took its dependents down with it. The node never knew it had a
+    // deadline, so it could not choose to land a smaller increment first.
     const nodeWithBudget = this.withDeadlineNotice(node, timeoutMs);
     const nodePromise = this.executeNode(nodeWithBudget, nodeController.signal);
     nodePromise.catch(() => { /* swallowed for race-loser only */ });
@@ -943,11 +943,11 @@ export class SupervisorDispatcher {
       const message = `${baseMsg} [node="${nodeLabel}", elapsed=${elapsed}ms, reason=${reason}]`;
       // WORK KEPT IS NOT A FAILURE. A node that ran out of time after
       // producing file changes used to be reported "failed", and every
-      // dependent was skipped as "dependency failed". Measured 2026-09-10: a
-      // node replaced 139 placeholder sprites in five committed batches (the
-      // measured goal was met after three), hit its 9 600 000 ms budget, and
-      // took its three dependents down with it — nodes whose first step was
-      // to re-measure and continue. Give the aborted run the same grace the
+      // dependent was skipped as "dependency failed". Measured in a live
+      // campaign: a node committed its work in several batches, met its
+      // measured goal before the deadline, hit the budget anyway, and took its
+      // dependents down with it — nodes whose first step was to re-measure
+      // and continue. Give the aborted run the same grace the
       // settle already gives it; if it hands back its artifacts, the node is
       // done-with-timeout and its dependents run against the work it left.
       if (timedOut) {
@@ -966,7 +966,7 @@ export class SupervisorDispatcher {
               `Last report: ${settled.output.slice(0, 600)}`,
             duration: Date.now() - startedAt,
             // Kept is not finished: whatever the aborted run reported, the
-            // budget cut it off (GDD-drift W01).
+            // budget cut it off.
             terminalKey: "cut_short",
           };
         }

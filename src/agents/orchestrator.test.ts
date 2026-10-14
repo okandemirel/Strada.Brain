@@ -6153,8 +6153,8 @@ DONE`,
       // The allowlist reads a drive-letter root (tmpdir() on the windows-test
       // job) as Windows, where only the Hub's Unity.exe is the editor.
       unity = /^[A-Za-z]:[\\/]/.test(base)
-        ? '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.3.22f1\\Editor\\Unity.exe"'
-        : "/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity";
+        ? '"C:\\Program Files\\Unity\\Hub\\Editor\\6000.0.58f2\\Editor\\Unity.exe"'
+        : "/Applications/Unity/Hub/Editor/6000.0.58f2/Unity.app/Contents/MacOS/Unity";
       source = join(base, "source");
       lease = join(base, "lease");
       mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });

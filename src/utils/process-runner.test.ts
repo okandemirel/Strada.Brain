@@ -1,10 +1,11 @@
 /**
  * A timeout that can itself hang is not a timeout.
  *
- * Measured on the run of 2026-08-20: the agent could not find the Unity editor
- * and ran `find /Users ...`. shell_exec's limit was 30 seconds; the command
- * ran 45 minutes and 27 seconds, took the whole run with it, and reported
- * success — isError was false, so nothing counted it as a failure either.
+ * Measured in a live campaign: the agent could not find the Unity editor and
+ * ran an unbounded `find` over the home directories. shell_exec's limit was 30
+ * seconds; the command ran for most of an hour, took the run with it, and
+ * reported success — isError was false, so nothing counted it as a failure
+ * either.
  *
  * The shell is killed; what the shell started is not. It keeps the inherited
  * stdout pipe open, and 'close' waits on the pipe.

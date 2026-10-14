@@ -2,7 +2,7 @@
  * Deterministic project-scoped shell allowlist — consulted BEFORE the LLM shell
  * reviewer.
  *
- * Measured 2026-08-23 (test-game run): the conformance gate demanded
+ * Measured 2026-08-23: the conformance gate demanded
  * "GAME NEVER RUN — run the game", the agent answered with exactly the right
  * command (Unity -batchmode -runTests against its own project), and the LLM
  * shell reviewer rejected it twice — once "inconclusive", once "looks
@@ -362,10 +362,9 @@ const RULES: readonly AllowlistRule[] = [
     },
   },
   {
-    // Measured 2026-09-08 00:25: `ls Assets/Art/Generated/ | grep -i kiln`
-    // went to the LLM reviewer, which was "inconclusive" twice, and a sprint
-    // collecting sprite guids lost two turns to a listing. A pipeline whose
-    // every stage is a read-only inspection command cannot change anything.
+    // A listing piped through grep went to the LLM reviewer, which answered
+    // "inconclusive" and cost the worker turns. A pipeline whose every stage
+    // is a read-only inspection command cannot change anything.
     name: "read-only inspection pipeline (ls/cat/grep/head/tail/find/wc/sort…)",
     matches(stages) {
       return stages.length > 0 && stages.every(readOnlyStage);

@@ -53,12 +53,12 @@ export function frameworkVaultScope(extraSourceDirs: readonly string[] = []): (r
  * The codebases this system is supposed to have mastered.
  *
  * Both boot-time vault registrations were pinned to the Unity project, so the
- * only thing ever indexed was the game. Strada.Core, Strada.Modules,
- * Strada.MCP and Brain itself — the systems every plan is written against —
- * were searchable nowhere. Measured 2026-08-22: the game project held 252
- * indexed notes and a 90MB index; the framework repositories held no vault at
- * all, and the knowledge that should have come from reading them arrived
- * instead as prose rules typed into a prompt after each incident.
+ * only codebase ever indexed was the project being built. Strada.Core,
+ * Strada.Modules, Strada.MCP and Brain itself — the systems every plan is
+ * written against — were searchable nowhere. In a live campaign the project
+ * had a working vault while the framework repositories had none, and the
+ * knowledge that should have come from reading them arrived instead as prose
+ * rules typed into a prompt after each incident.
  *
  * A package the project does not have is indexed from its upstream checkout
  * when one was found (WP-1.2): Strada.Modules otherwise had no vault at all.

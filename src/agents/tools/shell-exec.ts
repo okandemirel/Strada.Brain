@@ -244,13 +244,13 @@ export class ShellExecTool implements ITool {
     }
 
     // Resolve and validate working directory using path-guard.
-    // Under a workspace lease `projectPath` is the lease copy, but the agent
-    // knows the project by its REAL path (the GDD, the prompt and every user
-    // message name it). Naming it is not an escape attempt — it is the same
-    // tree — so map the source root onto the lease instead of refusing.
-    // Measured 2026-09-02 on Sprint 7: six shell_exec calls refused with
-    // "working directory must be within the project", each costing the
-    // delivery sprint a turn.
+    // Under a workspace lease `projectPath` is the lease copy, but the task
+    // text, a design document or a user message may name the project by its
+    // REAL path. Naming it is not an escape attempt — it is the same tree —
+    // so map the source root onto the lease instead of refusing. Measured in a
+    // live campaign (2026-09-02): calls naming the real root were refused with
+    // "working directory must be within the project", each costing the agent
+    // a turn.
     const relWd = redirectSourceWorkingDirectory(
       String(input["working_directory"] ?? ""),
       context.sourceProjectPath,

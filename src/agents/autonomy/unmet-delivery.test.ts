@@ -5,11 +5,10 @@
  * refusals and [STRADA NOTHING DRAWN] goes quiet, because a rule that cannot be
  * cleared stops being a rule and becomes a loop.
  *
- * Going quiet was then read as satisfied. Measured on one run: the gate fired
- * three times, fell silent on the fourth, and the run finished `failed: false`
- * with a one-line success message for a game whose captured frames were all
- * identical. The gate's own last words are "say the game does not render
- * rather than reporting it as delivered" — advice with nothing behind it.
+ * Going quiet was then read as satisfied: once the gate has spent its asks, a
+ * run whose captured frames are all identical could still finish
+ * `failed: false` with a success message, although the gate's own last words
+ * tell it not to report the game delivered.
  *
  * So the ask budget governs how often the agent is asked; this governs what may
  * be claimed, and it never goes quiet.
@@ -138,10 +137,10 @@ describe("what blocks delivery", () => {
     expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([]);
   });
 
-  it("still objects when frame variety is HUD-level", () => {
-    // Measured 2026-08-24: variation confined to the HUD (well under a quarter
-    // of the frames distinct) satisfied the old differing-frames rule while
-    // nothing was drawn.
+  it("still objects when frame variety is overlay-level", () => {
+    // Frames that differ only in a small overlay region (fewer than a quarter
+    // of them distinct) must not satisfy the variety rule while nothing else
+    // is drawn.
     const root = assembled(0);
     // 2 distinct of 10 = 20% — below the 25% substantive-variety bar.
     framesOf(root, ["same", "same", "same", "same", "same", "same", "same", "same", "same", "diff"]);
@@ -213,17 +212,21 @@ describe("the ask budget does not silence it", () => {
  * sprints had no art yet.
  */
 const GDD_SCHEDULING_MORE = [
-  "# Test Game GDD",
+  "# Cave Survey — design",
   "",
-  "## Cave features",
+  "## Later milestones",
   "",
-  "| Stage | Feature | Effect |",
-  "| ----- | ------- | ------ |",
-  "| Cave 23 | Gas Vent | pushes the drone upward |",
-  "| Cave 38 | Crystal Seam | reveals the map nearby |",
-  "| Cave 44 | Glow Moss | lights a radius |",
+  "Planned after the first playable; none of these belongs to the current sprint.",
+  "",
+  "| When | Feature |",
+  "| ---- | ------- |",
+  "| Milestone 5 | Echo Beacon |",
+  "| Milestone 3 | Rope Bridge |",
+  "| Milestone 5 | Bat Swarm |",
   "",
 ].join("\n");
+
+const LATER_FEATURES = ["Echo Beacon", "Rope Bridge", "Bat Swarm"] as const;
 
 /** A run that wrote module code and never started the game. */
 function runThatNeverPlayed(root: string): StradaConformanceGuard {
@@ -279,7 +282,15 @@ describe("the delivery claim stays inside the sprint's own scope", () => {
     mkdirSync(join(root, "docs"), { recursive: true });
     writeFileSync(join(root, "docs", "GDD.md"), GDD_SCHEDULING_MORE);
     framesOf(root, ["one", "two", "three"]);
+    const guard = runThatPlayed(root);
 
-    expect(runThatPlayed(root).unmetDeliveryConditions()).toEqual([]);
+    // The schedule is really read, and its later features really have no art:
+    // the coverage ask names every one of them. Without this the empty list
+    // below could pass on a document nothing parsed.
+    const ask = guard.getPrompt() ?? "";
+    expect(ask).toContain("[STRADA ELEMENT ASSETS MISSING]");
+    for (const feature of LATER_FEATURES) expect(ask).toContain(feature);
+
+    expect(guard.unmetDeliveryConditions()).toEqual([]);
   });
 });

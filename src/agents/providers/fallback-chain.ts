@@ -968,9 +968,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         health.recordSuccess(provider.name);
         const okMeta = this.attemptMeta[i];
         if (okMeta) this.onModelResponsive?.(okMeta.provider, okMeta.model);
-        // The cost of a turn, measured. 2026-09-07: 52 of a sprint's 91 minutes
-        // were twelve waits of 2-10 minutes, each after a cheap tool call — the
-        // model, not Unity — and nothing recorded how long any model call took.
+        // The cost of a turn, measured: in a live campaign most of a sprint's
+        // elapsed time was model waits after cheap tool calls — the model and not
+        // the engine — and nothing recorded how long any model call took.
         logger.info("Provider call", {
           label,
           provider: provider.name,
@@ -1019,8 +1019,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         if (midStream) error = midStream.underlying;
         const errorMsg = error instanceof Error ? error.message : String(error);
         lastError = error instanceof Error ? error : new Error(String(error));
-        // Every attempt leaves a line, not only the successful one: measured
-        // 2026-09-07 19:50, a first call took 4 min 21 s and no line said
+        // Every attempt leaves a line, not only the successful one: measured in
+        // a live run, a first call took more than four minutes and no line said
         // where the time went.
         logger.info("Provider call failed", {
           label,

@@ -11,7 +11,7 @@ import { fetchWithRetry } from "./fetch-with-retry.js";
  * was retried: ten attempts backing off to a minute each, against a signal that
  * could never become un-aborted.
  *
- * Measured 2026-08-22, run 47: ten "network error, retrying" lines between
+ * Measured live 2026-08-22: ten "network error, retrying" lines between
  * 20:23 and 22:09, every one carrying "This operation was aborted", ending in a
  * run that sat silent for four hours while the provider answered a direct
  * request in three seconds.

@@ -314,9 +314,9 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
   });
 
   it("integrates milestone branches only AFTER the lease has been written back", async () => {
-    // Measured 2026-09-07 21:32: the merge attempt ran one second before the
-    // lease commit, rewrote project files, and the commit quarantined the
-    // sprint's scene placements as "the user changed it".
+    // Measured 2026-09-07: the merge attempt ran one second before the lease
+    // commit and rewrote project files, so the commit took the agent's own
+    // edits for user changes and quarantined them.
     const order: string[] = [];
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree);
@@ -329,7 +329,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       id: "lease-task",
       path: "/tmp/task-lease",
       release: vi.fn(async () => { order.push("release"); }),
-      commit: vi.fn(async () => { order.push("commit"); return { written: ["Assets/Scenes/Main.unity"], conflicts: [], removed: [], deleted: [], failed: [], conflictsQuarantinedUnder: null, quarantined: 0 }; }),
+      commit: vi.fn(async () => { order.push("commit"); return { written: ["Assets/Scenes/Observatory.unity"], conflicts: [], removed: [], deleted: [], failed: [], conflictsQuarantinedUnder: null, quarantined: 0 }; }),
     };
     const executor = new BackgroundExecutor({
       orchestrator: mockOrch as any,
@@ -2115,7 +2115,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
   });
 
   /**
-   * Measured 2026-08-23 on run 53: the agent stopped to ask which project to
+   * Measured live 2026-08-23: the agent stopped to ask which project to
    * build, the control plane wrote the tag `blocked:ask_user`, and
    * `reason ?? (output || ...)` stored that sixteen-character tag as the whole
    * result. The question — the only part anyone could act on — was discarded,
@@ -2123,7 +2123,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
    */
   it("blocks with the question the worker asked, not the tag for asking", async () => {
     const question =
-      "UNITY_PROJECT_PATH points at SampleGame but the open editor is Lodestone. Which should I build?";
+      "UNITY_PROJECT_PATH points at Orchardkeep but the open editor has Tidewell loaded. Which should I build?";
     const executor = new BackgroundExecutor({
       orchestrator: {
         runWorkerTask: vi.fn().mockResolvedValue({
@@ -2811,9 +2811,9 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
   });
 
   it("settles a task whose workspace vanished under it, then keep-alive resubmits", async () => {
-    // Measured 2026-08-27: a Sprint C task flailed for 40+ minutes against a
-    // lease dir that had been deleted — failed tool calls kept resetting the
-    // inactivity reaper, so nothing ever settled it.
+    // Measured 2026-08-27: a task kept flailing against a lease dir that had
+    // been deleted. Failed tool calls kept resetting the inactivity reaper, so
+    // nothing ever settled it.
     const wsDir = mkdtempSync(join(os.tmpdir(), "lost-ws-"));
     const hangingAdmission = vi.fn().mockImplementation(
       () => new Promise(() => {}), // the run never settles on its own
@@ -3020,7 +3020,7 @@ describe("BackgroundExecutor - auto-resume bounds (measured loop of 2026-08-26)"
         id: id as any,
         status: TaskStatus.blocked,
         origin: "user",
-        prompt: "Sprint 3 — wire the greenhouse sprinkler timetable",
+        prompt: "Wire the greenhouse sprinkler timetable",
         updatedAt,
         result: "Transient failure — All providers are in cooldown. Auto-retry 1/10 in ~600s.",
       });
@@ -3492,7 +3492,7 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     writeFileSync(join(root, "a.txt"), "main\n");
     git("add", "-A");
     git("commit", "-qm", "first");
-    git("branch", "milestone/sprint-a");
+    git("branch", "milestone/tide-chart");
     // A live holder nothing may break: this very process, freshly heartbeated.
     const lockDir = join(root, ".strada", "locks", "project-write.lock");
     mkdirSync(lockDir, { recursive: true });
@@ -3515,7 +3515,7 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
         expect.anything(),
       );
       // Nothing was merged: the branch is still not an ancestor of main.
-      expect(spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", "milestone/sprint-a", "main"]).status).toBe(0);
+      expect(spawnSync("git", ["-C", root, "merge-base", "--is-ancestor", "milestone/tide-chart", "main"]).status).toBe(0);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -3546,10 +3546,10 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     git("commit", "-q", "-am", "conflict work");
     git("checkout", "-q", "main");
     // A cleanly deliverable branch (sorts after the conflicting one).
-    git("checkout", "-q", "-b", "milestone/sprint-c");
-    writeFileSync(join(root, "sprint-c.txt"), "delivered\n");
+    git("checkout", "-q", "-b", "milestone/dock-lights");
+    writeFileSync(join(root, "dock-lights.txt"), "delivered\n");
     git("add", ".");
-    git("commit", "-q", "-m", "sprint c");
+    git("commit", "-q", "-m", "dock lights");
     git("checkout", "-q", "main");
     writeFileSync(join(root, "shared.txt"), "from main\n");
     git("commit", "-q", "-am", "main work");
@@ -3572,11 +3572,11 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
 
       // The deliverable branch is integrated — even though a conflicting
       // sibling was processed before it.
-      expect(isAncestor("milestone/sprint-c")).toBe(true);
-      expect(existsSync(join(root, "sprint-c.txt"))).toBe(true);
+      expect(isAncestor("milestone/dock-lights")).toBe(true);
+      expect(existsSync(join(root, "dock-lights.txt"))).toBe(true);
       expect(logSpies.info).toHaveBeenCalledWith(
         "Integrated delivered milestone branch",
-        expect.objectContaining({ branch: "milestone/sprint-c" }),
+        expect.objectContaining({ branch: "milestone/dock-lights" }),
       );
 
       // The conflicting branch is NOT silently resolved in main's favour
@@ -3633,14 +3633,14 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     try {
       const baseline = await seam.snapshotIntegrationBaseline();
       expect(baseline).toEqual(new Set(["feature/foo"]));
-      newBranch("milestone/sprint-a"); // what the run created
+      newBranch("milestone/tide-chart"); // what the run created
       await seam.integrateMilestoneBranches(createTestTask(), baseline);
-      expect(isAncestor("milestone/sprint-a")).toBe(true);
+      expect(isAncestor("milestone/tide-chart")).toBe(true);
       expect(isAncestor("feature/foo")).toBe(false);
       expect(existsSync(join(root, "foo.txt"))).toBe(false);
 
       // A later delivery does not pick it up either.
-      await seam.integrateMilestoneBranches(createTestTask(), new Set(["feature/foo", "milestone/sprint-a"]));
+      await seam.integrateMilestoneBranches(createTestTask(), new Set(["feature/foo", "milestone/tide-chart"]));
       expect(isAncestor("feature/foo")).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -3651,9 +3651,9 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     const { root, newBranch, isAncestor } = repoWithUnrelatedFeatureBranch("milestone-int-none-");
     const executor = new BackgroundExecutor({ orchestrator: createMockOrchestrator() as any, projectPath: root });
     try {
-      newBranch("milestone/sprint-b");
+      newBranch("milestone/rope-store");
       await (executor as unknown as IntegrationSeam).integrateMilestoneBranches(createTestTask(), undefined);
-      expect(isAncestor("milestone/sprint-b")).toBe(false);
+      expect(isAncestor("milestone/rope-store")).toBe(false);
       expect(isAncestor("feature/foo")).toBe(false);
       expect(existsSync(join(root, ".strada", "locks"))).toBe(false);
     } finally {
@@ -3665,7 +3665,7 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     const { root, newBranch, isAncestor } = repoWithUnrelatedFeatureBranch("milestone-int-run-");
     const orchestrator = createMockOrchestrator();
     orchestrator.evaluateSupervisorAdmission.mockImplementation(async () => {
-      newBranch("milestone/sprint-run"); // an agent's branch, minted during the run
+      newBranch("milestone/agent-run"); // an agent's branch, minted during the run
       return {
         path: "supervisor",
         reason: "eligible",
@@ -3686,7 +3686,7 @@ describe("BackgroundExecutor - integrateMilestoneBranches", () => {
     try {
       executor.enqueue(createTestTask(buildTestGoalTree()), new AbortController().signal, vi.fn());
       await vi.waitFor(() => expect(taskManager.complete).toHaveBeenCalled(), { timeout: 10_000 });
-      expect(isAncestor("milestone/sprint-run")).toBe(true);
+      expect(isAncestor("milestone/agent-run")).toBe(true);
       expect(isAncestor("feature/foo")).toBe(false);
     } finally {
       await executor.shutdown();
@@ -3725,10 +3725,10 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
           totalNodes: 1, succeeded: 1, failed: 0, blocked: 0, skipped: 0,
           totalCost: 0, totalDuration: 0,
           nodeResults: [{
-            nodeId: "n1", status: "ok", output: "wrote the board",
-            artifacts: [{ path: "Assets/Board.cs", action: "modify" }],
+            nodeId: "n1", status: "ok", output: "wrote the orchard ledger",
+            artifacts: [{ path: "Assets/Orchard/OrchardLedger.cs", action: "modify" }],
             toolResults: [
-              { toolCallId: "toolu_1", content: "wrote Assets/Board.cs", isError: false },
+              { toolCallId: "toolu_1", content: "wrote Assets/Orchard/OrchardLedger.cs", isError: false },
               { toolCallId: "toolu_2", content: "compile green, 0 errors", isError: false },
             ],
           }],
@@ -3875,7 +3875,7 @@ describe("BackgroundExecutor - settle records 'no test run observed'", () => {
   });
 });
 
-describe("BackgroundExecutor - settle carries how the run ended (GDD-drift W01)", () => {
+describe("BackgroundExecutor - settle carries how the run ended", () => {
   // In a measured campaign most milestone tips ended on the system's own
   // "task_stuck" notice and every one of them went green. The only record of how a run
   // ended was that sentence; the task row carried nothing a gate could read.
@@ -3920,7 +3920,7 @@ describe("BackgroundExecutor - settle carries how the run ended (GDD-drift W01)"
 
   it("supervisor path: one stuck node makes the run's worst key task_stuck, with the models that worked", async () => {
     const verdict = await settle(supervisorRun([
-      node("n1", { terminalKey: "done", model: "kimi-k2", artifacts: [{ path: "Assets/Board.cs", action: "modify" }] }),
+      node("n1", { terminalKey: "done", model: "kimi-k2", artifacts: [{ path: "Assets/Orchard/OrchardLedger.cs", action: "modify" }] }),
       node("n2", { terminalKey: "task_stuck", model: "glm-5" }),
     ]), buildTestGoalTree(), "task_sup_stuck");
     expect(verdict.runIntegrity).toEqual({
@@ -3967,11 +3967,11 @@ describe("BackgroundExecutor - settle carries how the run ended (GDD-drift W01)"
 
   it("supervisor path: a run with no node that ran carries no integrity rather than a clean finish", async () => {
     const verdict = await settle(supervisorRun([
-      node("n1", { terminalKey: "done", model: "kimi-k2", artifacts: [{ path: "Assets/Board.cs", action: "modify" }] }),
+      node("n1", { terminalKey: "done", model: "kimi-k2", artifacts: [{ path: "Assets/Orchard/OrchardLedger.cs", action: "modify" }] }),
     ]), buildTestGoalTree(), "task_sup_control");
     expect(verdict.runIntegrity).toBeDefined();
     const none = await settle(supervisorRun([
-      node("n1", { status: "skipped", artifacts: [{ path: "Assets/Board.cs", action: "modify" }] }),
+      node("n1", { status: "skipped", artifacts: [{ path: "Assets/Orchard/OrchardLedger.cs", action: "modify" }] }),
     ]), buildTestGoalTree(), "task_sup_none");
     expect(none.runIntegrity).toBeUndefined();
   });

@@ -172,8 +172,8 @@ export class ProviderManager {
      * PROVIDER_CHAIN_STRICT: the operator's chain is the WHOLE chain. A
      * requested primary outside it is ignored rather than put at the head —
      * measured live 2026-09-11: a project pinned to `opencode,opencode2` ran
-     * over a thousand worker turns on OpenAI because something asked for it by
-     * name, which is the account reserved for other work.
+     * its worker turns on OpenAI because something asked for it by name, which
+     * is the account reserved for other work.
      */
     private readonly chainIsExhaustive: boolean = false,
   ) {
@@ -799,7 +799,7 @@ export class ProviderManager {
    * flag is an OR across members (fallback-chain.ts sets
    * `vision: providers.some(...)`) and it strips the image block when it
    * routes to a text-only member — so the chain answers "yes I can see" and
-   * then answers the question blind. That fabricated pass is why two
+   * then answers the question blind. That fabricated pass is why
    * visual-conformance attempts were refused on review (audited 2026-09-03).
    */
   getVisionProvider(): { provider: IAIProvider; name: string; model?: string } | null {

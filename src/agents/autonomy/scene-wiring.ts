@@ -6,11 +6,10 @@ import { isVendorPath, stripCsComments } from "./csharp-source.js";
  * Whether a run delivered a game or a library.
  *
  * The conformance guard checks the shape of code: a module has a ModuleConfig
- * class, an .asmdef, tests. Every one of those can pass while nothing runs.
- * Measured on one long run: several modules, dozens of C# files and their test
- * assemblies, all compiling — and zero scenes, zero ScriptableObject assets and
- * no bootstrapper wiring. The run reported success. A developer opening that
- * project finds a library.
+ * class, an .asmdef, tests. Every one of those can pass while nothing runs:
+ * modules, C# files and test assemblies can all compile with no scene, no
+ * ScriptableObject asset and no bootstrapper wiring, and such a run still
+ * reports success. A developer opening that project finds a library.
  *
  * These checks read artifacts, not intentions, and they are ordered cheapest
  * first: does a scene exist at all, is there an asset for each config class, is
@@ -144,11 +143,9 @@ function scriptGuid(path: string, io: SceneWiringIo): string | undefined {
 /**
  * Config classes that some asset in the project is an instance of.
  *
- * Measured 2026-08-20: a scene assembled by unity_scene_build, verified on
- * disk, and passing its play-mode boot test was reported unassembled — because
- * the assets are named SurveyModule.asset while the class is SurveyModuleConfig, and
- * the check compared names. A correctly built game accused of being a library
- * sends the agent back to rebuild what it had already got right.
+ * unity_scene_build names its assets <Name>Module.asset while the class is
+ * <Name>ModuleConfig, so comparing names accuses a correctly assembled scene
+ * of being a library and sends the agent back to rebuild it.
  */
 function classesWithAnAsset(
   files: readonly string[],
@@ -291,12 +288,10 @@ const VIEW_MARKERS = [
 /**
  * Whether a run that built a game built anything that renders.
  *
- * Measured 2026-08-21 on a delivered project: plenty of C# files, prefabs and
- * passing play-mode tests — and zero MonoBehaviours, zero uses of Strada.Core's
- * View, EntityView, EntityMediator or ViewRegistry, and next to nothing in the
- * only scene. Every service and system was correct and nothing could be seen.
- * The tests passed because they call services directly and never go through a
- * scene.
+ * A project can hold scripts, prefabs and passing play-mode tests and still
+ * contain no MonoBehaviour or Strada.Core view type (View, EntityView,
+ * EntityMediator, ViewRegistry). Tests that call services directly never go
+ * through a scene, so they pass while nothing can be seen.
  *
  * Only accuses when there is something to render: prefabs exist and project
  * code was written. A simulation with no prefabs owes nobody a view.
@@ -330,10 +325,7 @@ export function assessViewLayer(
     if (VIEW_MARKERS.some((marker) => text.includes(marker))) viewScripts++;
   }
 
-  // A scene with no camera renders nothing, whatever else is right. Measured
-  // 2026-08-21: every prefab carried a SpriteRenderer and the only scene held
-  // next to nothing and no Camera — so the question "what puts a prefab on
-  // screen" had a second answer nobody had asked for.
+  // A scene with no camera renders nothing, whatever else is right.
   const cameraless: string[] = [];
   let cameraPrefabs: ReadonlySet<string> | null = null;
   for (const scene of files.filter((f) => f.endsWith(".unity"))) {
@@ -403,11 +395,10 @@ const BYPASS_RULES: ReadonlyArray<{
     floor: 5,
   },
   {
-    // Measured 2026-08-21: a character system declared [Inject] for its services and
-    // then reached for GameBootstrapper.Services.TryGet in OnUpdate whenever
-    // they were null — every frame. The boot check's own wiring report said all
-    // of them WERE registered, so the fallback was never needed; it was masking a
-    // question nobody had asked. A green suite over a workaround is still green.
+    // A system that declares [Inject] and falls back to
+    // GameBootstrapper.Services.TryGet whenever a field is null masks a wiring
+    // question: if the services are registered the fallback is never needed,
+    // and a green suite over a workaround is still green.
     // Upstream SystemRunner does not inject systems, though: it hands one only
     // EntityManager and EventBus, so the advice says when [Inject] is filled.
     what: "service-locator lookups beside [Inject]",
@@ -435,14 +426,8 @@ const BYPASS_RULES: ReadonlyArray<{
  *
  * Not "which subsystems went unused" — a game owes nobody a state machine.
  * This counts only reimplementation: the project built the thing AND never
- * touched the one that was already there.
- *
- * Measured 2026-08-21 on a delivered project: a crowd of hand-rolled public
- * events against 0 uses of Communication's 11 types, and dozens of Debug.Log
- * calls against 0 uses of Logging's 10. Only a handful of Strada.Core's 194
- * public types were used at all.
- * The project inherited SystemBase to get a tick, took [Inject], registered a
- * ModuleConfig, and wrote a plain C# game inside the shell.
+ * touched the one that was already there (for example, many public events
+ * and no EventBus use).
  *
  * `authored`, when given, limits what counts as the project's OWN version to
  * the files this run wrote: a vendor pack's or a legacy file's Debug.Log calls

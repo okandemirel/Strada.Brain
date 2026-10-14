@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runUnityLink, CONSENT_SCRIPT } from "./unity-link-runner.js";
+import { runUnityLink, CONSENT_SCRIPT, editorVersion, installedEditorVersions } from "./unity-link-runner.js";
 import { resolveStradaHomeEntry } from "../../../common/strada-home-entry.js";
 import type { execFile } from "node:child_process";
 
@@ -128,6 +128,95 @@ describe("runUnityLink", () => {
     expect(existsSync(storePath)).toBe(false);
   });
 
+  /**
+   * WHICH EDITOR VERSION the scratch project asks for.
+   *
+   * It used to be a literal — the version of the machine the file was written
+   * on. That version goes stale on the next Hub update, and on a machine that
+   * never had it the Hub refuses to open the scratch project at all. The
+   * versions below are invented installs, chosen so a lexicographic sort would
+   * get the order wrong.
+   */
+  describe("the editor version it pins the scratch project to", () => {
+    const INSTALLED = ["2022.3.41f1", "6000.1.7f1", "6000.1.12f1"];
+
+    // A developer's own machine may point these at a real project, and then
+    // every case below would read that project's version instead of the
+    // fixture's. Cleared here, restored after.
+    const savedEnv: Record<string, string | undefined> = {};
+    beforeEach(() => {
+      for (const key of ["UNITY_PROJECT_PATH", "STRADA_UNITY_PROJECT"]) {
+        savedEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+    });
+    afterEach(() => {
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    function editorsDirWith(versions: readonly string[]): string {
+      const dir = join(fakeBinDir, "editors");
+      mkdirSync(dir, { recursive: true });
+      for (const v of versions) mkdirSync(join(dir, v, "Unity.app", "Contents", "MacOS"), { recursive: true });
+      return dir;
+    }
+
+    async function linkWith(editorsDir: string): Promise<void> {
+      stubTokenExchange();
+      const result = await runUnityLink({
+        unityCli: fakeCli,
+        spawnImpl: fakeCliLauncher(),
+        waitForOutputImpl: outputWriter({ code: VALID_CODE }),
+        hubCloudConfigImpl: fakeHubConfig,
+        linkStorePath: storePath,
+        scratchDir,
+        editorsDir,
+      });
+      expect(result.ok).toBe(true);
+    }
+
+    const pinnedVersion = (): string | undefined => {
+      const file = join(scratchDir, "ProjectSettings", "ProjectVersion.txt");
+      return existsSync(file) ? readFileSync(file, "utf8") : undefined;
+    };
+
+    it("lists the installed versions newest first, by number and not by text", () => {
+      // 6000.1.7f1 sorts ABOVE 6000.1.12f1 as text; as numbers it does not.
+      expect(installedEditorVersions(editorsDirWith(INSTALLED))).toEqual([
+        "6000.1.12f1",
+        "6000.1.7f1",
+        "2022.3.41f1",
+      ]);
+    });
+
+    it("pins the newest editor actually installed", async () => {
+      await linkWith(editorsDirWith(INSTALLED));
+
+      expect(pinnedVersion()).toBe("m_EditorVersion: 6000.1.12f1\n");
+    });
+
+    it("prefers the configured project's own version over what is installed", async () => {
+      const projectRoot = join(fakeBinDir, "configured-project");
+      mkdirSync(join(projectRoot, "ProjectSettings"), { recursive: true });
+      writeFileSync(join(projectRoot, "ProjectSettings", "ProjectVersion.txt"), "m_EditorVersion: 2023.2.20f1\n");
+      process.env["UNITY_PROJECT_PATH"] = projectRoot;
+
+      await linkWith(editorsDirWith(INSTALLED));
+
+      expect(pinnedVersion()).toBe("m_EditorVersion: 2023.2.20f1\n");
+    });
+
+    it("writes no ProjectVersion.txt when no editor is installed, and lets the Hub choose", async () => {
+      await linkWith(editorsDirWith([]));
+
+      expect(pinnedVersion()).toBeUndefined();
+      expect(editorVersion(join(fakeBinDir, "editors"))).toBeUndefined();
+    });
+  });
+
   it("rejects a malformed authorization-code file instead of exchanging", async () => {
     const result = await runUnityLink({
       unityCli: fakeCli,
@@ -160,7 +249,7 @@ describe("CONSENT_SCRIPT", () => {
     expect(CONSENT_SCRIPT).toContain("UnityEditor.Connect.UnityOAuth");
     expect(CONSENT_SCRIPT).toContain("UNITY-LINK-OK");
     // The exchange must NOT be in the editor script: UnityConnect's packages
-    // config is empty outside Hub launches (measured on 6000.3.22f1).
+    // config is empty outside Hub launches (measured on a Unity 6.3 editor).
     expect(CONSENT_SCRIPT).not.toContain("/v1/oauth2/token");
   });
 

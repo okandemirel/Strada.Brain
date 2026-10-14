@@ -157,9 +157,9 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
 }
 
 /**
- * Tokens of vault (codebase) context per turn. Measured 2026-09-09: the
- * default 4 000 tokens rendered as 15 724 chars of every worker turn, node or
- * not. Floor 500; unset = 4 000.
+ * Tokens of vault (codebase) context per turn. The block is injected into
+ * every worker turn, node or not, so its size is configurable. Floor 500;
+ * unset = 4 000.
  */
 export function vaultContextBudgetTokens(env: NodeJS.ProcessEnv = process.env): number {
   const raw = Math.floor(Number(env["VAULT_CONTEXT_BUDGET_TOKENS"]));
@@ -300,9 +300,10 @@ export async function setupAgentCoreRun(
       : null;
     // A pin is BARE by design (no chain) — which also means a pin to a
     // provider sitting in a quota/credential cooldown has no fallback at all:
-    // the node burns its attempts against a dead endpoint and dies (measured:
-    // 4 nodes pinned to a quota-exhausted provider). Health-check the pin at
-    // materialization and drop it to the chain when the provider is cooled.
+    // the node burns its attempts against a dead endpoint and dies (measured
+    // in a live campaign: plan nodes pinned to a quota-exhausted provider).
+    // Health-check the pin at materialization and drop it to the chain when
+    // the provider is cooled.
     if (fixedProvider && fixedProviderName) {
       try {
         const { ProviderHealthRegistry } = await import("../../agents/providers/provider-health.js");
@@ -422,8 +423,9 @@ export async function setupAgentCoreRun(
     }
     // audited 2026-09-02: scoped to the RUN, not the chat. Every supervisor
     // wave node runs on the one Orchestrator with the one chatId, so a
-    // chatId-keyed set meant 16 nodes overwrote each other and self-learning
-    // credited the last node's instincts with every node's outcome.
+    // chatId-keyed set meant concurrent nodes overwrote each other and
+    // self-learning credited the last node's instincts with every node's
+    // outcome.
     deps.currentSessionInstinctIds.set(
       instinctScopeKey(chatId, deps.getTaskExecutionContext()?.taskRunId),
       matchedInstinctIds,
@@ -474,8 +476,9 @@ export async function setupAgentCoreRun(
       // assembled. It has to read the same tree the tools are writing to.
       projectPath: conformanceProjectPath(request.workspaceLease?.path, deps.projectPath?.()),
       // A campaign task's GDD (set by the executor around the whole task, so a
-      // supervisor node or a delegate inherits it); left to discovery, the
-      // guard judged a text-only campaign against another game's docs/ GDD.
+      // supervisor node or a delegate inherits it). Left to discovery, the
+      // guard reads whichever markdown is largest under docs/, which need not
+      // be this campaign's design document.
       designDoc: currentRunDesignDoc(),
       projectWorldSummary,
       projectWorldFingerprint,

@@ -674,9 +674,9 @@ export function compactSession(
 // ---------------------------------------------------------------------------
 // Retry after a hard-timeout (2026-09-09)
 //
-// Measured 13:23-13:49 on the placeholder mission: a 57k-token turn hit the
-// 10-minute call ceiling twice in a row with zero output, while the same
-// model had been answering 41-47k turns in 20-55 s. The ordinary compaction
+// Measured 2026-09-09 in a live run: a 57k-token turn hit the 10-minute
+// call ceiling twice in a row with zero output, while the same model had
+// been answering 41-47k turns in 20-55 s. The ordinary compaction
 // only triggers at COMPACTION_TRIGGER_RATIO of the declared 128k window, far
 // above where the free tier stops answering. When a call produces nothing for
 // the whole ceiling, the retry gets a prompt half the size.
@@ -706,8 +706,8 @@ export function compactForRetry(
 // ---------------------------------------------------------------------------
 // The compaction decision, with the provider's own count as ground truth.
 //
-// Measured 2026-09-09 15:45-15:53 on the user's project: turns of 68-73k
-// input tokens on a provider declared at 64k, and no "Session compacted"
+// Measured 2026-09-09 in a live run: turns of 68-73k input tokens on a
+// provider declared at 64k, and no "Session compacted"
 // line — the estimate counted messages and the system prompt (chars/4) but
 // not the ~30k chars of tool schemas, and under-read code-heavy content. The
 // provider reports what it actually received; that number wins.
@@ -728,9 +728,8 @@ export interface CompactionDecision {
 export const COMPACTION_TARGET_FLOOR_TOKENS = 8_000;
 /**
  * The conversation keeps at least this share of the window whatever the tool
- * schemas cost. Subtracting the schemas from the target alone (report
- * 2026-09-10 #33) compacted the conversation to make room for tools nobody
- * had chosen: 73k characters of schema on a 64k window left 14k tokens of
+ * schemas cost. Subtracting the schemas from the target alone compacted the
+ * conversation to make room for tools nobody had chosen: 73k characters of schema on a 64k window left 14k tokens of
  * conversation. Past TOOL_SHARE_WARN_RATIO the floor holds and the caller is
  * told the offer is what has to shrink.
  */

@@ -188,3 +188,114 @@ describe("the conformance review targets game code that uses the framework", () 
     expect(guard.needsConformanceReview()).toBe(false);
   });
 });
+
+/**
+ * An invented project the drawing gates can reach: a complete module, art on
+ * disk, a wired scene, and `frames` captured into Recordings/ by this run.
+ */
+function kilnProject(frames: readonly string[], designDoc?: string): { root: string; configPath: string } {
+  const root = mkdtempSync(join(tmpdir(), "conformance-kiln-"));
+  const moduleRoot = join(root, "Assets", "Modules", "KilnModule");
+  const scripts = join(moduleRoot, "Scripts");
+  mkdirSync(scripts, { recursive: true });
+  const configPath = join(scripts, "KilnModuleConfig.cs");
+  writeFileSync(configPath, "public class KilnModuleConfig : ModuleConfig {}");
+  writeFileSync(join(scripts, "Game.Modules.Kiln.asmdef"), '{"name":"Game.Modules.Kiln"}');
+  writeFileSync(join(moduleRoot, "KilnModuleConfig.asset"), "%YAML 1.1");
+  const tests = join(moduleRoot, "Tests", "Runtime");
+  mkdirSync(tests, { recursive: true });
+  writeFileSync(join(tests, "Game.Modules.Kiln.Tests.asmdef"), '{"name":"Game.Modules.Kiln.Tests"}');
+  writeFileSync(join(tests, "KilnTests.cs"), "[Test] public void Fires() {}");
+  mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
+  writeFileSync(join(root, "Assets", "Scenes", "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+  mkdirSync(join(root, "Assets", "Art"), { recursive: true });
+  writeFileSync(join(root, "Assets", "Art", "glaze.png"), "glaze");
+  if (designDoc !== undefined) {
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "design.md"), designDoc);
+  }
+  const rec = join(root, "Recordings");
+  mkdirSync(rec, { recursive: true });
+  frames.forEach((content, i) => writeFileSync(join(rec, `frame_${String(i).padStart(5, "0")}.png`), content));
+  return { root, configPath };
+}
+
+function playedKiln(root: string, configPath: string): StradaConformanceGuard {
+  const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+  guard.trackToolCall("file_write", { path: configPath }, false);
+  guard.trackToolCall("unity_playmode_verify", { captureFrames: 60 }, false);
+  return guard;
+}
+
+/** `total` frames of which exactly `distinct` differ from one another. */
+const framesWithVariety = (distinct: number, total = 60): string[] =>
+  Array.from({ length: total }, (_, i) => `kiln-shot-${i % distinct}`);
+
+describe("frames that differ too little do not prove drawing", () => {
+  // Frames can differ only because an overlay changes over an empty scene, so
+  // the bar is a quarter of the sampled frames distinct, not merely two.
+  it("fails at 14 distinct frames of 60 and names the ratio", () => {
+    const { root, configPath } = kilnProject(framesWithVariety(14));
+    try {
+      const prompt = playedKiln(root, configPath).getPrompt() ?? "";
+      expect(prompt).toContain("[STRADA NOTHING DRAWN]");
+      expect(prompt).toContain("frames vary too little to prove drawing: 14/60 distinct");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes at 15 distinct frames of 60, the quarter itself", () => {
+    const { root, configPath } = kilnProject(framesWithVariety(15));
+    try {
+      const guard = playedKiln(root, configPath);
+      expect(guard.getPrompt() ?? "").not.toContain("[STRADA NOTHING DRAWN]");
+      expect(guard.unmetDeliveryConditions().join("\n")).not.toContain("never been observed to render");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the drawing asks claim nothing about a particular game", () => {
+  it("asks for the play the design describes without assuming it has levels", () => {
+    const design =
+      "# Kiln Hours\n\nOne continuous firing shift: pots arrive on a cart, the player loads and fires " +
+      "them, and the shift ends when the kiln cracks. There are no rounds and no stages.\n";
+    const { root, configPath } = kilnProject(framesWithVariety(1, 12), design);
+    try {
+      const prompt = playedKiln(root, configPath).getPrompt() ?? "";
+      expect(prompt).toContain("[STRADA NOTHING DRAWN]");
+      expect(prompt).toContain("the play its design describes");
+      expect(prompt).not.toMatch(/\blevels?\b/iu);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("asks for a camera without claiming the prefabs carry renderers", () => {
+    // Prefabs with a Transform and nothing else: no renderer anywhere.
+    const root = mkdtempSync(join(tmpdir(), "conformance-no-camera-"));
+    try {
+      const scripts = join(root, "Assets", "Scripts");
+      mkdirSync(scripts, { recursive: true });
+      writeFileSync(join(scripts, "Kiln.cs"), "public class Kiln {}");
+      mkdirSync(join(root, "Assets", "Prefabs"), { recursive: true });
+      writeFileSync(
+        join(root, "Assets", "Prefabs", "Pot.prefab"),
+        "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Pot\n--- !u!4 &2\nTransform:\n  m_GameObject: {fileID: 1}\n",
+      );
+      mkdirSync(join(root, "Assets", "Scenes"), { recursive: true });
+      writeFileSync(join(root, "Assets", "Scenes", "Workshop.unity"), "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Bench\n");
+      const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+      guard.trackToolCall("file_write", { path: join(scripts, "Kiln.cs") }, false);
+
+      const prompt = guard.getPrompt() ?? "";
+      expect(prompt).toContain("[STRADA NO CAMERA]");
+      expect(prompt).toContain("Workshop.unity holds no Camera");
+      expect(prompt).not.toMatch(/carr(?:y|ies) a renderer/iu);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

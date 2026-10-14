@@ -1,11 +1,11 @@
 /**
  * The prompts the worker sees (GDD-drift plan W10, M3).
  *
- * In the measured campaign no sprint was ever shown the GDD sentences its milestone
- * would be judged on: the planner told it that its "deliverables" were what
- * the sprint "can be measured against" (nothing ever read them), and the
- * final sprint was told not to re-read the GDD at all. A worker cannot build
- * to rows it never sees, so every submit in shadow and on mode carries the
+ * Before W10 no sprint prompt carried the GDD sentences its milestone is judged
+ * on: the planner said a sprint's "deliverables" were what it "can be measured
+ * against" (nothing ever read them), and the final-sprint instruction said not
+ * to re-read the GDD at all. A worker cannot build to rows it never sees, so
+ * every submit in shadow and on mode carries the
  * rows the milestone owns, verbatim, with their checks and last results.
  */
 
@@ -346,8 +346,8 @@ describe("the planner's instructions", () => {
     const systems: string[] = [];
     const ladder = JSON.stringify({
       milestones: [
-        { title: "Sprint A", prompt: "Build the kilns end to end, compile green, capture a frame.", coveredSections: ["1. Kilns"], deliverables: [] },
-        { title: "Sprint B", prompt: "Build the twelve workshops end to end, compile green, capture a frame.", coveredSections: ["2. Workshops"], deliverables: [] },
+        { title: "Milestone 1 — Kilns", prompt: "Build the kilns end to end, compile green, capture a frame.", coveredSections: ["1. Kilns"], deliverables: [] },
+        { title: "Milestone 2 — Workshops", prompt: "Build the twelve workshops end to end, compile green, capture a frame.", coveredSections: ["2. Workshops"], deliverables: [] },
       ],
       excluded: [],
     });
@@ -366,8 +366,8 @@ describe("the planner's instructions", () => {
   it("the campaign plans with its own gate mode", async () => {
     const planMilestones = vi.fn().mockResolvedValue({
       milestones: [
-        { title: "Sprint A", prompt: "Build the kilns, compile green.", coveredSections: [], deliverables: [] },
-        { title: "Sprint B", prompt: "Deliver the game, full suite green.", coveredSections: [], deliverables: [] },
+        { title: "Milestone 1 — Kilns", prompt: "Build the kilns, compile green.", coveredSections: [], deliverables: [] },
+        { title: "Milestone 2 — Delivery", prompt: "Deliver the game, full suite green.", coveredSections: [], deliverables: [] },
       ],
       excluded: [],
     });

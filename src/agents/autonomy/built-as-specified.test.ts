@@ -18,10 +18,11 @@ import {
 /**
  * The delivered game measured, not the delivery report re-read.
  *
- * Audited 2026-09-03 (measured on a delivered project): a game shipped as "game
- * build complete" with an entry scene that rendered nothing, runtime scripts
- * calling GameObject.CreatePrimitive, and prefabs, pngs and models nothing
- * bound. Every fixture below is invented, in a file shape Unity itself would read.
+ * A delivery report can say "game build complete" while the shipped entry
+ * scene renders nothing, runtime scripts build the world from CreatePrimitive,
+ * and the project's prefabs, pngs and models sit unbound. The gate measures
+ * the tree instead of re-reading the report. Every fixture below is invented,
+ * in a file shape Unity itself would read.
  */
 
 const roots: string[] = [];
@@ -109,14 +110,14 @@ describe("assessBuiltAsSpecified — refusal", () => {
   it("refuses a delivery that places nothing, builds primitives in code and leaves art unbound", () => {
     const root = project();
     buildSettings(root, [
-      { path: "Assets/Scenes/Orchard.unity" },
+      { path: "Assets/Scenes/Observatory.unity" },
       { path: "Assets/Tests/Runtime/Smoke.unity" },
     ]);
     // The entry scene: a camera, a roster component pointing at a config
     // asset, and not one renderer.
     put(
       root,
-      "Assets/Scenes/Orchard.unity",
+      "Assets/Scenes/Observatory.unity",
       `${HEADER}${CAMERA(0)}--- !u!114 &500\nMonoBehaviour:\n  _roster: {fileID: 11400000, guid: c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0, type: 2}\n`,
       "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     );
@@ -125,25 +126,25 @@ describe("assessBuiltAsSpecified — refusal", () => {
     // but the scene never places either.
     put(
       root,
-      "Assets/Settings/OrchardRoster.asset",
+      "Assets/Settings/ObservatoryRoster.asset",
       `${HEADER}--- !u!114 &11400000\nMonoBehaviour:\n` +
-        `  _beehive: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n` +
-        `  _basket: {fileID: 7, guid: 77777777777777777777777777777777, type: 3}\n`,
+        `  _telescope: {fileID: 7, guid: 11111111111111111111111111111111, type: 3}\n` +
+        `  _sextant: {fileID: 7, guid: 77777777777777777777777777777777, type: 3}\n`,
       "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
     );
-    put(root, "Assets/Prefabs/Beehive.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
-    put(root, "Assets/Art/beehive.png", "pixels", "22222222222222222222222222222222");
-    put(root, "Assets/Prefabs/Basket.prefab", artPrefab("88888888888888888888888888888888"), "77777777777777777777777777777777");
-    put(root, "Assets/Art/basket.png", "pixels", "88888888888888888888888888888888");
+    put(root, "Assets/Prefabs/Telescope.prefab", artPrefab("22222222222222222222222222222222"), "11111111111111111111111111111111");
+    put(root, "Assets/Art/telescope.png", "pixels", "22222222222222222222222222222222");
+    put(root, "Assets/Prefabs/Sextant.prefab", artPrefab("88888888888888888888888888888888"), "77777777777777777777777777777777");
+    put(root, "Assets/Art/sextant.png", "pixels", "88888888888888888888888888888888");
     // Unbound art: a prefab and a model nothing reaches.
-    put(root, "Assets/Prefabs/Scarecrow.prefab", artPrefab("44444444444444444444444444444444"), "33333333333333333333333333333333");
-    put(root, "Assets/Art/Models/Windmill.fbx", "binary", "55555555555555555555555555555555");
-    put(root, "Assets/Art/scarecrow.png", "pixels", "44444444444444444444444444444444");
+    put(root, "Assets/Prefabs/Orrery.prefab", artPrefab("44444444444444444444444444444444"), "33333333333333333333333333333333");
+    put(root, "Assets/Art/Models/Dome.fbx", "binary", "55555555555555555555555555555555");
+    put(root, "Assets/Art/orrery.png", "pixels", "44444444444444444444444444444444");
     // The geometry the player actually sees.
     put(
       root,
-      "Assets/Scripts/RowPlanter.cs",
-      "public class RowPlanter { void Plant() { GameObject.CreatePrimitive(PrimitiveType.Capsule); GameObject.CreatePrimitive(PrimitiveType.Cylinder); } }",
+      "Assets/Scripts/LensGrinder.cs",
+      "public class LensGrinder { void Grind() { GameObject.CreatePrimitive(PrimitiveType.Capsule); GameObject.CreatePrimitive(PrimitiveType.Cylinder); } }",
       "66666666666666666666666666666666",
     );
 
@@ -152,25 +153,25 @@ describe("assessBuiltAsSpecified — refusal", () => {
     expect(report.refusal).toBeDefined();
     expect(report.refusal).toContain("render NOTHING");
     // Names the scene…
-    expect(report.refusal).toContain("Assets/Scenes/Orchard.unity");
+    expect(report.refusal).toContain("Assets/Scenes/Observatory.unity");
     // …the counts…
     expect(report.refusal).toContain("0 world renderer components");
     // …and the unbound assets it found.
-    expect(report.refusal).toContain("Assets/Prefabs/Scarecrow.prefab");
-    expect(report.refusal).toContain("Assets/Art/Models/Windmill.fbx");
+    expect(report.refusal).toContain("Assets/Prefabs/Orrery.prefab");
+    expect(report.refusal).toContain("Assets/Art/Models/Dome.fbx");
     expect(report.refusal).toContain("GameObject.CreatePrimitive");
     expect(report.refusal).toContain("unity_bind_sprite");
     expect(report.refusal).toContain("unity_place_prefab");
     expect(report.shippedRenderers).toBe(0);
     // The scaffolding scene is measured but not judged as shipped work.
-    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/Orchard.unity"]);
+    expect(report.shippedScenes.map((s) => s.scene)).toEqual(["Assets/Scenes/Observatory.unity"]);
     // The prefabs the config points at are NOT called unbound…
-    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Beehive.prefab");
-    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Basket.prefab");
+    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Telescope.prefab");
+    expect(report.unboundPrefabs).not.toContain("Assets/Prefabs/Sextant.prefab");
     // …but their renderers are reported as referenced-only, never as shipped.
     expect(report.referencedOnlyRenderers).toBe(2);
-    expect(report.unboundPrefabs).toContain("Assets/Prefabs/Scarecrow.prefab");
-    expect(report.primitiveScripts).toEqual(["Assets/Scripts/RowPlanter.cs"]);
+    expect(report.unboundPrefabs).toContain("Assets/Prefabs/Orrery.prefab");
+    expect(report.primitiveScripts).toEqual(["Assets/Scripts/LensGrinder.cs"]);
   });
 
   it("refuses when every placed renderer is a Unity built-in and art sits unbound", () => {
@@ -348,10 +349,9 @@ describe("assessBuiltAsSpecified — what it could not measure", () => {
 
 describe("assessBuiltAsSpecified — the entry scene's own composition", () => {
   /**
-   * Audited 2026-09-04 (measured on a delivered project): the refusal said the
-   * shipped scenes render NOTHING and listed the unbound prefabs, and sprint
-   * after sprint failed to act on it. The scene it had to fill held almost
-   * nothing, and nothing the sprint was told said how little.
+   * A refusal that says only "renders NOTHING" and lists unbound prefabs does
+   * not tell the next worker how empty the scene it must fill is, so the
+   * refusal and the disclosures name the entry scene's own composition.
    */
   it("names how empty the entry scene is, in the refusal and the disclosures", () => {
     const root = project();
@@ -482,9 +482,8 @@ function boundSpriteProject(root: string, spriteGuid: string): void {
 }
 
 describe("assessBuiltAsSpecified — placeholder-grade art", () => {
-  // Measured 2026-09-06 on a delivered project: nearly all of its sprites were
-  // tiny procedural squares, and the gate counted them as sprite textures like
-  // any other. A game whose art was almost all solid squares delivered.
+  // A sprite texture that is a solid square is a procedural placeholder, not drawn art;
+  // counted like any other texture, a project whose art is almost all placeholders would pass.
   it("refuses when the sprite art is overwhelmingly flat shapes, naming counts, files and the tools", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
@@ -516,8 +515,8 @@ describe("assessBuiltAsSpecified — placeholder-grade art", () => {
   });
 
   it("names the placeholders a shipped scene binds FIRST, and says to replace those before wiring more", () => {
-    // Measured 2026-09-07 22:40: a sprint wired several prefabs to
-    // placeholder PNGs while the refusal's examples were icons nothing bound.
+    // A worker can wire prefabs to placeholder PNGs while the refusal's examples
+    // are icons nothing binds, so the bound placeholders are named first.
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000"); // Tent.prefab placed, sprite a000… bound
     putBytes(root, "Assets/Art/tent.png", png(56, 56, "flat"), "a0000000000000000000000000000000"); // bound AND a placeholder
@@ -586,27 +585,28 @@ function wav(seconds: number, fill: number): Buffer {
 }
 
 describe("assessBuiltAsSpecified — audio inventory", () => {
-  // Measured 2026-09-07 on a delivered project: most clips were sub-second
-  // blips and several were byte-identical to another, counted nowhere.
+  // Byte-identical clips and sub-second blips are audio a project can claim without having
+  // made it; the inventory counts both.
   it("counts clips, duplicates by content and blips, and says so", () => {
     const root = project();
     boundSpriteProject(root, "a0000000000000000000000000000000");
     putBytes(root, "Assets/Art/Real/Tent.png", png(56, 56, "noise"), "a0000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/caravan_bells.wav", wav(3, 7), "d1000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/dune_wind.wav", wav(3, 7), "d2000000000000000000000000000000"); // same bytes
-    putBytes(root, "Assets/Audio/abacus_tick.wav", wav(0.27, 3), "d3000000000000000000000000000000");
-    putBytes(root, "Assets/Audio/gong_hum.ogg", Buffer.from("OggS not really"), "d4000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/chisel_strike.wav", wav(1.5, 5), "d1000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/chisel_strike_b.wav", wav(1.5, 5), "d2000000000000000000000000000000"); // same bytes
+    putBytes(root, "Assets/Audio/quarry_rumble.wav", wav(4, 9), "d3000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/bell_ping.wav", wav(0.3, 2), "d4000000000000000000000000000000");
+    putBytes(root, "Assets/Audio/crowd.mp3", Buffer.from("ID3 not really"), "d5000000000000000000000000000000");
 
     const report = assessBuiltAsSpecified(root);
 
-    expect(report.artInventory.audio).toBe(4);
+    expect(report.artInventory.audio).toBe(5);
     expect(report.artInventory.duplicateAudio).toBe(1);
     expect(report.artInventory.shortAudio).toBe(1);
     const line = report.disclosures.find((d) => d.startsWith("Project audio"))!;
-    expect(line).toContain("4 clips, 3 distinct by content");
-    expect(line).toContain("dune_wind.wav = Assets/Audio/caravan_bells.wav");
+    expect(line).toContain("5 clips, 4 distinct by content");
+    expect(line).toContain("chisel_strike_b.wav = Assets/Audio/chisel_strike.wav");
     expect(line).toContain("1 shorter than 0.5s");
-    expect(line).toContain("abacus_tick.wav");
+    expect(line).toContain("bell_ping.wav");
   });
 
   it("says when there is no audio at all", () => {
@@ -662,7 +662,7 @@ describe("defects the measurement review found (2026-09-07)", () => {
     put(empty, "Assets/Art/unused.png", "pixels", G("2"));
     expect(assessBuiltAsSpecified(empty).refusal).toContain("render NOTHING");
 
-    // …and the measured hole stays shut: canvases over engine primitives are
+    // …and the original hole stays shut: canvases over engine primitives are
     // still a HUD over a world nobody made.
     const withPrimitives = project();
     buildSettings(withPrimitives, [{ path: "Assets/Scenes/Entry.unity" }]);

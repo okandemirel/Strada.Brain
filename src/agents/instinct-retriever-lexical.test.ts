@@ -31,7 +31,7 @@ let retriever: InstinctRetriever;
 
 // What stage-runtime builds from the config defaults.
 const scopeContext: ScopeContext = {
-  projectPath: "/projects/shooter",
+  projectPath: "/projects/apiary",
   scopeFilter: "project+universal",
   maxAgeDays: 90,
   recencyBoost: 1.0,
@@ -58,9 +58,9 @@ async function triggersFor(prompt: string): Promise<string[]> {
 
 describe("lexical retrieval matches a request that names a trigger", () => {
   it.each([
-    ["Use object pooling for the bullets in the shooter module", "object_pooling"],
-    ["Register the new ScoreService in the dependency injection container", "dependency_injection"],
-    ["Implement the event system that tells the HUD the score changed", "event_system"],
+    ["Use object pooling for the bees in the swarm module", "object_pooling"],
+    ["Register the new PollenLedgerService in the dependency injection container", "dependency_injection"],
+    ["Implement the event system that tells the almanac panel the weather changed", "event_system"],
   ])("%s → %s", async (prompt, trigger) => {
     expect(await triggersFor(prompt)).toContain(trigger);
 
@@ -77,7 +77,7 @@ describe("lexical retrieval matches a request that names a trigger", () => {
   it("comparing a trigger with a trigger stays symmetric (the pipeline's duplicate check)", async () => {
     // findSimilarInstincts with no request flag is what considerInstinctCreation
     // asks; a new long trigger that merely mentions a seed is not its duplicate.
-    const similar = await matcher.findSimilarInstincts("Use object pooling for the bullets in the shooter module");
+    const similar = await matcher.findSimilarInstincts("Use object pooling for the bees in the swarm module");
     expect(similar).toEqual([]);
   });
 });

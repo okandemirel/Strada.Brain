@@ -116,8 +116,8 @@ const WORK_RE =
   /\b(?:re-?)?(create|generate|draw|paint|write|bind|place|instantiate|implement|add|replace|fix|build|import|compose|record|configure|wire|assemble|edit|update|refactor|remove|delete|rename|migrate|convert|apply|set up|setup|install|execute|verify|capture|deliver|produce|ship|author|animate|script|attach|spawn|hook up|populate|tune|polish|export|commit|register|integrate|document)\b/i;
 /**
  * Verbs that only look — judged on the task's LEADING verb, so "Read the GDD
- * and generate the sprites" is work (generate) while "Read QuarryRun_Design.md
- * and summarize its chapters" is looking. Review 2026-09-08:
+ * and generate the sprites" is work (generate) while "Read docs/spec.md and
+ * summarize its chapters" is looking. Review 2026-09-08:
  * "extract", "map", "document", "inspect", "locate", "find" are also how
  * real work is phrased ("Extract the movement logic into MovementBase",
  * "Map legacy enemy IDs to the new enum"), so they are neither list —
@@ -136,12 +136,11 @@ export interface PlanShapeVerdict {
 /**
  * Whether a plan is all looking and no doing.
  *
- * Measured 2026-09-08 (the test game, a sprint whose prompt said "DO NOT
- * AUDIT"): the planner answered with look-up nodes only — in the shape of
- * "vault_search for the quarry levels", "… the cart prefabs", "Read
- * QuarryRun_Design.md" — and the sprint spent its whole run on read calls,
- * producing nothing. A single-node tree is the whole task and is not judged
- * here.
+ * Measured live 2026-09-08 on a sprint whose prompt said "DO NOT AUDIT": the
+ * planner answered with look-up nodes only — every node a vault_search or a
+ * read of a design document — and the sprint spent its whole run on read
+ * calls, producing nothing. A single-node tree is the whole task and is not
+ * judged here.
  */
 export function judgePlanShape(nodes: ReadonlyArray<{ readonly task: string }>): PlanShapeVerdict {
   let workNodes = 0;
@@ -176,9 +175,9 @@ export function isReadOnlyRequest(task: string): boolean {
 // ---------------------------------------------------------------------------
 // Measurement-only nodes are folded into the work that uses them.
 //
-// Measured 2026-09-09 (12:55, 14:08, 15:18, 18:05 plans): every plan for the
-// placeholder mission opened with "Call unity_delivery_measure … record the
-// count and list the paths" as a node of its own. The call takes a minute;
+// Measured 2026-09-09: plan after plan opened with a bare measuring-tool call
+// ("call the measure tool, record the count, list the paths") as a node of its
+// own. The call takes a minute;
 // the node then held its 60-minute budget while the worker searched and
 // read, and the batch nodes behind it waited. The prompt rule alone did not
 // stop the planner, and rejecting the plan costs another ten-minute

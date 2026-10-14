@@ -90,6 +90,6 @@ When `config.vault.enabled=true`, the **Codebase Memory Vault** is how agents sh
 - Do NOT modify test infrastructure (`scripts/run-vitest-batches.mjs`)
 - Do NOT add new npm dependencies — the project maintains a minimal dependency policy
 - Do NOT skip or disable existing tests to make new code pass
-- Do NOT name a product a run was measured on, quote its design document, or commit its campaign export — not in code, comments, tests, fixtures, docs or commit messages. Write "the test game" and invented data; real exports and the vehicle's term list belong in the gitignored `tests/fixtures/local/` (`src/universality.test.ts` enforces this)
+- Do NOT name, quote or commit material from any external project Strada.Brain was run against (names, design documents, campaign exports, measured counts or run ids) — not in code, comments, tests, fixtures, docs or commit messages. Fixtures and examples use invented data from an unrelated domain, and patterns, keyword lists and defaults are written for any project, never tuned to one document's wording or one product's look. Local lists of protected terms or confidential documents, if you keep them, live in the gitignored `tests/fixtures/local/*.txt`; `src/universality.test.ts` checks every publishable file against them and skips with a stated reason when they are absent
 - Channel-specific code stays in its own `src/channels/{name}/` directory
 - Core orchestrator changes require careful review — it coordinates the entire agent lifecycle

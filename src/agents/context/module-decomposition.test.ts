@@ -3,12 +3,11 @@
  * exist.
  *
  * The preamble showed a two-module tree (CoreModule, CombatModule) and said
- * nothing about deciding boundaries. Measured on a live run: asked to build a
- * grid game, the agent produced ONE game module and split it internally
- * into Core/Domain/Application/Infrastructure/Presentation — five folders, five
- * assemblies, one concern. Board state, match detection, gravity, scoring, input
- * and presentation all shipped as a single module, so nothing could be replaced,
- * tested or reasoned about on its own.
+ * nothing about deciding boundaries. Measured in a live campaign: the agent
+ * produced one module and split it internally into
+ * Core/Domain/Application/Infrastructure/Presentation: five folders, five
+ * assemblies, one concern. Every feature shipped inside it, so nothing could be
+ * replaced, tested or reasoned about on its own.
  *
  * A layer split inside one module is not a decomposition; it is one boundary
  * wearing five names.
@@ -32,7 +31,7 @@ describe("module decomposition guidance", () => {
   });
 
   it("names concrete concerns rather than abstractions", () => {
-    for (const concern of ["input", "camera", "board", "scoring"]) {
+    for (const concern of ["input", "camera", "patrol", "inventory"]) {
       expect(STRADA_AGENT_PREAMBLE.toLowerCase(), `${concern} not named`).toContain(concern);
     }
   });
@@ -62,7 +61,7 @@ describe("module decomposition guidance", () => {
     // Nesting is not the problem. A submodule that exists only to serve its
     // parent, and would be meaningless beside it, is a legitimate shape.
     expect(STRADA_AGENT_PREAMBLE).toMatch(/Nest a submodule only when it is genuinely PART OF/);
-    expect(STRADA_AGENT_PREAMBLE).toMatch(/GridRenderingModule/);
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/WaypointModule/);
   });
 
   it("gives the test for when a submodule should be top-level instead", () => {
@@ -72,13 +71,13 @@ describe("module decomposition guidance", () => {
   });
 
   it("rejects a wrapper named after the game", () => {
-    // Measured: a run created Assets/Modules/SampleGameModule/ and started
-    // placing real modules inside it. The game is not a concern, so it owns
-    // nothing and the wrapper only hides its children.
+    // Measured in a live campaign: a run created a wrapper module named after
+    // the game directly under Assets/Modules/ and started placing real modules
+    // inside it. The game is not a concern, so it owns nothing and the wrapper
+    // only hides its children.
     expect(STRADA_AGENT_PREAMBLE).toMatch(/named after the game or the feature set/);
-    // The example is written with a <Game> placeholder: the rule is universal,
-    // and the vehicle's name must not appear in system prompts (universality guard).
-    expect(STRADA_AGENT_PREAMBLE).toMatch(/<Game>Module\/BoardModule/);
+    // The example uses a <Game> placeholder so the rule names no particular game.
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/<Game>Module\/PatrolModule/);
     expect(STRADA_AGENT_PREAMBLE).toMatch(/<Game> is the game,\s+not a concern/);
   });
 

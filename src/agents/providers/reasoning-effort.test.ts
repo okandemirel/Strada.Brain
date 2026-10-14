@@ -1,16 +1,16 @@
 /**
  * Asking a reasoning model to think less, where thinking longer only costs time.
  *
- * Measured 2026-08-21 against opencode.ai/zen/go with deepseek-v4-flash on the
- * real goal-decomposition prompt:
+ * Measured 2026-08-21 against opencode.ai/zen/go with deepseek-v4-flash on
+ * one goal-decomposition prompt:
  *
  *   default   1595 reasoning chunks -> 2093 chars of answer
  *   low        876                  -> 1285
  *   minimal    497                  -> 1623
  *
  * All three finished with `stop`. More thinking did not buy more answer; it
- * bought latency, and latency is what a streaming stall timeout measures — the
- * thing that killed run 29 sixty seconds after it started.
+ * bought latency, and latency is what a streaming stall timeout measures: a
+ * stall that cut a run off sixty seconds after it started.
  */
 
 import { describe, expect, it } from "vitest";

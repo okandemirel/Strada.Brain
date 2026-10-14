@@ -508,7 +508,7 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     const toolTurn = mkResponse({
       text: "generating",
       stopReason: "tool_use",
-      toolCalls: [{ id: "tc-1", name: "unity_generate_sprite", input: { name: "StoneTotem" } }],
+      toolCalls: [{ id: "tc-1", name: "unity_generate_sprite", input: { name: "Weathervane" } }],
     });
     const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "the plan" }), toolTurn, mkResponse({ text: "done", stopReason: "end_turn" })]));
     const port = mkPort(mkProvider());
@@ -1331,10 +1331,8 @@ describe("V2AgentRunner — Phase 1c streaming liveness re-arm (no false task-in
   });
 
   describe("a graceful STOP is not a success for a worker or background run", () => {
-  // Measured 2026-09-08 10:00-11:53 (test-game sprint, supervisor node workers): eight nodes each
-  // hit a clock/stall stop with graceful finalize, reported status "completed", and carried as
-  // their whole output the localized "the AI provider is not responding" notice — the dispatcher
-  // marked all eight done ("Generate and bind area background sprites" among them).
+  // A graceful clock/stall stop used to report "completed" for a worker whose whole output was
+  // the provider-not-responding notice, so the dispatcher marked the node done.
   function noRearmRunner(clock: FakeClock) {
     const provider = mkProvider();
     const { plane } = mkTinyInactivityPlane(clock);

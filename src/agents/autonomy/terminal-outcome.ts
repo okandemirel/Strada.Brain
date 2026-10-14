@@ -4,10 +4,9 @@ import { TERMINAL_KEYS, type TerminalKey } from "./terminal-key.js";
 /**
  * Which terminal outcomes mean the run did not succeed.
  *
- * A run that told the user "the AI provider is not responding" was still
- * recorded as failed:false, because the episode settlement defaulted to success
- * and nothing carried the outcome out to it. Two measured runs each surfaced
- * that notice twice and both closed clean, so a report of success covered a run
+ * A run that surfaced "the AI provider is not responding" was still recorded
+ * as failed:false, because the episode settlement defaulted to success and
+ * nothing carried the outcome out to it, so a report of success covered a run
  * that had told the user the opposite.
  */
 export const FAILED_TERMINAL_KEYS: ReadonlySet<string> = new Set([
@@ -135,7 +134,7 @@ function readTerminal(
 }
 
 /**
- * How the run ended, as data (GDD-drift W01). Finer than the notice: a
+ * How the run ended, as data. Finer than the notice: a
  * timeout or the cost cap is `cut_short`, a person's or a shutdown's stop is
  * `interrupted`, and a failure nothing explains is `error` — never a clean
  * finish and never, without the registry saying so, the provider's.
@@ -151,7 +150,8 @@ export function terminalKeyOf(
 /**
  * The localized notice for a terminal the run left no visible message for;
  * undefined for a clean terminal, so the neutral "Task completed." stands.
- * Byte-identical to the mapper the orchestrator carried before W01.
+ * Byte-identical to the mapper the orchestrator carried before the terminal
+ * key existed.
  */
 export function terminalMessageKeyOf(
   reason: string | undefined,
@@ -199,8 +199,8 @@ const STAMP_PIECES: ReadonlyMap<TerminalKey, readonly string[]> = new Map(
  * first. A result written before the key was carried says how its run ended
  * only through these; a sentence counts only when it is the system's own
  * template text, so a worker's report that mentions getting stuck is not one.
- * A piece survives an excerpt that cut the notice's start (a measured m1 begins
- * "fter multiple approaches…").
+ * A piece survives an excerpt that cut the notice's start (a stored excerpt can
+ * begin mid-word, e.g. "fter multiple approaches…").
  */
 export function systemStampsIn(text: string | null | undefined): TerminalKey[] {
   if (!text) return [];

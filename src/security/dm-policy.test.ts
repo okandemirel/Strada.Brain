@@ -364,12 +364,11 @@ describe("a destructive ACT and a merely suspicious SHAPE are different question
 
   it("lets a plain rmdir through, because our own conformance gate demands it", () => {
     // Measured live 2026-09-18: the conformance gate told a worker to move game
-    // code under Assets/Modules/<Name>Module/, and this gate then refused the
-    // removal of the empty directory it had just left behind — 14 refusals of
-    // `rmdir Assets/SampleGame/Core/Sim/Data …` in ten minutes, the sprint
-    // spending its turns on a cleanup nothing would allow. POSIX rmdir removes
-    // only EMPTY directories and fails with ENOTEMPTY otherwise.
-    expect(destructiveShellFlag("rmdir Assets/SampleGame/Core/Sim/Data Assets/SampleGame/Core")).toBeNull();
+    // code under Assets/Modules/<Name>Module/, and this gate then refused
+    // removing the empty directory it had just left behind, again and again,
+    // the sprint spending its turns on a cleanup nothing would allow. POSIX
+    // rmdir removes only EMPTY directories and fails with ENOTEMPTY otherwise.
+    expect(destructiveShellFlag("rmdir Assets/Legacy/Weather/Forecasts Assets/Legacy/Weather")).toBeNull();
     expect(destructiveShellFlag("rmdir -p Assets/Modules/Old/Empty")).toBeNull();
     // A path that merely CONTAINS the word is not a command either.
     expect(destructiveShellFlag("cat docs/rmdir-notes.md")).toBeNull();
@@ -385,10 +384,10 @@ describe("a destructive ACT and a merely suspicious SHAPE are different question
   });
 
   it("names the shape, so the reviewer reads what it actually does", () => {
-    // Measured live 2026-09-12 05:03: a sprint asked for the size of a PNG it
-    // had just written and the gate refused the command unread, costing the
-    // turn. The agent can write the same three lines to a file and run it.
-    expect(destructiveShellFlag('ls -la docs/sprints && file m2.png && python3 -c "print(1)"')).toBe("shape");
+    // Measured live: a worker asked for the size of a PNG it had just written
+    // and the gate refused the command unread, costing the turn. The agent can
+    // write the same three lines to a file and run it.
+    expect(destructiveShellFlag('ls -la docs/notes && file capture.png && python3 -c "print(1)"')).toBe("shape");
     expect(destructiveShellFlag("cd $(git rev-parse --show-toplevel) && git status")).toBe("shape");
     expect(destructiveShellFlag("node -e \"console.log(1)\"")).toBe("shape");
   });
@@ -443,7 +442,7 @@ describe("a recursive delete is refused however it is spelled (round 15 #10)", (
 
   it("still lets the inspection those tools exist for through (guard)", () => {
     expect(destructiveShellFlag("find Assets -name '*.cs'")).toBeNull();
-    expect(destructiveShellFlag("rmdir Assets/SampleGame/Core")).toBeNull();
+    expect(destructiveShellFlag("rmdir Assets/Legacy/Weather")).toBeNull();
     expect(destructiveShellFlag("cat docs/rmdir-notes.md")).toBeNull();
   });
 });
@@ -499,7 +498,7 @@ describe("destructiveShellFlag reads programs, not substrings", () => {
     "grep -rn 'rm -rf' src",
     'echo "a > /etc/hosts"',
     "constructor Assets",
-    '"/Applications/Unity/Hub/Editor/6000.3.22f1/Unity.app/Contents/MacOS/Unity" -batchmode -projectPath "$PWD" -runTests -testPlatform EditMode',
+    '"/Applications/Unity/Hub/Editor/6000.1.4f1/Unity.app/Contents/MacOS/Unity" -batchmode -projectPath "$PWD" -runTests -testPlatform EditMode',
   ])("leaves ordinary work alone: %j", (command) => {
     expect(destructiveShellFlag(command, "linux")).toBeNull();
   });
@@ -532,8 +531,9 @@ describe("the home and system-config protection holds for macOS spellings", () =
 
   // Tightening cuts both ways: on macOS the work itself lives under
   // /Users/<me>, and runs name it by absolute path (measured: campaign
-  // commands write into /Users/okan/Documents/…/SampleGame). Refusing
-  // every write under /Users would refuse the work.
+  // commands write into the project by its absolute path under
+  // /Users/<me>/Documents). Refusing every write under /Users would refuse the
+  // work.
   it.each([
     "dotnet build > /Users/okan/Documents/Game/build.log 2>&1",
     "echo x > /Users/okan/Documents/Game/Assets/a.txt",

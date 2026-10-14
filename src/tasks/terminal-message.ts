@@ -6,10 +6,10 @@
  * to a person. The reason was preferred outright — `reason ?? (output || ...)` —
  * and reason is essentially always set, so output was unreachable.
  *
- * Measured 2026-08-23 on run 53: the agent stopped to ask a question, the
- * control plane wrote `blocked:ask_user`, and that sixteen-character tag became
- * the entire stored result. The question itself — 119 characters, the only part
- * anyone could act on — was discarded. An unattended run that stops to ask
+ * Measured live 2026-08-23: the agent stopped to ask a question, the control
+ * plane wrote `blocked:ask_user`, and that tag became the entire stored
+ * result. The question itself, the only part anyone could act on, was
+ * discarded. An unattended run that stops to ask
  * something and will not say what it asked cannot be answered, and cannot be
  * resumed.
  */

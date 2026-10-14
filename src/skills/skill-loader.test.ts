@@ -114,22 +114,22 @@ describe("discoverSkills", () => {
 
   it("reads inject and triggers from the frontmatter (how a body earns its place in a prompt)", async () => {
     const skillDir = join("/test-project", "skills");
-    const planDir = join(skillDir, "comet-plan");
+    const ledgerDir = join(skillDir, "orchard-ledger");
     fsMock.stat.mockImplementation(async (path: string) => {
-      if (path === skillDir || path === planDir) return dirStat;
-      if (path === join(planDir, "SKILL.md")) return fileStat;
+      if (path === skillDir || path === ledgerDir) return dirStat;
+      if (path === join(ledgerDir, "SKILL.md")) return fileStat;
       throw new Error("ENOENT");
     });
-    fsMock.readdir.mockImplementation(async (path: string) => (path === skillDir ? ["comet-plan"] : []));
+    fsMock.readdir.mockImplementation(async (path: string) => (path === skillDir ? ["orchard-ledger"] : []));
     fsMock.readFile.mockImplementation(async (path: string) => {
-      if (path === join(planDir, "SKILL.md")) {
+      if (path === join(ledgerDir, "SKILL.md")) {
         return makeSkillMd({
-          name: "comet-plan",
+          name: "orchard-ledger",
           version: "1.0.0",
-          description: "Comet set-piece plan",
+          description: "Orchard ledger notes",
           inject: "on-mention",
-          triggers: ["Comet", "set-piece"],
-        }) + "# Comet plan body\n";
+          triggers: ["orchard", "ledger"],
+        }) + "# Orchard ledger body\n";
       }
       throw new Error("ENOENT");
     });
@@ -137,8 +137,8 @@ describe("discoverSkills", () => {
     const skills = await discoverSkills("/test-project");
     expect(skills).toHaveLength(1);
     expect(skills[0]!.manifest.inject).toBe("on-mention");
-    expect(skills[0]!.manifest.triggers).toEqual(["Comet", "set-piece"]);
-    expect(skills[0]!.body).toContain("Comet plan body");
+    expect(skills[0]!.manifest.triggers).toEqual(["orchard", "ledger"]);
+    expect(skills[0]!.body).toContain("Orchard ledger body");
   });
 
   it("skips skills with missing name field", async () => {

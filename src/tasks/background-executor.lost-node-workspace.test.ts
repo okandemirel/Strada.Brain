@@ -192,7 +192,7 @@ describe("BackgroundExecutor - a node whose worktree vanished before the reaper'
     const project = mkdtempSync(join(tmpdir(), "node-vanished-project-"));
     const leaseRoot = mkdtempSync(join(tmpdir(), "node-vanished-leases-"));
     mkdirSync(join(project, "Assets"), { recursive: true });
-    writeFileSync(join(project, "Assets", "Board.cs"), "class Board {}");
+    writeFileSync(join(project, "Assets", "Greenhouse.cs"), "class Greenhouse {}");
     const clock = new FakeClock(0);
     let leasePath = "";
     const editTool = {

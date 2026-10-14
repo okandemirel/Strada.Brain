@@ -25,7 +25,7 @@ function longRunState(toolCalls: number): AgentState {
 }
 
 const SIMPLE = { type: "simple-question", complexity: "simple" } as any;
-const CLEAN_DRAFT = "STEP 63/63 file_read Assets/Modules/Board/Board.cs -> ok. The board module is failing on input.";
+const CLEAN_DRAFT = "STEP 63/63 file_read src/kiln/glaze-timer.ts -> ok. The glaze timer stops before the firing ends.";
 
 describe("shouldSynthesize on a run that used tools", () => {
   it("synthesizes after the 50-step window is full, exactly as it did before", () => {
@@ -35,7 +35,7 @@ describe("shouldSynthesize on a run that used tools", () => {
   });
 
   it("still bypasses synthesis for a clean direct answer with no tool use", () => {
-    expect(shouldSynthesize("The board module is failing on input.", longRunState(0), SIMPLE)).toBe(false);
+    expect(shouldSynthesize("The glaze timer stops before the firing ends.", longRunState(0), SIMPLE)).toBe(false);
   });
 });
 

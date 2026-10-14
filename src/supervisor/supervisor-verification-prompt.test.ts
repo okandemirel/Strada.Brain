@@ -13,7 +13,7 @@ function node(output: string): NodeResult {
 
 describe("buildVerificationPrompt", () => {
   it("shows a long structured result whole — a 4 000-character JSON block is not cut", () => {
-    const tests = JSON.stringify({ tests: { total: 215, failed: [], names: Array.from({ length: 120 }, (_, i) => `Suite.Test_${i}_ReachesWonState`) } }, null, 1);
+    const tests = JSON.stringify({ tests: { total: 120, failed: [], names: Array.from({ length: 120 }, (_, i) => `Ledger.Spec_${i}_BalancesAfterTransfer`) } }, null, 1);
     expect(tests.length).toBeGreaterThan(1800);
     const prompt = buildVerificationPrompt(node(`Done.\n\`\`\`json\n${tests}\n\`\`\``));
     expect(prompt).toContain(tests);

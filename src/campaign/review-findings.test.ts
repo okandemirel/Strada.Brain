@@ -23,12 +23,12 @@ const REV = "9".repeat(40);
 const AT = 1_000_000;
 
 const GDD = [
-  "# Kite Post",
+  "# Pelican Post",
   "## Glossary",
-  "Updraft — a column of rising air that lifts any kite flying through it.",
+  "Updraft — a column of rising air that lifts any pelican flying through it.",
   "## 3 Flight",
-  "KP-01 A kite gains one metre of height for every second spent inside an updraft.",
-  "KP-02 A letter is delivered only when the kite lands on the roof that matches its stamp.",
+  "PP-01 A pelican gains one metre of height for every second spent inside an updraft.",
+  "PP-02 A letter is delivered only when the pelican lands on the roof that matches its stamp.",
   "The wind indicator must show the current gust direction",
   "at all times during a delivery.",
   "## 7 Business",
@@ -63,10 +63,10 @@ function row(rid: string, label: string | undefined, text: string, fields: Parti
   };
 }
 
-const KP1 = "KP-01 A kite gains one metre of height for every second spent inside an updraft.";
-const KP2 = "KP-02 A letter is delivered only when the kite lands on the roof that matches its stamp.";
+const PP1 = "PP-01 A pelican gains one metre of height for every second spent inside an updraft.";
+const PP2 = "PP-02 A letter is delivered only when the pelican lands on the roof that matches its stamp.";
 
-function ledger(rows: RequirementRow[] = [row("req-1-k1", "KP-01", KP1), row("req-2-k2", "KP-02", KP2)]): RequirementLedger {
+function ledger(rows: RequirementRow[] = [row("req-1-k1", "PP-01", PP1), row("req-2-k2", "PP-02", PP2)]): RequirementLedger {
   return { version: 1, gddSha256: SHA, gddRevision: 1, extractedAtMs: 1, rows, overflow: { count: 0, sections: [] }, numberingGaps: [], llmAdded: 0 };
 }
 
@@ -117,7 +117,7 @@ describe("applyReviewFindings", () => {
   it("a weak check retires its test once, reopens the row, and only a new check passing on a measured revision closes it", () => {
     const before = ledger();
     const snapshot = structuredClone(before);
-    const applied = apply(before, findings({ weakChecks: [{ rid: "req-2-k2", why: "asserts true" }, { rid: "KP-02", why: "again, by label" }] }));
+    const applied = apply(before, findings({ weakChecks: [{ rid: "req-2-k2", why: "asserts true" }, { rid: "PP-02", why: "again, by label" }] }));
     expect(before).toEqual(snapshot);
     expect(applied.reopened.map((r) => r.rid)).toEqual(["req-2-k2"]);
     // The same row named twice in one review is regenerated once.
@@ -137,13 +137,13 @@ describe("applyReviewFindings", () => {
     expect(closesByLedger({ ...regenerated, status: "passing", last: { revision: REV, atMs: 9, outcome: "pass", detail: "passed in run r2" } }, REV)).toBe(true);
     // The row the review did not name is untouched.
     expect(applied.ledger.rows[0]).toEqual(before.rows[0]);
-    expect(reviewGateRecord(applied, "on").reopened).toEqual(["KP-02 (§3) — asserts true"]);
+    expect(reviewGateRecord(applied, "on").reopened).toEqual(["PP-02 (§3) — asserts true"]);
   });
 
   it("a weak call on a row that never blocks, has no current test, or no such id is disclosed and changes nothing", () => {
     const rows = [
-      row("req-1-k1", "KP-01", KP1, { status: "waived", waiver: { userId: "owner", atMs: 1, reason: "cut from scope" } }),
-      row("req-2-k2", "KP-02", KP2, { checks: [], status: "open", last: undefined }),
+      row("req-1-k1", "PP-01", PP1, { status: "waived", waiver: { userId: "owner", atMs: 1, reason: "cut from scope" } }),
+      row("req-2-k2", "PP-02", PP2, { checks: [], status: "open", last: undefined }),
     ];
     const applied = apply(ledger(rows), findings({ weakChecks: [{ rid: "req-1-k1", why: "a" }, { rid: "req-2-k2", why: "b" }, { rid: "req-404", why: "c" }] }));
     expect(applied.reopened).toEqual([]);
@@ -155,8 +155,8 @@ describe("applyReviewFindings", () => {
   });
 
   it("a label names a row only when exactly one row carries it", () => {
-    const rows = [row("req-1-k1", "KP-01", KP1), row("req-2-k2", "KP-01", KP2)];
-    const applied = apply(ledger(rows), findings({ weakChecks: [{ rid: "KP-01", why: "ambiguous" }] }));
+    const rows = [row("req-1-k1", "PP-01", PP1), row("req-2-k2", "PP-01", PP2)];
+    const applied = apply(ledger(rows), findings({ weakChecks: [{ rid: "PP-01", why: "ambiguous" }] }));
     expect(applied.reopened).toEqual([]);
     expect(applied.disclosed[0]).toContain("no GDD row has that id");
   });
@@ -189,8 +189,8 @@ describe("applyReviewFindings", () => {
         missing: [
           { gddQuote: "the wind arrow should always point where the gust blows", why: "paraphrase" },
           { gddQuote: "Updraft", why: "short" },
-          { gddQuote: "A kite gains one metre of height for every second spent inside an updraft.", why: "already a row" },
-          { gddQuote: "a column of rising air that lifts any kite flying through it", why: "glossary" },
+          { gddQuote: "A pelican gains one metre of height for every second spent inside an updraft.", why: "already a row" },
+          { gddQuote: "a column of rising air that lifts any pelican flying through it", why: "glossary" },
           { gddQuote: "Day-7 retention rate must reach at least 20 percent within the first month.", why: "kpi" },
         ],
       }),
@@ -213,14 +213,14 @@ describe("applyReviewFindings", () => {
   });
 
   it("a quote is read only against the text the rows were read from", () => {
-    const amended = `${GDD}\nA storm grounds every kite for 30 seconds.`;
-    const applied = apply(ledger(), findings({ missing: [{ gddQuote: "A storm grounds every kite for 30 seconds.", why: "x" }] }), amended);
+    const amended = `${GDD}\nA storm grounds every pelican for 30 seconds.`;
+    const applied = apply(ledger(), findings({ missing: [{ gddQuote: "A storm grounds every pelican for 30 seconds.", why: "x" }] }), amended);
     expect(applied.added).toEqual([]);
     expect(applied.disclosed[0]).toContain("another text than the approved GDD");
   });
 
   it("never closes: no finding moves a failing row, and no tail is disclosed", () => {
-    const failing = ledger([row("req-1-k1", "KP-01", KP1, { status: "failing", last: { revision: REV, atMs: 5, outcome: "fail", detail: "was 0" } })]);
+    const failing = ledger([row("req-1-k1", "PP-01", PP1, { status: "failing", last: { revision: REV, atMs: 5, outcome: "fail", detail: "was 0" } })]);
     const none = apply(failing, findings({ found: false }));
     expect(none.ledger).toBe(failing);
     expect(none.disclosed).toEqual(["the review ended with no findings object, so it reopened and added nothing"]);
@@ -231,11 +231,11 @@ describe("applyReviewFindings", () => {
 
   it("only a pass rests on the weak check: a failing, check-fault or unmeasured row keeps its status and its last result, and only its test is retired", () => {
     const fail = { revision: REV, atMs: 5, outcome: "fail", detail: "Expected 1 metre but was 0" } as const;
-    const fault = { revision: REV, atMs: 5, outcome: "check-fault", detail: "the test could not find the kite" } as const;
+    const fault = { revision: REV, atMs: 5, outcome: "check-fault", detail: "the test could not find the pelican" } as const;
     const unrun = { revision: REV, atMs: 5, outcome: "unmeasured", detail: "no editor could run it" } as const;
     const rows = [
-      row("req-1-k1", "KP-01", KP1, { status: "failing", last: fail }),
-      row("req-2-k2", "KP-02", KP2, { status: "check-fault", last: fault }),
+      row("req-1-k1", "PP-01", PP1, { status: "failing", last: fail }),
+      row("req-2-k2", "PP-02", PP2, { status: "check-fault", last: fault }),
       row("req-3-k3", undefined, "The wind indicator must show the current gust direction", { status: "unmeasured", last: unrun }),
     ];
     const applied = apply(ledger(rows), findings({ weakChecks: rows.map((r) => ({ rid: r.rid, why: "asserts true" })) }));
@@ -249,8 +249,8 @@ describe("applyReviewFindings", () => {
     }
     expect(applied.reopened.map((r) => r.rid)).toEqual(rows.map((r) => r.rid));
     expect(reviewGateRecord(applied, "on").reopened).toEqual([
-      "KP-01 (§3) (stays failing) — asserts true",
-      "KP-02 (§3) (stays check-fault) — asserts true",
+      "PP-01 (§3) (stays failing) — asserts true",
+      "PP-02 (§3) (stays check-fault) — asserts true",
       expect.stringMatching(/\(stays unmeasured\) — asserts true$/),
     ]);
   });
@@ -272,18 +272,18 @@ describe("applyReviewFindings", () => {
 describe("reviewRowsOf", () => {
   it("lists the rows that can block, with their current test only", () => {
     const rows = [
-      row("req-1-k1", "KP-01", KP1, {
+      row("req-1-k1", "PP-01", PP1, {
         checks: [
           { kind: "test", testName: "Old", path: "p", bodySha: "c", supersededAtMs: 3 },
           { kind: "test", testName: "New", path: "p", bodySha: "d" },
         ],
       }),
-      row("req-2-k2", undefined, KP2, { checks: [], sectionNumber: undefined }),
+      row("req-2-k2", undefined, PP2, { checks: [], sectionNumber: undefined }),
       row("req-3-k3", undefined, "Day-7 retention rate must reach at least 20 percent within the first month.", { kind: "aspiration", status: "excluded" }),
     ];
     expect(reviewRowsOf(ledger(rows))).toEqual([
-      { rid: "req-1-k1", label: "KP-01", where: "§3", text: KP1, test: "New" },
-      { rid: "req-2-k2", where: "3 Flight", text: KP2 },
+      { rid: "req-1-k1", label: "PP-01", where: "§3", text: PP1, test: "New" },
+      { rid: "req-2-k2", where: "3 Flight", text: PP2 },
     ]);
   });
 });

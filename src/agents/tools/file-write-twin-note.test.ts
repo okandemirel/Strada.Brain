@@ -5,11 +5,11 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { FileWriteTool } from "./file-write.js";
 
-// The measured case: IInputService.cs already at Scripts/Interfaces, written again at Scripts/Services.
+// An interface that already exists under Scripts/Interfaces is written again under Scripts/Services.
 const root = mkdtempSync(join(tmpdir(), "strada-twin-"));
-mkdirSync(join(root, "Assets/Modules/InputModule/Scripts/Interfaces"), { recursive: true });
-mkdirSync(join(root, "Assets/Modules/InputModule/Scripts/Services"), { recursive: true });
-writeFileSync(join(root, "Assets/Modules/InputModule/Scripts/Interfaces/IInputService.cs"), "interface IInputService {}");
+mkdirSync(join(root, "Assets/Modules/PantryModule/Scripts/Interfaces"), { recursive: true });
+mkdirSync(join(root, "Assets/Modules/PantryModule/Scripts/Services"), { recursive: true });
+writeFileSync(join(root, "Assets/Modules/PantryModule/Scripts/Interfaces/IPantryService.cs"), "interface IPantryService {}");
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -19,20 +19,20 @@ describe("writing a file whose name the project already uses", () => {
   it("says where the other one is", async () => {
     const result = await new FileWriteTool().execute(
       {
-        path: "Assets/Modules/InputModule/Scripts/Services/IInputService.cs",
-        content: "interface IInputService {}",
+        path: "Assets/Modules/PantryModule/Scripts/Services/IPantryService.cs",
+        content: "interface IPantryService {}",
       },
       context,
     );
 
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain("Interfaces");
-    expect(result.content).toContain("IInputService.cs");
+    expect(result.content).toContain("IPantryService.cs");
   });
 
   it("says nothing extra for a name the project does not already use", async () => {
     const result = await new FileWriteTool().execute(
-      { path: "Assets/Modules/InputModule/Scripts/Services/PowerUpService.cs", content: "class PowerUpService {}" },
+      { path: "Assets/Modules/PantryModule/Scripts/Services/AuditTrailService.cs", content: "class AuditTrailService {}" },
       context,
     );
 
@@ -40,9 +40,9 @@ describe("writing a file whose name the project already uses", () => {
   });
 
   it("does not warn when overwriting the file itself", async () => {
-    const path = "Assets/Modules/InputModule/Scripts/Interfaces/IInputService.cs";
+    const path = "Assets/Modules/PantryModule/Scripts/Interfaces/IPantryService.cs";
     const result = await new FileWriteTool().execute(
-      { path, content: "interface IInputService { void Tick(); }" },
+      { path, content: "interface IPantryService { void Tick(); }" },
       context,
     );
 

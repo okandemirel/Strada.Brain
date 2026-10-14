@@ -10,8 +10,8 @@ import type { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
 import type { FrameworkAPISnapshot, FrameworkPackageId, FrameworkSourceBinding } from "./framework-types.js";
 
 /**
- * Cap on the framework knowledge section, in chars. Measured 2026-09-09 on the
- * user's project: the section was 21 715 chars (7 088 of them "Classes by
+ * Cap on the framework knowledge section, in chars. Measured 2026-09-09 in a
+ * live campaign: the section was 21 715 chars (7 088 of them "Classes by
  * namespace") inside a 72k-char system prompt, on every turn of every worker —
  * including a node whose whole job was one unity_delivery_measure call — and
  * the free-tier model stopped answering 57k-token turns. Floor 2 000; unset =

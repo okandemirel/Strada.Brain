@@ -14,8 +14,8 @@
  * A test folder with no .asmdef compiles into the default assembly, which
  * cannot see the module's own assembly, so tests written there cannot reference
  * the code they are testing. Measured on a live run: the agent gave up on the
- * module entirely and built a separate Assets/Tests/SampleGame tree with an
- * invented asmdef — tests that live outside the architecture they belong to.
+ * module entirely and built a separate test tree directly under Assets/Tests
+ * with an invented asmdef — tests that live outside the architecture they belong to.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";

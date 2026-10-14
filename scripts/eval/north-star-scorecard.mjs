@@ -28,6 +28,7 @@
  *   ... [--home <dir>] [--memory-dir <dir>] [--campaigns-db <p>] [--tasks-db <p>]
  *   ... [--learning-db <p>] [--vault <index.db>]... [--upstream <dir>] [--log <p>]
  *   ... [--campaign <id>] [--brain-root <dir>]
+ *   ... [--expect-orientation <o>] [--expect-fps <n>] [--expect-pipeline <p>]
  *
  * Exit codes: 0 the scorecard was printed (whatever it says) · 2 bad
  * invocation or an unknown --campaign.
@@ -233,6 +234,8 @@ function toCampaign(row) {
     state: row.state,
     ideaText: typeof row.idea_text === "string" && row.idea_text.trim() !== "" ? row.idea_text : null,
     gddPath: row.gdd_path ?? null,
+    // The approved GDD the ledger was read from: criterion G's platform claims.
+    gddText: typeof row.gdd_text === "string" && row.gdd_text.trim() !== "" ? row.gdd_text : null,
     milestones,
     milestonesUnreadable: !Array.isArray(ms.value),
     createdAt: Number(row.created_at),
@@ -645,6 +648,23 @@ const FIND_OBJECT_RE =
 const NEW_SERVICE_RE = /\bnew\s+(?:[\w.]+\.)?([A-Za-z_]\w*Service)\s*\(/g;
 const REGISTER_CALL_RE = /\bRegister\w*\s*(?:<([^;(){}]*)>)?\s*\(([^;]*)/g;
 const HAND_ROLLED_SCREEN_RE = /^I?\w*Screen(?:Manager|Service|Navigator|Router|Switcher|Stack|Controller)$/;
+// An assignment, not a comparison (`==`): what the game asks the player loop for.
+const TARGET_FRAME_RATE_RE = /\bApplication\s*\.\s*targetFrameRate\s*=(?!=)\s*([^;{}]+?)\s*;/g;
+// A named whole number the assignment can use instead of a literal.
+const INT_CONSTANT_RE = /\b(?:const|static\s+readonly)\s+int\s+([A-Za-z_]\w*)\s*=\s*(-?\d+)\s*;/g;
+
+/**
+ * The number an Application.targetFrameRate assignment sets: a literal, or a
+ * constant the game's code declares with one value only. Anything else (a
+ * field read at run time, an expression) is null: not readable here.
+ */
+function frameRateValue(expr, constants) {
+  const e = expr.replace(/^\(\s*|\s*\)$/g, "").trim();
+  if (/^-?\d+$/.test(e)) return Number(e);
+  const name = /^(?:[A-Za-z_]\w*\s*\.\s*)*([A-Za-z_]\w*)$/.exec(e)?.[1];
+  const values = name ? constants.get(name) : undefined;
+  return values && values.size === 1 ? [...values][0] : null;
+}
 
 function moduleOf(assetsRel) {
   const parts = assetsRel.split(sep);
@@ -689,13 +709,19 @@ export function scanGameCode(assets) {
   const reflectionBootstrap = [];
   const modulesRefs = [];
   const screenTypes = [];
+  const frameRateAssignments = [];
+  const intConstants = new Map();
   let withoutCore = 0;
-  let targetFrameRate60 = 0;
   for (const f of game) {
     const { src, rel } = f;
     if (!/\bStrada\.Core\b/.test(src)) withoutCore++;
     if (/\bStrada\.Modules\b/.test(src)) modulesRefs.push(rel);
-    if (/\bApplication\s*\.\s*targetFrameRate\s*=\s*60\b/.test(src)) targetFrameRate60++;
+    for (const m of src.matchAll(TARGET_FRAME_RATE_RE)) frameRateAssignments.push({ file: rel, expr: m[1].replace(/\s+/g, " ") });
+    for (const m of src.matchAll(INT_CONSTANT_RE)) {
+      const set = intConstants.get(m[1]) ?? new Set();
+      set.add(Number(m[2]));
+      intConstants.set(m[1], set);
+    }
     // The bootstrap bypass: a static entry point that reaches into
     // GameBootstrapper by reflection instead of a scene's configured one.
     if (/\[\s*RuntimeInitializeOnLoadMethod\b/.test(src) && /\bGameBootstrapper\b/.test(src) && /\bBindingFlags\b|\.\s*GetField\s*\(/.test(src)) {
@@ -745,7 +771,8 @@ export function scanGameCode(assets) {
     reflectionBootstrap,
     modulesRefs,
     screenTypes: [...new Set(screenTypes)].sort(),
-    targetFrameRate60,
+    // Every Application.targetFrameRate assignment and the number it sets (null when not readable).
+    targetFrameRates: frameRateAssignments.map((a) => ({ ...a, value: frameRateValue(a.expr, intConstants) })),
   };
 }
 
@@ -799,6 +826,27 @@ function moduleRegistration(project, assets, moduleConfigs, scenes) {
   return { listed: [...listed].sort(), notListed: moduleConfigs.map((m) => m.name).filter((n) => !listed.has(n)).sort() };
 }
 
+/**
+ * Which way the player holds the screen, from PlayerSettings: Unity's
+ * UIOrientation is 0 Portrait, 1 PortraitUpsideDown, 2 LandscapeRight,
+ * 3 LandscapeLeft, 4 AutoRotation. Under auto-rotation the allowed rotations
+ * decide it; an allowance the file does not hold is Unity's default (allowed).
+ * `value` is "portrait", "landscape", "any" (both) or "none" (nothing allowed),
+ * or null with `why` when the file does not say.
+ */
+export function screenOrientationOf(code, autorotate = {}) {
+  if (code === null || code === undefined) return { value: null, why: "defaultScreenOrientation is not in ProjectSettings.asset" };
+  if (code === 0 || code === 1) return { value: "portrait", detail: `defaultScreenOrientation ${code}` };
+  if (code === 2 || code === 3) return { value: "landscape", detail: `defaultScreenOrientation ${code}` };
+  if (code !== 4) return { value: null, why: `defaultScreenOrientation ${code} is no orientation Unity defines` };
+  const allowed = (v) => (v ?? 1) !== 0;
+  const portrait = allowed(autorotate.portrait) || allowed(autorotate.portraitUpsideDown);
+  const landscape = allowed(autorotate.landscapeRight) || allowed(autorotate.landscapeLeft);
+  const value = portrait && landscape ? "any" : portrait ? "portrait" : landscape ? "landscape" : "none";
+  const allowing = { any: "portrait and landscape rotations", portrait: "portrait rotations only", landscape: "landscape rotations only", none: "no rotation" }[value];
+  return { value, detail: `auto-rotation (defaultScreenOrientation 4) allowing ${allowing}` };
+}
+
 function readSettings(project) {
   const ps = readText(join(project, "ProjectSettings", "ProjectSettings.asset"));
   const graphics = readText(join(project, "ProjectSettings", "GraphicsSettings.asset"));
@@ -810,14 +858,14 @@ function readSettings(project) {
       return m ? Number(m[1]) : null;
     };
     const str = (key) => (new RegExp(`^\\s*${key}:[ \\t]*(.*)$`, "m").exec(ps)?.[1] ?? "").trim();
-    const orientation = num("defaultScreenOrientation");
-    // 0 Portrait, 1 PortraitUpsideDown, 4 AutoRotation (portrait only when
-    // both landscape rotations are off).
-    out.portraitOnly =
-      orientation === 0 ||
-      orientation === 1 ||
-      (orientation === 4 && num("allowedAutorotateToLandscapeRight") === 0 && num("allowedAutorotateToLandscapeLeft") === 0);
-    out.orientation = orientation;
+    const code = num("defaultScreenOrientation");
+    const autorotate = {
+      portrait: num("allowedAutorotateToPortrait"),
+      portraitUpsideDown: num("allowedAutorotateToPortraitUpsideDown"),
+      landscapeRight: num("allowedAutorotateToLandscapeRight"),
+      landscapeLeft: num("allowedAutorotateToLandscapeLeft"),
+    };
+    out.orientation = { code, autorotate, ...screenOrientationOf(code, autorotate) };
     out.productName = str("productName") !== "";
     out.companyName = str("companyName") !== "" && str("companyName") !== "DefaultCompany";
     const block = /^\s*applicationIdentifier:[ \t]*(\{\})?[ \t]*\n((?:[ \t]{4,}\S.*\n?)*)/m.exec(ps);
@@ -834,8 +882,12 @@ function readSettings(project) {
   return out;
 }
 
+/** The scriptable render pipelines Unity ships as packages, by the name the spec readers use. */
+const RENDER_PIPELINE_PACKAGES = Object.freeze({ urp: "com.unity.render-pipelines.universal", hdrp: "com.unity.render-pipelines.high-definition" });
+
 function packagesState(project) {
-  const manifest = readText(join(project, "Packages", "manifest.json")) ?? "";
+  const manifestText = readText(join(project, "Packages", "manifest.json"));
+  const manifest = manifestText ?? "";
   const dirs = { core: [], modules: [], mcp: [] };
   const visit = (dir, depth) => {
     if (depth > 3) return;
@@ -857,7 +909,10 @@ function packagesState(project) {
   return {
     dirs,
     modulesInstalled: dirs.modules.length > 0 || /"com\.strada\.modules[^"]*"\s*:/i.test(manifest),
-    urpInstalled: /"com\.unity\.render-pipelines\.universal"\s*:/.test(manifest),
+    manifestFound: manifestText !== null,
+    renderPipelines: Object.entries(RENDER_PIPELINE_PACKAGES)
+      .filter(([, id]) => new RegExp(`"${id.replace(/\./g, "\\.")}"\\s*:`).test(manifest))
+      .map(([name]) => name),
   };
 }
 
@@ -1491,7 +1546,7 @@ function criterionE(ctx, run) {
         ? pass("every play-through used real input")
         : fail(`input routes: ${ev.routes.join(", ")}`),
   );
-  checks.push(unmeasured("the play-through scenarios (menu → level → result, pause, back key, relaunch) are not recorded by name"));
+  checks.push(unmeasured("which of the spec's play-through scenarios were played is not recorded by name"));
   return item("E", CRITERION_TITLES.E, checks);
 }
 
@@ -1526,31 +1581,223 @@ function criterionF(ctx) {
   return item("F", CRITERION_TITLES.F, checks);
 }
 
-function criterionG(ctx) {
+// ─── criterion G: the spec's own platform claims ────────────────────────────
+//
+// Which orientation, frame rate and render pipeline a project must have is
+// the spec's to say, not this scorecard's: a landscape game, a 30 fps cap or
+// the built-in pipeline is as right as their opposites when the spec asks for
+// it. So each expectation comes from the campaign being judged (or a flag),
+// and one the spec does not state is not measured, never failed.
+
+// "portrait and landscape", "either orientation": the spec allows both.
+const ORIENTATION_BOTH_RE = /\b(?:portrait\s*(?:and|&)\s*landscape|landscape\s*(?:and|&)\s*portrait|(?:both|either|any|all)\s+(?:screen\s+)?orientations?)\b/gi;
+// One orientation, said as a setting rather than as a noun ("the speaker's
+// portrait" is a picture, not a screen): after an orientation label, before a
+// qualifier, or after a verb of holding or playing.
+const ORIENTATION_ONE_RES = Object.freeze([
+  /\borientation\b[^.;\n]{0,24}?\b(portrait|landscape)\b/gi,
+  /\b(portrait|landscape)[\s-]+(?:only|mode|orientation|locked|first|format)\b/gi,
+  /\b(?:play(?:s|ed|ing)?|held|holds?|runs?|locked|locks?)\s+(?:in|to)\s+(?:the\s+)?(portrait|landscape)\b(?![\s-]+(?:frames?|images?|pictures?|art(?:work)?|photos?|icons?|panels?|shots?))/gi,
+]);
+const PIPELINE_RES = Object.freeze([
+  ["urp", /\b(?:URP|Universal\s+Render(?:ing)?\s+Pipeline|Universal\s+RP)\b/gi],
+  ["hdrp", /\b(?:HDRP|High[\s-]+Definition\s+Render(?:ing)?\s+Pipeline|High[\s-]+Definition\s+RP)\b/gi],
+  ["built-in", /\b(?:built[\s-]?in\s+(?:render(?:ing)?\s+)?pipeline|built[\s-]?in\s+RP|BiRP)\b/gi],
+]);
+// The figure gdd-claims.ts (FPS_RE) reads, and the words that make it a cap
+// rather than a floor (its COUNT_AT_MOST_RE, read within the clause).
+const FPS_RE = /\b(\d{2,3})\s*(?:fps|frames?\s+per\s+second)\b/gi;
+const AT_MOST_RE =
+  /(?:\b(?:up\s+to|at\s+most|no\s+more\s+than|not\s+more\s+than|max(?:imum)?(?:\s+of)?|capped\s+at|cap\s+of|limited\s+to|(?:never|not)\s+exceed(?:s|ing)?|fewer\s+than|less\s+than|under|below)\b|<=|≤|<)\s*$/i;
+// The line describeClaims writes for a frame-rate claim ("GDD frame rate ≥ 45 fps: …").
+const CLAIM_LINE_FPS_RE = /^GDD frame rate ([≥≤=])\s*(\d+(?:\.\d+)?)\s*fps\b/;
+const COMPARATOR_OF = Object.freeze({ "≥": "min", ">=": "min", "≤": "max", "<=": "max", "=": "eq" });
+
+const quoteOf = (m) => m[0].replace(/\s+/g, " ").trim().slice(0, 60);
+
+function clauseBefore(text, at) {
+  const before = text.slice(Math.max(0, at - 40), at);
+  const cut = Math.max(before.lastIndexOf(";"), before.lastIndexOf("\n"), before.search(/\.\s[^.]*$/));
+  return cut >= 0 ? before.slice(cut + 1) : before;
+}
+
+/**
+ * What a spec text says about orientation, frame rate and render pipeline:
+ * every mention found, as `{ value, quote }` (frame rates as `{ comparator,
+ * value, quote }`). The reader is generic; no document's own wording is in it.
+ */
+export function readSpecPlatform(text) {
+  const src = typeof text === "string" ? text : "";
+  const orientation = [];
+  const rest = src.replace(ORIENTATION_BOTH_RE, (m) => {
+    orientation.push({ value: "any", quote: m.replace(/\s+/g, " ").trim() });
+    return " ".repeat(m.length);
+  });
+  for (const re of ORIENTATION_ONE_RES) for (const m of rest.matchAll(re)) orientation.push({ value: m[1].toLowerCase(), quote: quoteOf(m) });
+  const pipeline = [];
+  for (const [value, re] of PIPELINE_RES) for (const m of src.matchAll(re)) pipeline.push({ value, quote: quoteOf(m) });
+  const fps = [];
+  for (const m of src.matchAll(FPS_RE)) {
+    const value = Number(m[1]);
+    if (value < 10 || value > 240) continue;
+    fps.push({ comparator: AT_MOST_RE.test(clauseBefore(src, m.index ?? 0)) ? "max" : "min", value, quote: quoteOf(m) });
+  }
+  return { orientation, pipeline, fps };
+}
+
+/** The spec text of the campaign being judged: its approved GDD, else its ledger rows' own words. */
+function specTextOf(proof) {
+  const run = proof.campaign;
+  if (!run) return { cause: `no proof campaign (${proof.chosenBy})` };
+  if (run.gddText) return { text: run.gddText, source: `the approved GDD of ${run.id}` };
+  const rows = run.ledgerState === "readable" ? run.ledger.rows.filter((r) => !OUT_OF_SCOPE_STATUSES.has(r.status) && typeof r.text === "string") : [];
+  if (rows.length > 0) return { text: rows.map((r) => r.text).join("\n"), source: `the requirement ledger of ${run.id}` };
+  return { cause: `${run.id} stores no approved GDD text and no in-scope requirement row` };
+}
+
+const SPEC_SUBJECT = Object.freeze({ orientation: "orientation", fps: "frame-rate target", pipeline: "render pipeline" });
+const FLAG_OF = Object.freeze({ orientation: "--expect-orientation", fps: "--expect-fps", pipeline: "--expect-pipeline" });
+
+/** One expectation: from its flag, else from the spec; `{ cause }` when neither states it. */
+function expectationOf(kind, flag, spec, mentions) {
+  if (flag !== undefined) return { value: flag, source: FLAG_OF[kind] };
+  if (spec.cause) return { cause: `the spec could not be read: ${spec.cause} (or pass ${FLAG_OF[kind]})` };
+  const values = [...new Set(mentions.map((f) => f.value))];
+  if (values.length === 0) return { cause: `the spec states no ${SPEC_SUBJECT[kind]} (read ${spec.source}; or pass ${FLAG_OF[kind]})` };
+  if (values.length > 1) {
+    const quotes = values.map((v) => `"${mentions.find((f) => f.value === v).quote}"`).join(" and ");
+    return { cause: `the spec states more than one ${SPEC_SUBJECT[kind]}: ${quotes} (read ${spec.source}; pass ${FLAG_OF[kind]} to choose)` };
+  }
+  return { value: values[0], source: `${spec.source}: "${mentions[0].quote}"` };
+}
+
+const uniqueTargets = (targets) => targets.filter((t, i) => targets.findIndex((o) => o.comparator === t.comparator && o.value === t.value) === i);
+
+/** Frame-rate targets: the flag, else production's own claim lines on the run, else the spec text. */
+function fpsExpectationOf(flag, proof, spec, mentions) {
+  if (flag !== undefined) return { targets: [flag], source: FLAG_OF.fps };
+  const run = proof.campaign;
+  const lines = run ? ([...run.milestones].reverse().find((m) => Array.isArray(m.gddClaims) && m.gddClaims.length > 0)?.gddClaims ?? []) : [];
+  const claimed = lines
+    .map((l) => (typeof l === "string" ? CLAIM_LINE_FPS_RE.exec(l) : null))
+    .filter(Boolean)
+    .map((m) => ({ comparator: COMPARATOR_OF[m[1]], value: Number(m[2]) }));
+  if (claimed.length > 0) return { targets: uniqueTargets(claimed), source: `the delivery claims of ${run.id}` };
+  if (spec.cause) return { cause: `the spec could not be read: ${spec.cause} (or pass ${FLAG_OF.fps})` };
+  if (mentions.length === 0) return { cause: `the spec states no ${SPEC_SUBJECT.fps} (read ${spec.source}; or pass ${FLAG_OF.fps})` };
+  return { targets: uniqueTargets(mentions.map(({ comparator, value }) => ({ comparator, value }))), source: spec.source };
+}
+
+function specPlatform(ctx, proof) {
+  const spec = specTextOf(proof);
+  const read = spec.cause ? { orientation: [], pipeline: [], fps: [] } : readSpecPlatform(spec.text);
+  return {
+    orientation: expectationOf("orientation", ctx.expect.orientation, spec, read.orientation),
+    pipeline: expectationOf("pipeline", ctx.expect.pipeline, spec, read.pipeline),
+    fps: fpsExpectationOf(ctx.expect.fps, proof, spec, read.fps),
+  };
+}
+
+const ORIENTATION_LABEL = Object.freeze({ portrait: "portrait", landscape: "landscape", any: "portrait and landscape", none: "no orientation" });
+const PIPELINE_LABEL = Object.freeze({ urp: "URP", hdrp: "HDRP", "built-in": "the built-in pipeline" });
+const fpsText = (t) => `${t.comparator === "min" ? "≥" : t.comparator === "max" ? "≤" : "="} ${t.value} fps`;
+// -1 and 0 hand the frame rate back to the platform's default: they answer no target.
+const answersFps = (t, v) => v > 0 && (t.comparator === "min" ? v >= t.value : t.comparator === "max" ? v <= t.value : v === t.value);
+
+function orientationCheck(project, expected) {
+  if (expected.cause) return unmeasured(`orientation: ${expected.cause}`);
+  if (project.value === null) return unmeasured(`orientation: ${project.why}`);
+  const have = `${ORIENTATION_LABEL[project.value]} (${project.detail})`;
+  const want = `${ORIENTATION_LABEL[expected.value]} (${expected.source})`;
+  return project.value === expected.value ? pass(`orientation ${have}, as the spec asks: ${want}`) : fail(`orientation ${have}; the spec asks for ${want}`);
+}
+
+function frameRateChecks(assignments, expected) {
+  if (expected.cause) return [unmeasured(`frame rate: ${expected.cause}`)];
+  const literal = assignments.filter((a) => a.value !== null);
+  const opaque = assignments.filter((a) => a.value === null);
+  const set = literal.map((a) => `${a.value} (${a.file})`).join(", ");
+  return expected.targets.map((t) => {
+    const want = `the spec's ${fpsText(t)} (${expected.source})`;
+    if (assignments.length === 0) return fail(`no game code sets Application.targetFrameRate, so ${want} is left to the platform's default`);
+    if (literal.some((a) => answersFps(t, a.value))) return pass(`game code sets Application.targetFrameRate to ${set}, which answers ${want}`);
+    if (opaque.length > 0) {
+      return unmeasured(`frame rate: Application.targetFrameRate is set from ${opaque.map((a) => `\`${a.expr}\` (${a.file})`).join(", ")}, which this scorecard cannot evaluate, against ${want}`);
+    }
+    return fail(`game code sets Application.targetFrameRate to ${set}, which does not answer ${want}`);
+  });
+}
+
+/** Whether the project renders through a scriptable pipeline: an asset on Graphics or on any quality level. */
+function pipelineAssets(s) {
+  const levels = s.qualityFound ? `${s.qualityWithPipeline} of ${s.qualityLevels} quality levels` : "QualitySettings.asset not found";
+  return { inUse: s.graphicsPipeline || s.qualityWithPipeline > 0, where: `${s.graphicsPipeline ? "on Graphics" : "not on Graphics"}, ${levels}` };
+}
+
+function pipelineCheck(s, packages, expected) {
+  if (expected.cause) return unmeasured(`render pipeline: ${expected.cause}`);
+  if (!s.graphicsFound) return unmeasured("render pipeline: ProjectSettings/GraphicsSettings.asset not found");
+  const want = `${PIPELINE_LABEL[expected.value]} (${expected.source})`;
+  const assets = pipelineAssets(s);
+  if (expected.value === "built-in") {
+    return assets.inUse
+      ? fail(`a render pipeline asset is assigned (${assets.where}); the spec asks for ${want}`)
+      : pass(`no render pipeline asset is assigned on Graphics or any quality level, so the project renders with the built-in pipeline, as the spec asks: ${want}`);
+  }
+  if (!assets.inUse) return fail(`no render pipeline asset is assigned on Graphics or any quality level (the built-in pipeline); the spec asks for ${want}`);
+  if (!packages.manifestFound) return unmeasured("render pipeline: Packages/manifest.json not found");
+  const pkg = RENDER_PIPELINE_PACKAGES[expected.value];
+  const other = expected.value === "urp" ? "hdrp" : "urp";
+  if (!packages.renderPipelines.includes(expected.value)) return fail(`${pkg} is not in Packages/manifest.json; the spec asks for ${want}`);
+  if (packages.renderPipelines.includes(other)) {
+    return unmeasured(`render pipeline: both ${pkg} and ${RENDER_PIPELINE_PACKAGES[other]} are in Packages/manifest.json, so which one the assigned asset belongs to cannot be told`);
+  }
+  return pass(`${pkg} is in Packages/manifest.json and a render pipeline asset is assigned (${assets.where}), as the spec asks: ${want}`);
+}
+
+function criterionG(ctx, proof) {
   const pc = projectCause(ctx);
   if (pc) return blocked("G", CRITERION_TITLES.G, pc);
   const s = ctx.project.settings;
+  const { code, packages } = ctx.project;
+  const spec = specPlatform(ctx, proof);
   const checks = [];
   if (!s.found) checks.push(unmeasured("ProjectSettings/ProjectSettings.asset not found"));
   else {
-    checks.push(s.portraitOnly ? pass("portrait only") : fail(`not portrait only (defaultScreenOrientation ${s.orientation ?? "unset"})`));
+    checks.push(orientationCheck(s.orientation, spec.orientation));
     checks.push(s.productName ? pass("product name set") : fail("product name not set"));
     checks.push(s.companyName ? pass("company name set") : fail("company name not set (empty or DefaultCompany)"));
     checks.push(s.bundleId ? pass("bundle id set") : fail("no bundle id set"));
   }
-  checks.push(ctx.project.code.targetFrameRate60 > 0 ? pass("game code sets Application.targetFrameRate = 60") : fail("no game code sets Application.targetFrameRate = 60"));
-  checks.push(ctx.project.packages.urpInstalled ? pass("URP is in Packages/manifest.json") : fail("URP is not in Packages/manifest.json"));
-  if (!s.graphicsFound) checks.push(unmeasured("ProjectSettings/GraphicsSettings.asset not found"));
-  else checks.push(s.graphicsPipeline ? pass("a render pipeline asset is assigned on Graphics") : fail("no render pipeline asset is assigned on Graphics"));
-  if (!s.qualityFound) checks.push(unmeasured("ProjectSettings/QualitySettings.asset not found"));
-  else {
-    checks.push(
-      s.qualityLevels > 0 && s.qualityWithPipeline === s.qualityLevels
-        ? pass(`all ${s.qualityLevels} quality levels assign a render pipeline asset`)
-        : fail(`${s.qualityWithPipeline} of ${s.qualityLevels} quality levels assign a render pipeline asset`),
-    );
+  checks.push(...frameRateChecks(code.targetFrameRates, spec.fps));
+  checks.push(pipelineCheck(s, packages, spec.pipeline));
+  // A project on a scriptable pipeline assigns its asset everywhere: on
+  // Graphics and on every quality level, or a level renders with another one.
+  if (s.graphicsFound && pipelineAssets(s).inUse) {
+    checks.push(s.graphicsPipeline ? pass("a render pipeline asset is assigned on Graphics") : fail("no render pipeline asset is assigned on Graphics, though a quality level assigns one"));
+    if (!s.qualityFound) checks.push(unmeasured("ProjectSettings/QualitySettings.asset not found"));
+    else {
+      checks.push(
+        s.qualityLevels > 0 && s.qualityWithPipeline === s.qualityLevels
+          ? pass(`all ${s.qualityLevels} quality levels assign a render pipeline asset`)
+          : fail(`${s.qualityWithPipeline} of ${s.qualityLevels} quality levels assign a render pipeline asset`),
+      );
+    }
   }
-  return item("G", CRITERION_TITLES.G, checks);
+  return item("G", CRITERION_TITLES.G, checks, {
+    measured: {
+      orientation: s.found ? { code: s.orientation.code, value: s.orientation.value } : null,
+      targetFrameRates: code.targetFrameRates,
+      renderPipelinePackages: packages.renderPipelines,
+      pipelineAssetOnGraphics: s.graphicsFound ? s.graphicsPipeline : null,
+      qualityLevelsWithPipelineAsset: s.qualityFound ? `${s.qualityWithPipeline} of ${s.qualityLevels}` : null,
+      expected: {
+        orientation: spec.orientation.value ?? null,
+        fps: spec.fps.targets ?? null,
+        pipeline: spec.pipeline.value ?? null,
+      },
+    },
+  });
 }
 
 function criterionH(ctx) {
@@ -1651,7 +1898,7 @@ function criteria(ctx) {
     run ? criterionD(ctx, run) : needRun("D"),
     run ? criterionE(ctx, run) : needRun("E"),
     criterionF(ctx),
-    criterionG(ctx),
+    criterionG(ctx, proof),
     ctx.store ? criterionH(ctx) : blocked("H", CRITERION_TITLES.H, campaignsCause(ctx)),
     run ? criterionI(ctx, run) : needRun("I"),
     criterionJ(ctx),
@@ -1713,11 +1960,44 @@ export function defaultPaths(env = process.env, homeDir = homedir(), installRoot
   };
 }
 
+function usageError(text) {
+  const err = new Error(text);
+  err.usage = true;
+  return err;
+}
+
+/**
+ * The platform a caller states instead of the spec (--expect-orientation,
+ * --expect-fps, --expect-pipeline): each one given replaces what criterion G
+ * would read from the campaign. A value it cannot read is a usage error.
+ */
+export function parseExpectations(opts = {}) {
+  const out = {};
+  if (opts.expectOrientation !== undefined) {
+    const v = String(opts.expectOrientation).trim().toLowerCase();
+    if (!Object.hasOwn(ORIENTATION_LABEL, v) || v === "none") throw usageError(`--expect-orientation must be portrait, landscape or any, not "${opts.expectOrientation}"`);
+    out.orientation = v;
+  }
+  if (opts.expectFps !== undefined) {
+    const m = /^\s*(>=|≥|<=|≤|=)?\s*(\d{1,3})\s*$/.exec(String(opts.expectFps));
+    if (!m || Number(m[2]) === 0) throw usageError(`--expect-fps must be a frame rate such as 30, ">=60" or "<=30", not "${opts.expectFps}"`);
+    out.fps = { comparator: m[1] ? COMPARATOR_OF[m[1]] : "eq", value: Number(m[2]) };
+  }
+  if (opts.expectPipeline !== undefined) {
+    const raw = String(opts.expectPipeline).trim().toLowerCase();
+    const v = raw === "builtin" || raw === "birp" ? "built-in" : raw;
+    if (!Object.hasOwn(PIPELINE_LABEL, v)) throw usageError(`--expect-pipeline must be urp, hdrp or built-in, not "${opts.expectPipeline}"`);
+    out.pipeline = v;
+  }
+  return out;
+}
+
 /**
  * Measure everything. `opts` mirrors the CLI flags; every path is optional
  * and an absent source turns the rungs that need it into "not measured".
  */
 export function scoreNorthStar(opts = {}) {
+  const expect = parseExpectations(opts);
   const defaults = defaultPaths(opts.env, opts.homeDir, opts.installRoot);
   const home = opts.home ? resolve(opts.home) : defaults.home;
   const memoryDir = opts.memoryDir ? resolve(opts.memoryDir) : opts.home ? join(home, ".strada-memory") : defaults.memoryDir;
@@ -1762,6 +2042,7 @@ export function scoreNorthStar(opts = {}) {
       upstream,
       vaults: vaultPaths.map((p) => readVault(p, upstream)),
       campaignFilter: opts.campaign ?? null,
+      expect,
     };
     const rungs = [rung1, rung2, rung3, rung4, rung5, rung6, rung7, rung8, rung9, rung10].map((f) => f(ctx));
     const crit = criteria(ctx);
@@ -1879,6 +2160,12 @@ const HELP = `north-star-scorecard.mjs — the ten north-star rungs and the proo
   --log <path>            daemon log for rung 1, read with its rotated archives (default <home>/strada-brain.log)
   --brain-root <dir>      Brain checkout whose HEAD rung 1 compares the boot with (default: this repository)
   --campaign <id>         measure one campaign only (the proof run)
+  --expect-orientation <portrait|landscape|any>
+  --expect-fps <n|">=n"|"<=n">
+  --expect-pipeline <urp|hdrp|built-in>
+                          the platform criterion G holds the project to, in place of what the proof
+                          campaign's GDD states (by default each is read from it; one it does not
+                          state is not measured)
   --json                  machine-readable output
 
 Every database is opened read-only. exit 0 printed · 2 bad invocation or unknown --campaign`;
@@ -1896,6 +2183,9 @@ export function parseArgs(argv) {
     "--log": "log",
     "--brain-root": "brainRoot",
     "--campaign": "campaign",
+    "--expect-orientation": "expectOrientation",
+    "--expect-fps": "expectFps",
+    "--expect-pipeline": "expectPipeline",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];

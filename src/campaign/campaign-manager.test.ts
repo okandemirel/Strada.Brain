@@ -2278,7 +2278,7 @@ describe("CampaignManager", () => {
     putAsset("Assets/Art/sapling.png", "pixels", "22222222222222222222222222222222");
     putAsset(
       "Assets/Scripts/OrchardBuilder.cs",
-      "class OrchardBuilder { void B() { GameObject.CreatePrimitive(PrimitiveType.Cube); } }",
+      "class OrchardBuilder { void B() { GameObject.CreatePrimitive(PrimitiveType.Capsule); } }",
       "66666666666666666666666666666666",
     );
   };

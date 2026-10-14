@@ -32,12 +32,11 @@ function recordingProvider(): { provider: IAIProvider; prompts: () => string } {
   return { provider, prompts: () => seen.join("\n") };
 }
 
-async function decompositionPrompt(): Promise<string> {
+async function decompositionPrompt(
+  task = "Build the game described in docs/design.md",
+): Promise<string> {
   const { provider, prompts } = recordingProvider();
-  await new GoalDecomposer(provider, 3).decomposeProactive(
-    "s",
-    "Build the game in SampleGame_GDD.docx",
-  );
+  await new GoalDecomposer(provider, 3).decomposeProactive("s", task);
   return prompts();
 }
 
@@ -75,6 +74,28 @@ describe("planning a game", () => {
     expect(prompt).toContain("do not sprinkle rendering through every module");
   });
 
+  it("asks for art for everything the design names, with or without a schedule section", async () => {
+    // An invented design with no schedule of any kind: a one-page brief for a
+    // tide-pool sorting game, where the player drags urchins, limpets and kelp
+    // fronds into three baskets over a rockpool backdrop. It names what has to
+    // be drawn and never says when anything is introduced — so a rule keyed to
+    // "what the design schedules" has nothing to anchor on and plans no art at
+    // all, while the capability it carries is needed by every game.
+    const prompt = await decompositionPrompt(
+      "Build the tide-pool sorting game in TidePool_brief.md — one page of prose, no tables",
+    );
+
+    expect(prompt).toContain("Every visible thing the design names");
+    expect(prompt).toContain("characters, props, obstacles, backgrounds, interface pieces");
+    // The chain the rule exists for, unchanged by the rewording: look for
+    // owned art first, then generate what fits, then BIND it.
+    expect(prompt).toContain("unity_my_assets_cloud");
+    expect(prompt).toContain("unity_generate_sprite");
+    expect(prompt).toContain("unity_generate_mesh");
+    expect(prompt).toContain("unity_prerender_frames");
+    expect(prompt).toContain("always the binding of that asset");
+  });
+
   it("says nothing renders by itself, and names the framework's bridge", async () => {
     const prompt = await decompositionPrompt();
 
@@ -100,11 +121,10 @@ describe("planning a game", () => {
   });
 
   it("knows a prefab nothing references is invisible", async () => {
-    // Measured 2026-08-22: prefabs and sprites in place, a config class
-    // declaring GameObject fields — and no .asset instance of
-    // it, so nothing held a reference to any prefab at run time. Making the
-    // asset is not a detail discovered later; it is the step between having
-    // prefabs and having a game.
+    // A config type that declares prefab fields references nothing until an
+    // .asset instance of it exists with the references assigned; without
+    // that, no prefab is reachable at run time. Making the asset is the step
+    // between having prefabs and having a game.
     const prompt = await decompositionPrompt();
 
     expect(prompt).toContain("nothing references is invisible");
@@ -126,8 +146,9 @@ describe("planning a game", () => {
   });
 
   it("does not accept a green suite as proof that anything was drawn", async () => {
-    // The whole suite passed while every captured frame was the same
-    // empty sky. Tests prove the simulation; only a frame proves the game.
+    // A passing suite proves the simulation, not the picture: only captured
+    // frames that differ from an empty or uniform frame show that anything
+    // renders.
     const prompt = await decompositionPrompt();
 
     expect(prompt).toContain("captured frame");

@@ -50,7 +50,7 @@ describe("synthesis", () => {
 
 describe("unity_generate_audio", () => {
   it("writes a WAV the delivery measurement reads back, with an AudioImporter meta", async () => {
-    // Measured 2026-09-07: the GDD's cue list had no tool to come from.
+    // A named cue must be writable and measurable without the Editor.
     const r = await new AudioGenerateTool().execute({ name: "ReverserNotch", preset: "chirp" }, ctx);
     expect(r.isError).toBeFalsy();
     const file = join(root, "Assets/Audio/Generated/ReverserNotch.wav");

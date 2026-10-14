@@ -12,12 +12,10 @@
  * longer than a tweet took the supervisor path and the classifier's verdict was
  * discarded.
  *
- * Measured cost of that: "write one C# file under Assets/Scripts in the
- * Fernbrook namespace" is 113 characters and classifies as
- * code-generation/moderate — below the configured "complex" threshold. The
- * classifier said no; the length check overruled it; a single-file edit was
- * routed through goal decomposition, a wave planner and multi-agent dispatch,
- * and produced no file at all.
+ * Measured cost: a single-file C# request well past the 60-character
+ * pre-filter classifies as code-generation/moderate, below the configured
+ * "complex" threshold. The length check overruled the classifier and the edit
+ * was routed through decomposition and multi-agent dispatch, producing no file.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -74,7 +72,7 @@ function makeOrchestrator(options: {
 
 /** Longer than the 60-character pre-filter, so length alone would admit it. */
 const LONG_MODERATE_PROMPT =
-  "Assets/Scripts altina Fernbrook namespace'inde Board.cs adli tek bir C# dosyasi yaz: basit bir grid sinifi olsun.";
+  "Add one C# file, Assets/Scripts/Tides/TideTable.cs, with a small class that returns the next high tide for a given day.";
 
 describe("supervisor admission", () => {
   it("sends a long but only-moderate request to the direct worker", async () => {

@@ -38,11 +38,10 @@ function installModel(root: string, id: string): void {
 }
 
 /**
- * Measured 2026-09-06: sd15 and TripoSR were installed (6.7 GB of weights
- * under ~/.strada/assets-local) and across a whole campaign `provider:
- * "local"` was requested zero times. Every sprite the game shipped was a
- * procedural blob, because "procedural" was the default and nothing told the
- * sprint otherwise.
+ * Measured in a live campaign: with local text-to-image and image-to-3D models
+ * installed (6.7 GB of weights under ~/.strada/assets-local), `provider:
+ * "local"` was never requested, because "procedural" was the default and
+ * nothing said otherwise.
  */
 /** A runner that is "installed" but refuses to draw — exercises the local branch without a model. */
 const refusing = {
@@ -258,9 +257,8 @@ describe("the installed model is the default; the placeholder is the fallback", 
 });
 
 describe("realLocalAvailability is a measurement, not a require() that cannot run", () => {
-  // Measured 2026-09-07 14:50: an ESM package, a require() in a try/catch,
-  // and "false" for a model that was installed — every sprint's sprites went
-  // procedural and nothing said why.
+  // An ESM package, a require() inside try/catch, and "false" for an installed
+  // model: availability was silently wrong and nothing said why.
   it("answers from the markers on disk, gated by the device — not from a restatement of the selection (Codex 2026-09-17)", async () => {
     // Inverted 2026-09-17 (audit A2 / D54): the expectation used to be
     // computed through defaultModelFor — the smallest model — which is the

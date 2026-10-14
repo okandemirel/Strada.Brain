@@ -458,7 +458,7 @@ export async function initializeTaskRuntimeStage(
       // the real-tree guardian uses; a missing registry or an unregistered
       // verifier answers `ran: false`, which the gate discloses as NOT
       // MEASURED and never treats as a pass (audited 2026-09-04: a campaign
-      // delivered on a tree carrying 37 compile errors).
+      // declared delivery on a tree that did not compile).
       verifyCompile: params.toolRegistry ? makeVerifyCompile(params.toolRegistry) : undefined,
       // The vendored Strada.MCP stamps a receipt on every ticketed run: a
       // producer that returns none is refused, not read as legacy (round 4 #1).
@@ -1110,7 +1110,7 @@ export interface PlayerRunSpec {
  *
  * A missing registry or an unregistered verifier answers `ran: false`, which
  * the gate discloses as NOT MEASURED and never treats as a pass (audited
- * 2026-09-04: a campaign delivered on a tree carrying 37 compile errors).
+ * 2026-09-04: a campaign declared delivery on a tree that did not compile).
  */
 export function makeVerifyCompile(
   registry: {
@@ -1146,7 +1146,7 @@ export function makeVerifyCompile(
             // read at all, so "Unity Editor executable not found" and
             // "Operation timed out" both reported a zero-error compile (Codex
             // 2026-09-12 R#5) — but reading it first turned a COMPLETED
-            // compile that found 37 errors into "not run", which the non-final
+            // compile that counted real errors into "not run", which the non-final
             // gate does not treat as broken at all (S#2). A counted error is
             // the compiler's answer whatever the flag says; a flag with no
             // count is a tool that did not get to answer.

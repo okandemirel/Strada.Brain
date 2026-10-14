@@ -50,7 +50,7 @@ describe("MessageRouter.preRoute", () => {
 
   it("lets an ordinary message fall through", async () => {
     const { router, route } = routerWith(false);
-    const consumed = await router.preRoute({ chatId: "c", text: "implement the board", channelType: "cli", userId: "u" } as never);
+    const consumed = await router.preRoute({ chatId: "c", text: "add a CSV export to the invoice page", channelType: "cli", userId: "u" } as never);
     expect(consumed).toBe(false);
     expect(route).not.toHaveBeenCalled();
   });

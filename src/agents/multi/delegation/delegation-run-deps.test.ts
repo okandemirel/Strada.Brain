@@ -137,7 +137,7 @@ function fakeVault(id: string, kind: string, rootPath: string): FakeVault {
     rootPath,
     query: vi.fn().mockResolvedValue({ hits: [], budgetUsed: 0, truncated: false }),
     readCanvas: vi.fn().mockResolvedValue({ nodes: [], edges: [] }),
-    listFiles: () => [{ path: "Assets/Scripts/MatchResolver.cs" }, { path: "Assets/Scripts/Board.cs" }],
+    listFiles: () => [{ path: "Assets/Scripts/Anemometer.cs" }, { path: "Assets/Scripts/Barometer.cs" }],
     dispose: async () => undefined,
   };
 }
@@ -161,7 +161,7 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
     duringRun = undefined;
     // The lexical tmpdir form on purpose: on macOS /var/..., its realpath /private/var/...
     tmpDir = mkdtempSync(join(tmpdir(), "delegation-run-deps-"));
-    project = join(tmpDir, "SampleGame");
+    project = join(tmpDir, "unity-project");
     mkdirSync(project, { recursive: true });
     mkdirSync(join(tmpDir, "strada-brain"), { recursive: true });
     lease = join(tmpDir, "strada-workspaces", "delegation-1");
@@ -297,7 +297,7 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
       seen ??= { value: await inspect(orchestrator, request) };
     };
     await manager.delegate({
-      type: "code_review", task: "Review MatchResolver", parentAgentId: PARENT, depth: 0, mode: "sync", toolContext: callerContext,
+      type: "code_review", task: "Review Anemometer", parentAgentId: PARENT, depth: 0, mode: "sync", toolContext: callerContext,
     });
     expect(seen, "the delegated run never reached the runner").toBeDefined();
     return seen!.value;
@@ -375,7 +375,7 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
       const delegate = orchestrator as unknown as DelegateInternals;
       const [result] = await delegate.executeToolCalls(
         "delegation-sub",
-        [{ id: "c1", name: "vault_graph_explore", input: { query: "MatchResolver" } }],
+        [{ id: "c1", name: "vault_graph_explore", input: { query: "Anemometer" } }],
         { mode: "delegated", workspaceLease: request.workspaceLease },
       );
       return { result, prompt: delegate.systemPrompt };
@@ -401,7 +401,7 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
       };
       const review = vi.spyOn(host, "reviewShellCommandWithProvider").mockResolvedValue({ approved: true });
       await host.reviewSelfManagedWriteOperation(
-        "delegation-sub", "shell_exec", { command: `dotnet build ${project}/SampleGame.sln` }, "delegated",
+        "delegation-sub", "shell_exec", { command: `dotnet build ${project}/Project.sln` }, "delegated",
         { workspaceLease: request.workspaceLease },
       );
       return review.mock.calls[0]?.[3] as { projectPath?: string; sourceProjectPath?: string } | undefined;
@@ -426,9 +426,9 @@ describe("DelegationManager builds the delegate's orchestrator with a chat turn'
       (orchestrator as unknown as { recordInRunTrajectoryCredit(params: unknown): void }).recordInRunTrajectoryCredit({
         chatId: "delegation-sub",
         sessionId: "delegation-sub",
-        taskDescription: "Review MatchResolver",
+        taskDescription: "Review Anemometer",
         success: true,
-        stepResults: [{ toolName: "file_read", success: true, summary: "read MatchResolver.cs", timestamp: Date.now() }],
+        stepResults: [{ toolName: "file_read", success: true, summary: "read Anemometer.cs", timestamp: Date.now() }],
       });
     });
 

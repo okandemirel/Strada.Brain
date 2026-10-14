@@ -121,8 +121,8 @@ export interface DelegationManagerOptions {
    *
    * Delegation built its candidate pool from EVERY credential present, so an
    * account reserved for other work became a sub-agent worker the moment its
-   * key existed — measured live 2026-09-12: a project pinned to
-   * "opencode,opencode2" ran its sprint turns on OpenAI (Codex O's
+   * key existed — measured live 2026-09-12: a deployment pinned to
+   * "opencode,opencode2" ran delegated turns on OpenAI (Codex O's
    * strict-chain finding, one layer down).
    */
   readonly providerChain?: readonly string[];
@@ -1198,7 +1198,7 @@ export class DelegationManager {
     // THE TIER MAP IS NOT ABOVE THE CHAIN. The candidate pool learned to
     // respect a strict chain, and delegated turns still went to a provider
     // outside it — the tier router's own configured name is consulted first
-    // (measured live 2026-09-12 02:13, 36 calls after the pool was fixed).
+    // (measured live 2026-09-12 02:13, after the pool was fixed).
     if (normalizedName && !this.providerAllowedByChain(normalizedName)) {
       const dynamicOnly = this.resolveDynamicProviderConfig(tier, typeConfig);
       if (dynamicOnly) return dynamicOnly;

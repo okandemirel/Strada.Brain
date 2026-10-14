@@ -6,10 +6,6 @@
  * always doing several jobs that the pattern set already has homes for, and a
  * signal handler is the cheapest cut: it takes one action out whole, with its
  * own test.
- *
- * Measured on the run that prompted this: no file came near the limit. The
- * rule did not fire there and should not have — it is a guardrail for the
- * shape this project has produced before, not a claim about this run.
  */
 
 import { describe, expect, it } from "vitest";
@@ -45,7 +41,7 @@ function project(sourceLines: number): { root: string; configPath: string; servi
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
-  writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+  writeFileSync(join(scenes, "Quarry.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
   return { root, configPath, servicePath };
 }
 
@@ -69,8 +65,7 @@ describe("a source file past the limit", () => {
   });
 
   it("is told where the framework already puts that work", () => {
-    // Naming a limit without naming the cut is the shape of advice this project
-    // has repeatedly found useless.
+    // Naming a limit without naming the cut is advice a worker cannot act on.
     const prompt = promptFor(400);
 
     // Core has no commands: a module's actions are signals with one handler each.

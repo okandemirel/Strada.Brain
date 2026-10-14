@@ -333,13 +333,11 @@ export function createAgentCorePort(
         // showed that flag makes the run's finally settle the tree under its
         // conversation scope, which for a worker is the PARENT's persisted
         // tree — settled "completed" by the first node to finish.
-        // Measured 2026-09-08 04:48 and 05:00 (test-game sprint): the
-        // supervisor dispatched sub-goal workers, each started in PLANNING,
-        // each re-decomposed its own task text into a fresh 12- and 3-node
-        // tree under a new root — 4-7 minutes apiece on the free model, 18 of
-        // the sprint's first 37 minutes — and each new tree overwrote the
-        // parent's entry in activeGoalTrees. The parent planner already decided
-        // this node's shape; the worker executes it.
+        // Measured in a live campaign: sub-goal workers each started in
+        // PLANNING and re-decomposed their own task text into a fresh tree
+        // under a new root, costing minutes per worker, and each new tree
+        // overwrote the parent's entry in activeGoalTrees. The parent planner
+        // already decided this node's shape; the worker executes it.
         if (c.realTreeRun) {
           // One agent on the real tree: no plan, no nodes (see EngineRunContext.realTreeRun).
           getLoggerSafe().info("Real-tree run skips goal decomposition — one agent, no plan", {

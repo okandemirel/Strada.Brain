@@ -126,8 +126,8 @@ function must(condition: boolean, message: string): void {
 export function probeGateLiveness(): GateProbe[] {
   const root = mkdtempSync(join(tmpdir(), "strada-gate-liveness-"));
   try {
-    put(root, "ProjectSettings/EditorBuildSettings.asset", "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Main.unity\n    guid: 00000000000000000000000000000001\n");
-    put(root, "Assets/Scenes/Main.unity", SCENE, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
+    put(root, "ProjectSettings/EditorBuildSettings.asset", "EditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/Orchard.unity\n    guid: 00000000000000000000000000000001\n");
+    put(root, "Assets/Scenes/Orchard.unity", SCENE, "5ce5e5e5e5e5e5e5e5e5e5e5e5e5e5e5");
     put(root, "Assets/Prefabs/Lantern.prefab", PREFAB, "11111111111111111111111111111111");
     put(root, "Assets/Art/flat.png", png(64, 64, "flat"), "22222222222222222222222222222222");
     put(root, "Assets/Art/real.png", png(64, 64, "noise"), "33333333333333333333333333333333");
@@ -230,7 +230,7 @@ export function probeGateLiveness(): GateProbe[] {
 
     probes.push(probe("scene binding (bind + place)", () => {
       bindSprite(join(root, "Assets/Prefabs/Lantern.prefab"), "33333333333333333333333333333333");
-      placePrefab(join(root, "Assets/Scenes/Main.unity"), "11111111111111111111111111111111", prefabRoot(PREFAB));
+      placePrefab(join(root, "Assets/Scenes/Orchard.unity"), "11111111111111111111111111111111", prefabRoot(PREFAB));
       const r = assessBuiltAsSpecified(root);
       must(r.shippedRenderers === 1, `placed prefab renderer not counted (shippedRenderers=${r.shippedRenderers})`);
       return "a bound, placed prefab is counted as shipped";

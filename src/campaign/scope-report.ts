@@ -334,13 +334,13 @@ export function formatRows(
 // WAIVERS
 // =============================================================================
 
-/** "R-07", "r07" and "R7" are one label. */
+/** "G-04", "g04" and "G4" are one label. */
 function labelKey(label: string): string {
   return label.toUpperCase().replace(/[\s_-]+/g, "").replace(/(\D)0+(?=\d)/g, "$1");
 }
 
 /**
- * The rows a waiver names: `§3.3` is that section and every subsection under
+ * The rows a waiver names: `§7.4` is that section and every subsection under
  * it; otherwise a row id or the GDD's own label. Nothing is guessed — a target
  * that matches nothing waives nothing.
  */

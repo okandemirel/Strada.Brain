@@ -301,13 +301,13 @@ describe("DelegationManager", () => {
         mode: "sync",
         toolContext: {
           ...TEST_TOOL_CONTEXT,
-          userAuthorizedPaths: ["/Users/okan/Downloads/SampleGame_GDD.docx"],
+          userAuthorizedPaths: ["/srv/handoff/orbital-survey-brief.pdf"],
         },
       });
 
       expect(seededAuthorizations, "the worker was handed nothing").toHaveLength(1);
       expect(seededAuthorizations[0]![0]).toMatch(/^delegation-/);
-      expect(seededAuthorizations[0]![1]).toEqual(["/Users/okan/Downloads/SampleGame_GDD.docx"]);
+      expect(seededAuthorizations[0]![1]).toEqual(["/srv/handoff/orbital-survey-brief.pdf"]);
     });
 
     it("hands down nothing when the parent held nothing", async () => {
@@ -497,7 +497,7 @@ describe("DelegationManager", () => {
       });
 
       await manager.delegate({
-        type: "code_review", task: "Review Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+        type: "code_review", task: "Review Telescope.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
       });
 
       expect(orchestratorOpts.maxIterations).toBe(10);
@@ -506,7 +506,7 @@ describe("DelegationManager", () => {
 
     it("refuses a delegation whose type keeps timing out at the cap, before any lease is taken", async () => {
       // Measured 2026-09-07: every code_review sub-agent of the day timed out
-      // at 60 s after seeding a 2000-file lease.
+      // at its configured 60 s, each after first seeding a workspace lease.
       for (let i = 0; i < 3; i++) {
         const id = delegationLog.start({ parentAgentId: PARENT_AGENT_ID, subAgentId: `dead-${i}`, type: "code_review", model: "m", tier: "cheap", depth: 0 });
         delegationLog.timeout(id, { durationMs: 600_000 });
@@ -1480,10 +1480,10 @@ describe("DelegationManager", () => {
   describe("workspace commit verdict reaches the caller", () => {
     // Measured 2026-09-02: the lease commit ran in the `finally` AFTER
     // delegationLog.complete / delegation:completed / the return literal, and
-    // its result went to one info log line. A sub-agent whose Board.cs was
-    // quarantined as a conflict (project copy changed while it ran) reported
-    // "I created Board.cs" to the parent with success:true — the project never
-    // got the file and every consumer said it did.
+    // its result went to one info log line. A sub-agent whose file was
+    // quarantined as a conflict (the project copy changed while it ran)
+    // reported that it had created it, with success:true. The project never
+    // got the file, and every consumer said it did.
     function leaseManagerWith(commit: () => Promise<unknown>) {
       const release = vi.fn().mockResolvedValue(undefined);
       const acquireLease = vi.fn().mockResolvedValue({
@@ -1501,7 +1501,7 @@ describe("DelegationManager", () => {
 
     const request = (): DelegationRequest => ({
       type: "code_review",
-      task: "Create Board.cs",
+      task: "Create Telescope.cs",
       parentAgentId: PARENT_AGENT_ID,
       depth: 0,
       mode: "sync",
@@ -1510,7 +1510,7 @@ describe("DelegationManager", () => {
 
     it("tells the parent which deletions were NOT applied and carries the commit in metadata", async () => {
       const commit = vi.fn().mockResolvedValue({
-        written: ["Assets/Scripts/Tile.cs"],
+        written: ["Assets/Scripts/Lens.cs"],
         conflicts: [],
         removed: ["Assets/Old.asmdef"],
         failed: [],
@@ -1568,8 +1568,8 @@ describe("DelegationManager", () => {
 
     it("a conflict that could not be quarantined fails the delegation and keeps the lease", async () => {
       const commit = vi.fn().mockResolvedValue({
-        written: ["Assets/Scripts/Tile.cs"],
-        conflicts: ["Assets/Scripts/Board.cs"],
+        written: ["Assets/Scripts/Lens.cs"],
+        conflicts: ["Assets/Scripts/Telescope.cs"],
         removed: [],
         failed: [],
         conflictsQuarantinedUnder: null,
@@ -1585,7 +1585,7 @@ describe("DelegationManager", () => {
     it("a quarantined conflict fails the delegation, and the lease goes — quarantine holds the bytes", async () => {
       const commit = vi.fn().mockResolvedValue({
         written: [],
-        conflicts: ["Assets/Scripts/Board.cs"],
+        conflicts: ["Assets/Scripts/Telescope.cs"],
         removed: [],
         failed: [],
         conflictsQuarantinedUnder: "/test/project/.strada/lease-conflicts/lease-1",
@@ -1595,7 +1595,7 @@ describe("DelegationManager", () => {
       manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: lease.manager }));
 
       const err = await manager.delegate(request()).catch((e: unknown) => e);
-      expect(String(err)).toMatch(/did not publish.*Assets\/Scripts\/Board\.cs/);
+      expect(String(err)).toMatch(/did not publish.*Assets\/Scripts\/Telescope\.cs/);
       // The parent learns where its sub-agent's version went.
       expect(String(err)).toContain("/test/project/.strada/lease-conflicts/lease-1");
       expect(lease.release).toHaveBeenCalledTimes(1);
@@ -1609,7 +1609,7 @@ describe("DelegationManager", () => {
         conflicts: [],
         removed: [],
         failed: Array.from({ length: 6 }, (_, i) =>
-          `Assets/Scripts/Generated/Gameplay/BoardTileController${i}.cs (EACCES: permission denied)`),
+          `Assets/Scripts/Generated/Observatory/LensMountingController${i}.cs (EACCES: permission denied)`),
         conflictsQuarantinedUnder: null,
         quarantined: 0,
       });
@@ -1629,7 +1629,7 @@ describe("DelegationManager", () => {
         written: [],
         conflicts: [],
         removed: [],
-        failed: ["Assets/Scripts/Board.cs"],
+        failed: ["Assets/Scripts/Telescope.cs"],
         conflictsQuarantinedUnder: null,
         quarantined: 0,
       });
@@ -1643,7 +1643,7 @@ describe("DelegationManager", () => {
 
     it("adds nothing to a clean commit beyond the applied count", async () => {
       const commit = vi.fn().mockResolvedValue({
-        written: ["Assets/Scripts/Board.cs"],
+        written: ["Assets/Scripts/Telescope.cs"],
         conflicts: [],
         removed: [],
         failed: [],
@@ -1683,9 +1683,9 @@ describe("DelegationManager", () => {
       orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
         workspace = orchestratorOpts.projectPath as string;
         mkdirSync(join(workspace, "Assets", "Scripts"), { recursive: true });
-        writeFileSync(join(workspace, "Assets", "Scripts", "Board.cs"), "the sub-agent's board", "utf8");
+        writeFileSync(join(workspace, "Assets", "Scripts", "Telescope.cs"), "the sub-agent's telescope", "utf8");
         const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
-        await channel.sendText(msg.chatId as string, "I created Board.cs");
+        await channel.sendText(msg.chatId as string, "I created Telescope.cs");
       });
       const other = await acquireProjectWriteLock(project, { timeoutMs: 1_000 });
       try {
@@ -1699,12 +1699,12 @@ describe("DelegationManager", () => {
         await expect(manager.delegate({ ...request(), toolContext: { ...TEST_TOOL_CONTEXT, projectPath: project } }))
           .rejects.toThrow(/did not publish/);
 
-        expect(existsSync(join(project, "Assets", "Scripts", "Board.cs"))).toBe(false);
-        expect(readFileSync(join(workspace, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("the sub-agent's board");
+        expect(existsSync(join(project, "Assets", "Scripts", "Telescope.cs"))).toBe(false);
+        expect(readFileSync(join(workspace, "Assets", "Scripts", "Telescope.cs"), "utf8")).toBe("the sub-agent's telescope");
         // …and the kept lease is still the manager's to publish once the lock is free.
         other.release();
         await leases.dispose();
-        expect(readFileSync(join(project, "Assets", "Scripts", "Board.cs"), "utf8")).toBe("the sub-agent's board");
+        expect(readFileSync(join(project, "Assets", "Scripts", "Telescope.cs"), "utf8")).toBe("the sub-agent's telescope");
       } finally {
         other.release();
         rmSync(project, { recursive: true, force: true });
@@ -1736,7 +1736,7 @@ describe("DelegationManager", () => {
       sourceProjectPath: "/test/project",
     };
     const delegateFrom = (toolContext: ToolContext): DelegationRequest => ({
-      type: "code_review", task: "Review Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext,
+      type: "code_review", task: "Review Telescope.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext,
     });
 
     it("seeds the sub-agent's lease from the caller's lease, never the project root", async () => {
@@ -1774,17 +1774,17 @@ describe("DelegationManager", () => {
       const leaseRoot = mkdtempSync(join(tmpdir(), "deleg-tree-leases-"));
       try {
         mkdirSync(join(project, "Assets", "Scripts"), { recursive: true });
-        writeFileSync(join(project, "Assets", "Scripts", "Tile.cs"), "tile", "utf8");
+        writeFileSync(join(project, "Assets", "Scripts", "Lens.cs"), "lens", "utf8");
         const leases = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false });
         const task = await leases.acquireLease({ label: "task" });
         // The caller's own, unpublished edit.
-        writeFileSync(join(task.path, "Assets", "Scripts", "Board.cs"), "the caller's board", "utf8");
+        writeFileSync(join(task.path, "Assets", "Scripts", "Telescope.cs"), "the caller's telescope", "utf8");
 
         let sawCallerEdit = false;
         orchestratorHandleMessage = vi.fn().mockImplementation(async (msg: Record<string, unknown>) => {
           const tree = orchestratorOpts.projectPath as string;
-          sawCallerEdit = existsSync(join(tree, "Assets", "Scripts", "Board.cs"));
-          writeFileSync(join(tree, "Assets", "Scripts", "BoardReview.cs"), "// reviewed", "utf8");
+          sawCallerEdit = existsSync(join(tree, "Assets", "Scripts", "Telescope.cs"));
+          writeFileSync(join(tree, "Assets", "Scripts", "TelescopeReview.cs"), "// reviewed", "utf8");
           const channel = orchestratorOpts.channel as { sendText: (chatId: string, text: string) => Promise<void> };
           await channel.sendText(msg.chatId as string, "reviewed");
         });
@@ -1798,8 +1798,8 @@ describe("DelegationManager", () => {
         }));
 
         expect(sawCallerEdit, "the reviewer measured a tree without the caller's edit").toBe(true);
-        expect(readFileSync(join(task.path, "Assets", "Scripts", "BoardReview.cs"), "utf8")).toBe("// reviewed");
-        expect(existsSync(join(project, "Assets", "Scripts", "BoardReview.cs")), "published behind the caller's lease").toBe(false);
+        expect(readFileSync(join(task.path, "Assets", "Scripts", "TelescopeReview.cs"), "utf8")).toBe("// reviewed");
+        expect(existsSync(join(project, "Assets", "Scripts", "TelescopeReview.cs")), "published behind the caller's lease").toBe(false);
         await leases.dispose();
       } finally {
         rmSync(project, { recursive: true, force: true });
@@ -1817,7 +1817,7 @@ describe("DelegationManager", () => {
       const leaseRoot = mkdtempSync(join(tmpdir(), "deleg-ghost-leases-"));
       try {
         mkdirSync(join(project, "Assets", "Scripts"), { recursive: true });
-        writeFileSync(join(project, "Assets", "Scripts", "Tile.cs"), "tile", "utf8");
+        writeFileSync(join(project, "Assets", "Scripts", "Lens.cs"), "lens", "utf8");
         const leases = new WorkspaceLeaseManager({ projectRoot: project, leaseRoot, preferGitWorktree: false, projectLockTimeoutMs: 300 });
         const task = await leases.acquireLease({ label: "task" });
         let workspace = "";
@@ -1879,7 +1879,7 @@ describe("DelegationManager", () => {
           new Promise((resolve) => {
             const t = setTimeout(() => {
               commitResolved = true;
-              resolve({ written: ["Assets/Scripts/Board.cs"], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null });
+              resolve({ written: ["Assets/Scripts/Telescope.cs"], conflicts: [], removed: [], failed: [], conflictsQuarantinedUnder: null });
             }, commitMs);
             if (typeof t === "object" && "unref" in t) (t as NodeJS.Timeout).unref();
           }),
@@ -1922,7 +1922,7 @@ describe("DelegationManager", () => {
 
       const run = manager.delegate({
         type: "code_review",
-        task: "Write Board.cs",
+        task: "Write Telescope.cs",
         parentAgentId: PARENT_AGENT_ID,
         depth: 0,
         mode: "sync",
@@ -1947,7 +1947,7 @@ describe("DelegationManager", () => {
 
       const run = manager.delegate({
         type: "code_review",
-        task: "Write Board.cs",
+        task: "Write Telescope.cs",
         parentAgentId: PARENT_AGENT_ID,
         depth: 0,
         mode: "sync",
@@ -2190,7 +2190,7 @@ describe("a timed-out delegation does not release its lease under a running tool
     return { manager: { acquireLease } as never, release, commit };
   }
   const request = (): DelegationRequest => ({
-    type: "code_review", task: "Verify Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+    type: "code_review", task: "Verify Telescope.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
   });
 
   it("waits for the aborted run to settle (bounded) before commit and release", async () => {
@@ -2258,7 +2258,7 @@ describe("a delegation whose budget expires while it waits for its lease", () =>
       const log = new DelegationLog(new Database(":memory:"));
       const mgr = new DelegationManager(buildManagerOpts({ delegationLog: log, workspaceLeaseManager: { acquireLease } as never }));
       const pending = mgr.delegate({
-        type: "code_review", task: "Verify Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
+        type: "code_review", task: "Verify Telescope.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext: TEST_TOOL_CONTEXT,
       }).catch((e: Error) => e);
       await vi.advanceTimersByTimeAsync(61_000 + DELEGATION_ABORT_GRACE_MS + 5);
       const outcome = await pending;
@@ -2283,7 +2283,7 @@ describe("a delegation runs inside its calling run", () => {
   const scope = (signal: AbortSignal, budget = createBudget(Number.POSITIVE_INFINITY, 1)): ParentRunScope =>
     ({ signal, budget, clockView });
   const request = (toolContext: ToolContext): DelegationRequest => ({
-    type: "code_review", task: "Verify Board.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext,
+    type: "code_review", task: "Verify Telescope.cs", parentAgentId: PARENT_AGENT_ID, depth: 0, mode: "sync", toolContext,
   });
 
   it("a cancel of the calling run stops the sub-agent at once, recorded as a cancellation", async () => {

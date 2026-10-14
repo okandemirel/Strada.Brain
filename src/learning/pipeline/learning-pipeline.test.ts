@@ -407,19 +407,20 @@ describe("LearningPipeline", () => {
 
       const errorFix = await defaultsPipeline.considerInstinctCreation({
         type: "error_fix",
-        triggerPattern: "CS1061: 'Board' does not contain a definition for 'Explode'",
-        action: "Add the Explode method to Board via strada_create_component",
+        triggerPattern: "CS1061: 'WeatherStation' does not contain a definition for 'Calibrate'",
+        action: "Add the Calibrate method to WeatherStation via strada_create_component",
         toolName: "unity_verify_change",
       });
       expect(errorFix).not.toBeNull();
     });
 
     it("junk triggers (JSON metrics, code listings, symbol soup) are refused", async () => {
-      // Measured 2026-08-30: 75 created instincts, every trigger a raw output
-      // fragment ('"compileErrors": 0', '  41 | ...') — noise, not knowledge.
+      // Measured: created instincts whose every trigger was a raw output
+      // fragment ('"compileErrors": 0', a line-numbered code listing) — noise,
+      // not knowledge.
       for (const trigger of [
         '"compileErrors": 0',
-        "  41 |             if (spec == null) throw new ArgumentNullException(nameof(spec));",
+        "  17 |     if (forecast == null) throw new ArgumentNullException(nameof(forecast));",
         "x==1;;;",
       ]) {
         const created = await pipeline.considerInstinctCreation({
@@ -433,7 +434,7 @@ describe("LearningPipeline", () => {
       // A real condition still creates.
       const good = await pipeline.considerInstinctCreation({
         type: "correction",
-        triggerPattern: "CS0246: The type or namespace name could not be found in BoardModule",
+        triggerPattern: "CS0246: The type or namespace name could not be found in ClimateModule",
         action: "Add the missing using directive for the module namespace",
         toolName: "unity_verify_change",
       });
@@ -462,7 +463,7 @@ describe("LearningPipeline", () => {
     // deprecated instinct (the wrong fix, already retired) fenced its trigger
     // off forever and the correct fix for the same error could never be learned.
     it("a deprecated instinct does not block relearning the same trigger (audited 2026-09-02)", async () => {
-      const trigger = "CS1061: 'BoardView' does not contain a definition for 'Refresh' and no accessible extension method could be found";
+      const trigger = "CS1061: 'WeatherStationView' does not contain a definition for 'Refresh' and no accessible extension method could be found";
       const wrong = await pipeline.considerInstinctCreation({
         type: "error_fix",
         triggerPattern: trigger,
@@ -475,7 +476,7 @@ describe("LearningPipeline", () => {
       const relearned = await pipeline.considerInstinctCreation({
         type: "error_fix",
         triggerPattern: trigger,
-        action: "Add a public Refresh() method to BoardView",
+        action: "Add a public Refresh() method to WeatherStationView",
         toolName: "unity_verify_change",
       });
       expect(relearned).not.toBeNull();
@@ -488,7 +489,7 @@ describe("LearningPipeline", () => {
       const rival = await pipeline.considerInstinctCreation({
         type: "error_fix",
         triggerPattern: trigger,
-        action: "Yet another fix: regenerate the BoardView partial",
+        action: "Yet another fix: regenerate the WeatherStationView partial",
         toolName: "unity_verify_change",
       });
       expect(rival, "a rival solution to a known trigger was refused").not.toBeNull();
@@ -496,7 +497,7 @@ describe("LearningPipeline", () => {
       const duplicate = await pipeline.considerInstinctCreation({
         type: "error_fix",
         triggerPattern: trigger,
-        action: "Add a public Refresh() method to BoardView",
+        action: "Add a public Refresh() method to WeatherStationView",
         toolName: "unity_verify_change",
       });
       expect(duplicate, "the live instinct's own advice was stored a second time").toBeNull();
@@ -593,7 +594,7 @@ describe("LearningPipeline", () => {
     // another session's unrelated success "resolved" this session's failure
     // and minted an error_fix instinct claiming a fix that was never observed.
     describe("error→resolution pairing is scoped to the session (audited 2026-09-02)", () => {
-      const errorOutput = "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.";
+      const errorOutput = "error CS0246: The type or namespace name 'WeatherStationView' could not be found. Build FAILED.";
       function failure(sessionId: string): ToolResultEvent {
         return { sessionId, toolName: "bash", input: { command: "dotnet build" }, output: errorOutput, success: false, timestamp: Date.now() };
       }
@@ -1546,7 +1547,7 @@ describe("LearningPipeline", () => {
     it("an auto-resolution leaves no unprocessed row behind", async () => {
       await pipeline.handleToolResult({
         sessionId: "s", toolName: "bash", input: { command: "dotnet build" },
-        output: "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.",
+        output: "error CS0246: The type or namespace name 'WeatherStationView' could not be found. Build FAILED.",
         success: false, timestamp: Date.now(),
       });
       await pipeline.handleToolResult({
@@ -2608,8 +2609,8 @@ describe("an auto-resolution must share the failure's target (D39 / audit 04.2a)
   let pipeline: LearningPipeline;
   let tempDir: string;
 
-  const buildFailure = "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.";
-  const writeFailure = "error: EACCES permission denied while writing 'Assets/Board.cs' — write failed.";
+  const buildFailure = "error CS0246: The type or namespace name 'WeatherStationView' could not be found. Build FAILED.";
+  const writeFailure = "error: EACCES permission denied while writing 'Assets/WeatherStation.cs' — write failed.";
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "pipeline-repair-"));
@@ -2654,7 +2655,7 @@ describe("an auto-resolution must share the failure's target (D39 / audit 04.2a)
 
   it("an unrelated read of a DIFFERENT file is not a repair", async () => {
     await pipeline.handleToolResult(
-      result("file_read", { path: "Assets/Board.cs" }, "error: ENOENT no such file — read failed", false),
+      result("file_read", { path: "Assets/WeatherStation.cs" }, "error: ENOENT no such file — read failed", false),
     );
     await pipeline.handleToolResult(
       result("file_read", { path: "Assets/Player.cs" }, "public class Player {}", true),
@@ -2664,19 +2665,19 @@ describe("an auto-resolution must share the failure's target (D39 / audit 04.2a)
   });
 
   it("never lets a file body become the action text of an instinct", async () => {
-    const fileBody = "using UnityEngine;\n\npublic class Board : MonoBehaviour { void Start() { Debug.Log(\"secret body\"); } }";
+    const fileBody = "using UnityEngine;\n\npublic class WeatherStation : MonoBehaviour { void Start() { Debug.Log(\"secret body\"); } }";
     await pipeline.handleToolResult(
-      result("file_write", { path: "Assets/Board.cs", content: fileBody }, writeFailure, false),
+      result("file_write", { path: "Assets/WeatherStation.cs", content: fileBody }, writeFailure, false),
     );
     await pipeline.handleToolResult(
-      result("file_write", { path: "Assets/Board.cs", content: fileBody }, "Wrote 118 bytes", true),
+      result("file_write", { path: "Assets/WeatherStation.cs", content: fileBody }, "Wrote 118 bytes", true),
     );
 
     const created = errorFixes();
     expect(created, "a same-target retry is a repair and should still be learned").toHaveLength(1);
     expect(created[0]!.action, "the file body became the learned solution").not.toContain("secret body");
     expect(created[0]!.action, "the file body became the learned solution").not.toContain("MonoBehaviour");
-    expect(created[0]!.action).toContain("Assets/Board.cs");
+    expect(created[0]!.action).toContain("Assets/WeatherStation.cs");
   });
 
   it("a re-run of the same command operation IS a repair (legitimate behaviour still accepted)", async () => {
@@ -2875,7 +2876,7 @@ describe("pending error resolutions end with the run (audit 04.cap)", () => {
   let pipeline: LearningPipeline;
   let tempDir: string;
 
-  const buildFailure = "error CS0246: The type or namespace name 'BoardView' could not be found. Build FAILED.";
+  const buildFailure = "error CS0246: The type or namespace name 'WeatherStationView' could not be found. Build FAILED.";
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "pipeline-pending-"));
@@ -2950,7 +2951,7 @@ describe("a permanent instinct can be quarantined (improvement on audit 04.6)", 
   let tempDir: string;
   let eventBus: TypedEventBus<any>;
   let quarantined: any[];
-  const PROJECT = "/projects/samplegame";
+  const PROJECT = "/projects/quarantine-fixture";
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "pipeline-quarantine-"));

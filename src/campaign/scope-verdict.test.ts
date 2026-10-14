@@ -663,7 +663,7 @@ describe("attributeRun — which expected test passed, failed, faulted or was no
     const broken = run({
       admitted: false,
       refusal: { kind: "count-mismatch", detail: "0 of 3 ran" },
-      acceptanceCompileErrors: [{ path: FILE, line: 12, code: "CS0246", message: "The type 'ScoreService' could not be found" }],
+      acceptanceCompileErrors: [{ path: FILE, line: 12, code: "CS0246", message: "The type 'HiveLedger' could not be found" }],
     });
     const a = attributeRun(broken, expected, new Set([testName("r1")]));
     expect(a.tests[testName("r1")]).toMatchObject({ outcome: "fail", compiledBefore: true });
@@ -711,7 +711,7 @@ describe("attributeRun — which expected test passed, failed, faulted or was no
     const a = attributeRun(run({
       admitted: false,
       refusal: { kind: "count-mismatch", detail: "0 of 2 ran" },
-      acceptanceCompileErrors: [{ path: FILE, message: "error CS0117: 'Board' does not contain a definition for 'Tiles'" }],
+      acceptanceCompileErrors: [{ path: FILE, message: "error CS0117: 'Apiary' does not contain a definition for 'Combs'" }],
     }), expected.slice(0, 2), new Set([testName("r1")]));
     const results = Object.fromEntries(["r1", "r2"].map((rid) => {
       const t = a.tests[testName(rid)]!;
@@ -788,7 +788,7 @@ describe("legacyRunIntegrity — a run settled before the key was carried, decod
   });
 
   it("reads the whole tip, not an excerpt: a stamp past the first 500 characters is found", () => {
-    const tip = `${"Worked on the board. ".repeat(40)}\n${getResilienceMessage("task_stuck", "en")}`;
+    const tip = `${"Worked on the save system. ".repeat(40)}\n${getResilienceMessage("task_stuck", "en")}`;
     expect(tip.indexOf("I got stuck")).toBeGreaterThan(500);
     expect(legacyRunIntegrity(tip, decode).worst).toBe("task_stuck");
   });

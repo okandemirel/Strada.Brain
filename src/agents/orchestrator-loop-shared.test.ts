@@ -61,8 +61,8 @@ describe("executeAndTrackTools", () => {
   });
 
   it("logs one 'Tool call' line per call, successes included", async () => {
-    // Measured 2026-09-07: only failures were logged, so a two-hour sprint's
-    // successful calls left no trace at all.
+    // Measured 2026-09-07: only failures were logged, so a run's successful
+    // calls left no trace at all.
     const { getLoggerSafe } = await import("../utils/logger.js");
     const real = getLoggerSafe();
     const seen: Array<[string, Record<string, unknown>]> = [];

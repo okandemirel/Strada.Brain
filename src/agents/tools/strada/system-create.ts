@@ -94,7 +94,7 @@ export class SystemCreateTool implements ITool {
     const relPath = String(input["path"] ?? "");
     const namespace = String(input["namespace"] ?? "");
     // An optional field the model fills with its zero value ("" or 0) means it
-    // was not chosen. Measured live: four of four failed calls carried
+    // was not chosen. Measured live: the failed calls carried
     // burst_component_count: 0, read as "a BurstSystem of no components" and
     // refused, when the caller wanted no BurstSystem at all.
     const baseClass = String(input["base_class"] || "SystemBase");

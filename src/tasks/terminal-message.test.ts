@@ -1,10 +1,10 @@
 /**
  * The question a blocked run asked, reaching the person who could answer it.
  *
- * Measured 2026-08-23 on run 53: the agent stopped to ask something, the control
- * plane wrote the tag `blocked:ask_user`, and `reason ?? (output || ...)` made
- * that sixteen-character tag the entire stored result. The 119-character
- * question was discarded. An unattended run that will not say what it asked
+ * Measured 2026-08-23: the agent stopped to ask something, the control plane
+ * wrote the tag `blocked:ask_user`, and `reason ?? (output || ...)` made that
+ * sixteen-character tag the entire stored result. The question was
+ * discarded. An unattended run that will not say what it asked
  * cannot be answered and cannot be resumed — it simply stops, looking like a
  * decision rather than a dead end.
  */
@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { terminalMessage } from "./terminal-message.js";
 
 const QUESTION =
-  "UNITY_PROJECT_PATH points at SampleGame but the open editor is Lodestone. Which should I build?";
+  "Two export profiles are configured, nightly and archive. Which one should this upload use?";
 
 describe("a tag that stands in for an explanation", () => {
   it("gives way to what the worker actually said", () => {
@@ -39,7 +39,7 @@ describe("a reason that is a real explanation", () => {
   });
 
   it("is not mistaken for a tag because it contains a colon", () => {
-    const reason = "Compilation failed: 3 errors in BoardService.cs";
+    const reason = "Compilation failed: 3 errors in WeatherRelay.cs";
 
     expect(terminalMessage(reason, "draft", "Task failed")).toBe(reason);
   });

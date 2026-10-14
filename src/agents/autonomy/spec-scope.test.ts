@@ -79,26 +79,25 @@ describe("spec scope — the design document is the checklist", () => {
 });
 
 describe("findDesignDoc runs in this ESM module", () => {
-  // Measured 2026-09-07 14:58: three require("node:fs") calls inside
-  // try/catch returned null/[] under ESM, so the scheduled-elements gate
-  // never saw the GDD — probe on the real project: null before, the GDD
-  // path after.
-  it("finds docs/<Name>_GDD.md", async () => {
+  // require("node:fs") inside try/catch returns nothing under ESM, so the
+  // scheduled-elements gate never found a design document.
+  it("finds the largest markdown under docs/ in an ESM module", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const root = mkdtempSync(join(tmpdir(), "spec-scope-"));
     try {
-      mkdirSync(join(root, "docs"));
-      writeFileSync(join(root, "docs", "Game_GDD.md"), "# GDD\n\nFeature list: vents, seams");
-      expect(findDesignDoc(root)).toBe(join(root, "docs", "Game_GDD.md"));
+      mkdirSync(join(root, "docs", "design"), { recursive: true });
+      writeFileSync(join(root, "docs", "readme.md"), "# Notes");
+      writeFileSync(join(root, "docs", "design", "survey-notes.md"), "# Survey notes\n\nFeature list: vents, seams, and the drone's battery");
+      expect(findDesignDoc(root)).toBe(join(root, "docs", "design", "survey-notes.md"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 });
 
-describe("short element names count as whole words (measured 2026-09-10: a short-named element with its own class reported missing)", () => {
+describe("short element names count as whole words: ignoring them outright reports every short-named element missing even when it has its own class", () => {
   it("finds a short element name as an identifier and not inside another word", async () => {
     const { assessSpecScope } = await import("./spec-scope.js");
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
@@ -120,11 +119,9 @@ describe("short element names count as whole words (measured 2026-09-10: a short
 });
 
 /**
- * A schedule table that lost its pipes. Measured by Codex 2026-09-12 (W#12)
- * on a real design document: its whole schedule read as ZERO
- * scheduled elements, because a document converted out of Google Docs
- * arrives as one cell per LINE. Zero suppresses the coverage check entirely,
- * so none of that content was ever compared to the code.
+ * A schedule table that lost its pipes. A document converted out of a word
+ * processor arrives one cell per line; read as pipes it yields zero scheduled
+ * elements, and zero suppresses the coverage check (Codex 2026-09-12 W#12).
  */
 describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
   const flattened = [
@@ -186,10 +183,8 @@ describe("a flattened schedule table (Codex 2026-09-12 W#12)", () => {
 });
 
 /**
- * A false refusal measured on the test vehicle (Codex 2026-09-12 Y): names
- * carrying a note in parentheses produced only the annotated spellings, so a
- * project whose code used the plain name was reported as missing the
- * elements it had implemented.
+ * Names carrying a note in parentheses produced only the annotated spellings,
+ * so code using the plain name read as missing (Codex 2026-09-12 Y).
  */
 describe("a parenthetical is an annotation, not part of the name (Codex 2026-09-12 Y)", () => {
   it("offers the name without its notes as well as with them", () => {
@@ -316,6 +311,62 @@ describe("every flattened shape, and saying when a schedule cannot be read (Code
     expect(scheduleLooksPresent(unreadable)).toBe(true);
     expect(scheduleLooksPresent("# GDD\n\nA cave-mapping game with 37 caves.")).toBe(false);
     expect(scheduleLooksPresent(GDD_SNIPPET)).toBe(true);
+  });
+});
+
+/**
+ * The header words are one generic synonym set for WHEN and one for WHAT, not
+ * any one document's column labels. Every alternative has its own fixture
+ * here, each from a different invented domain, so dropping one from the
+ * reader fails its row.
+ */
+describe("schedule header synonyms, each pinned by its own table", () => {
+  const tables: Array<[when: string, what: string, unlock: string, name: string]> = [
+    ["Unlock", "Element", "Shift 2", "Copper Kettle"],
+    ["Unlocks", "Elements", "Orbit 4", "Tether Drone"],
+    ["Unlocked", "Feature", "Dig 3", "Soft Brush"],
+    ["Unlock at", "Features", "Week 6", "Sourdough Starter"],
+    ["Unlocks at", "Mechanic", "Act 2", "Trapdoor Cue"],
+    ["Unlocked at", "Mechanics", "Ward 5", "Night Rounds"],
+    ["Introduced", "Item", "Depot 7", "Signal Lamp"],
+    ["Introduced at", "Items", "Loom 3", "Flying Shuttle"],
+    ["Level", "Obstacle", "12", "Fog Bank"],
+    ["Levels", "Obstacles", "14-16", "Crosswind"],
+    ["Stage", "Content", "Ch9", "Choir Loft"],
+    ["Arrive", "Name", "Night 3", "Lantern Moth"],
+    ["Arrives", "Element", "Floor 8", "Freight Lift"],
+    ["From", "Item", "Term 2", "Chalk Slate"],
+    ["When", "Feature", "Month 10", "Tax Ledger"],
+  ];
+
+  it("reads a flattened two-column table under every header pair", () => {
+    for (const [when, what, unlock, name] of tables) {
+      const doc = [when, what, unlock, name].join("\n");
+      expect(extractScheduledElements(doc), `${when} / ${what}`).toEqual([{ unlock, name }]);
+      expect(scheduleLooksPresent(doc), `${when} / ${what}`).toBe(true);
+    }
+  });
+
+  it("a header word in a row's second cell is a repeated header, not an element", () => {
+    // A table split into acts repeats its header under each act's id.
+    const acts = [
+      "| Act 1 | Item | Effect |",
+      "| --- | --- | --- |",
+      "| 3 | Copper Kettle | boils twice as fast |",
+      "| 7 | Tea Cosy | keeps a pot warm |",
+      "| Act 2 | Item | Effect |",
+      "| 12 | Samovar | serves a whole table |",
+    ].join("\n");
+    expect(extractScheduledElements(acts).map((e) => e.name)).toEqual(["Copper Kettle", "Tea Cosy", "Samovar"]);
+    // An ordinary header row is never a row at all.
+    expect(extractScheduledElements("| Arrives | Item |\n|---|---|\n| Night 2 | Lantern Moth |")).toEqual([
+      { unlock: "Night 2", name: "Lantern Moth" },
+    ]);
+  });
+
+  it("words outside both sets do not make a schedule", () => {
+    expect(extractScheduledElements("Chapter\nCharacter\nCh1\nThe Ferryman")).toEqual([]);
+    expect(scheduleLooksPresent("Chapter\nCharacter\nCh1\nThe Ferryman")).toBe(false);
   });
 });
 

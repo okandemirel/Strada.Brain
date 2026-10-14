@@ -4,10 +4,10 @@ import { basename, join } from "node:path";
 /**
  * HOW_TO_RUN.md — the file the person who opens the delivery reads first.
  *
- * Measured 2026-09-03: a delivered tree held a long list of scenes, many of
- * them enabled in the build, no README of any kind, and the user opened a
- * scene of untextured placeholder shapes expecting a game. The delivery
- * report is a chat message that scrolls away; the project itself said nothing.
+ * A delivery report is a chat message that scrolls away. A project with
+ * several enabled scenes and no README of any kind does not tell the person
+ * who opens it which scene is the game or what to do in it, so the project
+ * itself must say so.
  *
  * EVERY field here is measured or declared unknown:
  *   - Unity version   ← ProjectSettings/ProjectVersion.txt

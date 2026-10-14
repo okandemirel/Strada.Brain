@@ -7,9 +7,9 @@
  * them, and `dotnet build` in a project without one fails with
  * `MSBUILD : error MSB1003: Specify a project or solution file`.
  *
- * Measured on two from-scratch runs: the agent reached for `dotnet_build` three
- * times, got MSB1003 each time, and each attempt cost a round-trip and an error
- * the model then had to interpret. The tool that does work there —
+ * Measured on from-scratch runs: the agent reached for `dotnet_build`
+ * repeatedly and got MSB1003 each time; each attempt cost a round-trip and an
+ * error the model then had to interpret. The tool that does work there —
  * `unity_verify_change`, which compiles headlessly with no Editor open — was
  * sitting beside it in the same tool block.
  *

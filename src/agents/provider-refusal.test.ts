@@ -6,7 +6,7 @@
  * the right answer to that. It is the wrong answer to a quota 403, which will
  * refuse the second call exactly as it refused the first.
  *
- * Measured 2026-08-21, run 31: six Kimi calls in twenty-five seconds, six 403s,
+ * Measured 2026-08-21: six Kimi calls in twenty-five seconds, six 403s,
  * alternating streaming and non-streaming, with the quota exhausted before the
  * run began. Every second call asked a provider that had just said no whether
  * it still meant it, and nothing marked it down in between, so the chain kept
@@ -27,7 +27,7 @@ function refuses(error: unknown): boolean {
 }
 
 describe("telling a refusal from a glitch", () => {
-  it("treats the quota 403 that ended run 31 as a refusal", () => {
+  it("treats a quota 403 that arrived before the run began as a refusal", () => {
     const kimi = new Error(
       'Kimi (Moonshot) API error 403: {"error":{"message":"You\'ve reached your usage limit ' +
         'for this billing cycle. Your quota will be refreshed in the next cycle."}}',
