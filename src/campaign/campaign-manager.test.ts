@@ -10536,6 +10536,24 @@ describe("CampaignManager", () => {
       expect(tasks.submitted).toHaveLength(0);
     });
 
+    // "Ignore the GDD at P" answered "Building from `docs/Old_GDD.md`", the planner ran, and an idea beside it was thrown away.
+    it("builds nothing from a GDD the message calls the design and rules out", async () => {
+      writeFileSync(join(projectRoot, "docs", "Old_GDD.md"), DESIGN);
+      expect(await say("chat-ignore", "Build the game. Ignore the GDD at docs/Old_GDD.md.")).toBe(false);
+      expect(told("chat-ignore")).toBe("");
+      expect(storage.hasActiveForChat("chat-ignore")).toBe(false);
+
+      const idea = "Build a game where a gardener plants one new bed each season and every harvest buys a bigger greenhouse. Ignore the GDD at docs/Old_GDD.md.";
+      expect(await say("chat-ignore-idea", idea)).toBe(true);
+      const campaign = storage.listActive().find((c) => c.chatId === "chat-ignore-idea");
+      expect(campaign?.ideaText).toBe(idea);
+      expect(campaign?.gddPath).toBeUndefined();
+      expect(told("chat-ignore-idea")).toContain("Game idea received");
+      expect(told("chat-ignore-idea")).not.toContain("Building from");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect((manager as unknown as { planner: { planMilestones: ReturnType<typeof vi.fn> } }).planner.planMilestones).not.toHaveBeenCalled();
+    });
+
     // "Build the game" is also the player build; the build instructions were read as the design, ungated.
     it("starts nothing for a build aimed at the build instructions", async () => {
       writeFileSync(join(projectRoot, "docs", "BUILD.md"), "# Build\n\nOpen the project, pick Android, press Build.\n" + "b".repeat(400));

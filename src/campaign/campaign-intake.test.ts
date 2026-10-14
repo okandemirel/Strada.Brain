@@ -1097,6 +1097,52 @@ describe("a build the message reports, not orders", () => {
 });
 
 /**
+ * A design the message calls the GDD and rules out in the same breath is no
+ * design: "Build the game. Ignore the GDD at docs/Old_GDD.md." answered
+ * "Building from `docs/Old_GDD.md`", and an idea written beside it was
+ * thrown away. The turned-away words were read only for a document named
+ * beside the build, never for one the message calls the design.
+ */
+describe("a design the message calls the GDD and rules out", () => {
+  const msg = (text: string): Parameters<typeof detectCampaignIntent>[0] =>
+    ({ chatId: "c", text, attachments: [] }) as never;
+  const IDEA = "Build a game where a gardener plants one new bed each season and every harvest buys a bigger greenhouse.";
+
+  it.each([
+    "Build the game. Ignore the GDD at docs/Old_GDD.md.",
+    "Build the game without the GDD at docs/Old_GDD.md",
+    "Build the game, not from the GDD at docs/Old_GDD.md.",
+    "Build the game, except the GDD in docs/Old_GDD.md.",
+    "Build the game; never the GDD at docs/Old_GDD.md.",
+    "Build the game. Don't use the GDD at docs/Old_GDD.md.",
+    "Build the game. Skip the GDD at docs/Old_GDD.md.",
+    "Build the game, excluding the GDD at docs/Old_GDD.md",
+    "Build the game, no GDD: docs/Old_GDD.md",
+    // Ruled out after it, with the GDD's own clause closed by its colon.
+    "Build the game, the GDD: docs/Old_GDD.md is outdated",
+    "Oyunu yap; GDD: docs/Old_GDD.md hariç",
+    "Oyunu yap; GDD: docs/Old_GDD.md geçersiz",
+  ])("%s → no campaign", (text) => {
+    expect(detectCampaignIntent(msg(text))).toBeUndefined();
+  });
+
+  it.each([`${IDEA} Ignore the GDD at docs/Old_GDD.md.`, `${IDEA} The GDD: docs/Old_GDD.md is outdated.`])("%s → the idea", (text) => {
+    expect(detectCampaignIntent(msg(text))).toEqual({ kind: "idea", ideaText: text });
+  });
+
+  // The design the message does settle on is still built at once.
+  it.each([
+    ["Build the game. The GDD is docs/New_GDD.md", now("docs/New_GDD.md")],
+    ["Build the game without asking, the GDD is docs/New_GDD.md", now("docs/New_GDD.md")],
+    ["Oyunu yap, GDD: docs/New_GDD.md", now("docs/New_GDD.md")],
+    ["Ignore the GDD at docs/Old_GDD.md; the GDD is docs/New_GDD.md, build the game", now("docs/New_GDD.md")],
+    ["Build the game in docs/New_GDD.md, not docs/Old_GDD.md", now("docs/New_GDD.md")],
+  ])("%s → %j", (text, intent) => {
+    expect(detectCampaignIntent(msg(text))).toEqual(intent);
+  });
+});
+
+/**
  * Intake runs synchronously on every incoming message, and its cost grew with
  * the square of the message's length: each pattern anchored at a document was
  * run against the whole text before it, each span blanked by copying the

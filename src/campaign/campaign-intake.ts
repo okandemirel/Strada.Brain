@@ -816,11 +816,23 @@ const TURNS_AWAY_BEFORE_RE = /(?<![\p{L}])(?:ignore|skip|except|excluding|withou
 const TURNS_AWAY_AFTER_RE =
   /(?<![\p{L}])(?:outdated|obsolete|deprecated|superseded|stale|old|wrong|retired|ignored?|eski|geçersiz|değil|yerine|hariç|kullanma\p{L}*|görmezden|yok)(?![\p{L}])/giu;
 
+/** Only quotes, brackets and spaces between a name and the colon beside it. */
+const BESIDE_A_COLON_RE = /^[\s"'\x60“”‘’(<>]*$/u;
+
+/**
+ * A colon introduces what follows it, so a name on either side of one is read
+ * with the clause on the other side too: in "no GDD: P" the "no" is P's, and
+ * in "the GDD: P is outdated" the "outdated" is the GDD's.
+ */
 function turnedAway(prose: string, doc: Pick<NamedDocument, "at" | "end">): boolean {
-  const start = clauseStart(prose, doc.at);
+  const besideColon = (from: number, to: number): boolean => to - from <= 8 && BESIDE_A_COLON_RE.test(prose.slice(from, to));
+  let start = clauseStart(prose, doc.at);
+  if (prose[start - 1] === ":" && besideColon(start, doc.at)) start = clauseStart(prose, start - 1);
   if (matchesInside(prose, TURNS_DOWN_RE, start, doc.at) || matchesInside(prose, TURNS_AWAY_BEFORE_RE, start, doc.at)) return true;
   const breaks = matchesOf(prose, CLAUSE_BREAK_RE).at;
-  const clauseEnd = breaks[countBelow(breaks, doc.end)] ?? prose.length;
+  const next = countBelow(breaks, doc.end);
+  let clauseEnd = breaks[next] ?? prose.length;
+  if (prose[clauseEnd] === ":" && besideColon(doc.end, clauseEnd)) clauseEnd = breaks[next + 1] ?? prose.length;
   return matchesInside(prose, TURNS_AWAY_AFTER_RE, doc.end, clauseEnd);
 }
 
@@ -957,7 +969,12 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
   if (named.length === 0) return undefined;
   const prose = proseOf(text, named);
   const request = wholeGameRequest(prose);
-  const aims = named.map((doc) => aimAt(text, prose, doc, request));
+  // A DOCUMENT THE MESSAGE RULES OUT IS AIMED AT BY NOTHING. "Build the game.
+  // Ignore the GDD at docs/Old_GDD.md." built it at once: the turned-away
+  // words were read only for a document named beside the build, never for
+  // one the message calls the design.
+  const away = named.map((doc) => turnedAway(prose, doc));
+  const aims = named.map((doc, i) => (away[i] ? undefined : aimAt(text, prose, doc, request)));
   // "P and Q", "P ve Q": named together, aimed at together — as long as the
   // one the aim spreads to ends its clause too.
   // One sweep each way reaches every document of a chain: a pass repeated
@@ -980,7 +997,7 @@ function designAmong(text: string, named: readonly NamedDocument[]): Design | nu
   const rest = withoutDocuments(text, named);
   if (!request || !(speaksOfTheGdd(rest) || rest.trim().length < MIN_IDEA_LENGTH)) return playerBuild ? null : undefined;
   const beside = named.filter((_, i) => !aims[i]);
-  const candidates = beside.filter((doc) => !turnedAway(prose, doc));
+  const candidates = named.filter((_, i) => !aims[i] && !away[i]);
   const gdds = candidates.filter((doc) => refersToGdd(doc.path));
   if (gdds.length > 0) return offered(gdds, gdds[0]!);
   if (aimedDocs.length === 0) return undefined;
