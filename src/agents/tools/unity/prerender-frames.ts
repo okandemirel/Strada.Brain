@@ -1,9 +1,9 @@
 /**
  * unity_prerender_frames — the prerendered-frames pipeline as a tool.
  *
- * Renders a 3D prefab to 2D frames: instantiate it in a tuned 3-point-lit
- * scene, apply what the project's style profile sets (proportions, material,
- * inverted-hull outline; nothing when there is no profile), and capture N
+ * Renders a 3D prefab to 2D frames: instantiate it in a neutrally lit
+ * three-point scene, apply what the project's style profile sets (proportions,
+ * material, inverted-hull outline; nothing when there is no profile), capture N
  * angles synchronously through an offscreen RenderTexture (CaptureScreenshot
  * never lands in batchmode). Whether a project wants this at all is its own
  * GDD's call, never this tool's.
@@ -43,12 +43,14 @@ export interface PrerenderStyle {
    * asked for (Codex 2026-09-11 B#21).
    */
   shading?: string;
-  /** Root scale [x, y, z] from the profile's body-width factor. */
-  plump?: [number, number, number];
+  /** Root scale [x, y, z] from the requested body-width factor. */
+  widthScale?: [number, number, number];
   /** Head-bone scale multiplier. */
   headScale?: number;
   /** Outline width factor (0 disables the outline). */
   outlineWidth?: number;
+  /** Outline colour (hex) — from the style profile, never invented. */
+  outlineColor?: string;
 }
 
 function hexToRgb(hex: string | undefined, fallback: [number, number, number]): string {
@@ -56,6 +58,13 @@ function hexToRgb(hex: string | undefined, fallback: [number, number, number]): 
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
   if (!m) return `${fallback[0]}F, ${fallback[1]}F, ${fallback[2]}F`;
   return `${(parseInt(m[1]!, 16) / 255).toFixed(3)}F, ${(parseInt(m[2]!, 16) / 255).toFixed(3)}F, ${(parseInt(m[3]!, 16) / 255).toFixed(3)}F`;
+}
+
+/** `r,g,b` in 0-1 for a shader property literal; `fallback` when the hex is unreadable. */
+function hexToShaderRgb(hex: string | undefined, fallback: [number, number, number]): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec((hex ?? "").trim());
+  const rgb = m ? ([1, 2, 3] as const).map((i) => parseInt(m[i]!, 16) / 255) : fallback;
+  return rgb.map((v) => Number(v.toFixed(3))).join(",");
 }
 
 /** Gloss and metalness per shading family; unknown shading is matte. */
@@ -84,29 +93,32 @@ export function materialForShading(shading: string | undefined): { glossiness: n
  * T#14). Absence is the only thing a default may answer for.
  */
 export function resolvePrerenderStyle(
-  input: { outlineWidth?: number; plump?: number; headScale?: number; bodyColor?: unknown },
-  profile: { bodyColor?: string; outlineWidth?: number; plump?: number; headScale?: number; shading?: string },
+  input: { outlineWidth?: number; widthScale?: number; headScale?: number; bodyColor?: unknown; outlineColor?: unknown },
+  profile: { bodyColor?: string; outlineWidth?: number; outlineColor?: string; widthScale?: number; headScale?: number; shading?: string },
 ): Required<PrerenderStyle> {
   const outlineRaw = Number(input.outlineWidth);
-  const plumpRaw = Number(input.plump);
+  const widthRaw = Number(input.widthScale);
   const headRaw = Number(input.headScale);
   return {
     // A neutral grey when nothing named a colour — the default was a body
     // colour that belonged to one game (Codex 2026-09-11 B#21).
     bodyColor: input.bodyColor !== undefined ? String(input.bodyColor) : (profile.bodyColor ?? "#9aa0a6"),
     outlineWidth: Number.isFinite(outlineRaw) ? Math.max(0, Math.min(3, outlineRaw)) : (profile.outlineWidth ?? 0),
-    plump: (() => {
+    widthScale: (() => {
       // No style profile means NO styling: the squash was one fixed factor
       // for every model and the body width defaulted above 1, so a
       // realistic model was squashed into a cartoon (Codex 2026-09-11 B#21).
       // The Y factor now preserves volume, which is 1.0 when nothing asked
       // for a wider body.
-      const p = Number.isFinite(plumpRaw) ? Math.min(1.5, Math.max(0.5, plumpRaw)) : (profile.plump ?? 1.0);
+      const p = Number.isFinite(widthRaw) ? Math.min(1.5, Math.max(0.5, widthRaw)) : (profile.widthScale ?? 1.0);
       // Both horizontal axes are scaled by p, so the vertical compensation
       // is 1/p² — 1/p left the volume 20% larger (Codex 2026-09-11 C#33).
       const y = Number(Math.min(1.5, Math.max(0.5, 1 / (p * p))).toFixed(3));
       return [p, y, p] as [number, number, number];
     })(),
+    // Black when nothing named one: the shader used to hard-code one game's
+    // outline tint, so every project's outline came out in it.
+    outlineColor: input.outlineColor !== undefined ? String(input.outlineColor) : (profile.outlineColor ?? "#000000"),
     headScale: Number.isFinite(headRaw) ? Math.min(2, Math.max(0.5, headRaw)) : (profile.headScale ?? 1.0),
     shading: (profile.shading ?? "flat") as Required<PrerenderStyle>["shading"],
   };
@@ -117,6 +129,7 @@ export function buildRenderScript(style: Required<PrerenderStyle>): string {
   const body = hexToRgb(undefined, neutral);
   const customBody = style.bodyColor !== undefined && style.bodyColor !== "" ? hexToRgb(style.bodyColor, neutral) : body;
   const { glossiness, metallic } = materialForShading(style.shading);
+  const outlineRgb = hexToShaderRgb(style.outlineColor, [0, 0, 0]);
   return `// Generated by unity_prerender_frames — one-shot render, deleted after the run.
 using System;
 using System.IO;
@@ -147,18 +160,18 @@ public static class StradaPrerenderRun
         var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
         var key = new GameObject("KeyLight").AddComponent<Light>();
-        key.type = LightType.Directional; key.intensity = 0.7f; key.color = new Color(1f, 0.96f, 0.9f);
+        key.type = LightType.Directional; key.intensity = 0.7f; key.color = Color.white;
         key.transform.rotation = Quaternion.Euler(42f, -38f, 0f); key.shadows = LightShadows.Soft;
         var fill = new GameObject("FillLight").AddComponent<Light>();
-        fill.type = LightType.Directional; fill.intensity = 0.3f; fill.color = new Color(0.82f, 0.88f, 1f);
+        fill.type = LightType.Directional; fill.intensity = 0.3f; fill.color = Color.white;
         fill.transform.rotation = Quaternion.Euler(18f, 132f, 0f);
         var rim = new GameObject("RimLight").AddComponent<Light>();
-        rim.type = LightType.Directional; rim.intensity = 0.35f; rim.color = new Color(1f, 0.85f, 0.95f);
+        rim.type = LightType.Directional; rim.intensity = 0.35f; rim.color = Color.white;
         rim.transform.rotation = Quaternion.Euler(30f, 205f, 0f);
         RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-        RenderSettings.ambientSkyColor = new Color(0.62f, 0.65f, 0.7f);
-        RenderSettings.ambientEquatorColor = new Color(0.5f, 0.48f, 0.52f);
-        RenderSettings.ambientGroundColor = new Color(0.3f, 0.28f, 0.32f);
+        RenderSettings.ambientSkyColor = new Color(0.65f, 0.65f, 0.65f);
+        RenderSettings.ambientEquatorColor = new Color(0.5f, 0.5f, 0.5f);
+        RenderSettings.ambientGroundColor = new Color(0.3f, 0.3f, 0.3f);
 
         var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
         if (prefab == null) { Debug.LogError("STRADA-RENDER-FAIL: prefab not found: " + prefabPath); EditorApplication.Exit(1); return; }
@@ -168,7 +181,7 @@ public static class StradaPrerenderRun
         var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
         ground.transform.position = new Vector3(0, -0.001f, 0);
         ground.transform.localScale = Vector3.one * 4f;
-        ground.GetComponent<Renderer>().sharedMaterial = new Material(Shader.Find("Standard")) { color = new Color(0.9f, 0.9f, 0.93f) };
+        ground.GetComponent<Renderer>().sharedMaterial = new Material(Shader.Find("Standard")) { color = new Color(0.9f, 0.9f, 0.9f) };
 
         StylizeForGame(root);
 
@@ -210,7 +223,7 @@ public static class StradaPrerenderRun
 
     static void StylizeForGame(GameObject root)
     {
-        root.transform.localScale = new Vector3(${style.plump[0].toFixed(2)}f, ${style.plump[1].toFixed(2)}f, ${style.plump[2].toFixed(2)}f);
+        root.transform.localScale = new Vector3(${style.widthScale[0].toFixed(2)}f, ${style.widthScale[1].toFixed(2)}f, ${style.widthScale[2].toFixed(2)}f);
         foreach (var t in root.GetComponentsInChildren<Transform>())
         {
             var n = t.name.ToLowerInvariant();
@@ -223,7 +236,7 @@ public static class StradaPrerenderRun
         {
             File.WriteAllText(shaderPath,
 @"Shader ""Strada/Outline"" {
-  Properties { _Color (""Color"", Color) = (0.12,0.08,0.1,1) _Width (""Width"", Float) = ${style.outlineWidth.toFixed(1)} }
+  Properties { _Color (""Color"", Color) = (${outlineRgb},1) _Width (""Width"", Float) = ${style.outlineWidth.toFixed(1)} }
   SubShader {
     Tags { ""Queue""=""Transparent"" }
     Pass {
@@ -249,20 +262,15 @@ public static class StradaPrerenderRun
         }
         var outlineShader = AssetDatabase.LoadAssetAtPath<Shader>(shaderPath);
 
-        var toon = new Material(Shader.Find(${glossiness === 0 ? '"Unlit/Color"' : '"Standard"'}) ?? Shader.Find("Standard"));
-        toon.color = new Color(${customBody});
-        if (toon.HasProperty("_Glossiness")) toon.SetFloat("_Glossiness", ${glossiness}f);
-        if (toon.HasProperty("_Metallic")) toon.SetFloat("_Metallic", ${metallic}f);
-
-        var darkGlossy = new Material(Shader.Find("Standard"));
-        darkGlossy.color = new Color(0.1f, 0.08f, 0.1f);
-        darkGlossy.SetFloat("_Glossiness", 0.9f);
+        var bodyMat = new Material(Shader.Find(${glossiness === 0 ? '"Unlit/Color"' : '"Standard"'}) ?? Shader.Find("Standard"));
+        bodyMat.color = new Color(${customBody});
+        if (bodyMat.HasProperty("_Glossiness")) bodyMat.SetFloat("_Glossiness", ${glossiness}f);
+        if (bodyMat.HasProperty("_Metallic")) bodyMat.SetFloat("_Metallic", ${metallic}f);
 
         var outlineMat = new Material(outlineShader);
         foreach (var smr in root.GetComponentsInChildren<SkinnedMeshRenderer>())
         {
-            bool isEye = ${glossiness >= 0.8 ? "smr.name.ToLowerInvariant().Contains(\"eye\")" : "false"};
-            smr.sharedMaterial = isEye ? darkGlossy : toon;
+            smr.sharedMaterial = bodyMat;
             if (${style.outlineWidth > 0 ? "true" : "false"})
             {
                 var shell = new GameObject(smr.name + "_Outline");
@@ -284,7 +292,7 @@ public static class StradaPrerenderRun
 export class PrerenderFramesTool implements ITool {
   readonly name = "unity_prerender_frames";
   readonly description =
-    "Render 2D frames of any prefab in THIS project's own look: a 3-point-lit scene, stylization taken " +
+    "Render 2D frames of any prefab in THIS project's own look: a neutrally lit three-point scene, stylization taken " +
     "from the project's style.json (derived from its GDD — proportions, material, palette, outline; nothing " +
     "is a universal preset), captured at 6 angles synchronously. Use after importing/sourcing a rigged model " +
     "(e.g. from unity_my_assets_cloud packages) when the GDD wants 2D frames rendered from 3D. " +
@@ -297,7 +305,8 @@ export class PrerenderFramesTool implements ITool {
       outDir: { type: "string", description: "Project-relative output dir under Assets/ (default: Assets/Art/Prerendered)" },
       bodyColor: { type: "string", description: "Body color #rrggbb (default: the project's style.json palette; stock fallback only when no profile exists)" },
       outlineWidth: { type: "number", description: "Outline width factor (default from style.json; 0 disables)" },
-      bodyWidth: { type: "number", description: "Body width factor 0.5–1.5; height shrinks to keep the volume (default from style.json)" },
+      outlineColor: { type: "string", description: "Outline colour #rrggbb (default: the project's style.json outline colour; black when there is no profile)" },
+      widthScale: { type: "number", description: "Body width factor 0.5–1.5; height shrinks to keep the volume (default from style.json)" },
       headScale: { type: "number", description: "Head-bone scale multiplier (default from style.json)" },
     },
     required: ["prefab"],
@@ -349,11 +358,11 @@ export class PrerenderFramesTool implements ITool {
     // every project got one stock toon preset regardless of its GDD.
     // Absent must stay NaN so the profile (then the stock default) can win.
     const outlineRaw = Number(input["outlineWidth"]);
-    const plumpRaw = Number(input["bodyWidth"]);
+    const widthInputRaw = Number(input["widthScale"]);
     const headRaw = Number(input["headScale"]);
     // The project's style.json (derived from ITS OWN GDD by style-analysis —
     // never a universal preset) supplies the defaults; explicit inputs win.
-    let styleProfileDefaults: { bodyColor?: string; outlineWidth?: number; plump?: number; headScale?: number; shading?: string } = {};
+    let styleProfileDefaults: { bodyColor?: string; outlineWidth?: number; outlineColor?: string; widthScale?: number; headScale?: number; shading?: string } = {};
     try {
       const { loadStyleProfile, familyDefaults } = await import("../../style/style-profile.js");
       const profile = loadStyleProfile(context.projectPath);
@@ -362,7 +371,8 @@ export class PrerenderFramesTool implements ITool {
         styleProfileDefaults = {
           bodyColor: profile.palette[0],
           outlineWidth: profile.outline.width,
-          plump: profile.proportions.plump,
+          outlineColor: profile.outline.color,
+          widthScale: profile.proportions.widthScale,
           headScale: profile.proportions.headScale,
           shading: profile.shading,
         };
@@ -378,7 +388,7 @@ export class PrerenderFramesTool implements ITool {
       /* profile read is best-effort; explicit inputs and stock defaults still work */
     }
     const style: Required<PrerenderStyle> = resolvePrerenderStyle(
-      { outlineWidth: outlineRaw, plump: plumpRaw, headScale: headRaw, bodyColor: input["bodyColor"] },
+      { outlineWidth: outlineRaw, widthScale: widthInputRaw, headScale: headRaw, bodyColor: input["bodyColor"], outlineColor: input["outlineColor"] },
       styleProfileDefaults,
     );
 

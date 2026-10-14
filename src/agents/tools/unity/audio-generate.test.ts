@@ -31,9 +31,9 @@ describe("synthesis", () => {
   });
 
   it("is deterministic per seed and differs across seeds", () => {
-    const a = encodeWav(synthesizeSfx("select", 7).samples);
-    const b = encodeWav(synthesizeSfx("select", 7).samples);
-    const c = encodeWav(synthesizeSfx("explosion", 8).samples);
+    const a = encodeWav(synthesizeSfx("chirp", 7).samples);
+    const b = encodeWav(synthesizeSfx("chirp", 7).samples);
+    const c = encodeWav(synthesizeSfx("noise-burst", 8).samples);
     expect(a.equals(b)).toBe(true);
     expect(a.equals(c)).toBe(false);
   });
@@ -51,7 +51,7 @@ describe("synthesis", () => {
 describe("unity_generate_audio", () => {
   it("writes a WAV the delivery measurement reads back, with an AudioImporter meta", async () => {
     // Measured 2026-09-07: the GDD's cue list had no tool to come from.
-    const r = await new AudioGenerateTool().execute({ name: "ReverserNotch", preset: "select" }, ctx);
+    const r = await new AudioGenerateTool().execute({ name: "ReverserNotch", preset: "chirp" }, ctx);
     expect(r.isError).toBeFalsy();
     const file = join(root, "Assets/Audio/Generated/ReverserNotch.wav");
     expect(existsSync(file)).toBe(true);

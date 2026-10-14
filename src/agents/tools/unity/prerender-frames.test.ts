@@ -13,21 +13,20 @@ function makeContext(projectPath: string, readOnly = false): ToolContext {
 
 describe("buildRenderScript", () => {
   it("no profile means no styling: no squash, no body tint, matte material (Codex 2026-09-11 B#21)", () => {
-    const neutral = buildRenderScript({ bodyColor: "#9aa0a6", plump: [1, 1, 1], headScale: 1, outlineWidth: 0, shading: "flat" });
-    expect(neutral).toContain('toon.SetFloat("_Glossiness", 0.1f)');
-    expect(neutral).not.toContain('toon.SetFloat("_Glossiness", 0.82f)');
-    expect(neutral).toContain("bool isEye = false;");
-    const glossy = buildRenderScript({ bodyColor: "#3c8d6e", plump: [1.14, 0.88, 1.14], headScale: 1.09, outlineWidth: 1, shading: "glossy" });
-    expect(glossy).toContain('toon.SetFloat("_Glossiness", 0.82f)');
+    const neutral = buildRenderScript({ bodyColor: "#9aa0a6", widthScale: [1, 1, 1], headScale: 1, outlineWidth: 0, shading: "flat" });
+    expect(neutral).toContain('bodyMat.SetFloat("_Glossiness", 0.1f)');
+    expect(neutral).not.toContain('bodyMat.SetFloat("_Glossiness", 0.82f)');
+    const glossy = buildRenderScript({ bodyColor: "#3c8d6e", widthScale: [1.14, 0.88, 1.14], headScale: 1.09, outlineWidth: 1, shading: "glossy" });
+    expect(glossy).toContain('bodyMat.SetFloat("_Glossiness", 0.82f)');
     expect(materialForShading("glossy")).toEqual({ glossiness: 0.82, metallic: 0 });
     expect(materialForShading("pbr-realistic")).toEqual({ glossiness: 0.5, metallic: 0.1 });
     expect(materialForShading(undefined)).toEqual({ glossiness: 0.1, metallic: 0 });
   });
 
-  it("embeds the tuned lighting, the stylize stage, and the synchronous RT capture", () => {
+  it("embeds the lighting, the stylize stage, and the synchronous RT capture", () => {
     const script = buildRenderScript({
       bodyColor: "#3c8d6e",
-      plump: [1.14, 0.88, 1.14],
+      widthScale: [1.14, 0.88, 1.14],
       headScale: 1.09,
       outlineWidth: 1.0,
     });
@@ -40,10 +39,41 @@ describe("buildRenderScript", () => {
     expect(script).not.toContain("CaptureScreenshot");
   });
 
+  it("lights the scene neutrally: white lights and a grey ambient, so the render shows the model's own colours", () => {
+    const script = buildRenderScript({ bodyColor: "#3c8d6e", widthScale: [1, 1, 1], headScale: 1, outlineWidth: 1 });
+    for (const light of ["key", "fill", "rim"]) expect(script, light).toContain(`${light}.color = Color.white;`);
+    // Every ambient colour is a grey: equal channels, nothing tinted.
+    const ambients = [...script.matchAll(/RenderSettings\.ambient\w+Color = new Color\(([^)]*)\)/g)];
+    expect(ambients.length).toBe(3);
+    for (const [, args] of ambients) {
+      const [r, g, b] = args.split(",").map((v) => parseFloat(v));
+      expect([r, g], args).toEqual([b, b]);
+    }
+  });
+
+  it("outlines in the colour the profile asked for, and in black when it asked for none", () => {
+    const script = buildRenderScript({ bodyColor: "#3c8d6e", widthScale: [1, 1, 1], headScale: 1, outlineWidth: 1, outlineColor: "#2d3a4f" });
+    expect(script).toContain("Color) = (0.176,0.227,0.31,1)");
+    expect(buildRenderScript({ bodyColor: "#3c8d6e", widthScale: [1, 1, 1], headScale: 1, outlineWidth: 1 })).toContain("Color) = (0,0,0,1)");
+    expect(resolvePrerenderStyle({}, { outlineColor: "#2d3a4f" }).outlineColor).toBe("#2d3a4f");
+    expect(resolvePrerenderStyle({ outlineColor: "#ffffff" }, { outlineColor: "#2d3a4f" }).outlineColor).toBe("#ffffff");
+    expect(resolvePrerenderStyle({}, {}).outlineColor).toBe("#000000");
+  });
+
+  it("gives every skinned renderer the profile's own material — no renderer gets a second, built-in one", () => {
+    const glossy = buildRenderScript({ bodyColor: "#3c8d6e", widthScale: [1, 1, 1], headScale: 1, outlineWidth: 0, shading: "glossy" });
+    expect(glossy).toContain("smr.sharedMaterial = bodyMat;");
+    // One material is built from the profile, one from the outline shader; a
+    // third, hardcoded one used to be put on renderers whose name matched.
+    const stylize = glossy.slice(glossy.indexOf("static void StylizeForGame"));
+    expect([...stylize.matchAll(/new Material\(/g)].length).toBe(2);
+    expect(glossy).not.toMatch(/smr\.name\.ToLowerInvariant\(\)/);
+  });
+
   it("can disable the outline shell", () => {
     const script = buildRenderScript({
       bodyColor: "#3c8d6e",
-      plump: [1.14, 0.88, 1.14],
+      widthScale: [1.14, 0.88, 1.14],
       headScale: 1.09,
       outlineWidth: 0,
     });
@@ -62,7 +92,7 @@ describe("resolvePrerenderStyle (Codex 2026-09-12 T#14)", () => {
     expect(resolvePrerenderStyle({}, { outlineWidth: 1.5 }).outlineWidth).toBe(1.5);
     // …and nothing else is invented: neutral colour, no squash, flat shading.
     expect(resolvePrerenderStyle({}, {})).toMatchObject({
-      bodyColor: "#9aa0a6", plump: [1, 1, 1], headScale: 1, shading: "flat",
+      bodyColor: "#9aa0a6", widthScale: [1, 1, 1], headScale: 1, shading: "flat",
     });
   });
 });

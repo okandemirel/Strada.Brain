@@ -301,10 +301,12 @@ function renderShape(shape: SpriteShape, size: number, base: Rgb, accent: Rgb): 
 }
 
 /** Outline + top light-band so sprites read as objects, not stains.
- *  Style-aware: the game's own profile decides whether an outline exists at
+ *  Style-aware: the project's own profile decides whether an outline exists at
  *  all, its colour, and whether the gloss band is drawn — a "realistic,
- *  no-outline" GDD must not get outlined toon blobs. */
-function finishGrid(
+ *  no-outline" design must not get outlined, glossy blobs. The band is drawn
+ *  only for a profile that asks for gloss: drawn by default, it put one look
+ *  on every project that had no profile at all. */
+export function finishGrid(
   grid: Grid,
   base: Rgb,
   styleOpts?: { outlineWidth?: number; outlineColor?: Rgb; gloss?: boolean },
@@ -313,7 +315,7 @@ function finishGrid(
   const outline = styleOpts?.outlineColor ?? shade(base, 0.5);
   const light = shade(base, 1.3);
   const drawOutline = (styleOpts?.outlineWidth ?? 1) > 0;
-  const drawGloss = styleOpts?.gloss !== false;
+  const drawGloss = styleOpts?.gloss === true;
 
   // Outline: any transparent pixel touching a filled one becomes outline.
   const copy = grid.map((row) => [...row]);
@@ -496,16 +498,34 @@ export type LocalRunnerLike = Pick<
 };
 
 /**
- * The part of style.json's notes that describes a LOOK. Measured 2026-09-07:
- * a sprint had appended its own status report to the project's art-direction
- * notes, after a "|", and every default diffusion prompt then carried that
- * report as if it were part of the look. Only the first "|"-segment is kept,
- * and within it no sentence about checks, config, prefabs or references.
+ * A sentence that reports on the work instead of describing a look. The cues
+ * are the form of such a sentence, not a vocabulary: a link, a path or file
+ * name, a code identifier, a proportion, a bare figure (a run or an item
+ * count) or a progress mark. An art direction is written in plain words; a
+ * status line carries at least one of these.
+ */
+export function readsAsReport(sentence: string): boolean {
+  return (
+    /https?:\/\//i.test(sentence) ||
+    /[\\/]\w|\b\w+\.[a-z]{2,5}\b/i.test(sentence) ||
+    /\b\w*(?:_\w|[a-z0-9][A-Z])\w*\b/.test(sentence) ||
+    /\b\d+\s*%|\b\d+\s*\/\s*\d+\b/.test(sentence) ||
+    /(?<![#\w-])\d{2,}(?![-\w])/.test(sentence) ||
+    /[\u2713\u2714\u2717\u2718]|\bTODO\b|\bFIXME\b/i.test(sentence)
+  );
+}
+
+/**
+ * The part of style.json's notes that describes a LOOK. Measured in a live
+ * campaign: a run had appended its own status report to a project's
+ * art-direction notes, after a "|", and every default diffusion prompt then
+ * carried that report as if it were part of the look. Only the first
+ * "|"-segment is kept, and within it no sentence that reads as a report.
  */
 export function styleNotesForPrompt(notes: string | undefined): string {
   if (!notes) return "";
   const first = notes.split("|")[0]!.trim();
-  const sentences = first.split(/(?<=[.!?])\s+/).filter((t) => !/verif|config|prefab|integrat|reference/i.test(t));
+  const sentences = first.split(/(?<=[.!?])\s+/).filter((t) => !readsAsReport(t));
   return sentences.join(" ").trim().slice(0, 220);
 }
 
@@ -933,7 +953,9 @@ export class SpriteGenerateTool implements ITool {
             } catch {
               /* nothing assumed */
             }
-            const subject = rawName.replace(/([A-Z])/g, " $1").toLowerCase();
+            // Trimmed and collapsed: an initial capital otherwise left the
+            // prompt saying "sprite of  stone bridge".
+            const subject = rawName.replace(/([A-Z])/g, " $1").trim().replace(/\s+/g, " ").toLowerCase();
             // THE PROJECT'S OWN NOTES BELONG TO EVERY FAMILY. Only two
             // branches carried them, so a realistic profile asking for
             // "overcast natural lighting, no studio light" was dispatched as

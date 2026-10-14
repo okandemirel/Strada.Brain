@@ -16,7 +16,7 @@ describe("styleProfileSchema", () => {
     const parsed = styleProfileSchema.parse({
       family: "toon-casual",
       pipeline: "sprite-native",
-      proportions: { plump: 1.35, headScale: 1.4 },
+      proportions: { widthScale: 1.35, headScale: 1.4 },
       palette: ["#6a8caf"],
       outline: { width: 2.5, color: "#20262e" },
       shading: "flat",
@@ -65,7 +65,7 @@ describe("style.json IO", () => {
     const loaded = loadStyleProfile(dir);
     expect(loaded?.family).toBe("realistic");
     expect(loaded?.outline.width).toBe(0);
-    expect(loaded?.proportions.plump).toBe(1.0);
+    expect(loaded?.proportions.widthScale).toBe(1.0);
   });
 
   it("returns undefined for a missing or corrupt file", () => {
@@ -80,7 +80,7 @@ describe("familyDefaults", () => {
     expect(familyDefaults("realistic").shading).toBe("pbr-realistic");
     expect(familyDefaults("pixel").shading).toBe("unlit");
     for (const f of STYLE_FAMILIES) {
-      expect(familyDefaults(f).plump).toBeGreaterThan(0);
+      expect(familyDefaults(f).widthScale).toBeGreaterThan(0);
     }
   });
 });
@@ -95,9 +95,9 @@ describe("StyleAnalysis keyword fallback", () => {
 
   it("an unrecognized document gets NO invented style: unspecified family, its own colours, a matching pipeline (Codex 2026-09-11 B#20)", async () => {
     const analysis = new StyleAnalysis(undefined);
-    const { profile } = await analysis.analyze("A turn-based game about trade routes between harbour towns.");
+    const { profile } = await analysis.analyze("A turn-based game about caravan routes between desert way-stations.");
     expect(profile.family).toBe("unspecified");
-    expect(profile.proportions).toMatchObject({ plump: 1, headScale: 1 });
+    expect(profile.proportions).toMatchObject({ widthScale: 1, headScale: 1 });
     expect(profile.outline.width).toBe(0);
     expect(profile.palette).toEqual(["#9aa0a6"]);
     expect(profile.notes).toContain("names no colours");

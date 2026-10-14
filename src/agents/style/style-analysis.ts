@@ -11,7 +11,7 @@ import type { IAIProvider } from "../providers/provider.interface.js";
 import { streamOrChatText } from "../providers/provider.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { stripLeakedReasoning } from "../leaked-reasoning.js";
-import { familyDefaults, styleProfileSchema, STYLE_FAMILIES } from "./style-profile.js";
+import { DEFAULT_OUTLINE_COLOR, familyDefaults, styleProfileSchema, STYLE_FAMILIES } from "./style-profile.js";
 import type { StyleProfile } from "./style-profile.js";
 
 const ANALYSIS_SYSTEM = `You are the art-direction reader for an autonomous game-build pipeline.
@@ -21,7 +21,7 @@ You receive the art-direction sections of a game design document (or the whole d
 {
   "family": one of ["toon-casual", "realistic", "pixel", "lowpoly", "painterly"],
   "pipeline": one of ["prerendered-frames", "realtime-3d", "sprite-native"],
-  "proportions": { "plump": 0.5-1.5, "headScale": 0.5-2.0 },
+  "proportions": { "widthScale": 0.5-1.5, "headScale": 0.5-2.0 },
   "palette": ["#rrggbb", ...] (1-8 anchors, primary first),
   "outline": { "width": 0-3, "color": "#rrggbb" },
   "shading": one of ["glossy", "flat", "pbr-realistic", "unlit"],
@@ -30,7 +30,7 @@ You receive the art-direction sections of a game design document (or the whole d
 }
 
 Rules:
-- The document is the only truth. Never import a style from another game: "big-headed comic-book heroes" means toon-casual with headScale>1; "gritty realistic military shooter" means realistic with plump=1 and outline=0.
+- The document is the only truth. Never import a style from another game: "big-headed comic-book heroes" means toon-casual with headScale>1; "gritty realistic military shooter" means realistic with widthScale=1 and outline=0.
 - "sprite sheets baked offline from 3D models" → pipeline prerendered-frames; realtime 3D gameplay → realtime-3d; pure sprite/pixel games → sprite-native.
 - Palette comes from the doc's named colors or its described mood (fluorescent → saturated hexes; sepia/monochrome → low-chroma hexes). Never fewer than 3.
 - Respond ONLY with the JSON object.`;
@@ -41,7 +41,10 @@ function inferFamilyFromText(text: string): StyleProfile["family"] {
   if (/pixel[- ]?art|16[- ]?bit|8[- ]?bit/.test(t)) return "pixel";
   if (/low[- ]?poly|voxel/.test(t)) return "lowpoly";
   if (/painterly|watercolor|hand[- ]?painted/.test(t)) return "painterly";
-  if (/toon|cartoon|chibi|plump|glossy|cute|casual game/.test(t)) return "toon-casual";
+  // Words that name a drawn look themselves. Adjectives for a body or a
+  // finish (and a genre word) are not a look: they once came from one
+  // project's art direction and sent any document that used them here.
+  if (/\b(?:toon|cartoon|cel[- ]?shaded|chibi|comic[- ]?book)\b/.test(t)) return "toon-casual";
   if (/realistic|pbr|military|shooter|simulation/.test(t)) return "realistic";
   // An unrecognized document is UNKNOWN, not the toon-casual family: the
   // default stamped one genre's look on every GDD (Codex 2026-09-11 B#20).
@@ -67,8 +70,12 @@ function pipelineForFamily(family: StyleProfile["family"], text = ""): StyleProf
     case "lowpoly":
       return "realtime-3d";
     case "unspecified":
-      // Nothing said: nothing imposed. A 2D sprite pipeline is the least
-      // invasive default — it needs no model, no rig and no render pass.
+    case "toon-casual":
+    case "painterly":
+      // Nothing said about rendering: nothing imposed. A 2D sprite pipeline is
+      // the least invasive default — it needs no model, no rig and no render
+      // pass. A drawn or painted look does not by itself ask for frames baked
+      // from 3D; only the document's own words (handled above) do.
       return "sprite-native";
     default:
       return "prerendered-frames";
@@ -145,9 +152,9 @@ export class StyleAnalysis {
     const fallback: StyleProfile = styleProfileSchema.parse({
       family,
       pipeline: pipelineForFamily(family, gddText),
-      proportions: { plump: defaults.plump, headScale: defaults.headScale },
+      proportions: { widthScale: defaults.widthScale, headScale: defaults.headScale },
       palette: palette.length > 0 ? palette : ["#9aa0a6"],
-      outline: { width: defaults.outlineWidth, color: "#1f1418" },
+      outline: { width: defaults.outlineWidth, color: DEFAULT_OUTLINE_COLOR },
       shading: defaults.shading,
       references: [],
       notes: palette.length > 0
