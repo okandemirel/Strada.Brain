@@ -262,6 +262,9 @@ describe("a message that names the design document by its path", () => {
     ["Build this game: design/quillmoor-deck.pptx", confirm("design/quillmoor-deck.pptx")],
     ["Build this game: docs/Quillmoor_GDD.html", now("docs/Quillmoor_GDD.html")],
     ["Build this game: https://example.com/files/Quillmoor_GDD.md", now("https://example.com/files/Quillmoor_GDD.md")],
+    // The punctuation that closes the sentence is no part of the link.
+    ["Build this game: https://example.com/files/Quillmoor_GDD.md.", now("https://example.com/files/Quillmoor_GDD.md")],
+    ["Build this game (https://example.com/files/Quillmoor_GDD.md), thanks!", now("https://example.com/files/Quillmoor_GDD.md")],
     ["Bu oyunu yap: https://example.com/d/quillmoor.pdf", confirm("https://example.com/d/quillmoor.pdf")],
     ["https://example.com/files/Quillmoor_GDD.md'deki oyunu yap", now("https://example.com/files/Quillmoor_GDD.md")],
     // A download copy was read as the name before its "(1)" — the original beside it.
@@ -1169,5 +1172,15 @@ describe("intake cost grows with the message's length, not its square", () => {
   ])("%s", (_what, text) => {
     expect(text.length).toBeGreaterThan(190_000);
     expect(timed(text)).toBeLessThan(2000);
+  });
+
+  // A run of dots ended a file name's token, and a link's body stopped lazily before its trailing punctuation: 40 KB took 4.5 s and 7.1 s.
+  it.each([
+    ["a run of dots in a word", "Build the game in a" + ".".repeat(60_000) + "x"],
+    ["a run of dots in a link", "Build the game from http://" + ".".repeat(60_000) + "x"],
+    ["a run of commas in a link", "Build the game from http://x" + ",".repeat(60_000) + "x"],
+    ["a link that ends in a run of stops", "Build the game from http://example.com/Quillmoor_GDD.md" + ".".repeat(60_000)],
+  ])("%s", (_what, text) => {
+    expect(timed(text)).toBeLessThan(1000);
   });
 });

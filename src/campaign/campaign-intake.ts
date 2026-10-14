@@ -112,11 +112,14 @@ const FILE_EXTENSION_RE = /\.(?=\p{N}*\p{L})[\p{L}\p{N}]{1,8}$/u;
  * my_gdd_parser.ts" was a build from that file, and the manager took the
  * message over to say it could not read it — the user's task never ran. Each
  * word is read once: a name searched for from each of its characters made a
- * long unbroken word cost its length squared.
+ * long unbroken word cost its length squared — and so did a pattern for the
+ * dots that end it, tried from every dot of a long run of them.
  */
 function withoutCodeFiles(text: string): string {
   return text.replace(FILE_TOKEN_RE, (token) => {
-    const name = token.replace(/\.+$/u, "");
+    let cut = token.length;
+    while (cut > 0 && token[cut - 1] === ".") cut--;
+    const name = token.slice(0, cut);
     if (!FILE_EXTENSION_RE.test(name) || DOCUMENT_NAME_EXTENSION_RE.test(name)) return token;
     return " ".repeat(name.length) + token.slice(name.length);
   });
@@ -301,8 +304,21 @@ const DOCUMENT_PATH_RE = new RegExp(
   "giu",
 );
 
-/** A link, which the manager refuses by name rather than reading another design in its place. */
-const LINK_RE = /(?:^|[\s"'`(:“‘<])((?:https?|ftp|file):\/\/[^\s"'`<>()“”‘’]+?)(?=[.,;:!?]*(?:$|[\s"'`<>)”’]))/giu;
+/**
+ * A link, which the manager refuses by name rather than reading another
+ * design in its place: the whole run of the characters a link holds, its
+ * sentence's closing punctuation trimmed by linkEnd. A lazy body that looked
+ * ahead past that punctuation tried every length of a long run of dots.
+ */
+const LINK_RE = /(?:^|[\s"'`(:“‘<])((?:https?|ftp|file):\/\/[^\s"'`<>()“”‘’]+)/giu;
+const SENTENCE_PUNCTUATION = ".,;:!?";
+
+/** Where a link that runs to `to` ends: before the punctuation that closes its sentence. */
+function linkEnd(text: string, to: number): number {
+  let end = to;
+  while (SENTENCE_PUNCTUATION.includes(text[end - 1]!)) end--;
+  return end;
+}
 
 /**
  * A name with GDD in it and no extension the path pattern reads — "docs/Foo_GDD",
@@ -427,8 +443,10 @@ function namedDocumentsIn(text: string): NamedDocument[] {
   let unread = blankSpans(text, named);
   const links: NamedDocument[] = [];
   for (const m of unread.matchAll(LINK_RE)) {
-    const end = m.index + m[0].length;
-    links.push({ path: m[1]!, at: end - m[1]!.length, end });
+    const run = m.index + m[0].length;
+    const at = run - m[1]!.length;
+    const end = linkEnd(unread, run);
+    links.push({ path: unread.slice(at, end), at, end });
   }
   named.push(...links.filter((link) => linkNamesDocument(link.path)));
   unread = blankSpans(unread, links);
