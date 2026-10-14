@@ -47,6 +47,26 @@ describe("planning a game", () => {
    * Strada.Modules was installed in the project and 0 of its 16 game files
    * referenced it, while the plan declared modules of its own.
    */
+  /**
+   * Rung 8 of the north star is "the delivered game is playable through real
+   * input", and the play-through the system runs is what judges it — but
+   * nothing in the plan's rules had ever named the driver it resolves.
+   * Measured live 2026-10-14: a sprint assembled a scene, ran its tests and
+   * was refused with "the game registers no Strada.Core.Play.IPlaythroughDriver".
+   */
+  it("plans the play-through driver the delivery gate resolves, with the work it drives", async () => {
+    const prompt = await decompositionPrompt();
+
+    expect(prompt).toContain("THE GAME MUST BE PLAYABLE BY THE FRAMEWORK");
+    expect(prompt).toContain("Strada.Core.Play.IPlaythroughDriver");
+    // And the catalog, so a game of levels is played through all of them.
+    expect(prompt).toContain("Strada.Core.Play.ISessionCatalog");
+    // Not a detail for the end: the driver is planned with its work.
+    expect(prompt).toContain("not after it");
+    // A suite and a capture are not substitutes for being played.
+    expect(prompt).toContain("no suite or capture substitutes for it");
+  });
+
   it("plans a requirement a ready module already covers as a use of that module", async () => {
     const prompt = await decompositionPrompt();
 
