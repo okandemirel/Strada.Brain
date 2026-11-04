@@ -53,6 +53,7 @@ import { acquireProjectWriteLock } from "../../common/project-write-lock.js";
 import { runProcess } from "../../utils/process-runner.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import type { WorkspaceCommandRunner } from "./workspace-lease-manager.js";
+import { isStrictlyInside } from "../../common/path-containment.js";
 
 /** `<project>/.strada/lease-changes` — excluded from every lease walk (see BASE_FALLBACK_COPY_EXCLUDES). */
 export const CHANGE_REVIEW_DIRNAME = join(".strada", "lease-changes");
@@ -304,12 +305,6 @@ export function readChangeReview(projectRoot: string, reviewId: string): ChangeR
 
 const UNDO_ACTIONS: readonly UndoAction[] = ["restore", "delete", "restore-deleted"];
 const COMMIT_SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-
-/** `child` is strictly below `parent` (both absolute, already resolved). */
-function isStrictlyInside(parent: string, child: string): boolean {
-  const rel = relative(parent, child);
-  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
 
 /** A project-relative path that names something inside the project, and nothing else. */
 function isContainedRel(root: string, rel: string): boolean {

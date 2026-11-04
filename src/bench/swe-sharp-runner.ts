@@ -27,6 +27,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { isAtOrInside } from "../common/path-containment.js";
 import { isSafeRepoRelativePath, patchPaths } from "./swe-sharp-dataset.js";
 import {
   evaluateResolution,
@@ -1069,11 +1070,6 @@ export function restoreTestPaths(input: {
 }
 
 /** True when `candidate` is `root` itself or lies below it. */
-function isWithin(root: string, candidate: string): boolean {
-  const rel = path.relative(root, candidate);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
-}
-
 /**
  * `rel` under `root`, or null when it would land anywhere else — by `..`, by an
  * absolute path, or by a symlinked directory on the way (a patch can create
@@ -1083,11 +1079,11 @@ export function containedCheckoutPath(root: string, rel: string): string | null 
   if (!isSafeRepoRelativePath(rel)) return null;
   const realRoot = fs.realpathSync(root);
   const abs = path.resolve(realRoot, rel);
-  if (!isWithin(realRoot, abs)) return null;
+  if (!isAtOrInside(realRoot, abs)) return null;
   // The nearest ancestor that exists (at worst the root itself) must really be inside.
   let parent = path.dirname(abs);
   while (parent !== realRoot && !fs.existsSync(parent)) parent = path.dirname(parent);
-  return isWithin(realRoot, fs.realpathSync(parent)) ? abs : null;
+  return isAtOrInside(realRoot, fs.realpathSync(parent)) ? abs : null;
 }
 
 /**
@@ -1109,7 +1105,7 @@ export function checkoutFileAdapters(repoDir: string): {
       const abs = inside(rel);
       if (!fs.existsSync(abs)) return null;
       // A final symlink is read only when it points back into the checkout.
-      if (!isWithin(fs.realpathSync(repoDir), fs.realpathSync(abs))) return "";
+      if (!isAtOrInside(fs.realpathSync(repoDir), fs.realpathSync(abs))) return "";
       return fs.readFileSync(abs, "utf8");
     },
     // rmSync removes a symlink itself, never its target.

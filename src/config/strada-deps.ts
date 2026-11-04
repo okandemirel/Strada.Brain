@@ -7,7 +7,8 @@
  */
 
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { join, dirname, isAbsolute, relative as relativePath, resolve as resolvePath } from "node:path";
+import { join, dirname, resolve as resolvePath } from "node:path";
+import { isAtOrInside } from "../common/path-containment.js";
 import { execFile, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ok, err } from "../types/index.js";
@@ -280,7 +281,7 @@ export function assessStradaMcpLoadTrust(
   if (config?.mcpAllowProjectLocal === true || !unityProjectPath?.trim()) {
     return { trusted: true };
   }
-  if (!isWithinDirectory(canonicalPath(unityProjectPath), canonicalPath(installPath))) {
+  if (!isAtOrInside(canonicalPath(unityProjectPath), canonicalPath(installPath))) {
     return { trusted: true };
   }
   return {
@@ -299,14 +300,6 @@ function canonicalPath(target: string): string {
   } catch {
     return resolvePath(target);
   }
-}
-
-/** Is `candidate` the directory `root` or anywhere under it? */
-function isWithinDirectory(root: string, candidate: string): boolean {
-  const step = relativePath(root, candidate);
-  if (step === "") return true;
-  if (isAbsolute(step)) return false;
-  return step.split(/[\\/]+/)[0] !== "..";
 }
 
 /**

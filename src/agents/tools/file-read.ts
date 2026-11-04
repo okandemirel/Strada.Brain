@@ -1,5 +1,6 @@
 import { readFile, realpath, stat } from "node:fs/promises";
-import { relative as pathRelative, resolve as pathResolve, sep as pathSep } from "node:path";
+import { relative as pathRelative, resolve as pathResolve } from "node:path";
+import { isAtOrInside } from "../../common/path-containment.js";
 import { isSensitivePath, validatePath } from "../../security/path-guard.js";
 import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "./document-text.js";
 import { isUserAuthorizedPath, resolveUserNamedPath } from "../../security/user-authorized-paths.js";
@@ -352,11 +353,7 @@ export function toVaultRelative(vault: IVault, absPath: string): string {
  * the filesystem spells them, like the path validatePath hands the vault.
  */
 export function isVaultInsideProject(vault: IVault, projectPath: string): boolean {
-  const root = canonicalVaultPath(vault.rootPath);
-  const project = canonicalVaultPath(projectPath);
-  if (root === project) return true;
-  const projectWithSep = project.endsWith(pathSep) ? project : project + pathSep;
-  return root.startsWith(projectWithSep);
+  return isAtOrInside(canonicalVaultPath(projectPath), canonicalVaultPath(vault.rootPath));
 }
 
 /** Fire-and-forget reindex when a file drifts from the vault snapshot. */
