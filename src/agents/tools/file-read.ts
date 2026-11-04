@@ -1,13 +1,12 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import { relative as pathRelative, resolve as pathResolve } from "node:path";
-import { isAtOrInside } from "../../common/path-containment.js";
 import { isSensitivePath, validatePath } from "../../security/path-guard.js";
 import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "./document-text.js";
 import { isUserAuthorizedPath, resolveUserNamedPath } from "../../security/user-authorized-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
 import type { IVault } from "../../vault/vault.interface.js";
-import { canonicalVaultPath } from "../../vault/path-policy.js";
+import { canonicalVaultPath, isVaultInsideProject } from "../../vault/path-policy.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { nearbyNames, sameNameElsewhere } from "./nearby-names.js";
 import { integerArg } from "./tool-input.js";
@@ -343,17 +342,6 @@ export async function vaultFileRead(params: {
  */
 export function toVaultRelative(vault: IVault, absPath: string): string {
   return pathRelative(canonicalVaultPath(vault.rootPath), canonicalVaultPath(absPath)).replaceAll("\\", "/");
-}
-
-/**
- * sec-H2: true iff the vault's rootPath is contained within (or equal to)
- * the session's projectPath. Keeps file_read strictly confined to the
- * current project, even when the VaultRegistry also owns a sibling vault
- * (e.g. the SelfVault pointing at the Brain source tree). Both compared as
- * the filesystem spells them, like the path validatePath hands the vault.
- */
-export function isVaultInsideProject(vault: IVault, projectPath: string): boolean {
-  return isAtOrInside(canonicalVaultPath(projectPath), canonicalVaultPath(vault.rootPath));
 }
 
 /** Fire-and-forget reindex when a file drifts from the vault snapshot. */

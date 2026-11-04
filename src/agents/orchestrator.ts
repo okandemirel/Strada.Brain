@@ -62,7 +62,8 @@ import {
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
 import { validatePath, projectRelativeTarget } from "../security/path-guard.js";
-import { vaultFileRead, isVaultInsideProject, toVaultRelative, MAX_SYMBOL_LEN } from "./tools/file-read.js";
+import { vaultFileRead, toVaultRelative, MAX_SYMBOL_LEN } from "./tools/file-read.js";
+import { isVaultInsideProject } from "../vault/path-policy.js";
 import { FILE_LIMITS } from "../common/constants.js";
 import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
 import type { IdentityState } from "../identity/identity-state.js";

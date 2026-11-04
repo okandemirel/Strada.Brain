@@ -1069,7 +1069,6 @@ export function restoreTestPaths(input: {
   return { restored, failed };
 }
 
-/** True when `candidate` is `root` itself or lies below it. */
 /**
  * `rel` under `root`, or null when it would land anywhere else — by `..`, by an
  * absolute path, or by a symlinked directory on the way (a patch can create

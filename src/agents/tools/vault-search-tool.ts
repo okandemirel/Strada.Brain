@@ -1,7 +1,7 @@
 import { vaultNotFound } from './vault-not-found.js';
-// sec-H2: the same check file_read uses, not a mirror of it. A mirror kept
-// comparing the typed spelling after the original moved to the real one.
-import { isVaultInsideProject } from './file-read.js';
+// sec-H2: the vault policy's own check, shared with file_read. A mirror of it
+// kept comparing the typed spelling after the original moved to the real one.
+import { isVaultInsideProject } from '../../vault/path-policy.js';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.interface.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';

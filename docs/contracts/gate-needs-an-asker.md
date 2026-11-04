@@ -23,8 +23,8 @@ rather than the test suite:
 - **The play-through driver.** A sprint assembled a scene and passed its
   tests. It was then refused because the game registered no
   `IPlaythroughDriver`, which no goal had ever mentioned (3efef40f).
-- **Service registration.** A sprint wrote nine services and registered one
-  (63680033).
+- **Service registration.** A sprint wrote several services and registered
+  only one of them (63680033).
 
 Each fix was one sentence of planner prompt plus a pinned test. This contract
 turns that one-off fix into a rule.

@@ -3,7 +3,8 @@ import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isSensitivePath } from '../security/path-guard.js';
-import type { VaultFile } from './vault.interface.js';
+import type { IVault, VaultFile } from './vault.interface.js';
+import { isAtOrInside } from '../common/path-containment.js';
 
 export const IGNORE_DIRS = new Set([
   'Library',
@@ -338,6 +339,18 @@ export function canonicalVaultPath(path: string): string {
   } catch {
     return resolve(path);
   }
+}
+
+/**
+ * sec-H2: the vault's root is the session's project directory or lies inside
+ * it. file_read, vault_search and the orchestrator's vault-first read all
+ * confine themselves with this, so a sibling vault the registry also owns
+ * (the SelfVault over Brain's own source, another project's knowledge vault)
+ * is never served. Both sides are compared as the filesystem spells them —
+ * the spelling validatePath hands the tools and the registry records roots in.
+ */
+export function isVaultInsideProject(vault: Pick<IVault, 'rootPath'>, projectPath: string): boolean {
+  return isAtOrInside(canonicalVaultPath(projectPath), canonicalVaultPath(vault.rootPath));
 }
 
 export async function resolveExistingVaultRoot(rootPath: string): Promise<
