@@ -12,6 +12,11 @@
  * or a tool description the worker is given — that asks for what the gate
  * judges, BEFORE the refusal. A new gate without a row fails this file; a row
  * whose sentence has been edited away fails it too.
+ *
+ * What this file cannot do: judge MEANING. It proves the credited sentence is
+ * there, not that it asks for what the gate judges. That is the job of whoever
+ * writes or edits a row, and of the review: read the sentence against the
+ * gate's own message.
  */
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -50,7 +55,12 @@ const LEDGER: Readonly<Record<string, Row>> = {
     asker: KNOWLEDGE,
     phrase: "A ModuleConfig CLASS does nothing until a ModuleConfig ASSET exists for it",
   },
-  "[STRADA TEST ASSEMBLY EMPTY]": { asker: KNOWLEDGE, phrase: "A test run in which nothing executed is NOT a pass" },
+  // An .asmdef with no test beside it is a state the run made by hand
+  // (strada_create_module's template writes a test); the gate's message —
+  // "Write the tests, or delete the assembly" — is the instruction. The
+  // sentence once credited here was about reading a run's result, not about
+  // what this gate judges: present, but not an asker.
+  "[STRADA TEST ASSEMBLY EMPTY]": { none: "repair" },
   "[STRADA FILE TOO LONG]": { asker: KNOWLEDGE, phrase: "Keep a file under 200 lines" },
   "[STRADA MODULE TESTS MISSING]": { asker: MODULE_TOOL, phrase: "plus Tests/Runtime and Tests/Editor" },
   "[STRADA ASSETS UNSOURCED]": {
@@ -64,7 +74,7 @@ const LEDGER: Readonly<Record<string, Row>> = {
 };
 
 /** Rows with no asker. Raising this is a decision the diff should show. */
-const PINNED_NONE = 2;
+const PINNED_NONE = 3;
 
 const GATE_TAG = /\[STRADA [A-Z][A-Z0-9 _-]+\]/g;
 const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/;

@@ -52,9 +52,17 @@ turns that one-off fix into a rule.
   gate's own message carries **how** to satisfy it.
 - When you change what a gate judges, re-read its asking sentence. A gate that
   has grown stricter than its asker has become unreachable again.
-- Not yet covered: delivery-time refusals that do not use a `[STRADA …]` tag
-  (the play-through and identity checks). Until they carry one, add their
-  asking sentence by hand and pin it in `src/goals/decomposer-game-rules.test.ts`.
+- The ledger checks that the credited sentence is **present**. It cannot check
+  that the sentence asks for what the gate judges. Whoever adds or edits a row
+  reads the sentence against the gate's own message, and the review reads
+  both again. (Found on 2026-11-04: the empty-test-assembly gate was credited
+  with a sentence about reading a run's result. It is now `none: repair`.)
+- Not yet covered: refusals that do not use a `[STRADA …]` tag. These are the
+  delivery-time play-through and identity checks, plus the families tagged
+  `[TESTS NOT RUN]`, `[VERIFICATION REQUIRED]`, `[VISIBILITY REVIEW REQUIRED]`
+  and `[READ-ONLY STREAK]`. Until the ledger reads them, add the asking
+  sentence for a new one by hand and pin it in
+  `src/goals/decomposer-game-rules.test.ts`.
 
 ## Don't
 
