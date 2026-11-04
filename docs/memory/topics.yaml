@@ -1,0 +1,19 @@
+# Registered topics for docs/memory/entries. An entry's `topics` come from this list.
+# Add a topic here in the same change as the first entry that needs it.
+topics:
+  - id: agent-loop
+    covers: "src/agents, src/agent-core, src/goals, src/supervisor, src/tasks — the PAOR loop, decomposition, supervision, compaction"
+  - id: campaign
+    covers: "src/campaign — GDD intake, milestone ladder, acceptance, delivery gates"
+  - id: unity-mcp
+    covers: "Strada.MCP, the vendored submodule in game projects, Unity tools, src/mcp, src/config/strada-deps.ts"
+  - id: providers
+    covers: "src/agents/providers, provider health and cooldowns, quotas, model choice"
+  - id: learning-memory
+    covers: "src/learning, src/memory, src/vault, src/rag — what the system learns and retrieves"
+  - id: evidence
+    covers: "how a verdict, gate, test or measurement reports what it measured"
+  - id: process
+    covers: "how agents work on this repo: commits, tests, measurement discipline"
+  - id: ops
+    covers: "daemon, bootstrap, configuration, credentials, the runtime home"

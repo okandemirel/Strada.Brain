@@ -66,6 +66,12 @@ When a request matches, load the skill file and follow it in full. The slash wra
 
 - **`ship`** — "commit this", "push", "ship it", "land it": run `node scripts/ci/gates.mjs`, stage explicit paths, push, watch CI. → `docs/skills/ship/SKILL.md`
 
+## Team memory
+
+- **Read:** at the start of a session, read `docs/memory/CORE.md` (40 lines). Before you enter an area, scan `docs/memory/INDEX.md` and open only the entries that match it. Never read `entries/` in bulk.
+- **Capture:** an entry is worth writing when you chose between alternatives, found a root cause that was not obvious, were corrected by the owner, or finished a spike. Write it if it will recur, cannot be derived from the code, and is costly not to know. Write it in the format given in `docs/memory/POLICY.md`, run `node scripts/memory-index.mjs`, and say `team-memory: <summary>`.
+- Memory is not a status board. A rule that has a detector is a contract, not a memory entry.
+
 ## Conventions
 
 - ESM imports only. Zod for all configuration and external data.
