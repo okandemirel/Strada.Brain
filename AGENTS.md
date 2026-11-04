@@ -48,6 +48,7 @@ Each of these was paid for once. This file holds one line per rule. The reason, 
 - **ESM:** no bare `require(` in `src`. Inside a try/catch it is a silent false at run time, and the tests cannot see it. → `docs/contracts/esm-no-require.md`
 - **Gates:** a gate that refuses work ships together with the prompt sentence that asks for what it judges. → `docs/contracts/gate-needs-an-asker.md`
 - **Tests:** never make a check pass by weakening its test — no removed case or assertion, new skip, commented-out test, or loosened pin without a `Test-Weakened:` line in that commit. CI and the pre-push hook check every commit. → `docs/contracts/test-integrity.md`
+- **File size:** no source file grows past 1,000 lines, and the 64 that already have may not grow at all. New code goes into a module beside the file. → `docs/contracts/file-size.md`
 
 ## High-traffic router
 
@@ -57,6 +58,7 @@ Each of these was paid for once. This file holds one line per rule. The reason, 
 | Module loading | `require`, a lazy or optional import, a try/catch around a load | `docs/contracts/esm-no-require.md` |
 | Gates & planning prompts | a `[STRADA …]` gate; a rule in `goal-decomposer.ts` or `strada-knowledge.ts`; a Strada tool description | `docs/contracts/gate-needs-an-asker.md` |
 | Tests | editing a failing test; skip/only/todo; a BASELINE or PINNED number | `docs/contracts/test-integrity.md` |
+| Large files | adding code to `campaign-manager.ts`, `orchestrator.ts` or any file over 1,000 lines | `docs/contracts/file-size.md` |
 
 ## Conventions
 

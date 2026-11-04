@@ -118,6 +118,7 @@ export const PINS = [
   { file: "src/test-integrity.test.ts", name: "SKIP_BASELINE", shape: "record", direction: "up" },
   { file: "src/goals/gate-askers.test.ts", name: "PINNED_NONE", shape: "number", direction: "up" },
   { file: "src/contracts.test.ts", name: "PINNED", shape: "record", direction: "down" },
+  { file: "src/file-size-ratchet.test.ts", name: "SIZE_BASELINE", shape: "record", direction: "up" },
 ];
 
 /** A pin's value in a file's text: a number, a record, or null when absent. */
