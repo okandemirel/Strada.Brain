@@ -1,0 +1,15 @@
+[
+  {
+    "project": ".",
+    "advisory": "GHSA-mrhx-c7xc-m3w5",
+    "nodes": [
+      "node_modules/botbuilder/node_modules/zod",
+      "node_modules/botbuilder-core/node_modules/zod",
+      "node_modules/botframework-connector/node_modules/zod",
+      "node_modules/botframework-schema/node_modules/zod"
+    ],
+    "reason": "The advisory (zod memory exhaustion on oversized constrained collections) covers every zod release below 4.6.6, so every zod 3. The Teams SDK bundles zod ^3.23.8: botbuilder 4.23.3, the latest release on 2026-11-04 (registry last modified 2025-08-27), and botframework-schema both depend on it, and npm's only offered fix is a semver-major downgrade to botbuilder 4.13.6. Forcing zod 4 into the SDK is untested against a live Teams bot. Exposure is limited to deployments that enable the Teams channel: src/core/bootstrap-channels.ts loads src/channels/teams/channel.ts, and botbuilder with it, through a dynamic import only for channel type 'teams'. Brain's own zod is 4.6.7 and is NOT covered by this exception. Re-check at expiry: a botbuilder release on zod >= 4.6.6, or a decision to override.",
+    "added": "2026-11-04",
+    "expires": "2026-12-04"
+  }
+]

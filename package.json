@@ -62,7 +62,7 @@
     "smoke:boot": "node scripts/ci/boot-smoke.mjs",
     "accept:release": "node scripts/ci/release-acceptance.mjs",
     "restore:db": "node scripts/restore.mjs",
-    "security:audit": "npm audit --audit-level=high",
+    "security:audit": "node scripts/ci/audit-gate.mjs",
     "security:full": "./pentest/scripts/run-all-tests.sh",
     "security:critical": "./pentest/scripts/run-all-tests.sh --critical-only",
     "security:sast": "./pentest/scripts/test-sast.sh",

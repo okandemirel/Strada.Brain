@@ -60,7 +60,8 @@ jobs:
         run: npm run sync:check -- --core-path /tmp/Strada.Core-ci
 
       - name: Security Audit
-        run: npm audit --audit-level=high
+        # npm audit at high, minus dated exceptions in scripts/ci/audit-exceptions.json
+        run: npm run security:audit
 
       - name: Portal Security Audit
         run: npm --prefix web-portal run security:audit

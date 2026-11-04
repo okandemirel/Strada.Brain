@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "security:audit": "npm audit --audit-level=high"
+    "security:audit": "node ../scripts/ci/audit-gate.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",
