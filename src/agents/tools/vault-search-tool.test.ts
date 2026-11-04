@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { VaultSearchTool } from './vault-search-tool.js';
 import type { ToolContext } from './tool.interface.js';
 import type { IVault, VaultKind } from '../../vault/vault.interface.js';
@@ -107,6 +110,37 @@ describe('VaultSearchTool default vault targeting', () => {
     // Explicit target only — the project code vault is NOT pulled in.
     expect((knowledge as { query: ReturnType<typeof vi.fn> }).query).toHaveBeenCalledTimes(1);
     expect((code as { query: ReturnType<typeof vi.fn> }).query).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The registry records a vault root as the filesystem spells it (native
+   * realpath, 74db22a1); the session's projectPath arrives as typed. This
+   * check was a copy of file-read.ts's that kept comparing the two spellings
+   * after the original was fixed, so a project reached through a symlink (or
+   * a Windows 8.3 short name) silently lost its own knowledge vault here.
+   * Contract: docs/contracts/path-containment.md.
+   */
+  it('keeps the project knowledge vault when the project path is spelled through a symlink', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'vault-search-link-'));
+    try {
+      const realProject = join(base, 'real-project');
+      mkdirSync(join(realProject, '.strada', 'knowledge'), { recursive: true });
+      const linkedProject = join(base, 'linked-project');
+      symlinkSync(realProject, linkedProject, 'junction');
+      const code = makeVault('project', 'unity-project', realpathSync.native(realProject));
+      const knowledge = makeVault(
+        'dev-knowledge',
+        'knowledge',
+        realpathSync.native(join(realProject, '.strada', 'knowledge')),
+      );
+      const ctx = { ...makeContext([code, knowledge], 'project'), projectPath: linkedProject };
+
+      await tool.execute({ query: 'how does foo work' }, ctx);
+
+      expect((knowledge as { query: ReturnType<typeof vi.fn> }).query).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
 

@@ -1,5 +1,7 @@
 import { vaultNotFound } from './vault-not-found.js';
-import { resolve as pathResolve, sep as pathSep } from 'node:path';
+// sec-H2: the same check file_read uses, not a mirror of it. A mirror kept
+// comparing the typed spelling after the original moved to the real one.
+import { isVaultInsideProject } from './file-read.js';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.interface.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
@@ -343,20 +345,6 @@ export class VaultSearchTool {
       },
     };
   }
-}
-
-/**
- * sec-H2 (mirror of file-read.ts): true iff the vault's rootPath is contained
- * within (or equal to) the session's projectPath. Keeps the default knowledge
- * vault union strictly confined to the current project, even when the
- * VaultRegistry also owns a sibling project's knowledge vault.
- */
-function isVaultInsideProject(vault: IVault, projectPath: string): boolean {
-  const root = pathResolve(vault.rootPath);
-  const project = pathResolve(projectPath);
-  if (root === project) return true;
-  const projectWithSep = project.endsWith(pathSep) ? project : project + pathSep;
-  return root.startsWith(projectWithSep);
 }
 
 function projectHit(hit: VaultHit, vaultId: string, mode: VaultSearchMode): VaultSearchHit | null {
