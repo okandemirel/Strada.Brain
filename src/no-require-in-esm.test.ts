@@ -6,6 +6,8 @@
  * spec-scope.ts never found a project's design document, both because a bare
  * require() inside try/catch threw into the catch. Every test still passed,
  * because the test runner shims require.
+ *
+ * Detector for docs/contracts/esm-no-require.md, rule no-bare-require.
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
