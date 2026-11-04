@@ -57,6 +57,8 @@ export const NOT_FOR_ENV_FILE = new Map([
   ["COMSPEC", "OS"],
   ["ComSpec", "OS"],
   ["FORCE_COLOR", "terminal"],
+  ["GIT_DIR", "git: read only to know whether git could find a repository the filesystem does not show (src/campaign/project-repository.ts)"],
+  ["GIT_WORK_TREE", "git: read only to know whether git could find a repository the filesystem does not show (src/campaign/project-repository.ts)"],
   ["HOME", "OS"],
   ["LANG", "OS"],
   ["LOCALAPPDATA", "OS"],

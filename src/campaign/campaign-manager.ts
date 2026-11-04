@@ -12,6 +12,7 @@ import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, rea
 import type { BigIntStats } from "node:fs";
 import { systemInterrupted } from "../tasks/interruption.js";
 import { EvidenceLedger, artifactDigest, artifactDigestAsync, describeLedgerRow } from "./evidence-ledger.js";
+import { certainlyNoRepository, gitAbove } from "./project-repository.js";
 import { receiptOfFailure } from "./producer-failure.js";
 import {
   issueRunId,
@@ -6979,6 +6980,7 @@ export class CampaignManager {
    */
   private projectRepoState(): "revision" | "none" | "unknown" {
     if (this.projectRevision() !== "") return "revision";
+    if (certainlyNoRepository(this.projectRoot)) return "none";
     try {
       const inside = execFileSync("git", ["-C", this.projectRoot, "rev-parse", "--is-inside-work-tree"], {
         encoding: "utf8",
@@ -6996,7 +6998,7 @@ export class CampaignManager {
       // …and no `.git` ANYWHERE ABOVE the project: checking only the
       // project's own directory called a subdirectory of a repository "no
       // git" and let it close requirements uncached (Codex 2026-09-12 AB).
-      return this.gitAboveProject() ? "unknown" : "none";
+      return gitAbove(this.projectRoot) ? "unknown" : "none";
     }
   }
 
@@ -7145,6 +7147,7 @@ export class CampaignManager {
    * all waited on it. Same commands, same answers as the blocking ones.
    */
   private async projectRevisionAsync(): Promise<string> {
+    if (certainlyNoRepository(this.projectRoot)) return "";
     try {
       const { stdout } = await this.probe(() => execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], { encoding: "utf8", timeout: 10_000 }));
       return stdout.trim();
@@ -7164,11 +7167,12 @@ export class CampaignManager {
 
   private async projectRepoStateAsync(): Promise<"revision" | "none" | "unknown"> {
     if ((await this.projectRevisionAsync()) !== "") return "revision";
+    if (certainlyNoRepository(this.projectRoot)) return "none";
     try {
       const { stdout } = await this.probe(() => execFileAsync("git", ["-C", this.projectRoot, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", timeout: 10_000 }));
       return stdout.trim() === "true" ? "unknown" : "none";
     } catch {
-      return this.gitAboveProject() ? "unknown" : "none";
+      return gitAbove(this.projectRoot) ? "unknown" : "none";
     }
   }
 
@@ -7177,18 +7181,8 @@ export class CampaignManager {
     return this.probe(() => artifactDigestAsync(path, this.stopReads.signal)).catch(() => undefined);
   }
 
-  /** Is there a `.git` anywhere at or above the project? */
-  private gitAboveProject(): boolean {
-    let at = this.projectRoot;
-    for (;;) {
-      if (existsSync(join(at, ".git"))) return true;
-      const up = dirname(at);
-      if (up === at) return false;
-      at = up;
-    }
-  }
-
   private projectRevision(): string {
+    if (certainlyNoRepository(this.projectRoot)) return "";
     try {
       return execFileSync("git", ["-C", this.projectRoot, "rev-parse", "HEAD"], {
         encoding: "utf8",

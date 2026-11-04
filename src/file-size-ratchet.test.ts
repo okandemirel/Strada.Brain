@@ -27,7 +27,7 @@ const SLACK = 100;
 
 /** Lines per oversized file on 2026-11-04. Lower as files shrink; delete a line at or under LIMIT. */
 const SIZE_BASELINE: Readonly<Record<string, number>> = {
-  "src/campaign/campaign-manager.ts": 11538,
+  "src/campaign/campaign-manager.ts": 11532,
   "src/agents/orchestrator.ts": 6765,
   "src/learning/storage/learning-storage.ts": 4089,
   "src/channels/web/channel.ts": 3623,
