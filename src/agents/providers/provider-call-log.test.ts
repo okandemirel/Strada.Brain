@@ -26,6 +26,20 @@ describe("logProviderCall", () => {
     expect((fields as { ms: number }).ms).toBeGreaterThanOrEqual(1500);
   });
 
+  it("carries the cached part of the input, so a run can say what its prefix-cache hit rate was", () => {
+    logProviderCall("turn", { name: "chain" }, Date.now(), {
+      response: { text: "x", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 60000, outputTokens: 200, cacheReadInputTokens: 48000 } } as never,
+    });
+    expect(loggerSpies.info.mock.calls[0]![1]).toMatchObject({ inputTokens: 60000, cachedInputTokens: 48000 });
+  });
+
+  it("says nothing about the cache when the provider reported nothing — absence is not zero", () => {
+    logProviderCall("turn", { name: "chain" }, Date.now(), {
+      response: { text: "x", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 1 } } as never,
+    });
+    expect(loggerSpies.info.mock.calls[0]![1]).not.toHaveProperty("cachedInputTokens");
+  });
+
   it("writes 'Provider call failed' with the error when the call threw", () => {
     logProviderCall("turn", { name: "opencode" }, Date.now(), { error: new Error("sent no response within 300000ms") });
     const [message, fields] = loggerSpies.info.mock.calls[0]!;

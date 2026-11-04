@@ -11,6 +11,7 @@ import type {
 import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
 import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { usageFields } from "./provider-call-log.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { QUOTA_LIMIT_RE, holdsNoAnswer } from "../orchestrator-runtime-utils.js";
@@ -976,8 +977,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           provider: provider.name,
           model: okMeta?.model,
           ms: Date.now() - callStartedAt,
-          inputTokens: response.usage?.inputTokens,
-          outputTokens: response.usage?.outputTokens,
+          ...usageFields(response.usage),
           stopReason: response.stopReason,
           toolCalls: response.toolCalls?.length ?? 0,
         });

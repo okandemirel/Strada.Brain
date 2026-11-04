@@ -18,6 +18,23 @@ import { getLogger } from "../../utils/logger.js";
  * alone accounts for — the rest is tools and messages, and only a
  * measurement says how much of it is which.
  */
+/**
+ * The token fields of a call's log line, one shape for every call site.
+ *
+ * `cachedInputTokens` is the part of the input the provider served from its
+ * prefix cache. On the worker's provider a cached input token costs about a
+ * fiftieth of an uncached one, so whether a change to the history saves or
+ * spends money depends on it. The usage parsers read it, but no log line
+ * carried it, so no run could say what its hit rate was (2026-11-04).
+ */
+export function usageFields(usage: ProviderResponse["usage"] | undefined): Record<string, number | undefined> {
+  return {
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    ...(usage?.cacheReadInputTokens === undefined ? {} : { cachedInputTokens: usage.cacheReadInputTokens }),
+  };
+}
+
 export function toolDefinitionChars(tools: ReadonlyArray<unknown> | undefined): number {
   if (!tools || tools.length === 0) return 0;
   return JSON.stringify(tools).length;
@@ -116,8 +133,7 @@ export function logProviderCall(
       provider: response.servedBy?.provider ?? provider.name,
       model: response.servedBy?.model,
       ms,
-      inputTokens: response.usage?.inputTokens,
-      outputTokens: response.usage?.outputTokens,
+      ...usageFields(response.usage),
       stopReason: response.stopReason,
       toolCalls: response.toolCalls?.length ?? 0,
       ...extra,
