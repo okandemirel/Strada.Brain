@@ -10,9 +10,9 @@
  * the contracts' format, so the file is read without a YAML library.
  */
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const CORE_LINE_LIMIT = 40;
 const KINDS = ["decision", "guideline", "gotcha", "spike"];
@@ -140,7 +140,18 @@ export function derive(memoryDir) {
   return { problems, core, index: buildIndex(entries, topics) };
 }
 
-const isMain = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+/**
+ * Entry check by realpath: node runs a module from its realpath, so a script
+ * started through a symlinked checkout has an argv[1] that never equals
+ * import.meta.url as spelled (src/tests/integration/entry-guard-symlink.test.ts).
+ */
+const isMain = (() => {
+  try {
+    return realpathSync(process.argv[1] ?? "") === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 if (isMain) {
   const memoryDir = resolve(dirname(fileURLToPath(import.meta.url)), "..", "docs", "memory");
   const { problems, core, index } = derive(memoryDir);

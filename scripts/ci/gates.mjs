@@ -44,6 +44,8 @@ const DETECTORS = [
   "src/goals/gate-askers.test.ts",
   "src/team-memory.test.ts",
   "src/governance.test.ts",
+  // Scans every script and src file, so `vitest related` never selects it.
+  "src/tests/integration/entry-guard-symlink.test.ts",
 ];
 
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
