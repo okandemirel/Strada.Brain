@@ -1,0 +1,24 @@
+#!/bin/sh
+# strada-brain:managed-hook
+# Pre-push guard: refuse a push with a commit that weakens a test — a removed
+# case or assertion, a new skip, a commented-out test, an assertion rewritten
+# with no source change, a loosened ratchet pin — unless that commit says why
+# in a "Test-Weakened: <why>" line. scripts/ci/check-test-integrity.mjs,
+# docs/contracts/test-integrity.md. CI runs the same check over the push.
+guard=scripts/ci/check-test-integrity.mjs
+if [ ! -f "$guard" ]; then
+  # A checkout from before the guard existed. CI still runs it over the push.
+  echo "[pre-push] $guard is not in this checkout; CI will check the push" >&2
+  exit 0
+fi
+zero=0000000000000000000000000000000000000000
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue          # deleting a remote ref
+  base="$remote_sha"
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || continue
+  fi
+  node "$guard" --base "$base" --head "$local_sha" || status=1
+done
+exit $status

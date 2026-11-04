@@ -17,7 +17,7 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 const CONTRACTS_DIR = join(REPO, "docs", "contracts");
 
 /** Pinned: move these only in the same change that adds, retires or downgrades a rule. */
-const PINNED = { contracts: 3, active: 3, rules: 3, errorRules: 3 };
+const PINNED = { contracts: 4, active: 4, rules: 4, errorRules: 4 };
 
 interface Rule {
   id: string;

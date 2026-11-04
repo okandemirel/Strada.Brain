@@ -21,6 +21,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          # The test-integrity step compares every pushed commit with its parent.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
@@ -30,6 +33,19 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             web-portal/package-lock.json
+
+      # docs/contracts/test-integrity.md: a commit that removes a test case or an
+      # assertion, adds a skip or a commented-out test, rewrites an assertion
+      # without touching source, or loosens a ratchet pin must say why in a
+      # `Test-Weakened:` line. It needs only git, so it runs before the install.
+      # --walk-back-skip-ci: commits a `[skip ci]` push kept from this job are
+      # checked by the next push (the version bump excepted).
+      - name: Test integrity (no test bent to green)
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/ci/check-test-integrity.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --walk-back-skip-ci
 
       - name: Install dependencies
         run: npm ci
