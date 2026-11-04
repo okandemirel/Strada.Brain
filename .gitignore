@@ -24,9 +24,11 @@ coverage/
 .strada/
 *.tgz
 
-# Local AI/editor agent state and tool metadata
+# Local AI/editor agent state and tool metadata. Shared slash wrappers are
+# tracked (docs/skills/ holds what they load); personal settings never are.
 .agents/
-.claude/
+.claude/*
+!.claude/commands/
 .codex/
 .cursor/
 !.cursor/rules/

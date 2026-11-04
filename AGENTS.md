@@ -60,6 +60,12 @@ Each of these was paid for once. This file holds one line per rule. The reason, 
 | Tests | editing a failing test; skip/only/todo; a BASELINE or PINNED number | `docs/contracts/test-integrity.md` |
 | Large files | adding code to `campaign-manager.ts`, `orchestrator.ts` or any file over 1,000 lines | `docs/contracts/file-size.md` |
 
+## Team skills
+
+When a request matches, load the skill file and follow it in full. The slash wrappers only load it.
+
+- **`ship`** — "commit this", "push", "ship it", "land it": run `node scripts/ci/gates.mjs`, stage explicit paths, push, watch CI. → `docs/skills/ship/SKILL.md`
+
 ## Conventions
 
 - ESM imports only. Zod for all configuration and external data.
