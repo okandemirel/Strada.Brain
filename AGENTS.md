@@ -49,6 +49,7 @@ Each of these was paid for once. This file holds one line per rule. The reason, 
 - **Gates:** a gate that refuses work ships together with the prompt sentence that asks for what it judges. → `docs/contracts/gate-needs-an-asker.md`
 - **Tests:** never make a check pass by weakening its test — no removed case or assertion, new skip, commented-out test, or loosened pin without a `Test-Weakened:` line in that commit. CI and the pre-push hook check every commit. → `docs/contracts/test-integrity.md`
 - **File size:** no source file grows past 1,000 lines, and the 64 that already have may not grow at all. New code goes into a module beside the file. → `docs/contracts/file-size.md`
+- **Rules about rules:** a commit that changes the checker, a hook, a workflow or a contract says why in a `Governance-Change:` line. CI judges each push with the checker from its base. → `docs/contracts/governance.md`
 
 ## High-traffic router
 

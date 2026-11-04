@@ -283,7 +283,9 @@ describe("the tree holds no test bent to green (docs/contracts/test-integrity.md
   it("CI and the pre-push hook both run the commit layer", () => {
     // Textual tripwire: a guard nothing runs is the defect this repo keeps finding.
     const ci = readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8");
-    expect(ci).toContain("node scripts/ci/check-test-integrity.mjs");
+    // The step names the checker and runs it (from the base commit: docs/contracts/governance.md).
+    expect(ci).toContain("GUARD=scripts/ci/check-test-integrity.mjs");
+    expect(ci).toContain('node "$GUARD" --base');
     expect(ci).toMatch(/fetch-depth:\s*0/);
     expect(readFileSync(join(REPO, "scripts/git-hooks/pre-push"), "utf8")).toContain("scripts/ci/check-test-integrity.mjs");
     expect(readFileSync(join(REPO, "scripts/install-git-hooks.mjs"), "utf8")).toMatch(/"pre-push"/);

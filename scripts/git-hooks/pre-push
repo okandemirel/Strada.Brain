@@ -19,6 +19,15 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
     base=$(git merge-base "$local_sha" origin/main 2>/dev/null) || continue
   fi
-  node "$guard" --base "$base" --head "$local_sha" || status=1
+  # The checker as it is on the remote, not as this push left it
+  # (docs/contracts/governance.md): loosening it cannot pass under itself.
+  # A .mjs name, in a fresh directory: node reads an extensionless file as CommonJS.
+  run="$guard"
+  pinned_dir=$(mktemp -d "${TMPDIR:-/tmp}/check-test-integrity.XXXXXX") || pinned_dir=""
+  if [ -n "$pinned_dir" ] && git show "$base:$guard" > "$pinned_dir/check-test-integrity.mjs" 2>/dev/null; then
+    run="$pinned_dir/check-test-integrity.mjs"
+  fi
+  node "$run" --base "$base" --head "$local_sha" || status=1
+  [ -n "$pinned_dir" ] && rm -rf "$pinned_dir"
 done
 exit $status

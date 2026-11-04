@@ -43,6 +43,7 @@ const DETECTORS = [
   "src/universality.test.ts",
   "src/goals/gate-askers.test.ts",
   "src/team-memory.test.ts",
+  "src/governance.test.ts",
 ];
 
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";

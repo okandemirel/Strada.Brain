@@ -160,17 +160,42 @@ export function pinLoosening(pin, before, after) {
 }
 
 /**
- * The verdict for one commit.
- *
- * @returns {{ findings: string[]; justification: string | null }}
+ * The files that enforce the rules: this checker, the hooks and their installer,
+ * the CI workflows, the contracts themselves, and the checker of contracts.
+ * docs/contracts/governance.md. A commit that changes one says why, in a
+ * `Governance-Change:` line. In this repository no person reviews a push, so the
+ * reason in the commit is the review. The contracts' index (README.md) is a
+ * record, not a rule: it changes whenever a contract is added, and is not
+ * governed.
  */
-export function judgeCommit({ message, files, sourceChanged, pins }) {
+export const GOVERNED = [
+  /^scripts\/ci\/check-test-integrity\.mjs$/,
+  /^scripts\/git-hooks\//,
+  /^scripts\/install-git-hooks\.mjs$/,
+  /^\.github\/workflows\//,
+  /^docs\/contracts\/(?!README\.md$)[^/]+\.md$/,
+  /^src\/contracts\.test\.ts$/,
+];
+export const GOVERNANCE_TRAILER = /^Governance-Change:[ \t]*\S.{9,}$/m;
+
+export function governedChanges(paths) {
+  return paths.filter((p) => GOVERNED.some((re) => re.test(p)));
+}
+
+/**
+ * The verdict for one commit: what it weakened, which governed files it
+ * changed, and the trailer lines that say why.
+ *
+ * @returns {{ findings: string[]; justification: string | null; governed: string[]; governanceReason: string | null }}
+ */
+export function judgeCommit({ message, files, sourceChanged, pins, changedPaths = [] }) {
   const findings = [
     ...findWeakening({ files, sourceChanged }),
     ...pins.flatMap(({ pin, before, after }) => pinLoosening(pin, before, after)),
   ];
   const m = TRAILER.exec(message);
-  return { findings, justification: m ? m[0] : null };
+  const g = GOVERNANCE_TRAILER.exec(message);
+  return { findings, justification: m ? m[0] : null, governed: governedChanges(changedPaths), governanceReason: g ? g[0] : null };
 }
 
 /* ---- git wiring --------------------------------------------------------- */
@@ -216,11 +241,14 @@ function commitInput(sha) {
   const message = git(["log", "-1", "--format=%B", sha]);
   const status = git(["diff", "--name-status", "-M", parent, sha]).trim();
   const files = [];
+  const changedPaths = [];
   let sourceChanged = false;
   for (const row of status ? status.split("\n") : []) {
     const [code, first, second] = row.split("\t");
     const oldPath = first;
     const newPath = code.startsWith("R") || code.startsWith("C") ? second : first;
+    changedPaths.push(newPath);
+    if (newPath !== oldPath) changedPaths.push(oldPath);
     const testFile = isTestPath(newPath) || isTestPath(oldPath);
     if (!testFile) {
       if (!NOT_SOURCE.test(newPath)) sourceChanged = true;
@@ -232,7 +260,7 @@ function commitInput(sha) {
     files.push({ path: newPath, before, after, removedAssertions: removedAssertionLines(diff) });
   }
   const pins = PINS.map((pin) => ({ pin, before: readPin(showAt(parent, pin.file), pin), after: readPin(showAt(sha, pin.file), pin) }));
-  return { message, files, sourceChanged, pins };
+  return { message, files, sourceChanged, pins, changedPaths };
 }
 
 function argValue(name, fallback) {
@@ -261,22 +289,45 @@ if (isDirectExecution()) {
   const shas = git(["rev-list", "--reverse", "--no-merges", `${base}..${head}`]).split("\n").filter(Boolean);
   let failed = 0;
   let justified = 0;
+  let ungoverned = 0;
+  let governedCount = 0;
   for (const sha of shas) {
     const input = commitInput(sha);
     if (!input) continue;
-    const { findings, justification } = judgeCommit(input);
-    if (findings.length === 0) continue;
+    const { findings, justification, governed, governanceReason } = judgeCommit(input);
     const subject = input.message.split("\n")[0];
-    const list = findings.map((f) => `    - ${f}`).join("\n");
-    if (justification) {
-      justified++;
-      console.log(`  ${sha.slice(0, 8)} ${subject}\n${list}\n    justified: ${justification}`);
-    } else {
-      failed++;
-      console.error(`  ${sha.slice(0, 8)} ${subject}\n${list}`);
+    if (findings.length > 0) {
+      const list = findings.map((f) => `    - ${f}`).join("\n");
+      if (justification) {
+        justified++;
+        console.log(`  ${sha.slice(0, 8)} ${subject}\n${list}\n    justified: ${justification}`);
+      } else {
+        failed++;
+        console.error(`  ${sha.slice(0, 8)} ${subject}\n${list}`);
+      }
+    }
+    if (governed.length > 0) {
+      governedCount++;
+      const list = governed.map((f) => `    - governed file changed: ${f}`).join("\n");
+      if (governanceReason) console.log(`  ${sha.slice(0, 8)} ${subject}\n${list}\n    explained: ${governanceReason}`);
+      else {
+        ungoverned++;
+        console.error(`  ${sha.slice(0, 8)} ${subject}\n${list}`);
+      }
     }
   }
-  console.log(`check-test-integrity: ${shas.length} commit(s) checked, ${failed + justified} weakened (${justified} justified)`);
+  console.log(
+    `check-test-integrity: ${shas.length} commit(s) checked, ${failed + justified} weakened (${justified} justified), ` +
+      `${governedCount} changed a governed file (${governedCount - ungoverned} explained)`,
+  );
+  if (ungoverned > 0) {
+    console.error(
+      "A commit above changes a file that enforces the rules without saying why. Add a line\n" +
+        "  Governance-Change: <what rule changes, and why the old one was wrong or incomplete>\n" +
+        "to that commit's message. docs/contracts/governance.md",
+    );
+    process.exitCode = 1;
+  }
   if (failed > 0) {
     console.error(
       "A commit above weakens a test without saying why. Make the code pass the test, or — when the\n" +

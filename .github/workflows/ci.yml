@@ -45,7 +45,16 @@ jobs:
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/ci/check-test-integrity.mjs --base "$BASE_SHA" --head "$HEAD_SHA" --walk-back-skip-ci
+        # The checker is taken from the BASE commit, not from the push: a push that
+        # loosens the checker is judged by the checker it was pushed onto
+        # (docs/contracts/governance.md). Its first appearance runs its own copy.
+        run: |
+          GUARD=scripts/ci/check-test-integrity.mjs
+          if git cat-file -e "$BASE_SHA:$GUARD" 2>/dev/null; then
+            git show "$BASE_SHA:$GUARD" > "$RUNNER_TEMP/check-test-integrity.mjs"
+            GUARD="$RUNNER_TEMP/check-test-integrity.mjs"
+          fi
+          node "$GUARD" --base "$BASE_SHA" --head "$HEAD_SHA" --walk-back-skip-ci
 
       - name: Install dependencies
         run: npm ci
