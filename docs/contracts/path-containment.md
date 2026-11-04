@@ -12,8 +12,10 @@ rules:
 # Path containment
 
 When this contract was written (2026-11-04) the question "is this path inside
-that root?" was answered by hand on 62 lines in 42 files, in five different
-shapes, and the copies disagreed with each other:
+that root?" was answered by hand on at least 64 lines in 43 files, in five
+different shapes, and the copies disagreed with each other. "At least" because
+the count is what the ratchet's patterns see (see "What the ratchet cannot
+see" below). The disagreements:
 
 - string prefix (`candidate.startsWith(root + sep)`) against `path.relative()`;
 - `relative(...).startsWith("..")`, which calls a child named `..cache` an escape;
@@ -42,8 +44,24 @@ Both are lexical and segment-based, and both use the platform's own path rules.
 To test Windows behaviour on any host, pass `path.win32` as the third argument.
 
 The first six copies moved to the producer in the same change. The remaining
-56 lines in 38 files are held by the ratchet in
-`src/path-containment-ratchet.test.ts`.
+58 lines in 39 files (again, as the patterns see them) are held by the ratchet
+in `src/path-containment-ratchet.test.ts`.
+
+### What the ratchet cannot see
+
+The ratchet counts lines that match its `IDIOMS` patterns. It is a floor,
+not a census. These shapes pass it unseen:
+
+- a bare `x.startsWith(root)` with no separator;
+- a bare `.includes("..")` on a relative step (left out on purpose: most of
+  those lines validate an id or a user-supplied fragment, which is a
+  different question);
+- a prefix built on one line and tested on the next
+  (`const withSep = root + sep;` … `x.startsWith(withSep)`);
+- any shape nobody has listed yet.
+
+Review is the detector for these. When you meet a new shape, add it to
+`IDIOMS` and baseline what it finds in the same commit.
 
 ## Caller rules
 

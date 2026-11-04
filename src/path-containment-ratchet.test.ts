@@ -2,7 +2,8 @@
  * Detector for docs/contracts/path-containment.md, rule no-hand-rolled-containment.
  *
  * "Is this path inside that root?" has one producer: src/common/path-containment.ts.
- * When the contract was written the repo answered it by hand in 42 files, and
+ * When the contract was written the repo answered it by hand in at least 43
+ * files (counting only the shapes below), and
  * the copies disagreed (see the contract). Rewriting every one of them at once
  * meant touching security code in forty places in one change, so this is a
  * RATCHET: the files below may keep the count they had, no file may grow one,
@@ -10,7 +11,11 @@
  * so the number only ever goes down.
  *
  * The idioms are the shapes the copies were written in. A line is counted once
- * however many of them it holds; comment lines are not counted.
+ * however many of them it holds; comment lines are not counted. The counts are
+ * therefore a FLOOR — what these shapes see, not every hand-rolled check. Known
+ * blind spots are listed in the contract (a bare `x.startsWith(root)`, a bare
+ * `.includes("..")` on a relative step, a prefix built on one line and tested
+ * on the next); a new shape seen in the wild belongs in IDIOMS.
  */
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -33,18 +38,21 @@ const IDIOMS: readonly RegExp[] = [
   /endsWith\(\s*(?:[\w$]+\.)?(?:sep|pathSep|SEP)\s*\)\s*\?/,
   // step.split(/[\\/]/)[0] !== ".." — a first-segment climb test
   /\[0\]\s*[!=]==\s*['"]\.\.['"]/,
+  // step.split(/[\\/]/).includes("..") — an any-segment climb test
+  /\.split\([^)]*\)\.includes\(\s*['"]\.\.['"]\s*\)/,
 ];
 
 /**
- * Hand-rolled containment lines per file when the contract was written
- * (2026-11-04: 62 lines in 42 files; 56 in 38 once the first six copies
- * moved to the producer). Lower a count when you
- * migrate a file; delete its line at zero. Never raise one, never add one.
+ * Hand-rolled containment lines per file, as IDIOMS sees them (a floor, not
+ * the true count). 2026-11-04: 64 lines in 43 files before the producer
+ * existed; 58 in 39 once the first six copies moved to it. Lower a count when
+ * you migrate a file; delete its line at zero. Never raise one, never add one
+ * — except when IDIOMS itself widens, and then say so in the commit.
  */
 const BASELINE: Readonly<Record<string, number>> = {
   "src/agents/autonomy/project-shell-allowlist.ts": 1,
   "src/agents/context/strada-knowledge.ts": 1,
-  "src/agents/multi/workspace-change-review.ts": 1,
+  "src/agents/multi/workspace-change-review.ts": 2,
   "src/agents/multi/workspace-lease-manager.ts": 1,
   "src/agents/plugins/plugin-loader.ts": 2,
   "src/agents/soul/soul-loader.ts": 3,
@@ -70,6 +78,7 @@ const BASELINE: Readonly<Record<string, number>> = {
   "src/daemon/triggers/file-watch-trigger.ts": 1,
   "src/dashboard/workspace-routes.ts": 1,
   "src/intelligence/unity-guid-resolver.ts": 1,
+  "src/learning/error-signature.ts": 1,
   "src/rag/docs/doc-rag-pipeline.ts": 1,
   "src/rag/file-pattern.ts": 1,
   "src/security/framework-package-path.ts": 1,

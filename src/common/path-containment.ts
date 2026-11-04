@@ -2,8 +2,8 @@
  * Is this path inside that root? The one place the question is answered.
  *
  * Contract: docs/contracts/path-containment.md. Before this module the repo
- * held the same check in 42 files, written five different ways, and the
- * copies disagreed: string-prefix against `relative()`, `startsWith("..")`
+ * held the same check in at least 43 files, written five different ways, and
+ * the copies disagreed: string-prefix against `relative()`, `startsWith("..")`
  * (which calls a child named `..cache` an escape) against a segment test, a
  * root that counted as inside for some callers and outside for others, and
  * `root + sep` that broke on a filesystem root. The /var vs /private/var
