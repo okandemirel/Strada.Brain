@@ -5932,8 +5932,9 @@ export class Orchestrator {
       // could not distinguish "wrote the file" from "wrote it into the void".
       //
       // Preview only: results can be whole files. The logger's redaction format
-      // runs over this like any other field.
-      logger.debug("Tool executed", {
+      // runs over this like any other field. INFO, not debug: at debug the daemon
+      // never wrote it, and a proof run's non-provider 69% could not be split by tool.
+      logger.info("Tool executed", {
         chatId,
         tool: activeToolCall.name,
         durationMs: toolDurationMs,
