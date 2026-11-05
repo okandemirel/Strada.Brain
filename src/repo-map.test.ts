@@ -91,6 +91,31 @@ describe("the repo map matches the code (docs/architecture/repo_map.yaml)", () =
     for (const name of Object.keys(nodes)) expect(doctor.route(nodes, [name])[0]?.name, name).toBe(name);
   });
 
+  it("routes every class an entrypoint exports to its card: never a miss, the owner in the top 3 or sent there by one of them", () => {
+    const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
+    // A symbol from a stack trace or a task is an agent's likeliest query. Lower-cased whole, "CampaignManager"
+    // was one word no card holds: 47 of these 50 classes missed, and the doctor asked to write each into read_when.
+    const sendsTo = (card: Card | undefined, owner: string) =>
+      Array.isArray(card?.skip_when) && card.skip_when.some((s) => typeof s === "string" && s.trimEnd().endsWith(`→ ${owner}`));
+    const classes: Array<[string, string]> = [];
+    for (const [owner, card] of Object.entries(nodes)) {
+      for (const entry of (card.entrypoints as string[]) ?? []) {
+        for (const m of readFileSync(join(REPO, entry), "utf8").matchAll(/^export (?:abstract )?class (\w+)/gm)) classes.push([m[1]!, owner]);
+      }
+    }
+    expect(classes.length).toBeGreaterThan(0);
+    for (const [symbol, owner] of classes) {
+      const top = doctor.route(nodes, [symbol]).slice(0, 3).map((r) => r.name);
+      // "Daemon" is both the daemon card's name and gateway's restart class; the daemon card sends it on (AGENTS.md step 1).
+      expect(top.includes(owner) || top.some((n) => sendsTo(nodes[n], owner)), `${symbol} (${owner}): ${top.join(", ") || "miss"}`).toBe(true);
+    }
+  });
+
+  it("routes C#, the language this product writes, though it is one letter and a sign", () => {
+    const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
+    expect(doctor.route(nodes, ["C#"])[0]?.name).toBe("intelligence");
+  });
+
   it("routes an -ies or -es plural to the cards of its singular, and the plural of a word ending in e too", () => {
     const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
     const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
@@ -292,10 +317,42 @@ describe("repo-map-doctor on a fixture checkout", () => {
     }
   }, 60_000);
 
-  it("drops a single letter, the tail of a possessive, so it matches no card that has one", () => {
+  it("drops the clitic of a possessive or a negation, so its letter matches no card that has one", () => {
     expect(doctor.termsOf(["the agent's lease"])).toEqual(["agent", "lease"]);
+    expect(doctor.termsOf(["it’s the agent’s"])).toEqual(["agent"]);
+    expect(doctor.termsOf(["don't touch the lease, it isn't held"])).toEqual(["touch", "lease", "held"]);
     const { nodes } = doctor.parseMap(mapOf([card("alpha", { read_when: '\n      - "the worker\'s queue"' }), card("beta"), card("delta"), card("gamma")]));
     expect(doctor.route(nodes, ["beta's"]).map((r) => r.name)).toEqual(["beta"]);
+  });
+
+  it("keeps C# and F# as one word each, so the language routes while the letter alone does not", () => {
+    expect(doctor.termsOf(["C# parser"])).toEqual(["csharp", "parser"]);
+    const { nodes } = doctor.parseMap(
+      mapOf([card("alpha", { read_when: '\n      - "scripts in F#"' }), card("beta", { read_when: '\n      - "Unity and C#: C# parsing"' }), card("delta"), card("gamma")]),
+    );
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    expect(names("C#")).toEqual(["beta"]);
+    expect(names("f#")).toEqual(["alpha"]);
+    expect(names("c")).toEqual([]);
+  });
+
+  it("splits a symbol into the words its file and the cards spell, on both sides", () => {
+    expect(doctor.termsOf(["CampaignManager"])).toEqual(["campaign", "manager"]);
+    expect(doctor.termsOf(["AgentDBAdapter"])).toEqual(["agent", "db", "adapter"]);
+    expect(doctor.termsOf(["HNSWVectorStore"])).toEqual(["hnsw", "vector", "store"]);
+    const { nodes } = doctor.parseMap(
+      mapOf([
+        card("alpha", { entrypoints: flow(["src/alpha/lease-keeper.ts"]) }),
+        card("beta", { read_when: '\n      - "the HNSWVectorStore index"' }),
+        card("delta"),
+        card("gamma"),
+      ]),
+    );
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    // The query holds the symbol, the card its file name.
+    expect(names("LeaseKeeper")).toEqual(["alpha"]);
+    // The card holds the symbol, the query its words.
+    expect(names("vector store")).toEqual(["beta"]);
   });
 
   it("matches whole words: a plural, and from five letters the start of a longer word, never a piece of one", () => {
@@ -426,6 +483,24 @@ describe("repo-map-doctor on a fixture checkout", () => {
       ]);
     });
   });
+
+  it("--write starts a map its own parser reads where there is none, or none with a nodes: key", () => {
+    for (const text of ["", "# a map still to write\n", "# no nodes key\nversion: 1\n"]) {
+      const written = doctor.writeDependsOn(text, scan);
+      const { nodes, problems } = doctor.parseMap(written);
+      expect(problems, JSON.stringify(text)).toEqual([]);
+      expect(Object.keys(nodes), JSON.stringify(text)).toEqual(["alpha", "beta", "delta", "gamma"]);
+      expect(written.match(/^version: 1$/gm), JSON.stringify(text)).toHaveLength(1);
+      expect(doctor.writeDependsOn(written, scan), JSON.stringify(text)).toBe(written);
+    }
+    // A checkout with no docs/architecture/ at all.
+    rmSync(join(root, "docs/architecture"), { recursive: true, force: true });
+    expect(run("--write").status).toBe(0);
+    const after = run();
+    expect(after.out).not.toContain("unreadable line");
+    expect(after.out).toContain('card "alpha": "read_when" needs at least one line');
+    expect(after.status).toBe(1);
+  }, 60_000);
 
   it("the command line exits 1 on drift, 0 when clean, and routes", () => {
     writeMap(mapOf([card("alpha", { depends_on: "[]" }), card("beta"), card("delta"), card("gamma")]));

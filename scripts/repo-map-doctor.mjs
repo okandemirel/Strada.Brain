@@ -39,7 +39,7 @@
  * or as `- <json>` list items / `<key>: <json>` map entries one level deeper.
  */
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -248,6 +248,11 @@ export function writeDependsOn(text, scan) {
     lines.splice(line + 1 + at, after - (line + 1 + at), `    depends_on: ${derived(name)}`);
   }
   let out = lines.join("\n");
+  // No map yet, or one without its `nodes:` key: the cards below would be lines its own parser cannot read.
+  if (!/^nodes:\s*$/m.test(out)) {
+    const head = out.trimEnd();
+    out = `${head}${head ? "\n\n" : ""}${/^version:/m.test(out) ? "" : "version: 1\n\n"}nodes:\n`;
+  }
   const have = new Set(Object.keys(parseMap(out).nodes));
   for (const mod of scan.modules.filter((m) => !have.has(m))) {
     const card = [`  ${mod}:`, `    purpose: ""`, `    entrypoints: []`, `    depends_on: ${derived(mod)}`, `    contracts: []`, `    read_when: []`];
@@ -290,13 +295,26 @@ export const FILLER = new Set(
   ).split(" "),
 );
 
-const wordsOf = (s) => String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 /**
- * The words of a query that can say where code lives. A quoted phrase is its
- * words; filler goes, and so does a single letter, which is only ever the
- * tail of "agent's" or "don't" and would match every card that has one.
+ * The words of a text, the same for a query and a card. A symbol is its
+ * words: "CampaignManager" is campaign manager, as campaign-manager.ts spells
+ * it, and "HNSWVectorStore" is hnsw vector store. "C#" is one word, csharp:
+ * the language this product writes. A clitic is no word: "agent's" is agent,
+ * and "don't" or "isn't" goes whole, a negated helper verb. Without that the
+ * "s" of every possessive would match every card that has one.
  */
-export const termsOf = (words) => words.flatMap(wordsOf).filter((w) => w.length > 1 && !FILLER.has(w));
+const wordsOf = (s) =>
+  String(s)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .toLowerCase()
+    .replace(/(^|[^a-z0-9])([a-z])#/g, "$1$2sharp")
+    .replace(/[a-z]+n['’]t\b/g, " ")
+    .replace(/['’](?:s|d|ll|re|ve|m)\b/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+/** The words of a query that can say where code lives: a quoted phrase is its words, and filler goes. */
+export const termsOf = (words) => words.flatMap(wordsOf).filter((w) => !FILLER.has(w));
 /**
  * The word and every singular its spelling allows. The spelling alone does
  * not say which one is meant: "memories" is "memory" and "processes" is
@@ -395,6 +413,7 @@ function main(argv) {
   }
   const scan = scanImports(root);
   if (args[0] === "--write") {
+    mkdirSync(dirname(mapFile), { recursive: true });
     writeFileSync(mapFile, writeDependsOn(text, scan));
     console.log(`repo-map: depends_on rewritten from the imports of ${scan.modules.length} modules in ${MAP_PATH}`);
     return 0;

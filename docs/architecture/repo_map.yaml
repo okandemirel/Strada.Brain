@@ -185,7 +185,7 @@ nodes:
       - "daemon approvals, notifications, deployment or resilience"
       - "the `strada daemon` commands"
     skip_when:
-      - "restarting Brain after a crash → gateway"
+      - "the Daemon class (src/gateway/daemon.ts): restarting Brain after a crash → gateway"
       - "what the autonomous engine decides once a tick fires → agent-core"
 
   dashboard:
@@ -371,6 +371,7 @@ nodes:
     read_when:
       - "a test needs a mock provider, a mock channel or an isolated home"
       - "an integration test across modules fails"
+      - "the universality scan: its shingles and rolling-hash prefilter (RollSet)"
 
   types:
     purpose: "Repo-wide type foundations: brand types for ids, Result and Option."
