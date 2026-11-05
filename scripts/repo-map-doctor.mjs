@@ -12,7 +12,8 @@
  * by hand: it is the set of other modules that its non-test files import.
  * An edge is any relative import that resolves into another module: a static
  * import, a type-only import, a re-export, a side-effect import, or an
- * import("…") with a literal path. A type import counts because the reader
+ * import("…") with a literal path, whether it names a file in the module or
+ * the module's directory itself. A type import counts because the reader
  * still has to open the other module to follow it. Test files (*.test.*,
  * *.spec.*, __tests__/) do not count: a test reaching into a module is not a
  * dependency of the code under test.
@@ -70,8 +71,9 @@ export function scanImports(root) {
       for (const { fileName: spec } of ts.preProcessFile(readFileSync(join(src, file), "utf8"), true, true).importedFiles) {
         if (!spec.startsWith(".")) continue;
         const target = posix.normalize(posix.join(posix.dirname(file), spec)).split("/");
-        // Outside src/, or a file at the src/ root: no card covers it, so it is no edge.
-        if (target.length < 2 || !known.has(target[0]) || target[0] === mod) continue;
+        // Outside src/, or a file at the src/ root ("../index.js"): no card covers it, so it is no edge.
+        // A bare module name ("../campaign") is one: moduleResolution "bundler" resolves it to that module's index.
+        if (!known.has(target[0]) || target[0] === mod) continue;
         edges[mod][target[0]] ??= `src/${file} imports "${spec}"`;
       }
     }
@@ -265,18 +267,56 @@ export function writeDependsOn(text, scan) {
 
 /* ---- routing ------------------------------------------------------------ */
 
-/** Cards ranked by how many of the words they match; the name weighs most. */
+/**
+ * Words that say nothing about where code lives: grammar, the verbs of any
+ * task, path noise, and the project's own name. Measured on the map: "the",
+ * "and", "or", "a", "src" and "ts" are in 27 or more of the 32 cards, "is",
+ * "in", "on", "its", "that", "strada" and "brain" in 7 to 10. A term like
+ * these matches cards at random and hides a miss.
+ */
+export const FILLER = new Set(
+  (
+    "a an the and or nor but not no of to in on at by for from with into onto about over as if so " +
+    "is are was were be been being am it its this that these those there here " +
+    "i we you my our your me us they them their he she his her " +
+    "do does did done has have had can could should would will shall may might must " +
+    "when where what which who whom whose why how " +
+    "fix fixes fixed fixing bug bugs issue issues problem broken wrong " +
+    "add adds added adding change changes changed changing update updates updated updating make makes making " +
+    "use uses using new " +
+    "src ts tsx js mjs cjs " +
+    "strada brain"
+  ).split(" "),
+);
+
+const wordsOf = (s) => String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+/** A plural and its singular are one word; "status", "process" and "analysis" keep their s. */
+const stem = (w) => (w.length > 3 && /[^isu]s$/.test(w) ? w.slice(0, -1) : w);
+/**
+ * A term matches a whole word, never a piece of one ("is" is not in
+ * "visualization", "resets" is not in "presets"). From five letters on it
+ * also matches the start of a longer word ("config" → "configuration").
+ */
+const matches = (term, word) => stem(word) === term || (term.length >= 5 && word.startsWith(term));
+
+/**
+ * Cards ranked by how many of the words they match; the name weighs most, and
+ * the word as typed half a point more than its plural or a longer word it
+ * starts ("agents" is the agents card before agent-core). No meaningful word
+ * matched is a miss: [].
+ */
 export function route(nodes, words) {
   // `--route "campaign milestone"` arrives as one argument; it means two words.
-  const terms = words.flatMap((w) => w.toLowerCase().split(/\s+/)).filter(Boolean);
+  const terms = words.flatMap(wordsOf).filter((w) => !FILLER.has(w));
   const ranked = [];
   for (const [name, card] of Object.entries(nodes)) {
     const fields = [
-      [3, name],
-      [2, `${card.purpose ?? ""} ${listOf(card.read_when).join(" ")}`],
-      [1, `${listOf(card.entrypoints).join(" ")} ${JSON.stringify(card.centers ?? {})}`],
-    ].map(([w, s]) => [w, String(s).toLowerCase()]);
-    const score = terms.reduce((sum, t) => sum + Math.max(0, ...fields.filter(([, s]) => s.includes(t)).map(([w]) => w)), 0);
+      [3, wordsOf(name)],
+      [2, wordsOf(`${card.purpose ?? ""} ${listOf(card.read_when).join(" ")}`)],
+      [1, wordsOf(`${listOf(card.entrypoints).join(" ")} ${JSON.stringify(card.centers ?? {})}`)],
+    ];
+    const weigh = (t) => fields.map(([w, ws]) => (ws.includes(t) ? w : ws.some((x) => matches(stem(t), x)) ? w - 0.5 : 0));
+    const score = terms.reduce((sum, t) => sum + Math.max(0, ...weigh(t)), 0);
     if (score > 0) ranked.push({ name, score });
   }
   return ranked.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));

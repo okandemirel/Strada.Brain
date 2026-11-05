@@ -63,6 +63,7 @@ nodes:
       - "adding or changing a tool the worker can call, including the Unity tools"
       - "a [STRADA …] conformance gate, or the framework knowledge prompt the worker reads"
       - "multi-agent delegation or the agent's personality (soul, style)"
+      - "a workspace lease: the git worktree or temp copy a worker writes in, and how its commits, deletions and reviewed changes come back to the project"
     skip_when:
       - "the campaign lifecycle: GDD, milestones, sprints, delivery → campaign"
       - "queueing, background execution, progress messages of a task → tasks"
@@ -73,7 +74,7 @@ nodes:
       tools/: "the worker's tools, Unity tools among them"
       autonomy/: "conformance gates and autonomy policy"
       context/: "the framework knowledge and API reference the worker reads"
-      multi/: "multi-agent manager and delegation"
+      multi/: "multi-agent manager and delegation, and the workspace lease (workspace-lease-manager.ts): a worker's worktree and how its work lands"
 
   assets-local:
     purpose: "Local open-weights asset generation: one Python venv driven over a subprocess, a catalog of models, and pinned weights."
