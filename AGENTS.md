@@ -20,6 +20,7 @@ npm run doctor             # Diagnose setup issues
 
 ## Where things are
 
+- **Repo map**, one card per `src/` module: `docs/architecture/repo_map.yaml`. Its `depends_on` comes from the imports (`node scripts/repo-map-doctor.mjs --write`), never from a hand edit.
 - **Contracts**, the rule index with a "read when" column: `docs/contracts/README.md`.
 - **Entry point:** `src/index.ts` (Commander CLI), which calls `src/core/bootstrap.ts`. Bootstrap delegates to its `bootstrap-*` stages.
 - **Agent loop:** `src/agents/`. The orchestrator runs Plan → Act → Observe → Reflect and delegates to focused helper modules. Shared agent code is in `src/agent-core/`. Subsystems talk over the TypedEventBus.
@@ -39,6 +40,13 @@ npm run doctor             # Diagnose setup issues
   - When `config.vault.enabled=true`, prefer `vault_search` over repeated Read/Grep cycles.
   - Use `vault_init`, `vault_sync` and `vault_status` to attach, reindex and check a vault.
   - SelfVault indexes this repo's `src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md` and `CLAUDE.md`.
+
+## Route before you read
+
+1. Resolve the task to a card: `node scripts/repo-map-doctor.mjs --route <words>`. Follow its "skip when" redirects.
+2. Read only that card's entrypoints and contracts.
+3. Go at most one hop along its `depends_on`.
+4. Search the whole repo only when the map missed. A miss is a bug in the map: fix that card's `read_when` in the same change.
 
 ## Non-negotiable rules
 

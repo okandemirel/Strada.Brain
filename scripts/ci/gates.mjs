@@ -13,8 +13,9 @@
  * It is not the full suite. CI runs that, all 17,000+ tests, in about ten
  * minutes. These are the gates that catch what agents in this repo break most
  * often, fast enough to run before every push: types, lint on what changed,
- * the contracts' detectors, the tests vitest relates to the changed files,
- * and the commit layer of the test-integrity contract.
+ * the contracts' detectors, the repo map against the imports, the tests
+ * vitest relates to the changed files, and the commit layer of the
+ * test-integrity contract.
  */
 
 import { spawnSync } from "node:child_process";
@@ -57,6 +58,11 @@ const gates = [
     ? { name: "lint (changed)", why: `${changedSrc.length} changed src file(s)`, cmd: [npx, "eslint", ...changedSrc] }
     : { name: "lint (changed)", why: "no src file changed", skip: true },
   { name: "contract detectors", why: "every docs/contracts rule", cmd: [npx, "vitest", "run", ...DETECTORS] },
+  {
+    name: "repo map",
+    why: "docs/architecture/repo_map.yaml matches the imports",
+    cmd: [process.execPath, "scripts/repo-map-doctor.mjs"],
+  },
   changedSrc.length > 0
     ? {
         name: "related tests",
