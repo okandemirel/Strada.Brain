@@ -116,6 +116,26 @@ describe("the repo map matches the code (docs/architecture/repo_map.yaml)", () =
     expect(doctor.route(nodes, ["C#"])[0]?.name).toBe("intelligence");
   });
 
+  it("routes every mixed-case word a card writes when it is asked lower-cased, to a card that writes it", () => {
+    const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
+    // The fields route() reads. Split into "sq lite" there, "sqlite" missed all five cards that write SQLite, and
+    // the doctor asked to add to read_when a word it already held; rollset, typedeventbus and execfilenothrow too.
+    const routed = (c: Card) =>
+      [c.purpose, ...((c.read_when as string[]) ?? []), ...((c.entrypoints as string[]) ?? []), JSON.stringify(c.centers ?? {})].join(" ");
+    const asked: string[] = [];
+    for (const [name, card] of Object.entries(nodes)) {
+      for (const [word] of routed(card).matchAll(/[A-Za-z0-9]*[a-z][A-Za-z0-9]*/g)) {
+        if (!/[A-Z]/.test(word.slice(1))) continue;
+        asked.push(word);
+        const names = doctor.route(nodes, [word.toLowerCase()]).map((r) => r.name);
+        expect(names, `${word.toLowerCase()} (${name})`).toContain(name);
+      }
+    }
+    expect(asked).toContain("SQLite");
+    const sqlite = doctor.route(nodes, ["sqlite"]).map((r) => r.name);
+    expect(sqlite).toContain("memory");
+  });
+
   it("routes an -ies or -es plural to the cards of its singular, and the plural of a word ending in e too", () => {
     const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
     const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
@@ -321,6 +341,8 @@ describe("repo-map-doctor on a fixture checkout", () => {
     expect(doctor.termsOf(["the agent's lease"])).toEqual(["agent", "lease"]);
     expect(doctor.termsOf(["it’s the agent’s"])).toEqual(["agent"]);
     expect(doctor.termsOf(["don't touch the lease, it isn't held"])).toEqual(["touch", "lease", "held"]);
+    // A capital does not hide a clitic: the case split comes after it, per word.
+    expect(doctor.termsOf(["Don't touch the Agent'S lease"])).toEqual(["touch", "agent", "lease"]);
     const { nodes } = doctor.parseMap(mapOf([card("alpha", { read_when: '\n      - "the worker\'s queue"' }), card("beta"), card("delta"), card("gamma")]));
     expect(doctor.route(nodes, ["beta's"]).map((r) => r.name)).toEqual(["beta"]);
   });
@@ -337,9 +359,9 @@ describe("repo-map-doctor on a fixture checkout", () => {
   });
 
   it("splits a symbol into the words its file and the cards spell, on both sides", () => {
-    expect(doctor.termsOf(["CampaignManager"])).toEqual(["campaign", "manager"]);
-    expect(doctor.termsOf(["AgentDBAdapter"])).toEqual(["agent", "db", "adapter"]);
-    expect(doctor.termsOf(["HNSWVectorStore"])).toEqual(["hnsw", "vector", "store"]);
+    expect(doctor.termsOf(["CampaignManager"])).toEqual(["campaign", "manager", "campaignmanager"]);
+    expect(doctor.termsOf(["AgentDBAdapter"])).toEqual(["agent", "db", "adapter", "agentdbadapter"]);
+    expect(doctor.termsOf(["HNSWVectorStore"])).toEqual(["hnsw", "vector", "store", "hnswvectorstore"]);
     const { nodes } = doctor.parseMap(
       mapOf([
         card("alpha", { entrypoints: flow(["src/alpha/lease-keeper.ts"]) }),
@@ -353,6 +375,23 @@ describe("repo-map-doctor on a fixture checkout", () => {
     expect(names("LeaseKeeper")).toEqual(["alpha"]);
     // The card holds the symbol, the query its words.
     expect(names("vector store")).toEqual(["beta"]);
+  });
+
+  it("keeps a symbol whole beside its words, so a card that writes SQLite is found by sqlite, and the other way round", () => {
+    const { nodes } = doctor.parseMap(
+      mapOf([
+        card("alpha", { read_when: '\n      - "the SQLite store"' }),
+        card("beta", { read_when: '\n      - "a typedeventbus listener"' }),
+        card("delta"),
+        card("gamma"),
+      ]),
+    );
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    // Split alone, the card's "SQLite" was "sq lite": the query "sqlite" missed a card that writes it.
+    expect(names("sqlite")).toEqual(["alpha"]);
+    expect(names("SQLite")).toEqual(["alpha"]);
+    // The card writes the symbol lower-cased, the query as the code spells it.
+    expect(names("TypedEventBus")).toEqual(["beta"]);
   });
 
   it("matches whole words: a plural, and from five letters the start of a longer word, never a piece of one", () => {

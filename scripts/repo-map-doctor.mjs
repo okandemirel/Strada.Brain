@@ -297,22 +297,30 @@ export const FILLER = new Set(
 
 /**
  * The words of a text, the same for a query and a card. A symbol is its
- * words: "CampaignManager" is campaign manager, as campaign-manager.ts spells
- * it, and "HNSWVectorStore" is hnsw vector store. "C#" is one word, csharp:
- * the language this product writes. A clitic is no word: "agent's" is agent,
- * and "don't" or "isn't" goes whole, a negated helper verb. Without that the
- * "s" of every possessive would match every card that has one.
+ * words and itself: "CampaignManager" is campaign manager, as
+ * campaign-manager.ts spells it, and campaignmanager; "HNSWVectorStore" is
+ * hnsw vector store and hnswvectorstore. Without the whole word a card that
+ * writes "SQLite" was "sq lite", and the query "sqlite" missed it. "C#" is
+ * one word, csharp: the language this product writes. A clitic is no word:
+ * "agent's" is agent, and "don't" or "isn't" goes whole, a negated helper
+ * verb. Without that the "s" of every possessive would match every card
+ * that has one.
  */
 const wordsOf = (s) =>
   String(s)
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .toLowerCase()
-    .replace(/(^|[^a-z0-9])([a-z])#/g, "$1$2sharp")
-    .replace(/[a-z]+n['’]t\b/g, " ")
-    .replace(/['’](?:s|d|ll|re|ve|m)\b/g, "")
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
+    .replace(/(^|[^A-Za-z0-9])([A-Za-z])#/g, "$1$2sharp")
+    .replace(/[a-z]+n['’]t\b/gi, " ")
+    .replace(/['’](?:s|d|ll|re|ve|m)\b/gi, "")
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .flatMap((token) => {
+      const parts = token
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+        .toLowerCase()
+        .split(" ");
+      return parts.length > 1 ? [...parts, token.toLowerCase()] : parts;
+    });
 /** The words of a query that can say where code lives: a quoted phrase is its words, and filler goes. */
 export const termsOf = (words) => words.flatMap(wordsOf).filter((w) => !FILLER.has(w));
 /**
