@@ -69,6 +69,19 @@ describe("the repo map matches the code (docs/architecture/repo_map.yaml)", () =
     const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
     expect(doctor.route(nodes, ["campaign milestone"])[0]?.name).toBe("campaign");
   });
+
+  it("routes a natural sentence by its meaningful words, never by filler or a piece of a word", () => {
+    const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    // "is" sat inside "history", "supervisor" and "visualization", and "the" in every purpose.
+    expect(names("the worktree lease is lost")[0]).toBe("agents");
+    // "resets" sat inside "presets", which put config before core.
+    expect(names("auto-updater resets the branch")[0]).toBe("core");
+    expect(names("auto-updater resets the branch")).not.toContain("config");
+    // The module's own name as typed outranks its plural folded into another name ("agent-core").
+    expect(names("agents")[0]).toBe("agents");
+    for (const filler of ["a", "in", "is", "the"]) expect(names(filler), filler).toEqual([]);
+  });
 });
 
 /* A tiny checkout with four modules. Each import form is one line. */
@@ -86,11 +99,11 @@ const FILES: Record<string, string> = {
   "src/beta/b.ts": 'export type { T } from "../gamma/t.js";\nexport const b = "import x from \'../alpha/a.js\'";\n',
   "src/gamma/g.ts": 'export const g = () => import("../delta/d.js");\n',
   "src/gamma/t.ts": "export type T = number;\n",
-  "src/delta/d.ts": "export const d = 1;\n",
+  "src/delta/d.ts": 'export type G = typeof import("../gamma");\nexport const d = 1;\n',
   "src/delta/legacy.cjs": 'module.exports = require("../beta/b.js");\n',
   "docs/contracts/some-rule.md": "# some rule\n",
 };
-const EXACT: Record<string, string[]> = { alpha: ["beta"], beta: ["gamma"], delta: ["beta"], gamma: ["delta"] };
+const EXACT: Record<string, string[]> = { alpha: ["beta"], beta: ["gamma"], delta: ["beta", "gamma"], gamma: ["delta"] };
 
 const flow = (xs: string[]) => `[${xs.map((x) => JSON.stringify(x)).join(", ")}]`;
 function card(name: string, over: Record<string, string> = {}): string {
@@ -138,13 +151,15 @@ describe("repo-map-doctor on a fixture checkout", () => {
     return { status: r.status, out: `${r.stdout}${r.stderr}` };
   };
 
-  it("derives edges from static, type-only, re-exported and dynamic imports and require(), and nothing else", () => {
+  it("derives edges from static, type-only, re-exported and dynamic imports, require() and a module's directory, and nothing else", () => {
     expect(scan.modules).toEqual(["alpha", "beta", "delta", "gamma"]);
     const edges = Object.fromEntries(Object.entries(scan.edges).map(([m, e]) => [m, Object.keys(e).sort()]));
     // Not edges: the commented import, the import inside a string, the test
     // file, the __tests__ helper, the package, and the src/ root file.
     expect(edges).toEqual(EXACT);
     expect(scan.edges.alpha?.beta).toBe('src/alpha/a.ts imports "../beta/b.js"');
+    // "../gamma" names the directory; moduleResolution "bundler" resolves it to gamma's index.
+    expect(scan.edges.delta?.gamma).toBe('src/delta/d.ts imports "../gamma"');
   });
 
   it("accepts a map whose cards match the code", () => {
@@ -230,6 +245,27 @@ describe("repo-map-doctor on a fixture checkout", () => {
     expect(routed.status).toBe(0);
   }, 60_000);
 
+  it("drops filler words, so a sentence whose meaningful words match no card is a miss, on the command line too", () => {
+    const { nodes } = doctor.parseMap(exactMap());
+    // Every fixture card says "The … module." and "working on … things".
+    expect(doctor.route(nodes, ["the xyzzy is on a"])).toEqual([]);
+    expect(doctor.route(nodes, ["a"])).toEqual([]);
+    writeMap(exactMap());
+    const missed = run("--route", "the xyzzy is on a");
+    expect(missed.out).toContain('no card matches "the xyzzy is on a"');
+    expect(missed.status).toBe(1);
+  }, 60_000);
+
+  it("matches whole words: a plural, and from five letters the start of a longer word, never a piece of one", () => {
+    const { nodes } = doctor.parseMap(mapOf([card("alpha"), card("beta"), card("delta"), card("gamma", { read_when: '\n      - "configuration and autonomy"' })]));
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    expect(names("amm")).toEqual([]); // inside "gamma"
+    expect(names("orking")).toEqual([]); // inside "working"
+    expect(names("modules")).toEqual(["alpha", "beta", "delta", "gamma"]); // the plural of "module"
+    expect(names("config")).toEqual(["gamma"]); // starts "configuration"
+    expect(names("auto")).toEqual([]); // starts "autonomy", but four letters start too many words
+  });
+
   it("reports a value on the key's line with items below it, instead of merging the two", () => {
     const text = exactMap().replace('    depends_on: ["gamma"]', '    depends_on: ["gamma"]\n      - "alpha"');
     const line = text.split("\n").indexOf('      - "alpha"') + 1;
@@ -308,7 +344,7 @@ describe("repo-map-doctor on a fixture checkout", () => {
 
     expect(run("--write").status).toBe(0);
     const clean = run();
-    expect(clean.out).toContain("repo-map: clean — 4 modules, 4 import edges");
+    expect(clean.out).toContain("repo-map: clean — 4 modules, 5 import edges");
     expect(clean.status).toBe(0);
 
     const routed = run("--route", "gamma");
