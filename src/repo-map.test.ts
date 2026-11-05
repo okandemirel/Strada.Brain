@@ -32,6 +32,7 @@ interface Doctor {
   checkMap(nodes: Record<string, Card>, scan: Scan, root: string, foundation?: string[]): string[];
   writeDependsOn(text: string, scan: Scan): string;
   route(nodes: Record<string, Card>, words: string[]): Array<{ name: string; score: number }>;
+  termsOf(words: string[]): string[];
   singulars(word: string): string[];
 }
 const doctor = (await import(pathToFileURL(DOCTOR).href)) as Doctor;
@@ -90,15 +91,19 @@ describe("the repo map matches the code (docs/architecture/repo_map.yaml)", () =
     for (const name of Object.keys(nodes)) expect(doctor.route(nodes, [name])[0]?.name, name).toBe(name);
   });
 
-  it("routes an -ies or -es plural like its singular, and the plural of a word ending in e too", () => {
+  it("routes an -ies or -es plural to the cards of its singular, and the plural of a word ending in e too", () => {
     const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
     const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
     // "memories" folded to "memorie", which no card says: a false miss that asked the agent to edit the map.
+    // The plural of a card's name routes to that card first: the name and the full-name point outweigh any other field.
     expect(names("memories")[0]).toBe("memory");
     // "caches", "leases", "phases": the singular ends in e, so only dropping "es" would lose them.
+    // The same cards, not the same order: a card that writes the plural as typed ranks half a point higher,
+    // so read_when may say "leases" (step 4 of AGENTS.md adds words as they come) without breaking this case.
+    const cards = (q: string) => names(q).sort();
     for (const [plural, singular] of [["memories", "memory"], ["processes", "process"], ["policies", "policy"], ["caches", "cache"], ["leases", "lease"], ["phases", "phase"]]) {
-      expect(names(singular), singular).not.toEqual([]);
-      expect(names(plural), plural).toEqual(names(singular));
+      expect(cards(singular), singular).not.toEqual([]);
+      expect(cards(plural), plural).toEqual(cards(singular));
     }
   });
 });
@@ -275,6 +280,24 @@ describe("repo-map-doctor on a fixture checkout", () => {
     expect(missed.status).toBe(1);
   }, 60_000);
 
+  it("tells a query with no meaningful word from a miss, and never asks to fix the map for it", () => {
+    expect(doctor.termsOf(["fix the bug"])).toEqual([]);
+    expect(doctor.termsOf([])).toEqual([]);
+    writeMap(exactMap());
+    for (const query of [["fix the bug"], ["the", "a"], []]) {
+      const r = run("--route", ...query);
+      expect(r.out, query.join(" ")).toContain("no meaningful word in the query");
+      expect(r.out, query.join(" ")).not.toContain("read_when");
+      expect(r.status, query.join(" ")).toBe(2);
+    }
+  }, 60_000);
+
+  it("drops a single letter, the tail of a possessive, so it matches no card that has one", () => {
+    expect(doctor.termsOf(["the agent's lease"])).toEqual(["agent", "lease"]);
+    const { nodes } = doctor.parseMap(mapOf([card("alpha", { read_when: '\n      - "the worker\'s queue"' }), card("beta"), card("delta"), card("gamma")]));
+    expect(doctor.route(nodes, ["beta's"]).map((r) => r.name)).toEqual(["beta"]);
+  });
+
   it("matches whole words: a plural, and from five letters the start of a longer word, never a piece of one", () => {
     const { nodes } = doctor.parseMap(mapOf([card("alpha"), card("beta"), card("delta"), card("gamma", { read_when: '\n      - "configuration and autonomy"' })]));
     const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
@@ -298,10 +321,31 @@ describe("repo-map-doctor on a fixture checkout", () => {
     for (const q of ["memories", "policies", "processes"]) expect(names(q), q).toEqual(["alpha"]); // -ies is -y; -es after s, x, z, ch, sh
     for (const q of ["caches", "leases", "sizes"]) expect(names(q), q).toEqual(["beta"]); // and still only -s after an e
     for (const q of ["status", "statuses", "analysis"]) expect(names(q), q).toEqual(["delta"]);
+    for (const q of ["memory", "policy", "process", "cache", "lease", "size", "status"]) expect(names(q), q).not.toEqual([]);
     for (const w of ["status", "process", "analysis", "bus"]) expect(doctor.singulars(w), w).toEqual([w]);
     expect(doctor.singulars("memories")).toContain("memory");
     expect(doctor.singulars("processes")).toContain("process");
     expect(doctor.singulars("caches")).toContain("cache");
+  });
+
+  it("routes a plural and its singular to the same cards when one card writes the plural and another the singular", () => {
+    const { nodes } = doctor.parseMap(
+      mapOf([
+        card("alpha", { read_when: '\n      - "task leases"' }),
+        card("beta", { read_when: '\n      - "the lease of a worktree"' }),
+        card("delta", { read_when: '\n      - "memories and processes"' }),
+        card("gamma", { read_when: '\n      - "memory of a process"' }),
+      ]),
+    );
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    const cards = (q: string) => names(q).sort();
+    for (const [plural, singular, both] of [["leases", "lease", ["alpha", "beta"]], ["memories", "memory", ["delta", "gamma"]], ["processes", "process", ["delta", "gamma"]]] as const) {
+      expect(cards(plural), plural).toEqual(both);
+      expect(cards(singular), singular).toEqual(both);
+    }
+    // The word as typed ranks half a point higher, so the order is not the same, by design.
+    expect(names("leases")).toEqual(["alpha", "beta"]);
+    expect(names("lease")).toEqual(["beta", "alpha"]);
   });
 
   it("puts the card a query names in full before a card whose name it only shares a word with", () => {
