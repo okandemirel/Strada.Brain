@@ -9,7 +9,7 @@
  * the production construction site never passes
  * (docs/memory/entries/2026-09-18-tested-but-never-wired.md). So nothing here
  * is built by hand: the REAL bootstrap() runs every stage and wires every
- * object, and only the three edges of the process are replaced.
+ * object, and only the edges of the process are replaced.
  *
  * Replaced, and nothing else:
  * - The provider factory. provider-registry's createProvider and
@@ -24,6 +24,13 @@
  *   git children may not reach a remote, and the framework sync's git
  *   fallback — which would clone from GitHub when the project has no Strada
  *   packages — is off. A run that needs the network fails here.
+ * - The disk outside the test's own folder. Every database path is given
+ *   inside it (relative defaults resolve against the checkout), and no vault
+ *   indexes a tree outside it: the self vault is off by configuration, and
+ *   framework-vault-targets offers no target. Those vaults index this
+ *   repository (into <checkout>/.strada/vault) and any Strada checkout beside
+ *   it, in the background, on the CPU the run needs — and no step reads them.
+ *   The run fails if it leaves a `.strada*` entry in the working directory.
  *
  * The chain it pins, in order: the message router hands the request to a
  * background task; the supervisor admits it and the goal decomposer splits it
@@ -39,10 +46,20 @@
  */
 
 import { describe, it, expect, vi, afterAll } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import net from "node:net";
-import { tmpdir } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
+import winston from "winston";
 import type {
   ConversationMessage,
   ToolDefinition,
@@ -76,11 +93,17 @@ vi.mock("../../core/bootstrap-channels.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../vault/framework-vault-targets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../vault/framework-vault-targets.js")>();
+  return { ...actual, frameworkVaultTargets: () => [] };
+});
+
 import { bootstrap } from "../../core/bootstrap.js";
 import { loadConfig, type Config } from "../../config/config.js";
 import { MockAIProvider as ScriptedProvider } from "../helpers/mock-provider.js";
 import { TaskStorage } from "../../tasks/task-storage.js";
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
+import { createLogger, getLogRingBuffer } from "../../utils/logger.js";
 
 // ─── The task ────────────────────────────────────────────────────────────────
 
@@ -279,6 +302,26 @@ function refuseNetwork(): void {
   vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
 }
 
+/**
+ * Every path under the working directory's `.strada*` entries. A relative
+ * default (`.strada-memory/…`, a vault's `<root>/.strada/vault`) lands in the
+ * working directory, and a test runs in the checkout: the run must leave
+ * nothing there. vitest.worker-setup.ts points process.env's databases away
+ * from it, but loadConfig below is handed an environment built by hand.
+ */
+function stradaEntriesIn(dir: string): Set<string> {
+  const entries = new Set<string>();
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(".strada")) continue;
+    entries.add(name);
+    const top = join(dir, name);
+    if (!statSync(top).isDirectory()) continue;
+    for (const nested of readdirSync(top, { recursive: true })) entries.add(join(name, String(nested)));
+  }
+  return entries;
+}
+
+const workingDir = process.cwd();
 const root = mkdtempSync(join(tmpdir(), "golden-run-"));
 afterAll(() => {
   vi.restoreAllMocks();
@@ -286,17 +329,80 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+// ─── Where a stalled run stopped ─────────────────────────────────────────────
+
+/**
+ * Boot and run share one budget, and shutdown has its own, all inside the
+ * test's two minutes. Shared, because under load either may take most of it
+ * (bootstrap's lazy imports are compiled on first use). A budget that runs out
+ * says which phase it ran out in, what each earlier phase took, and the last
+ * lines the run logged: they name the stage it stopped in.
+ */
+const BUDGET_MS = { bootAndRun: 108_000, shutdown: 10_000 } as const;
+const TEST_TIMEOUT_MS = 120_000;
+const clock = { start: 0, phases: [] as string[] };
+
+const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)} s`;
+const bootAndRunLeft = (): number => Math.max(0, clock.start + BUDGET_MS.bootAndRun - Date.now());
+
+/**
+ * Made before bootstrap, whose createLogger then returns it: at info and
+ * without the console, so its lines go only to the ring buffer (and a file in
+ * the test's folder).
+ */
+function quietInfoLogger(): void {
+  const logger = createLogger("info", join(root, "golden-run.log"));
+  for (const transport of logger.transports.filter((t) => t instanceof winston.transports.Console)) {
+    logger.remove(transport);
+  }
+}
+
+function progress(): string {
+  const lastLines = getLogRingBuffer()
+    .slice(-6)
+    .map((entry) => `[${entry.level}] ${entry.message}`);
+  const phases = clock.phases.length > 0 ? clock.phases.join(", ") : "no phase finished";
+  const load = loadavg()[0]?.toFixed(0) ?? "?";
+  return (
+    `${seconds(Date.now() - clock.start)} in (${phases}; load ${load}). ` +
+    `Steps served: [${served.join(", ")}]; connections refused: [${connectAttempts.join(", ")}]; ` +
+    `last log lines: ${lastLines.join(" | ") || "(none)"}`
+  );
+}
+
+/** Waits for `work` at most `limitMs`, and records how long the phase took. */
+async function within<T>(phase: string, limitMs: number, work: Promise<T>): Promise<T> {
+  const started = Date.now();
+  let timer: NodeJS.Timeout | undefined;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`golden run: the budget ran out during ${phase}. ${progress()}`)), limitMs);
+  });
+  try {
+    const result = await Promise.race([work, limit]);
+    clock.phases.push(`${phase} ${seconds(Date.now() - started)}`);
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function makeConfig(project: string, memoryDir: string): Config {
   const loaded = loadConfig({
     UNITY_PROJECT_PATH: project,
     PROVIDER_CHAIN: "deepseek",
     DEEPSEEK_API_KEY: "golden-run-not-a-key",
     MEMORY_DB_PATH: memoryDir,
+    // Relative by default: it, and the dynamic profiles opened beside it,
+    // would land in the checkout (vitest.worker-setup.ts sets it in
+    // process.env, which this environment is not).
+    MODEL_INTELLIGENCE_DB_PATH: join(memoryDir, "model-intelligence.db"),
+    // What a child process logs at. This process's logger is made by the test.
     LOG_LEVEL: "error",
     // Embeddings: semantic memory and RAG call an embedding API.
     MEMORY_ENABLED: "false",
     RAG_ENABLED: "false",
-    // Indexing the project and this repository is minutes of work no step reads.
+    // Unity project discovery, and the self vault, which indexes this
+    // repository into the checkout. Minutes of work no step reads.
     STRADA_VAULT_ENABLED: "false",
     STRADA_VAULT_SELF_ENABLED: "false",
     // Listeners and the update check are not the loop.
@@ -321,10 +427,18 @@ describe("golden run: a two-node task through the real bootstrap", () => {
     const memoryDir = join(root, "memory");
     mkdirSync(project, { recursive: true });
     writeFileSync(join(project, "README.md"), "# A tiny project with no Unity in it\n");
+    const entriesBefore = stradaEntriesIn(workingDir);
     refuseNetwork();
+    quietInfoLogger();
     edges.provider = loadScript();
 
-    const app = await bootstrap({ channelType: "cli", config: makeConfig(project, memoryDir), daemonMode: false });
+    clock.start = Date.now();
+    const booting = bootstrap({ channelType: "cli", config: makeConfig(project, memoryDir), daemonMode: false });
+    const app = await within("bootstrap", bootAndRunLeft(), booting).catch((error: unknown) => {
+      // A boot that finishes after its limit is still shut down.
+      void booting.then((late) => late.shutdown()).catch(() => undefined);
+      throw error;
+    });
     const channel = edges.channel;
     const answers = (): string[] =>
       [...(channel?.sentMessages ?? []), ...(channel?.sentMarkdowns ?? [])]
@@ -336,7 +450,8 @@ describe("golden run: a two-node task through the real bootstrap", () => {
       const tasks = new TaskStorage(join(memoryDir, "tasks.db"));
       tasks.initialize();
       try {
-        await channel!.simulateIncomingMessage(CHAT_ID, REQUEST);
+        // Awaits the real message handler, so it shares the budget too.
+        await within("the hand-off", bootAndRunLeft(), channel!.simulateIncomingMessage(CHAT_ID, REQUEST));
         // Until the task is settled and, if it completed, its answer is out.
         // An unscripted call ends the wait at once: the run has left the script.
         await vi.waitFor(
@@ -345,20 +460,23 @@ describe("golden run: a two-node task through the real bootstrap", () => {
             task = tasks.listByChatId(CHAT_ID)[0];
             const settled = task !== undefined && TERMINAL_STATUSES.has(task.status);
             if (!settled || (task?.status === TaskStatus.completed && !answers().includes(ANSWER))) {
-              throw new Error(
-                `the task is ${task?.status ?? "not created"} after steps [${served.join(", ")}]; ` +
-                  `connections refused: [${connectAttempts.join(", ")}]`,
-              );
+              throw new Error(`golden run: the task is ${task?.status ?? "not created"}. ${progress()}`);
             }
           },
-          { timeout: 60_000, interval: 50 },
+          { timeout: bootAndRunLeft(), interval: 50 },
         );
       } finally {
         tasks.close();
       }
     } finally {
-      await app.shutdown();
+      await within("shutdown", BUDGET_MS.shutdown, app.shutdown());
     }
+
+    // Nothing landed in the checkout the test runs from.
+    expect(
+      [...stradaEntriesIn(workingDir)].filter((entry) => !entriesBefore.has(entry)),
+      `the run wrote into the working directory ${workingDir}: a path resolved against it`,
+    ).toEqual([]);
 
     // Every provider call was the step the script expected, and every step ran.
     expect(violations).toEqual([]);
@@ -385,6 +503,5 @@ describe("golden run: a two-node task through the real bootstrap", () => {
     // The task is recorded as done, and the answer reached the chat.
     expect(task?.status, `task error: ${task?.error ?? "none"}`).toBe(TaskStatus.completed);
     expect(answers()).toContain(ANSWER);
-    // The budget: the run, boot to shutdown, inside two minutes.
-  }, 120_000);
+  }, TEST_TIMEOUT_MS);
 });
