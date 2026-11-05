@@ -29,7 +29,7 @@ import { isFailedTerminalKey, terminalMessageKeyOf } from "./autonomy/terminal-o
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { isQuotaStop, QUOTA_LIMIT_RE } from "./orchestrator-runtime-utils.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
-import { AsyncLocalStorage } from "node:async_hooks";
+import { ChatScopedStorage } from "./providers/chat-scope.js";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, basename, relative, sep } from "node:path";
@@ -1098,7 +1098,7 @@ export class Orchestrator {
   private readonly confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
   private readonly taskClassifier = new TaskClassifier();
   private readonly onUsage?: (usage: TaskUsageEvent) => void;
-  private readonly taskContext = new AsyncLocalStorage<TaskExecutionContext>();
+  private readonly taskContext = new ChatScopedStorage<TaskExecutionContext>();
   private readonly supervisorBrain?: SupervisorBrain;
   private readonly activeSupervisorScopes = new Set<string>();
   private readonly supervisorComplexityThreshold: "moderate" | "complex";

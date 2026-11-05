@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { OpenAIProvider, retainedReasoningContent } from "./openai.js";
 import type { OpenAIMessage } from "./openai.js";
 import type { AssistantMessage } from "./provider-core.interface.js";
+import { chatSessionId, currentChatId } from "./chat-scope.js";
 
 /**
  * OpenCode hosted-platform base URLs (both OpenAI-compatible). The Go API lives
@@ -148,14 +149,16 @@ export class OpencodeProvider extends OpenAIProvider {
    */
   protected override async buildHeaders(): Promise<Record<string, string>> {
     const headers = await super.buildHeaders();
+    const chatId = currentChatId();
     return {
       ...headers,
       "User-Agent": "Strada.Brain/1.0",
       // Measured 2026-09-07 07:39: every OpenCode call answered 400
       // MissingSessionID — "Request is missing x-opencode-session and cannot
-      // be routed efficiently". One id per provider instance, as the codex
-      // session id is kept.
-      "x-opencode-session": this.opencodeSessionId,
+      // be routed efficiently". OpenCode wants one id per conversation, and
+      // this object serves every chat: the chat's own id when the call serves
+      // one (chat-scope.ts), this instance's id when it serves none.
+      "x-opencode-session": chatId === undefined ? this.opencodeSessionId : chatSessionId(chatId),
     };
   }
 
