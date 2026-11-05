@@ -5,7 +5,8 @@
  *
  *   node scripts/repo-map-doctor.mjs                  # check; exit 1 on any drift
  *   node scripts/repo-map-doctor.mjs --write          # rewrite every depends_on from the imports
- *   node scripts/repo-map-doctor.mjs --route <words>  # print the cards those words match
+ *   node scripts/repo-map-doctor.mjs --route <words>  # print the cards those words match;
+ *                                                     # exit 1 on a miss, 2 if no word can route
  *   node scripts/repo-map-doctor.mjs --root <dir> ... # act on another checkout (tests)
  *
  * A module is a directory directly under src/. Its depends_on is never typed
@@ -291,6 +292,12 @@ export const FILLER = new Set(
 
 const wordsOf = (s) => String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
 /**
+ * The words of a query that can say where code lives. A quoted phrase is its
+ * words; filler goes, and so does a single letter, which is only ever the
+ * tail of "agent's" or "don't" and would match every card that has one.
+ */
+export const termsOf = (words) => words.flatMap(wordsOf).filter((w) => w.length > 1 && !FILLER.has(w));
+/**
  * The word and every singular its spelling allows. The spelling alone does
  * not say which one is meant: "memories" is "memory" and "processes" is
  * "process", but "caches" is "cache" and "leases" is "lease". So a word keeps
@@ -325,7 +332,7 @@ const matches = (term, word) => {
  */
 export function route(nodes, words) {
   // `--route "campaign milestone"` arrives as one argument; it means two words.
-  const terms = words.flatMap(wordsOf).filter((w) => !FILLER.has(w));
+  const terms = termsOf(words);
   const ranked = [];
   for (const [name, card] of Object.entries(nodes)) {
     const named = wordsOf(name);
@@ -371,10 +378,16 @@ function main(argv) {
   const mapFile = join(root, MAP_PATH);
   const text = existsSync(mapFile) ? readFileSync(mapFile, "utf8") : "";
   if (args[0] === "--route") {
+    const query = args.slice(1).join(" ");
+    // Words the router always drops would change nothing in read_when, so their miss is the query's, not the map's.
+    if (termsOf(args.slice(1)).length === 0) {
+      console.error(`repo-map: no meaningful word in the query "${query}": name the module, file or concept you are after.\n${USAGE}`);
+      return 2;
+    }
     const { nodes } = parseMap(text);
     const hits = route(nodes, args.slice(1)).slice(0, 3);
     if (hits.length === 0) {
-      console.log(`repo-map: no card matches "${args.slice(1).join(" ")}". A miss is a bug in the map: search, then add the words to the right card's read_when in this same change.`);
+      console.log(`repo-map: no card matches "${query}". A miss is a bug in the map: search, then add the words to the right card's read_when in this same change.`);
       return 1;
     }
     for (const { name } of hits) console.log(`${formatCard(name, nodes[name])}\n`);
