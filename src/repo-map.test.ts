@@ -26,9 +26,10 @@ interface Scan {
 }
 interface Doctor {
   MAP_PATH: string;
+  FOUNDATION: string[];
   scanImports(root: string): Scan;
   parseMap(text: string): { nodes: Record<string, Card>; problems: string[] };
-  checkMap(nodes: Record<string, Card>, scan: Scan, root: string): string[];
+  checkMap(nodes: Record<string, Card>, scan: Scan, root: string, foundation?: string[]): string[];
   writeDependsOn(text: string, scan: Scan): string;
   route(nodes: Record<string, Card>, words: string[]): Array<{ name: string; score: number }>;
 }
@@ -37,9 +38,15 @@ const doctor = (await import(pathToFileURL(DOCTOR).href)) as Doctor;
 const FIX = "run node scripts/repo-map-doctor.mjs --write";
 
 describe("the repo map matches the code (docs/architecture/repo_map.yaml)", () => {
+  // One scan of the real tree serves every case. It takes about a second on an idle machine and
+  // far longer when parallel agents load it, so it runs once, under its own generous timeout.
+  let scan: Scan;
+  beforeAll(() => {
+    scan = doctor.scanImports(REPO);
+  }, 120_000);
+
   it("every src/ module has a card, and every card matches its imports, files and contracts", () => {
     const { nodes, problems } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
-    const scan = doctor.scanImports(REPO);
     expect([...problems, ...doctor.checkMap(nodes, scan, REPO)], FIX).toEqual([]);
     expect(Object.keys(nodes).sort()).toEqual(scan.modules);
   });
@@ -52,6 +59,15 @@ describe("the repo map matches the code (docs/architecture/repo_map.yaml)", () =
 
   it("the pre-push gates run the doctor, so a stale map is caught before CI", () => {
     expect(readFileSync(join(REPO, "scripts/ci/gates.mjs"), "utf8")).toContain("scripts/repo-map-doctor.mjs");
+  });
+
+  it("every foundation module exists, so the violation rule never names a module that is gone", () => {
+    expect(scan.modules).toEqual(expect.arrayContaining(doctor.FOUNDATION));
+  });
+
+  it("routes a task phrase an agent quotes as one argument", () => {
+    const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
+    expect(doctor.route(nodes, ["campaign milestone"])[0]?.name).toBe("campaign");
   });
 });
 
@@ -202,6 +218,86 @@ describe("repo-map-doctor on a fixture checkout", () => {
     expect(doctor.route(nodes, ["gamma"]).map((r) => r.name)).toEqual(["gamma"]);
     expect(doctor.route(nodes, ["module", "beta"])[0]?.name).toBe("beta");
     expect(doctor.route(nodes, ["xyzzy"])).toEqual([]);
+  });
+
+  it("reads a quoted phrase as its words, on the command line too", () => {
+    const { nodes } = doctor.parseMap(exactMap());
+    expect(doctor.route(nodes, ["module gamma"])).toEqual(doctor.route(nodes, ["module", "gamma"]));
+    expect(doctor.route(nodes, ["module gamma"])[0]?.name).toBe("gamma");
+    writeMap(exactMap());
+    const routed = run("--route", "module gamma");
+    expect(routed.out).toContain("## gamma — The gamma module.");
+    expect(routed.status).toBe(0);
+  }, 60_000);
+
+  it("reports a value on the key's line with items below it, instead of merging the two", () => {
+    const text = exactMap().replace('    depends_on: ["gamma"]', '    depends_on: ["gamma"]\n      - "alpha"');
+    const line = text.split("\n").indexOf('      - "alpha"') + 1;
+    const { nodes, problems } = doctor.parseMap(text);
+    expect(nodes.beta?.depends_on).toEqual(["gamma"]);
+    expect(problems).toEqual([
+      `${doctor.MAP_PATH}:${line}: "depends_on" has a value on its line and items below it — keep one form (node scripts/repo-map-doctor.mjs --write rewrites it)`,
+    ]);
+  });
+
+  it("reports a field a card sets twice", () => {
+    const problems = check(exactMap().replace('    depends_on: ["gamma"]', '    depends_on: ["gamma"]\n    depends_on: ["gamma"]'));
+    expect(problems).toEqual([expect.stringMatching(/: card "beta" sets "depends_on" twice$/)]);
+  });
+
+  it("reports an entry a list holds twice", () => {
+    const problems = check(exactMap().replace('    depends_on: ["gamma"]', '    depends_on: ["gamma", "gamma"]'));
+    expect(problems).toEqual(['card "beta": "depends_on" lists "gamma" twice']);
+  });
+
+  it("--write replaces a depends_on together with the items below it, so the fix it names works", () => {
+    const blocky = exactMap()
+      .replace('    depends_on: ["beta"]', '    depends_on:\n      - "delta"\n      - "gamma"\n      - "beta"')
+      .replace('    depends_on: ["gamma"]', '    depends_on: ["gamma"]\n      - "alpha"');
+    expect(check(blocky)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/"depends_on" has a value on its line and items below it/), expect.stringMatching(/^card "alpha": depends_on lists delta/)]),
+    );
+    const written = doctor.writeDependsOn(blocky, scan);
+    expect(written).toBe(exactMap());
+    expect(check(written)).toEqual([]);
+  });
+
+  describe("violations: an edge from a foundation module to a module outside it", () => {
+    // beta and gamma play the foundation: beta -> gamma stays inside it, gamma -> delta leaves it.
+    const FOUNDATION = ["beta", "gamma"];
+    const checkWith = (text: string) => {
+      const { nodes, problems } = doctor.parseMap(text);
+      return [...problems, ...doctor.checkMap(nodes, scan, root, FOUNDATION)];
+    };
+    const recorded = (entries: string) => `\n      ${entries}`;
+
+    it("is demanded for each such edge, and for no other", () => {
+      expect(checkWith(exactMap())).toEqual([
+        'card "gamma": imports delta (src/gamma/g.ts imports "../delta/d.js"), but gamma is a foundation module (beta, gamma) and delta is not — ' +
+          'record it under "violations" as delta: "<why> Follow-up: #<ticket>", or remove the import',
+      ]);
+    });
+
+    it("is accepted once recorded with its follow-up ticket", () => {
+      const map = mapOf(["alpha", "beta", "delta"].map((n) => card(n)).concat(card("gamma", { violations: recorded('delta: "g.ts loads delta. Follow-up: #7."') })));
+      expect(checkWith(map)).toEqual([]);
+    });
+
+    it("needs a ticket, and cannot be recorded where the rule does not apply", () => {
+      const map = mapOf([
+        card("alpha", { violations: recorded('beta: "Follow-up: #7."') }),
+        card("beta", { violations: recorded('gamma: "Follow-up: #7."') }),
+        card("delta", { violations: '["beta"]' }),
+        card("gamma", { violations: recorded('delta: "someone should fix this"') + recorded('alpha: "Follow-up: #7."') }),
+      ]);
+      expect(checkWith(map)).toEqual([
+        'card "alpha": violations lists beta, but only a foundation module\'s edges are violations (beta, gamma) — use "note"',
+        'card "beta": violations lists gamma, which is a foundation module — remove the entry',
+        'card "delta": "violations" maps the module an edge reaches to why it is wrong and its follow-up ticket',
+        'card "gamma": the delta violation must name its follow-up ticket as #<id>',
+        'card "gamma": violations lists alpha, which it no longer imports — remove the entry',
+      ]);
+    });
   });
 
   it("the command line exits 1 on drift, 0 when clean, and routes", () => {
