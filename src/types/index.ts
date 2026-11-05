@@ -438,6 +438,14 @@ export type JsonValue =
 /** JSON-compatible object */
 export type JsonObject = { [key: string]: JsonValue };
 
+/**
+ * Image source for vision models: the image block a provider message carries,
+ * and what media processing produces from an attachment.
+ */
+export type ImageSource =
+  | { type: "base64"; media_type: string; data: string }
+  | { type: "url"; url: string };
+
 /** JSON-compatible array */
 export type JsonArray = JsonValue[];
 
