@@ -93,6 +93,9 @@ describe("compaction-replay", () => {
     expect(out).toMatch(/^append-only \(reference\)/m);
     expect(out).toMatch(/^current \(session-compaction\.ts\)/m);
     expect(out).toMatch(/^cliff 40k->12k, min 7k/m);
+    // Append-only outgrows 128k by the last calls: it is named as no option, the compacting arms are not.
+    expect(out).toMatch(/^NOT VIABLE at a 128,000-token window: "append-only \(reference\)" sent \d+ of 30 call\(s\)/m);
+    expect(out.match(/^NOT VIABLE/gm)).toHaveLength(1);
     expect(out).toMatch(/tool results: 29 sized from their "Tool call" line/);
     expect(out).toMatch(/not measured here:/);
   });

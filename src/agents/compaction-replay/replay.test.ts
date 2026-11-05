@@ -53,6 +53,14 @@ describe("compaction replay", () => {
     expect(headChurn([session])).toEqual({ transitions: 3, promptChanged: 1, toolsChanged: 1 });
   });
 
+  it("counts the calls whose request is larger than the context window, and only those", () => {
+    const session = chat([call([say("user", "task")]), call([say("assistant", "a1"), say("user", "u1")]), call([say("assistant", "a2"), say("user", "u2")])]);
+    // Requests: 1 100, 1 300, 1 500 tokens. A request exactly the window's size still fits.
+    expect(replayArm(APPEND_ONLY, [session], { ...PRICES, contextWindow: 1_300 }).callsOverWindow).toBe(1);
+    expect(replayArm(APPEND_ONLY, [session], { ...PRICES, contextWindow: 1_000 }).callsOverWindow).toBe(3);
+    expect(replayArm(APPEND_ONLY, [session], PRICES).callsOverWindow).toBe(0);
+  });
+
   it("counts a rewritten message as cached only up to its first changed character", () => {
     const piece = (text: string, tokens: number) => ({ text, tokens });
     const prev = [piece("aaaa", 10), piece("bbbbbbbb", 20), piece("cccc", 10)];
@@ -72,6 +80,9 @@ describe("compaction replay", () => {
     // The live trigger is 70% of the window: no request the current arm sends goes far past it.
     expect(current.requestMax).toBeLessThan(0.7 * 20_000 + 1_500);
     expect(reference.requestMax).toBeGreaterThan(20_000);
+    // Append-only outgrows the window: it is a reference there, not an option.
+    expect(reference.callsOverWindow).toBeGreaterThan(0);
+    expect(current.callsOverWindow).toBe(0);
   });
 
   it("counts the cliff's events, and a backstop when the cliff cannot make room under the live window", () => {

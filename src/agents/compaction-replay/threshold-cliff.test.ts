@@ -33,7 +33,8 @@ const resultsOf = (messages: readonly ConversationMessage[]): string[] =>
     .filter((b): b is Extract<MessageContent, { type: "tool_result" }> => b.type === "tool_result")
     .map((b) => b.content);
 
-const OPTS = { triggerTokens: 10_000, floorTokens: 12_000, minReclaimTokens: 1_000 };
+/** A cliff parseCliff accepts: the trigger is above the floor. */
+const OPTS = { triggerTokens: 15_000, floorTokens: 12_000, minReclaimTokens: 1_000 };
 
 describe("threshold cliff", () => {
   it("makes no event at or under the trigger: the history stays append-only", () => {
@@ -44,7 +45,7 @@ describe("threshold cliff", () => {
 
   it("masks the oldest results first, stops at the floor, and keeps the newest ten verbatim", () => {
     const h = history(20);
-    const event = planCliff(h, { ...OPTS, triggerTokens: 15_000 })!;
+    const event = planCliff(h, OPTS)!;
     expect(event).not.toBeNull();
     const after = resultsOf(event.messages);
     const before = resultsOf(h);

@@ -70,6 +70,12 @@ export interface ArmResult {
   readonly requestMedian: number;
   readonly requestP90: number;
   readonly requestMax: number;
+  /**
+   * Calls whose request is larger than the context window. A provider refuses
+   * such a call, so an arm with any is not an option at this window: its cost
+   * is a reference only.
+   */
+  readonly callsOverWindow: number;
 }
 
 /** How closely the append-only rebuild matches what the provider counted, before any live cut. */
@@ -201,6 +207,7 @@ interface Totals {
   inputTokens: number;
   cachedStableHead: number;
   cachedLoggedHead: number;
+  callsOverWindow: number;
   requests: number[];
 }
 
@@ -221,6 +228,7 @@ function replaySession(arm: ArmSpec, session: ReplaySession, contextWindow: numb
     totals.cachedStableHead += stable;
     totals.cachedLoggedHead += headSame ? stable : 0;
     totals.requests.push(request);
+    if (request > contextWindow) totals.callsOverWindow++;
     state.lastInputTokens = request;
     prevPieces = body;
     prevTurn = turn;
@@ -234,7 +242,7 @@ function percentile(sorted: readonly number[], q: number): number {
 }
 
 export function replayArm(arm: ArmSpec, sessions: readonly ReplaySession[], options: ReplayOptions): ArmResult {
-  const totals: Totals = { calls: 0, inputTokens: 0, cachedStableHead: 0, cachedLoggedHead: 0, requests: [] };
+  const totals: Totals = { calls: 0, inputTokens: 0, cachedStableHead: 0, cachedLoggedHead: 0, callsOverWindow: 0, requests: [] };
   let events = 0;
   let backstops = 0;
   for (const session of sessions) {
@@ -259,6 +267,7 @@ export function replayArm(arm: ArmSpec, sessions: readonly ReplaySession[], opti
     requestMedian: percentile(sorted, 0.5),
     requestP90: percentile(sorted, 0.9),
     requestMax: sorted.at(-1) ?? 0,
+    callsOverWindow: totals.callsOverWindow,
   };
 }
 
