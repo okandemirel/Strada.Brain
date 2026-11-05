@@ -444,7 +444,7 @@ const LOG_MESSAGES = new Set([
   PROVIDER_CALL_FAILED,
 ]);
 
-function parseLogTime(raw) {
+export function parseLogTime(raw) {
   if (typeof raw !== "string") return NaN;
   // The logger writes local wall time without a zone ("2026-09-18 03:19:59").
   const local = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw) ? raw.replace(" ", "T") : raw;
@@ -456,7 +456,7 @@ function parseLogTime(raw) {
  * transport is tailable with zipped archives (logger.ts): <name>1<ext>.gz is
  * the newest archive and the highest number the oldest.
  */
-function logFiles(path) {
+export function logFiles(path) {
   const ext = extname(path);
   const base = basename(path, ext);
   const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
