@@ -32,6 +32,7 @@ interface Doctor {
   checkMap(nodes: Record<string, Card>, scan: Scan, root: string, foundation?: string[]): string[];
   writeDependsOn(text: string, scan: Scan): string;
   route(nodes: Record<string, Card>, words: string[]): Array<{ name: string; score: number }>;
+  singulars(word: string): string[];
 }
 const doctor = (await import(pathToFileURL(DOCTOR).href)) as Doctor;
 
@@ -81,6 +82,24 @@ describe("the repo map matches the code (docs/architecture/repo_map.yaml)", () =
     // The module's own name as typed outranks its plural folded into another name ("agent-core").
     expect(names("agents")[0]).toBe("agents");
     for (const filler of ["a", "in", "is", "the"]) expect(names(filler), filler).toEqual([]);
+  });
+
+  it("routes every module's own name to its card first, even when that name is a word of another card's name", () => {
+    const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
+    // "core" is also a word of "agent-core": both scored 3 on the name, and the alphabet put agent-core first.
+    for (const name of Object.keys(nodes)) expect(doctor.route(nodes, [name])[0]?.name, name).toBe(name);
+  });
+
+  it("routes an -ies or -es plural like its singular, and the plural of a word ending in e too", () => {
+    const { nodes } = doctor.parseMap(readFileSync(join(REPO, doctor.MAP_PATH), "utf8"));
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    // "memories" folded to "memorie", which no card says: a false miss that asked the agent to edit the map.
+    expect(names("memories")[0]).toBe("memory");
+    // "caches", "leases", "phases": the singular ends in e, so only dropping "es" would lose them.
+    for (const [plural, singular] of [["memories", "memory"], ["processes", "process"], ["policies", "policy"], ["caches", "cache"], ["leases", "lease"], ["phases", "phase"]]) {
+      expect(names(singular), singular).not.toEqual([]);
+      expect(names(plural), plural).toEqual(names(singular));
+    }
   });
 });
 
@@ -264,6 +283,34 @@ describe("repo-map-doctor on a fixture checkout", () => {
     expect(names("modules")).toEqual(["alpha", "beta", "delta", "gamma"]); // the plural of "module"
     expect(names("config")).toEqual(["gamma"]); // starts "configuration"
     expect(names("auto")).toEqual([]); // starts "autonomy", but four letters start too many words
+  });
+
+  it("folds a plural onto its singular however English spells it, and leaves a word that ends in s whole", () => {
+    const { nodes } = doctor.parseMap(
+      mapOf([
+        card("alpha", { read_when: '\n      - "memory policy process"' }),
+        card("beta", { read_when: '\n      - "cache lease size"' }),
+        card("delta", { read_when: '\n      - "status analysis"' }),
+        card("gamma"),
+      ]),
+    );
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    for (const q of ["memories", "policies", "processes"]) expect(names(q), q).toEqual(["alpha"]); // -ies is -y; -es after s, x, z, ch, sh
+    for (const q of ["caches", "leases", "sizes"]) expect(names(q), q).toEqual(["beta"]); // and still only -s after an e
+    for (const q of ["status", "statuses", "analysis"]) expect(names(q), q).toEqual(["delta"]);
+    for (const w of ["status", "process", "analysis", "bus"]) expect(doctor.singulars(w), w).toEqual([w]);
+    expect(doctor.singulars("memories")).toContain("memory");
+    expect(doctor.singulars("processes")).toContain("process");
+    expect(doctor.singulars("caches")).toContain("cache");
+  });
+
+  it("puts the card a query names in full before a card whose name it only shares a word with", () => {
+    // Both names hold the word "core", and on a tie the alphabet puts agent-core first.
+    const { nodes } = doctor.parseMap(mapOf([card("agent-core"), card("core")]));
+    const names = (q: string) => doctor.route(nodes, [q]).map((r) => r.name);
+    expect(names("core")).toEqual(["core", "agent-core"]);
+    expect(names("agent core")).toEqual(["agent-core", "core"]);
+    expect(names("agent-core")).toEqual(["agent-core", "core"]);
   });
 
   it("reports a value on the key's line with items below it, instead of merging the two", () => {
