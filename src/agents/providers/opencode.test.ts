@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OpencodeProvider } from "./opencode.js";
+import { cachedPromptTokens } from "./openai-compat.js";
 
 vi.mock("../../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -189,5 +190,57 @@ describe("every assistant tool_call is answered on replay (measured 2026-09-10 1
       { role: "user", content: [{ type: "tool_result", tool_use_id: "call_a", content: "A" }] },
     ]);
     expect(out.map((m) => m["role"])).toEqual(["system", "user", "assistant", "tool"]);
+  });
+});
+
+describe("the prefix-cache share is read when a DeepSeek model answers through OpenCode in DeepSeek's own usage shape", () => {
+  // DeepSeek's native usage block: the cached share is prompt_cache_hit_tokens,
+  // with no prompt_tokens_details.cached_tokens beside it. Reading only
+  // OpenAI's field left every such call "not measured" in cache-hit-report.mjs.
+  const deepSeekUsage = {
+    prompt_tokens: 1520,
+    completion_tokens: 84,
+    total_tokens: 1604,
+    prompt_cache_hit_tokens: 1408,
+    prompt_cache_miss_tokens: 112,
+    completion_tokens_details: { reasoning_tokens: 40 },
+  };
+  const USER = [{ role: "user" as const, content: "hi" }];
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, "fetch");
+  });
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("chat(): cacheReadInputTokens carries prompt_cache_hit_tokens", async () => {
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      usage: deepSeekUsage,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const { usage } = await new OpencodeProvider("k", "deepseek-v4-flash").chat("sys", USER, []);
+    expect(usage).toEqual({ inputTokens: 1520, outputTokens: 84, totalTokens: 1604, cacheReadInputTokens: 1408 });
+  });
+
+  it("chatStream(): the final usage chunk's prompt_cache_hit_tokens becomes cacheReadInputTokens", async () => {
+    const lines = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}`,
+      `data: ${JSON.stringify({ choices: [], usage: deepSeekUsage })}`,
+      "data: [DONE]",
+    ];
+    fetchSpy.mockResolvedValue(new Response(lines.map((l) => `${l}\n\n`).join(""), {
+      status: 200, headers: { "content-type": "text/event-stream" },
+    }));
+    const { usage } = await new OpencodeProvider("k", "deepseek-v4-flash").chatStream("sys", USER, [], () => {});
+    expect(usage).toEqual({ inputTokens: 1520, outputTokens: 84, totalTokens: 1604, cacheReadInputTokens: 1408 });
+  });
+
+  it("a relay that adds cached_tokens: 0 beside DeepSeek's field still reports the hit; OpenAI's own non-zero field wins", () => {
+    expect(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 0 }, prompt_cache_hit_tokens: 1408 })).toBe(1408);
+    expect(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 900 }, prompt_cache_hit_tokens: 1408 })).toBe(900);
+    expect(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 900 } })).toBe(900);
+    expect(cachedPromptTokens({})).toBe(0);
+    expect(cachedPromptTokens(undefined)).toBe(0);
   });
 });
