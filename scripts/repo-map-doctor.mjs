@@ -290,33 +290,53 @@ export const FILLER = new Set(
 );
 
 const wordsOf = (s) => String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-/** A plural and its singular are one word; "status", "process" and "analysis" keep their s. */
-const stem = (w) => (w.length > 3 && /[^isu]s$/.test(w) ? w.slice(0, -1) : w);
 /**
- * A term matches a whole word, never a piece of one ("is" is not in
- * "visualization", "resets" is not in "presets"). From five letters on it
- * also matches the start of a longer word ("config" → "configuration").
+ * The word and every singular its spelling allows. The spelling alone does
+ * not say which one is meant: "memories" is "memory" and "processes" is
+ * "process", but "caches" is "cache" and "leases" is "lease". So a word keeps
+ * each reading, and two words are one when they share a reading. "status",
+ * "process" and "analysis" keep their s.
  */
-const matches = (term, word) => stem(word) === term || (term.length >= 5 && word.startsWith(term));
+export const singulars = (w) => {
+  const out = [w];
+  if (w.length > 4 && w.endsWith("ies")) out.push(`${w.slice(0, -3)}y`);
+  if (/(?:s|x|z|ch|sh)es$/.test(w)) out.push(w.slice(0, -2));
+  if (w.length > 3 && /[^isu]s$/.test(w)) out.push(w.slice(0, -1));
+  return out;
+};
+/**
+ * A term matches a whole word, its plural or singular, never a piece of a
+ * word ("is" is not in "visualization", "resets" is not in "presets"). From
+ * five letters on it also matches the start of a longer word ("config" →
+ * "configuration").
+ */
+const matches = (term, word) => {
+  const forms = singulars(term);
+  return singulars(word).some((x) => forms.includes(x)) || forms.some((t) => t.length >= 5 && word.startsWith(t));
+};
 
 /**
  * Cards ranked by how many of the words they match; the name weighs most, and
  * the word as typed half a point more than its plural or a longer word it
- * starts ("agents" is the agents card before agent-core). No meaningful word
- * matched is a miss: [].
+ * starts ("agents" is the agents card before agent-core). A card whose every
+ * name word the query matches gains a point, so a query that names a card in
+ * full puts it before a card that only shares a word of its name ("core" is
+ * the core card before agent-core). No meaningful word matched is a miss: [].
  */
 export function route(nodes, words) {
   // `--route "campaign milestone"` arrives as one argument; it means two words.
   const terms = words.flatMap(wordsOf).filter((w) => !FILLER.has(w));
   const ranked = [];
   for (const [name, card] of Object.entries(nodes)) {
+    const named = wordsOf(name);
     const fields = [
-      [3, wordsOf(name)],
+      [3, named],
       [2, wordsOf(`${card.purpose ?? ""} ${listOf(card.read_when).join(" ")}`)],
       [1, wordsOf(`${listOf(card.entrypoints).join(" ")} ${JSON.stringify(card.centers ?? {})}`)],
     ];
-    const weigh = (t) => fields.map(([w, ws]) => (ws.includes(t) ? w : ws.some((x) => matches(stem(t), x)) ? w - 0.5 : 0));
-    const score = terms.reduce((sum, t) => sum + Math.max(0, ...weigh(t)), 0);
+    const weigh = (t) => fields.map(([w, ws]) => (ws.includes(t) ? w : ws.some((x) => matches(t, x)) ? w - 0.5 : 0));
+    const inFull = named.length > 0 && named.every((n) => terms.some((t) => matches(t, n)));
+    const score = terms.reduce((sum, t) => sum + Math.max(0, ...weigh(t)), 0) + (inFull ? 1 : 0);
     if (score > 0) ranked.push({ name, score });
   }
   return ranked.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
