@@ -13,12 +13,14 @@
  * It is not the full suite. CI runs that, all 17,000+ tests, in about ten
  * minutes. These are the gates that catch what agents in this repo break most
  * often, fast enough to run before every push: types, lint on what changed,
- * the contracts' detectors, the repo map against the imports, the tests
- * vitest relates to the changed files, and the commit layer of the
- * test-integrity contract.
+ * a build of dist/ when a selected test runs the compiled output and dist/ is
+ * missing or stale (scripts/ci/dist-build.mjs), the contracts' detectors, the
+ * repo map against the imports, the tests vitest relates to the changed files,
+ * and the commit layer of the test-integrity contract.
  */
 
 import { spawnSync } from "node:child_process";
+import { distBuildGate } from "./dist-build.mjs";
 
 const argBase = process.argv.indexOf("--base");
 const base = argBase === -1 ? "origin/main" : process.argv[argBase + 1];
@@ -57,6 +59,9 @@ const gates = [
   changedSrc.length > 0
     ? { name: "lint (changed)", why: `${changedSrc.length} changed src file(s)`, cmd: [npx, "eslint", ...changedSrc] }
     : { name: "lint (changed)", why: "no src file changed", skip: true },
+  // Before the vitest gates: a fresh worktree has no dist/, and the tests that
+  // run the compiled output fail without it.
+  await distBuildGate({ root: process.cwd(), detectors: DETECTORS, changedSrc, npm }),
   { name: "contract detectors", why: "every docs/contracts rule", cmd: [npx, "vitest", "run", ...DETECTORS] },
   {
     name: "repo map",
@@ -85,8 +90,10 @@ for (const gate of gates) {
   }
   console.log(`\n=== ${gate.name}: ${gate.why}`);
   const started = Date.now();
-  const r = spawnSync(gate.cmd[0], gate.cmd.slice(1), { stdio: "inherit", shell: process.platform === "win32" });
-  results.push({ ...gate, status: r.status === 0 ? "pass" : "FAIL", seconds: Math.round((Date.now() - started) / 1000) });
+  const ok = gate.run
+    ? gate.run()
+    : spawnSync(gate.cmd[0], gate.cmd.slice(1), { stdio: "inherit", shell: process.platform === "win32" }).status === 0;
+  results.push({ ...gate, status: ok ? "pass" : "FAIL", seconds: Math.round((Date.now() - started) / 1000) });
 }
 
 console.log("\n=== gates summary");

@@ -22,6 +22,7 @@ and exits non-zero if any gate failed.
 | --- | --- | --- |
 | typecheck | `npm run typecheck:src` | A change that compiles only in the file you were looking at |
 | lint (changed) | `eslint <changed src files>` | What the pre-commit hook enforces, so it fails here and not mid-commit |
+| build dist/ | `npm run build` (portal failure allowed), only when a test the gates will run says "run `npm run build` before this test" and dist/ is missing or older than src/ (`scripts/ci/dist-build.mjs`) | A fresh worktree's missing dist/ showing up as a red test; a failed build is a red gate |
 | contract detectors | `vitest run` on the detectors listed in `docs/contracts/README.md` | Any contract rule broken: path containment, ESM require, gate askers, test integrity, file size, confidentiality |
 | repo map | `node scripts/repo-map-doctor.mjs` | A module's imports changed and its card in `docs/architecture/repo_map.yaml` did not. Run it with `--write` and commit the map in the same change |
 | related tests | `vitest related --run <changed files>` | Tests that import what you changed |
