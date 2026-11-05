@@ -42,9 +42,18 @@ describe("a change to the rules says why (docs/contracts/governance.md)", () => 
     expect(governed).toHaveLength(6);
   });
 
-  it("does not govern records: the contracts' index, team memory, ordinary source", () => {
+  it("governs the repo-map doctor, which decides what the map may claim", () => {
+    expect(guard.governedChanges(["scripts/repo-map-doctor.mjs"])).toEqual(["scripts/repo-map-doctor.mjs"]);
+  });
+
+  it("does not govern records: the contracts' index, team memory, the repo map's cards, ordinary source", () => {
     expect(
-      guard.governedChanges(["docs/contracts/README.md", "docs/memory/INDEX.md", "src/campaign/campaign-manager.ts"]),
+      guard.governedChanges([
+        "docs/contracts/README.md",
+        "docs/memory/INDEX.md",
+        "docs/architecture/repo_map.yaml",
+        "src/campaign/campaign-manager.ts",
+      ]),
     ).toEqual([]);
   });
 
