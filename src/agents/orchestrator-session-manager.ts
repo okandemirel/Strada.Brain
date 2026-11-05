@@ -31,10 +31,8 @@ import { mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
-import {
-  redactSensitiveText,
-  stripVisibleProviderArtifacts,
-} from "./orchestrator-text-utils.js";
+import { redactSensitiveText } from "../security/api-key-redaction.js";
+import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
 import { getLogger } from "../utils/logger.js";

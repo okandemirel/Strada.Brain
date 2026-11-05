@@ -283,7 +283,7 @@ nodes:
     skip_when:
       - "code and document retrieval, embeddings → rag"
       - "the project knowledge vault → vault"
-    note: "The agents edge is two imports, and neither is a violation: memory is not a foundation module. unified/session-summarizer.ts takes the provider interfaces (IAIProvider and its message types) to call an LLM, and keeps them. unified/agentdb-retrieval.ts takes sanitizeRetrievalContent from agents/orchestrator-text-utils.ts, a security helper misplaced in the agent loop, which #11 moves to src/security/."
+    note: "The agents edge stays only for the provider interface, and it is not a violation: memory is not a foundation module. unified/session-summarizer.ts takes IAIProvider and its message types to call an LLM. Retrieval sanitizing (sanitizeRetrievalContent) comes from security/prompt-injection.ts."
 
   metrics:
     purpose: "Task metrics: the recorder the orchestrator calls, their SQLite storage, and the `strada metrics` command."
@@ -317,7 +317,7 @@ nodes:
       - "indexing and searching the project vault → vault"
 
   security:
-    purpose: "Security boundaries: the path guard, secret patterns and sanitizer, auth, rate limits, DM policy, origin and host validation, shell lexing."
+    purpose: "Security boundaries: the path guard, secret patterns and sanitizer, API-key redaction, prompt-injection stripping, auth, rate limits, DM policy, origin and host validation, shell lexing."
     entrypoints: ["src/security/path-guard.ts", "src/security/secret-sanitizer.ts", "src/security/auth.ts", "src/security/rate-limiter.ts"]
     depends_on: ["agents", "budget", "channels", "utils"]
     contracts: ["file-size", "path-containment"]
@@ -325,6 +325,7 @@ nodes:
       - "a tool may read or write a path it should not"
       - "secrets in logs or output, authentication, rate limits, who may DM the bot"
       - "origin, host or shell-command validation"
+      - "prompt-injection stripping of stored or retrieved text (memory, vault, learned guidance) before it reaches a prompt"
     violations:
       agents: "read-only-guard.ts takes the ITool type from agents/tools/tool.interface.ts; through utils/logger.ts and common/errors.ts every module then reaches the agent loop. Follow-up: #15."
       budget: "rate-limiter.ts takes the cost model from budget/cost-model.ts and re-exports estimateCost. Follow-up: #15."
@@ -402,7 +403,7 @@ nodes:
       - "dev-knowledge notes written into a vault"
     skip_when:
       - "conversation memory → memory"
-    note: "The agents edge is two imports, and neither is a violation: vault is not a foundation module. symbol-summarizer.ts takes the IAIProvider interface to call an LLM, and keeps it. dev-knowledge-writer.ts takes sanitizePromptInjection from agents/orchestrator-text-utils.ts, a security helper misplaced in the agent loop, which #11 moves to src/security/."
+    note: "The agents edge stays only for the provider interface, and it is not a violation: vault is not a foundation module. symbol-summarizer.ts takes IAIProvider to call an LLM. Prompt-injection sanitizing (sanitizePromptInjection) comes from security/prompt-injection.ts."
 
   visualization:
     purpose: "Renders goal trees and chains as Mermaid flowcharts: inline on the web channel, mermaid.ink links elsewhere."

@@ -1,4 +1,4 @@
-import { sanitizePromptInjection } from '../agents/orchestrator-text-utils.js';
+import { sanitizePromptInjection } from '../security/prompt-injection.js';
 import { redactSecrets } from '../security/secret-patterns.js';
 import { xxhash64Hex } from './hash.js';
 import type { VaultRegistry } from './vault-registry.js';

@@ -5,7 +5,7 @@ import { isVaultInsideProject } from '../../vault/path-policy.js';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.interface.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
-import { sanitizeRetrievalContent } from '../orchestrator-text-utils.js';
+import { sanitizeRetrievalContent } from '../../security/prompt-injection.js';
 import { estimateTextTokens } from "../../common/token-estimator.js";
 import { packByBudget } from '../../vault/query-pipeline.js';
 import { getLoggerSafe } from "../../utils/logger.js";

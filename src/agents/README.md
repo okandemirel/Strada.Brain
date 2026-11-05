@@ -137,7 +137,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | `orchestrator-interaction-policy.ts` | Execution policy, shell review, autonomous mode |
 | `orchestrator-phase-telemetry.ts` | PAOR phase transition telemetry |
 | `orchestrator-runtime-utils.ts` | Reflection parsing, phase transitions, step result mapping |
-| `orchestrator-text-utils.ts` | Response formatting, identity resolution, prompt sanitization |
+| `orchestrator-text-utils.ts` | Response formatting, identity resolution, profile directives |
 
 ### Autonomy Layer
 

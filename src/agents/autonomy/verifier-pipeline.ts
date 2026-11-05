@@ -1,6 +1,6 @@
 import type { AgentState } from "../agent-state.js";
 import { completionOmitsNamedDeliverables, draftLeavesOpenInvestigations } from "./completion-review.js";
-import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { LogEntry } from "../../utils/logger.js";
 import type {

@@ -16,7 +16,7 @@ import type { NormalizedScore } from "../../types/index.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import { TextIndex, extractTerms, cosineSimilarity } from "../text-index.js";
 import { getLogger } from "../../utils/logger.js";
-import { sanitizeRetrievalContent } from "../../agents/orchestrator-text-utils.js";
+import { sanitizeRetrievalContent } from "../../security/prompt-injection.js";
 
 function getLoggerSafe() {
   try { return getLogger(); } catch { return console; }

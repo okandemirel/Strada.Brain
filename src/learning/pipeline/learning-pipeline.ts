@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import { provenanceTags, runProvenance } from "../run-provenance.js";
-import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, EVIDENCE_WEIGHTS, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { getLoggerSafe } from "../../utils/logger.js";

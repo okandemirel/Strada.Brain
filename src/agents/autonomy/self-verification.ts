@@ -11,7 +11,7 @@
  */
 
 import type { ToolResult } from "../providers/provider.interface.js";
-import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import {
   MUTATION_TOOLS,
   COMPILABLE_EXT,

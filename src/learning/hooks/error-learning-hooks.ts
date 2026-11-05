@@ -20,7 +20,7 @@ import type {
 } from "../types.js";
 import { CONFIDENCE_THRESHOLDS } from "../types.js";
 import { createBrand, type JsonObject } from "../../types/index.js";
-import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 
 // ErrorAnalysis interface is defined locally (not in learning/types.ts)
 interface ErrorAnalysis {

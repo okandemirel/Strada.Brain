@@ -195,8 +195,8 @@ import {
   resolveConversationOwner,
   resolveConversationScope,
   resolveIdentityKey,
-  sanitizePromptInjection,
 } from "./orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../security/prompt-injection.js";
 import {
   normalizeFailureFingerprint,
   sanitizeEventInput,
