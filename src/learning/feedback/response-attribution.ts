@@ -16,7 +16,7 @@
  */
 
 import { capLearnedText } from "./learned-text.js";
-import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import type { FeedbackReactionEvent } from "../../core/event-bus.js";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import { getLoggerSafe } from "../../utils/logger.js";

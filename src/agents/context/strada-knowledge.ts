@@ -457,7 +457,7 @@ import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import { describeFrameworkCheckout, type StradaDepsStatus } from "../../config/strada-deps.js";
-import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
+import { sanitizeRetrievalContent } from "../../security/prompt-injection.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { createProjectScopeFingerprint } from "../../learning/project-scope.js";
 import { STRADA_WORK_DIVISION } from "./strada-work-division.js";

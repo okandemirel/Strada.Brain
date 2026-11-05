@@ -15,8 +15,8 @@ import {
   LANGUAGE_DISPLAY_NAMES,
   buildProfileParts,
   buildExactResponseDirective,
-  sanitizePromptInjection,
 } from "./orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../security/prompt-injection.js";
 import { buildExplicitTargetExecutionDirective } from "./prompt-targets.js";
 import { buildProjectWorldMemorySection } from "./context/strada-knowledge.js";
 

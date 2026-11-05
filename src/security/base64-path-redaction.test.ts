@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { sanitizePromptInjection } from "./orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "./prompt-injection.js";
 
 describe("redacting base64 without eating paths", () => {
   it("leaves a long project path alone", () => {

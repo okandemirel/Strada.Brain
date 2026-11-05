@@ -2,7 +2,7 @@ import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.j
 import type { IMemoryManager, MemoryScope } from "../../memory/memory.interface.js";
 import { UNSCOPED_CHAT_ID } from "../../memory/retrieval-filters.js";
 import type { ChatId } from "../../types/index.js";
-import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
+import { sanitizeRetrievalContent } from "../../security/prompt-injection.js";
 
 /**
  * Tool that allows the AI to search its persistent memory.

@@ -17,7 +17,7 @@
  */
 
 import type { ToolResult } from "../providers/provider.interface.js";
-import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import { TEST_FAILURE_RE } from "../orchestrator-runtime-utils.js";
 import type { ErrorLearningHooks } from "../../learning/index.js";
 import type { 

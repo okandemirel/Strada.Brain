@@ -9,7 +9,7 @@ import type {
   PhaseOutcomeStatus,
 } from "../agent-core/routing/routing-types.js";
 import type { SupervisorAssignment } from "./orchestrator-supervisor-routing.js";
-import { redactSensitiveText } from "./orchestrator-text-utils.js";
+import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { getLoggerSafe } from "../utils/logger.js";
 
 export interface ConsensusVerificationParams {

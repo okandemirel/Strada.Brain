@@ -118,7 +118,7 @@ Output truncated at 8192 characters. Global singleton via `getGlobalSanitizer()`
 
 **Reach — where `sanitizeSecrets()` actually runs:** task results and errors (`src/tasks/task-manager.ts`, `src/tasks/background-executor.ts`), memory writes (`src/memory/file-memory-manager.ts`, `src/memory/unified/agentdb-memory.ts`), learning storage (`src/learning/storage/learning-storage.ts`), channel sends from bootstrap (`src/core/bootstrap-stages/stage-runtime.ts`), provider error messages (`src/agents/providers/fallback-chain.ts`), dashboard config masking (`src/dashboard/server.ts`) and `src/common/fetch-with-retry.ts` bodies.
 
-**Not on tool outputs.** The tool-result path (`sanitizeToolResult` in `src/agents/orchestrator-runtime-utils.ts`, called from `src/agents/orchestrator.ts`) applies prompt-injection stripping, one API-key regex (`redactSensitiveText` in `src/agents/orchestrator-text-utils.ts`) and the 8192-character cap — not the 26-pattern set. File text (`file_read`, `grep_search`, also inside `batch_execute`) is not stripped: the model edits from it, so it arrives as the file holds it (CR, Unicode, base64 kept) and directive-shaped wording is named in a note instead; the API-key regex still applies (`redactSecretsInFileText`), redacting behind `sk-`, `key-`, `token-`, `api_key=` and `Bearer` only a key-shaped value, so identifiers such as `token-refresh-interval-seconds` survive. Tool output containing e.g. `sk_live_…`, a JWT or a `postgres://user:pass@host` URL reaches the model unredacted.
+**Not on tool outputs.** The tool-result path (`sanitizeToolResult` in `src/agents/orchestrator-runtime-utils.ts`, called from `src/agents/orchestrator.ts`) applies prompt-injection stripping, one API-key regex (`redactSensitiveText` in `api-key-redaction.ts`) and the 8192-character cap — not the 26-pattern set. File text (`file_read`, `grep_search`, also inside `batch_execute`) is not stripped: the model edits from it, so it arrives as the file holds it (CR, Unicode, base64 kept) and directive-shaped wording is named in a note instead; the API-key regex still applies (`redactSecretsInFileText`), redacting behind `sk-`, `key-`, `token-`, `api_key=` and `Bearer` only a key-shaped value, so identifiers such as `token-refresh-interval-seconds` survive. Tool output containing e.g. `sk_live_…`, a JWT or a `postgres://user:pass@host` URL reaches the model unredacted.
 
 ## Read-Only Guard (`read-only-guard.ts`)
 
@@ -174,6 +174,8 @@ Generates diff previews (max 50 lines), sends via channel, waits for user respon
 | `user-authorized-paths.ts` | User-named files readable outside the project |
 | `secret-patterns.ts` | 26-pattern credential masking core (dependency-free) |
 | `secret-sanitizer.ts` | Configurable sanitizer class over `secret-patterns.ts` |
+| `api-key-redaction.ts` | The one API-key regex on tool results, errors and summaries (`redactSensitiveText`), and its file-text variant (`redactSecretsInFileText`) |
+| `prompt-injection.ts` | Prompt-injection stripping for stored and retrieved text (`sanitizePromptInjection`, `sanitizeRetrievalContent`, `detectPromptInjection`) |
 | `read-only-guard.ts` | Write tool blocking (23 tools) |
 | `dm-policy.ts` | Diff/Merge confirmation flow |
 | `browser-security.ts` | URL validation, SSRF prevention |

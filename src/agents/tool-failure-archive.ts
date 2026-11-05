@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { redactSensitiveText } from "./orchestrator-text-utils.js";
+import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { applySecretPatterns, DEFAULT_SECRET_PATTERNS } from "../security/secret-patterns.js";
 
 export const TOOL_FAILURE_ARCHIVE_DIR = "tool-failures";

@@ -13,7 +13,7 @@ import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import { MS_PER_DAY, type Instinct, type PatternMatch } from "../learning/types.js";
 import { capLearnedText } from "../learning/feedback/learned-text.js";
-import { sanitizePromptInjection } from "./orchestrator-text-utils.js";
+import { sanitizePromptInjection } from "../security/prompt-injection.js";
 
 /** The longest learned insight rendered into a prompt. */
 export const MAX_INSIGHT_CHARS = 300;
