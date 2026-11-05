@@ -25,6 +25,12 @@
  * A reported edge records an import; it does not make it legitimate. A real
  * boundary violation is recorded too, with a note on the card that names its
  * follow-up ticket. A doctor that stays red is worth less than an exact map.
+ * Which edge is a violation is not left to whoever writes the card: it is an
+ * edge from a FOUNDATION module, the layer every module may import, to a
+ * module outside that layer. The doctor finds each one and stays red until
+ * the card records it under `violations`, keyed by the module it reaches,
+ * with the follow-up ticket (#<id>), and it reports a recorded violation that
+ * the code no longer has, so the record cannot outlive the fix.
  *
  * The map is YAML restricted so that it reads without a YAML library, like
  * the contracts' frontmatter: every value is JSON, either on its key's line
@@ -37,7 +43,9 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 export const MAP_PATH = "docs/architecture/repo_map.yaml";
-export const FIELDS = ["purpose", "entrypoints", "depends_on", "contracts", "read_when", "skip_when", "centers", "note"];
+export const FIELDS = ["purpose", "entrypoints", "depends_on", "contracts", "read_when", "skip_when", "centers", "violations", "note"];
+/** The layer every module may import. An edge from one of these to any other module is a boundary violation. */
+export const FOUNDATION = ["types", "utils", "common", "security", "config"];
 const REQUIRED = ["purpose", "entrypoints", "depends_on", "contracts", "read_when"];
 const SOURCE = /\.(?:[cm]?ts|tsx|[cm]?js)$/;
 const NOT_SCANNED = /\.(?:test|spec)\.[^/]+$|\.d\.ts$|(?:^|\/)__tests__\//;
@@ -90,6 +98,7 @@ export function parseMap(text) {
   let inNodes = false;
   let node = null;
   let field = null;
+  let inline = false;
   text.replace(/\r\n/g, "\n").split("\n").forEach((line, i) => {
     const at = `${MAP_PATH}:${i + 1}`;
     if (!line.trim() || /^\s*#/.test(line)) return;
@@ -104,7 +113,13 @@ export function parseMap(text) {
       nodes[node] = {};
     } else if (node && (m = /^ {4}([a-z_]+):\s*(.*)$/.exec(line))) {
       field = m[1];
-      nodes[node][field] = m[2] === "" ? null : json(m[2], at, problems);
+      inline = m[2] !== "";
+      if (field in nodes[node]) problems.push(`${at}: card "${node}" sets "${field}" twice`);
+      nodes[node][field] = inline ? json(m[2], at, problems) : null;
+    } else if (node && field && inline && /^ {6}\S/.test(line)) {
+      // YAML rejects a value on the key's line followed by items under it; reading both would merge them silently.
+      const hint = field === "depends_on" ? " (node scripts/repo-map-doctor.mjs --write rewrites it)" : "";
+      problems.push(`${at}: "${field}" has a value on its line and items below it — keep one form${hint}`);
     } else if (node && field && (m = /^ {6}- (.+)$/.exec(line))) {
       const prev = nodes[node][field];
       if (prev !== null && !Array.isArray(prev)) problems.push(`${at}: "${field}" mixes a list with another value`);
@@ -124,7 +139,7 @@ const isStringList = (v) => Array.isArray(v) && v.every((s) => typeof s === "str
 const listOf = (v) => (Array.isArray(v) ? v : []);
 
 /** Every way the cards disagree with the code, one sentence each. */
-export function checkMap(nodes, scan, root) {
+export function checkMap(nodes, scan, root, foundation = FOUNDATION) {
   const problems = [];
   const fix = `run node scripts/repo-map-doctor.mjs --write`;
   for (const mod of scan.modules) if (!nodes[mod]) problems.push(`src/${mod}/ has no card — ${fix}, then fill in its purpose, entrypoints and read_when`);
@@ -157,12 +172,44 @@ export function checkMap(nodes, scan, root) {
       problems.push(`${at}: "centers" maps a sub-path to what it holds`);
     }
     if (card.note !== undefined && typeof card.note !== "string") problems.push(`${at}: "note" is one string`);
+    for (const key of ["entrypoints", "depends_on", "contracts", "read_when", "skip_when"]) {
+      const list = listOf(card[key]);
+      for (const twice of new Set(list.filter((x, i) => list.indexOf(x) !== i))) problems.push(`${at}: "${key}" lists ${JSON.stringify(twice)} twice`);
+    }
     const declared = new Set(listOf(card.depends_on));
     const actual = scan.edges[name] ?? {};
     for (const [to, example] of Object.entries(actual)) {
       if (!declared.has(to)) problems.push(`${at}: imports ${to} but depends_on omits it (${example}) — ${fix}`);
     }
     for (const to of declared) if (!(to in actual)) problems.push(`${at}: depends_on lists ${to}, which it no longer imports — ${fix}`);
+    problems.push(...checkViolations(name, card, actual, foundation));
+  }
+  return problems;
+}
+
+/** Holds a card's `violations` to the edges that leave the foundation layer: none missing, none stale, each with a ticket. */
+function checkViolations(name, card, actual, foundation) {
+  const at = `card "${name}"`;
+  const problems = [];
+  const recorded = card.violations ?? {};
+  if (recorded === null || typeof recorded !== "object" || Array.isArray(recorded)) {
+    return [`${at}: "violations" maps the module an edge reaches to why it is wrong and its follow-up ticket`];
+  }
+  const inFoundation = foundation.includes(name);
+  const leaving = inFoundation ? Object.keys(actual).filter((to) => !foundation.includes(to)) : [];
+  for (const to of leaving) {
+    if (!(to in recorded)) {
+      problems.push(
+        `${at}: imports ${to} (${actual[to]}), but ${name} is a foundation module (${foundation.join(", ")}) and ${to} is not — ` +
+          `record it under "violations" as ${to}: "<why> Follow-up: #<ticket>", or remove the import`,
+      );
+    }
+  }
+  for (const [to, why] of Object.entries(recorded)) {
+    if (!inFoundation) problems.push(`${at}: violations lists ${to}, but only a foundation module's edges are violations (${foundation.join(", ")}) — use "note"`);
+    else if (!(to in actual)) problems.push(`${at}: violations lists ${to}, which it no longer imports — remove the entry`);
+    else if (foundation.includes(to)) problems.push(`${at}: violations lists ${to}, which is a foundation module — remove the entry`);
+    else if (typeof why !== "string" || !/#\d+/.test(why)) problems.push(`${at}: the ${to} violation must name its follow-up ticket as #<id>`);
   }
   return problems;
 }
@@ -180,15 +227,23 @@ export function writeDependsOn(text, scan) {
     const m = inNodes ? /^ {2}([a-z0-9][a-z0-9-]*):\s*$/.exec(line) : null;
     if (m) headers.push({ name: m[1], line: i });
   });
-  headers.forEach(({ name, line }, k) => {
-    if (!scan.modules.includes(name)) return;
+  // Last card first, so a line added or removed in one card does not move the cards still to come.
+  for (let k = headers.length - 1; k >= 0; k--) {
+    const { name, line } = headers[k];
+    if (!scan.modules.includes(name)) continue;
     let end = line + 1;
     const limit = k + 1 < headers.length ? headers[k + 1].line : lines.length;
     while (end < limit && !/^[^\s#]/.test(lines[end])) end++;
     const at = lines.slice(line + 1, end).findIndex((l) => /^ {4}depends_on:/.test(l));
-    if (at >= 0) lines[line + 1 + at] = `    depends_on: ${derived(name)}`;
-    else lines.splice(line + 1, 0, `    depends_on: ${derived(name)}`);
-  });
+    if (at < 0) {
+      lines.splice(line + 1, 0, `    depends_on: ${derived(name)}`);
+      continue;
+    }
+    // The old value may go on below its key as block items; they go with it.
+    let after = line + 2 + at;
+    while (after < end && /^ {6}/.test(lines[after])) after++;
+    lines.splice(line + 1 + at, after - (line + 1 + at), `    depends_on: ${derived(name)}`);
+  }
   let out = lines.join("\n");
   const have = new Set(Object.keys(parseMap(out).nodes));
   for (const mod of scan.modules.filter((m) => !have.has(m))) {
@@ -212,7 +267,8 @@ export function writeDependsOn(text, scan) {
 
 /** Cards ranked by how many of the words they match; the name weighs most. */
 export function route(nodes, words) {
-  const terms = words.map((w) => w.toLowerCase()).filter(Boolean);
+  // `--route "campaign milestone"` arrives as one argument; it means two words.
+  const terms = words.flatMap((w) => w.toLowerCase().split(/\s+/)).filter(Boolean);
   const ranked = [];
   for (const [name, card] of Object.entries(nodes)) {
     const fields = [
@@ -235,6 +291,7 @@ export function formatCard(name, card) {
   for (const r of listOf(card.read_when)) out.push(`  read when:  ${r}`);
   for (const s of listOf(card.skip_when)) out.push(`  skip when:  ${s}`);
   for (const [k, v] of Object.entries(card.centers ?? {})) out.push(`  center:     ${k} — ${v}`);
+  for (const [k, v] of Object.entries(card.violations ?? {})) out.push(`  violation:  → ${k} — ${v}`);
   if (card.note) out.push(`  note:       ${card.note}`);
   return out.join("\n");
 }
