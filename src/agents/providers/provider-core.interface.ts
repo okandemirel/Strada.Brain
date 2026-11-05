@@ -8,6 +8,7 @@
  */
 
 import type {
+  ImageSource,
   JsonObject,
 } from "../../types/index.js";
 
@@ -21,11 +22,6 @@ export type MessageContent =
   | { type: "image"; source: ImageSource }
   | { type: "tool_use"; id: string; name: string; input: JsonObject }
   | { type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean };
-
-/** Image source for vision models */
-export type ImageSource =
-  | { type: "base64"; media_type: string; data: string }
-  | { type: "url"; url: string };
 
 /** Base conversation message */
 interface BaseConversationMessage {

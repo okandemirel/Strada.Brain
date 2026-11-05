@@ -384,14 +384,12 @@ nodes:
   utils:
     purpose: "Low-level utilities: the logger, process runners, execFileNoThrow, diffs, media processing, error messages."
     entrypoints: ["src/utils/logger.ts", "src/utils/process-runner.ts", "src/utils/execFileNoThrow.ts", "src/utils/media-processor.ts"]
-    depends_on: ["agents", "common", "security"]
+    depends_on: ["common", "security", "types"]
     contracts: []
     read_when:
       - "logging, spawning a process, diff output, media attachments"
     skip_when:
       - "path checks, runtime paths, atomic files → common"
-    violations:
-      agents: "media-processor.ts takes the ImageSource type from agents/providers/provider-core.interface.ts. Follow-up: #11."
 
   vault:
     purpose: "The Codebase Memory Vault: indexes a project, and Brain itself, into SQLite with full-text search, embeddings and a symbol graph, and answers vault_search with symbolic PPR."

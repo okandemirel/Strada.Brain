@@ -6,7 +6,7 @@
  */
 
 import { getLogger } from "./logger.js";
-import type { ImageSource } from "../agents/providers/provider-core.interface.js";
+import type { ImageSource } from "../types/index.js";
 import {
   ForbiddenTargetError,
   discardBody,

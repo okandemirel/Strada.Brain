@@ -87,6 +87,7 @@ Helpers: `some()`, `none()`, `fromNullable()`, `isSome()`, `isNone()`, `unwrapOp
 | `JsonValue` | Union of primitives, arrays, objects | JSON-compatible value |
 | `JsonObject` | `Record<string, JsonValue>` | JSON-compatible object |
 | `JsonArray` | `JsonValue[]` | JSON-compatible array |
+| `ImageSource` | `{ type: "base64"; media_type; data }` or `{ type: "url"; url }` | Image block for vision models (provider messages, media processing) |
 | `Dictionary<T>` | `Record<string, T>` | Typed string-keyed map |
 | `StringDictionary` | `Record<string, string>` | String-to-string map |
 | `TimestampMs` | `number` | Timestamp in milliseconds |
