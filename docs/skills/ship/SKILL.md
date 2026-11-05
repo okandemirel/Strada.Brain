@@ -23,6 +23,7 @@ and exits non-zero if any gate failed.
 | typecheck | `npm run typecheck:src` | A change that compiles only in the file you were looking at |
 | lint (changed) | `eslint <changed src files>` | What the pre-commit hook enforces, so it fails here and not mid-commit |
 | contract detectors | `vitest run` on the detectors listed in `docs/contracts/README.md` | Any contract rule broken: path containment, ESM require, gate askers, test integrity, file size, confidentiality |
+| repo map | `node scripts/repo-map-doctor.mjs` | A module's imports changed and its card in `docs/architecture/repo_map.yaml` did not. Run it with `--write` and commit the map in the same change |
 | related tests | `vitest related --run <changed files>` | Tests that import what you changed |
 | test integrity | `scripts/ci/check-test-integrity.mjs` | A commit that weakens a test without a `Test-Weakened:` line |
 

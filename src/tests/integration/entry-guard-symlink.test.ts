@@ -58,6 +58,7 @@ describe.skipIf(process.platform === "win32")("scripts started through a symlink
     { script: "scripts/eval/learning-eval.mjs", args: ["--help"], says: /learning ablation harness/ },
     { script: "scripts/eval/requirement-evidence-eval.mjs", args: ["--help"], says: /requirement–evidence map/ },
     { script: "scripts/eval/compaction-replay.mjs", args: ["--help"], says: /compaction A\/B, offline/ },
+    { script: "scripts/repo-map-doctor.mjs", args: ["--help"], says: /usage: repo-map-doctor\.mjs/ },
     { script: "scripts/ci/check-publish-lock.mjs", inFixture: true, args: [], says: /check-publish-lock: package\.json has overrides/ },
     { script: "scripts/build-package.mjs", inFixture: true, args: ["--portal-only"], says: /build:portal/ },
   ];

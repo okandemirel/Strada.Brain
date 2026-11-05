@@ -1,0 +1,393 @@
+# Repo map: one card per top-level module under src/. A routing layer only.
+#
+# Route before you read: `node scripts/repo-map-doctor.mjs --route <words>`
+# prints the cards that match. Open that card's entrypoints and contracts,
+# go at most one hop along depends_on, and search the repo only when the map
+# missed. A miss is a bug in the map: fix read_when in the same change.
+#
+# purpose and entrypoints find the code. The rules live in the linked
+# contracts (docs/contracts/). Each card lists the contracts whose detectors
+# name files in that module: file-size where a file is over 1,000 lines,
+# path-containment where a file calls the producer or sits in its ratchet,
+# gate-needs-an-asker where a [STRADA …] gate or a planner rule lives.
+# esm-no-require and test-integrity hold in every module and are not repeated.
+#
+# depends_on is never written by hand. It is the set of modules this
+# module's non-test files import, derived by scripts/repo-map-doctor.mjs
+# (`--write`), and the doctor fails when it drifts from the code.
+#
+# A declared edge RECORDS an import; it does not LEGITIMIZE it. A real
+# boundary violation is recorded too, and its card carries a note that names
+# the follow-up ticket. A doctor that stays red is worth less than an exact map.
+#
+# Format: YAML whose values are all JSON, so the doctor reads it without a
+# YAML library. skip_when lines end with "→ <card>".
+version: 1
+
+nodes:
+  agent-core:
+    purpose: "The autonomous engine the daemon's heartbeat drives (observe, score priorities, reason, act), and the v2 runner, model gateway and routing seams the orchestrator runs on."
+    entrypoints: ["src/agent-core/agent-core.ts", "src/agent-core/runner/orchestrator-port.ts", "src/agent-core/routing/provider-router.ts", "src/agent-core/engine/agent-engine.ts"]
+    depends_on: ["agents", "budget", "channels", "config", "core", "dashboard", "goals", "learning", "memory", "metrics", "rag", "security", "tasks", "types", "utils", "vault"]
+    contracts: ["file-size", "gate-needs-an-asker"]
+    read_when:
+      - "changing what Brain does on its own between user messages: observers, priority scoring, the reasoning prompt"
+      - "changing how a phase picks a provider or model: provider router, consensus, confidence, task classifier"
+      - "the v2 agent runner, the OrchestratorPort seam, the engine's iteration, reflection or budget control"
+    skip_when:
+      - "the chat and worker turn itself (plan, act, observe, reflect) → agents"
+      - "what fires on a daemon tick → daemon"
+    centers:
+      runner/: "the v2 agent runner and the OrchestratorPort it drives"
+      engine/: "one iteration: prepare, tool turn, reflection, review, synthesis"
+      routing/: "provider and model choice per phase"
+      control/: "cancellation, capability guard, budget, failure ledger"
+      observers/: "file, git, build, trigger and user-activity observers"
+
+  agents:
+    purpose: "The agent loop: the orchestrator (plan, act, observe, reflect) and its helper modules, the LLM providers, the tools the worker calls, conformance gates and multi-agent delegation."
+    entrypoints: ["src/agents/orchestrator.ts", "src/agents/providers/provider.interface.ts", "src/agents/tools/tool.interface.ts", "src/agents/autonomy/strada-conformance.ts"]
+    depends_on: ["agent-core", "assets-local", "budget", "campaign", "channels", "common", "config", "core", "daemon", "dashboard", "goals", "identity", "intelligence", "learning", "memory", "metrics", "rag", "security", "skills", "supervisor", "tasks", "types", "utils", "vault"]
+    contracts: ["file-size", "gate-needs-an-asker", "path-containment"]
+    read_when:
+      - "changing how a turn runs: planning, tool calls, reflection, end-of-turn handling, context building"
+      - "adding or changing an LLM provider, a provider call, fallback or provider health"
+      - "adding or changing a tool the worker can call, including the Unity tools"
+      - "a [STRADA …] conformance gate, or the framework knowledge prompt the worker reads"
+      - "multi-agent delegation or the agent's personality (soul, style)"
+    skip_when:
+      - "the campaign lifecycle: GDD, milestones, sprints, delivery → campaign"
+      - "queueing, background execution, progress messages of a task → tasks"
+      - "the goal DAG planner's rules → goals"
+    centers:
+      orchestrator-*.ts: "the turn loop, split into focused helper modules"
+      providers/: "LLM provider implementations, registry, health and outage handling"
+      tools/: "the worker's tools, Unity tools among them"
+      autonomy/: "conformance gates and autonomy policy"
+      context/: "the framework knowledge and API reference the worker reads"
+      multi/: "multi-agent manager and delegation"
+
+  assets-local:
+    purpose: "Local open-weights asset generation: one Python venv driven over a subprocess, a catalog of models, and pinned weights."
+    entrypoints: ["src/assets-local/local-model-runner.ts", "src/assets-local/model-catalog.ts", "src/assets-local/weights-lock.ts"]
+    depends_on: ["agents", "common", "utils"]
+    contracts: ["file-size"]
+    read_when:
+      - "a local art or audio model reads unavailable or produces nothing"
+      - "adding a model to the catalog or changing how weights are pinned"
+    skip_when:
+      - "installing the venv during setup → core"
+
+  bench:
+    purpose: "The SWE-Sharp benchmark loop: check a task out at its base commit, apply its test patch, run it bounded, and score the TRX report."
+    entrypoints: ["src/bench/swe-sharp-runner.ts", "src/bench/swe-sharp-dataset.ts", "src/bench/trx-report.ts"]
+    depends_on: ["common"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "running or changing the SWE-Sharp benchmark or its scoring"
+      - "reading a dotnet test TRX report"
+
+  budget:
+    purpose: "The single source of truth for LLM cost: the cost model, daily and monthly limits, and per-source sub-limits."
+    entrypoints: ["src/budget/unified-budget-manager.ts", "src/budget/cost-model.ts", "src/budget/budget-types.ts"]
+    depends_on: ["utils"]
+    contracts: []
+    read_when:
+      - "recording or limiting LLM spend; a call refused for budget"
+      - "changing a model's price"
+
+  campaign:
+    purpose: "Campaigns, GDD in and finished game out: the state machine from idea through GDD, approval, milestone ladder and sprints to delivery, with its acceptance gates, evidence ledgers and play-through verdicts."
+    entrypoints: ["src/campaign/campaign-manager.ts", "src/campaign/campaign-planner.ts", "src/campaign/types.ts", "src/campaign/index.ts"]
+    depends_on: ["agents", "channels", "common", "core", "daemon", "history", "memory", "security", "supervisor", "tasks", "utils"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "a campaign step, milestone, sprint or delivery behaves wrongly"
+      - "GDD intake, scope, the requirement ledger, acceptance or play-through verdicts"
+      - "producer evidence that a campaign gate judges"
+    skip_when:
+      - "how one sprint task is queued and executed → tasks"
+      - "the worker's turn inside a task → agents"
+
+  channels:
+    purpose: "The user-facing channels (web, Telegram, Discord, Slack, CLI, Teams) behind one Channel interface, plus message chunking, queueing and streaming."
+    entrypoints: ["src/channels/channel.interface.ts", "src/channels/channel-messages.interface.ts", "src/channels/web/channel.ts"]
+    depends_on: ["common", "config", "core", "learning", "memory", "security", "tasks", "utils"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "a message is received or sent wrongly on one channel"
+      - "a channel capability: streaming, attachments, confirmations, chunking"
+      - "the web channel's server side: websocket protocol, instance access, identities"
+    skip_when:
+      - "the dashboard's HTTP routes and monitor → dashboard"
+
+  common:
+    purpose: "Shared helpers any module may use: runtime paths and STRADA_HOME, path containment, atomic files, fetch with retry, errors, write locks, token estimates."
+    entrypoints: ["src/common/runtime-paths.ts", "src/common/path-containment.ts", "src/common/atomic-file.ts", "src/common/fetch-with-retry.ts"]
+    depends_on: ["security", "utils"]
+    contracts: ["path-containment"]
+    read_when:
+      - "before writing any helper: look here and in utils first"
+      - "an inside, under or within check on paths"
+      - "where Brain keeps its files: STRADA_HOME, runtime paths, setup state"
+    skip_when:
+      - "logging, spawning a process, diffs → utils"
+
+  config:
+    purpose: "Configuration: the Zod schema behind 90+ environment variables, presets, retired settings, and the check that a Unity project has the Strada packages."
+    entrypoints: ["src/config/config.ts", "src/config/config-schema.ts", "src/config/strada-deps.ts", "src/config/presets.ts"]
+    depends_on: ["agents", "campaign", "common", "core", "daemon", "learning", "security", "supervisor", "types"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "adding, renaming or retiring an environment variable or setting"
+      - "detecting Strada.Core, Strada.Modules or a vendored Strada.MCP in a Unity project"
+    skip_when:
+      - "the setup wizard and doctor that write and check the settings → core"
+
+  core:
+    purpose: "Process wiring: the CLI entry calls bootstrap, whose stages build providers, memory, channels and the DI container; plus the event bus, tool registry, runtime lock, auto-updater, setup wizard and doctor."
+    entrypoints: ["src/core/bootstrap.ts", "src/core/bootstrap-wiring.ts", "src/core/event-bus.ts", "src/core/tool-registry.ts"]
+    depends_on: ["agent-core", "agents", "assets-local", "budget", "campaign", "channels", "common", "config", "daemon", "dashboard", "goals", "history", "identity", "intelligence", "learning", "mcp", "memory", "metrics", "rag", "security", "skills", "supervisor", "tasks", "types", "utils", "vault"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "a service is built but never passed to the code that needs it (wiring)"
+      - "startup, shutdown, the runtime lock, the auto-updater"
+      - "the TypedEventBus event map or the tool registry"
+      - "the setup wizard, setup doctor, boot report, or loading Strada.MCP tools"
+    skip_when:
+      - "the environment variable schema → config"
+    centers:
+      bootstrap-stages/: "the bootstrap stages, one service family each"
+
+  daemon:
+    purpose: "The always-on daemon: the heartbeat loop that evaluates triggers each tick, its storage, approvals, budget, deployment, dedup, resilience and reporting."
+    entrypoints: ["src/daemon/heartbeat-loop.ts", "src/daemon/daemon-storage.ts", "src/daemon/daemon-types.ts", "src/daemon/daemon-cli.ts"]
+    depends_on: ["agent-core", "agents", "budget", "channels", "core", "goals", "history", "learning", "memory", "tasks", "utils"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "triggers (cron, webhook, file, checklist) and what fires on a tick"
+      - "daemon approvals, notifications, deployment or resilience"
+      - "the `strada daemon` commands"
+    skip_when:
+      - "restarting Brain after a crash → gateway"
+      - "what the autonomous engine decides once a tick fires → agent-core"
+
+  dashboard:
+    purpose: "The HTTP dashboard and monitor: REST routes for settings, providers, skills, daemon control and project history, the workspace event bus, and Prometheus metrics."
+    entrypoints: ["src/dashboard/server.ts", "src/dashboard/monitor-routes.ts", "src/dashboard/workspace-bus.ts", "src/dashboard/metrics.ts"]
+    depends_on: ["agents", "budget", "channels", "common", "config", "core", "daemon", "goals", "history", "identity", "learning", "memory", "metrics", "security", "skills", "tasks", "utils", "vault"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "an HTTP route under the dashboard server"
+      - "monitor or workspace events the portal shows"
+      - "Prometheus, token or tool-call metrics"
+    skip_when:
+      - "the chat side of the web channel → channels"
+      - "stored task metrics and `strada metrics` → metrics"
+
+  gateway:
+    purpose: "Keeps Brain running as an always-on service: restart on crash with exponential backoff, and graceful shutdown."
+    entrypoints: ["src/gateway/daemon.ts", "src/gateway/supervisor-death.ts"]
+    depends_on: ["core", "utils"]
+    contracts: []
+    read_when:
+      - "Brain does not come back after a crash, or shuts down uncleanly"
+    skip_when:
+      - "the heartbeat and trigger daemon → daemon"
+
+  goals:
+    purpose: "Goal DAG planning: decompose a request into a goal tree, validate the DAG, store it, track its progress and render it."
+    entrypoints: ["src/goals/goal-decomposer.ts", "src/goals/types.ts", "src/goals/goal-storage.ts", "src/goals/index.ts"]
+    depends_on: ["agents", "common", "memory", "utils", "visualization"]
+    contracts: ["gate-needs-an-asker"]
+    read_when:
+      - "the planner's rules or the shape of a goal tree"
+      - "goal progress, goal storage, or how a tree is rendered"
+    skip_when:
+      - "dispatching a goal tree across providers → supervisor"
+
+  history:
+    purpose: "Durable, permission-scoped project history recorded on the server, so the portal's history survives the browser."
+    entrypoints: ["src/history/project-history.ts", "src/history/project-history-recorder.ts"]
+    depends_on: ["daemon", "utils"]
+    contracts: []
+    read_when:
+      - "project history is missing or wrong in the portal"
+    skip_when:
+      - "the HTTP routes that serve the history → dashboard"
+
+  identity:
+    purpose: "The agent's identity in SQLite (id, boot count, uptime, activity counts) and crash detection and recovery after an unclean shutdown."
+    entrypoints: ["src/identity/identity-state.ts", "src/identity/crash-recovery.ts"]
+    depends_on: ["goals", "memory"]
+    contracts: []
+    read_when:
+      - "boot count, uptime, or what Brain does after a crash"
+
+  intelligence:
+    purpose: "Code intelligence for Unity and C#: C# parsing, Strada project analysis, API drift validation against Strada.Core, GUID resolution, and the framework knowledge sync."
+    entrypoints: ["src/intelligence/strada-analyzer.ts", "src/intelligence/csharp-parser.ts", "src/intelligence/strada-drift-validator.ts", "src/intelligence/framework/framework-prompt-generator.ts"]
+    depends_on: ["agents", "common", "config", "memory", "utils"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "C# parsing or Strada pattern analysis of a Unity project"
+      - "Strada.Core API drift, or the framework knowledge that is extracted and synced"
+    skip_when:
+      - "the knowledge prompt the worker reads at run time → agents"
+
+  learning:
+    purpose: "Learning: instincts from errors and corrections, trajectories, chains, scoring and the ledger, kept in learning storage and fed back into decisions."
+    entrypoints: ["src/learning/index.ts", "src/learning/types.ts", "src/learning/storage/learning-storage.ts", "src/learning/ledger.ts"]
+    depends_on: ["agent-core", "agents", "channels", "common", "config", "core", "memory", "rag", "security", "types", "utils", "vault"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "what Brain learns from a run, and where it is stored"
+      - "an instinct, chain or score that should change a decision and does not"
+    skip_when:
+      - "conversation and user memory → memory"
+
+  mcp:
+    purpose: "A client for external MCP servers over stdio that exposes their tools to the agent as ordinary tools."
+    entrypoints: ["src/mcp/mcp-client.ts"]
+    depends_on: ["agents", "utils"]
+    contracts: []
+    read_when:
+      - "connecting a user's MCP server, or its tools not showing up"
+    skip_when:
+      - "loading the Strada.MCP Unity tools → core"
+
+  memory:
+    purpose: "Conversation and user memory: AgentDB unified memory on SQLite and HNSW, user profiles, the task execution store, retrieval filters."
+    entrypoints: ["src/memory/memory.interface.ts", "src/memory/unified/unified-memory.interface.ts", "src/memory/unified/agentdb-adapter.ts", "src/memory/unified/user-profile-store.ts"]
+    depends_on: ["agents", "common", "core", "intelligence", "learning", "rag", "security", "types", "utils"]
+    contracts: ["file-size"]
+    read_when:
+      - "what the agent remembers across turns and sessions"
+      - "memory retrieval quality, or the SQLite memory databases"
+    skip_when:
+      - "code and document retrieval, embeddings → rag"
+      - "the project knowledge vault → vault"
+    note: "The agents edge is two imports. unified/session-summarizer.ts calls an LLM provider, which is a real need. unified/agentdb-retrieval.ts takes a prompt-injection sanitizer from agents/orchestrator-text-utils.ts, which belongs outside the agent loop. Follow-up: board proposal #11."
+
+  metrics:
+    purpose: "Task metrics: the recorder the orchestrator calls, their SQLite storage, and the `strada metrics` command."
+    entrypoints: ["src/metrics/metrics-recorder.ts", "src/metrics/metrics-storage.ts", "src/metrics/metrics-cli.ts"]
+    depends_on: ["agents", "config", "learning", "memory", "utils"]
+    contracts: []
+    read_when:
+      - "a task's recorded success or failure, or `strada metrics`"
+    skip_when:
+      - "live dashboard and Prometheus metrics → dashboard"
+
+  plugins:
+    purpose: "The in-process plugin registry: registration, dependency order, initialisation and disposal, with no sandbox."
+    entrypoints: ["src/plugins/registry.ts"]
+    depends_on: ["utils"]
+    contracts: []
+    read_when:
+      - "a plugin's lifecycle"
+    skip_when:
+      - "skills that users install → skills"
+
+  rag:
+    purpose: "Retrieval over code and documents: chunking, embeddings and their cache, an HNSW vector store, reranking."
+    entrypoints: ["src/rag/rag.interface.ts", "src/rag/rag-pipeline.ts", "src/rag/hnsw/hnsw-vector-store.ts", "src/rag/embeddings/embedding-resolver.ts"]
+    depends_on: ["agents", "common", "config", "intelligence", "types", "utils"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "code or document retrieval quality, chunking, embeddings"
+      - "the HNSW index or its performance"
+    skip_when:
+      - "indexing and searching the project vault → vault"
+
+  security:
+    purpose: "Security boundaries: the path guard, secret patterns and sanitizer, auth, rate limits, DM policy, origin and host validation, shell lexing."
+    entrypoints: ["src/security/path-guard.ts", "src/security/secret-sanitizer.ts", "src/security/auth.ts", "src/security/rate-limiter.ts"]
+    depends_on: ["agents", "budget", "channels", "utils"]
+    contracts: ["file-size", "path-containment"]
+    read_when:
+      - "a tool may read or write a path it should not"
+      - "secrets in logs or output, authentication, rate limits, who may DM the bot"
+      - "origin, host or shell-command validation"
+
+  skills:
+    purpose: "Installable skills: load, gate, trust, pin and install them and register their tools, plus the bundled skills."
+    entrypoints: ["src/skills/skill-manager.ts", "src/skills/skill-loader.ts", "src/skills/skill-installer.ts", "src/skills/types.ts"]
+    depends_on: ["agents", "common", "plugins", "security", "utils"]
+    contracts: ["path-containment"]
+    read_when:
+      - "a skill does not load, install or register its tools"
+      - "skill trust, pinning, or the bundled skills"
+    skip_when:
+      - "in-process plugins → plugins"
+
+  supervisor:
+    purpose: "The multi-provider supervisor: decompose a task, match capabilities, assign providers, dispatch, verify and aggregate the results."
+    entrypoints: ["src/supervisor/supervisor-brain.ts", "src/supervisor/supervisor-types.ts", "src/supervisor/supervisor-dispatcher.ts", "src/supervisor/result-aggregator.ts"]
+    depends_on: ["agent-core", "agents", "campaign", "dashboard", "goals", "utils"]
+    contracts: ["file-size"]
+    read_when:
+      - "a task split across providers, or the evidence a node must return"
+    skip_when:
+      - "the planner's goal decomposition itself → goals"
+
+  tasks:
+    purpose: "The task system: submit, run in the background under concurrency limits, checkpoint and resume, route messages and commands, report progress."
+    entrypoints: ["src/tasks/task-manager.ts", "src/tasks/background-executor.ts", "src/tasks/types.ts", "src/tasks/message-router.ts"]
+    depends_on: ["agent-core", "agents", "budget", "campaign", "channels", "common", "config", "core", "daemon", "dashboard", "goals", "learning", "memory", "security", "supervisor", "utils", "vault"]
+    contracts: ["file-size"]
+    read_when:
+      - "a task is queued, run, interrupted, resumed or reported wrongly"
+      - "deterministic command detection or message routing"
+    skip_when:
+      - "what happens inside one agent turn → agents"
+      - "campaign sprints that submit tasks → campaign"
+
+  tests:
+    purpose: "Tests that span modules (integration and unit suites) and the shared test helpers: mock provider, mock channel, decoy home, local fixtures."
+    entrypoints: ["src/tests/helpers/mock-provider.ts", "src/tests/helpers/mock-channel.ts", "src/tests/helpers/local-fixtures.ts", "src/tests/helpers/universality-scan.ts"]
+    depends_on: ["agents", "channels", "types"]
+    contracts: ["test-integrity", "path-containment"]
+    read_when:
+      - "a test needs a mock provider, a mock channel or an isolated home"
+      - "an integration test across modules fails"
+
+  types:
+    purpose: "Repo-wide type foundations: brand types for ids, Result and Option."
+    entrypoints: ["src/types/index.ts"]
+    depends_on: []
+    contracts: []
+    read_when:
+      - "a shared id, Result or Option type"
+
+  utils:
+    purpose: "Low-level utilities: the logger, process runners, execFileNoThrow, diffs, media processing, error messages."
+    entrypoints: ["src/utils/logger.ts", "src/utils/process-runner.ts", "src/utils/execFileNoThrow.ts", "src/utils/media-processor.ts"]
+    depends_on: ["agents", "common", "security"]
+    contracts: []
+    read_when:
+      - "logging, spawning a process, diff output, media attachments"
+    skip_when:
+      - "path checks, runtime paths, atomic files → common"
+    note: "Imports agents only for a provider type (ImageSource in media-processor.ts): a shared utility layer should not depend on the agent loop. Follow-up: board proposal #11."
+
+  vault:
+    purpose: "The Codebase Memory Vault: indexes a project, and Brain itself, into SQLite with full-text search, embeddings and a symbol graph, and answers vault_search with symbolic PPR."
+    entrypoints: ["src/vault/vault-registry.ts", "src/vault/vault.interface.ts", "src/vault/query-pipeline.ts", "src/vault/self-vault.ts"]
+    depends_on: ["agents", "common", "config", "security", "utils"]
+    contracts: ["path-containment"]
+    read_when:
+      - "vault_search, vault_init, vault_sync or vault_status"
+      - "vault indexing, the symbol graph, PPR ranking"
+      - "dev-knowledge notes written into a vault"
+    skip_when:
+      - "conversation memory → memory"
+    note: "The agents edge is two imports. symbol-summarizer.ts calls an LLM provider, which is a real need. dev-knowledge-writer.ts takes a prompt-injection sanitizer from agents/orchestrator-text-utils.ts, which belongs outside the agent loop. Follow-up: board proposal #11."
+
+  visualization:
+    purpose: "Renders goal trees and chains as Mermaid flowcharts: inline on the web channel, mermaid.ink links elsewhere."
+    entrypoints: ["src/visualization/mermaid-renderer.ts"]
+    depends_on: ["goals"]
+    contracts: []
+    read_when:
+      - "a goal tree or chain diagram renders wrongly"
