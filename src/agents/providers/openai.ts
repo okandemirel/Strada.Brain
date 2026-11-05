@@ -14,7 +14,7 @@ import type {
 import type { MessageContent, AssistantMessage } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { repairConversationToolPairing } from "./tool-pairing.js";
-import { convertToolDefinitions } from "./openai-compat.js";
+import { cachedPromptTokens, convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
 import {
   ensureOpenAiSubscriptionAuth,
@@ -484,7 +484,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
             if (chunk.usage) {
               inputTokens = chunk.usage.prompt_tokens ?? 0;
               outputTokens = chunk.usage.completion_tokens ?? 0;
-              cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? 0;
+              cachedTokens = cachedPromptTokens(chunk.usage);
             }
           } catch {
             // Ignore malformed SSE chunks
@@ -1233,7 +1233,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     });
 
     const stopReason = OPENAI_STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
-    const cachedPromptTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    const cached = cachedPromptTokens(data.usage);
 
     return {
       text,
@@ -1243,7 +1243,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
         totalTokens: (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0),
-        ...(cachedPromptTokens > 0 ? { cacheReadInputTokens: cachedPromptTokens } : {}),
+        ...(cached > 0 ? { cacheReadInputTokens: cached } : {}),
       },
     };
   }
