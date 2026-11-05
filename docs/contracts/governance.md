@@ -1,8 +1,8 @@
 ---
 id: governance
 status: active
-scope: "The files that enforce this repository's rules: the commit checker, the git hooks and their installer, the CI workflows, the contracts, and the checker of contracts."
-read_trigger: "Before you change scripts/ci/check-test-integrity.mjs, scripts/git-hooks/*, scripts/install-git-hooks.mjs, .github/workflows/*, a contract in docs/contracts/, or src/contracts.test.ts; when the commit checker prints 'governed file changed'."
+scope: "The files that enforce this repository's rules: the commit checker, the git hooks and their installer, the CI workflows, the contracts, the checker of contracts, and the repo-map doctor."
+read_trigger: "Before you change scripts/ci/check-test-integrity.mjs, scripts/git-hooks/*, scripts/install-git-hooks.mjs, .github/workflows/*, a contract in docs/contracts/, src/contracts.test.ts or scripts/repo-map-doctor.mjs; when the commit checker prints 'governed file changed'."
 keywords: ["governance", "governed paths", "Governance-Change", "CI", "workflow", "hook", "pre-push", "contract", "checker", "self-loosening", "pinned gate", "yönetişim"]
 related: ["test-integrity"]
 rules:
@@ -42,8 +42,11 @@ judges each commit against it.
   carries a change to the checker is judged by the old checker. That is
   intended.
 - **Know what is governed.** Records are not governed, rules are. The
-  contracts' index, the team memory, and baseline numbers that go down change
+  contracts' index, the team memory, the repo map's cards
+  (`docs/architecture/repo_map.yaml`), and baseline numbers that go down change
   as work happens. Gating them would block the work that keeps them honest.
+  The repo-map doctor that derives and checks the map is a rule, and is
+  governed.
   A pinned number that goes *up* is caught by the test-integrity contract.
 
 ## Don't

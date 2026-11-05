@@ -161,12 +161,13 @@ export function pinLoosening(pin, before, after) {
 
 /**
  * The files that enforce the rules: this checker, the hooks and their installer,
- * the CI workflows, the contracts themselves, and the checker of contracts.
- * docs/contracts/governance.md. A commit that changes one says why, in a
- * `Governance-Change:` line. In this repository no person reviews a push, so the
- * reason in the commit is the review. The contracts' index (README.md) is a
- * record, not a rule: it changes whenever a contract is added, and is not
- * governed.
+ * the CI workflows, the contracts themselves, the checker of contracts, and the
+ * repo-map doctor that keeps the map honest. docs/contracts/governance.md. A
+ * commit that changes one says why, in a `Governance-Change:` line. In this
+ * repository no person reviews a push, so the reason in the commit is the
+ * review. The contracts' index (README.md) and the repo map's data
+ * (docs/architecture/repo_map.yaml) are records, not rules: they change as the
+ * code does, and are not governed.
  */
 export const GOVERNED = [
   /^scripts\/ci\/check-test-integrity\.mjs$/,
@@ -175,6 +176,7 @@ export const GOVERNED = [
   /^\.github\/workflows\//,
   /^docs\/contracts\/(?!README\.md$)[^/]+\.md$/,
   /^src\/contracts\.test\.ts$/,
+  /^scripts\/repo-map-doctor\.mjs$/,
 ];
 export const GOVERNANCE_TRAILER = /^Governance-Change:[ \t]*\S.{9,}$/m;
 
