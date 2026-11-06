@@ -43,9 +43,12 @@ const CJK_ROLE_HIJACK_RE =
  * Envelope patterns: XML <system>, pipe-delimited <|system|>, bracket [SYSTEM].
  * A closing pipe tag may put its slash on either side of the pipe: `</|system|>`
  * and `<|/system|>`. With only the first, the second left its payload behind.
+ * The slash after the pipe may follow the same whitespace the opener allows there
+ * (`<| /system |>`). It is written `\s*(?:\/\s*)?` rather than `\s*\/?\s*`: two
+ * `\s*` with nothing between them backtrack quadratically on a long run of spaces.
  */
 const ENVELOPE_RE =
-  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\/?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*\/?\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|im_end|start_header_id|end_header_id|eot_id|begin_of_text)\|>/gi;
+  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\s*(?:\/\s*)?(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*\/?\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|im_end|start_header_id|end_header_id|eot_id|begin_of_text)\|>/gi;
 
 /**
  * Unopened/open-only envelope tags (e.g. lone `[SYSTEM]:` prefix, `<|system|>` header).
