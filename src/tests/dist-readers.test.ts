@@ -19,8 +19,9 @@
  * imported function is judged by its name in its module (`join as joinPath`
  * is join), and an import of a relative specifier counts too. A path whose end
  * comes at run time counts by its known start, up to its last whole segment:
- * join(repoRoot, "dist", name) and `${repoRoot}/dist/${name}` land in dist/
- * whatever name is. A test that builds a dist/ in its own temp folder points
+ * join(repoRoot, "dist", name), `${repoRoot}/dist/${name}` and
+ * new URL(`../dist/${name}`, import.meta.url) land in dist/ whatever name is.
+ * A test that builds a dist/ in its own temp folder points
  * somewhere else and is not a reader.
  *
  * The message is assembled below and never written out whole: this file names
@@ -221,11 +222,14 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
 
   const urlValue = (n: ts.NewExpression): Value => {
     if (!ts.isIdentifier(n.expression) || n.expression.text !== "URL" || !n.arguments?.[0]) return undefined;
-    const spec = whole(value(n.arguments[0]));
+    const spec = value(n.arguments[0]);
     const base = n.arguments[1] === undefined ? undefined : whole(value(n.arguments[1]));
     if (spec === undefined || (n.arguments[1] !== undefined && base === undefined)) return undefined;
     try {
-      return new URL(spec, base).href;
+      if (typeof spec === "string") return new URL(spec, base).href;
+      // A spec whose end comes at run time resolves by its whole segments, as a
+      // join does: new URL(`../dist/${name}`, import.meta.url) is open after "…/dist/".
+      return { open: new URL(settled(spec), base).href };
     } catch {
       return undefined;
     }
@@ -433,6 +437,18 @@ describe("what counts as a path into dist/", () => {
       'function f(name: string) {\n  return process.cwd() + "/dist/core/" + name;\n}',
       "dist/core/…",
     ],
+    [
+      "new URL(…, import.meta.url) whose end comes at run time",
+      "src/tests/a.test.ts",
+      "function f(name: string) {\n  return readFileSync(new URL(`../../dist/${name}`, import.meta.url));\n}",
+      "dist/…",
+    ],
+    [
+      "a module imported by name through new URL(…, import.meta.url).href",
+      "src/tests/unit/a.test.ts",
+      'it.each(["database-backup"])("%s", async (name) => {\n  await import(new URL(`../../../dist/core/${name}.js`, import.meta.url).href);\n});',
+      "dist/core/…",
+    ],
   ])("%s", (_label, rel, body, target) => {
     expect(targets(rel, body)).toContain(target);
   });
@@ -469,6 +485,11 @@ describe("what counts as a path into dist/", () => {
       "a join whose run-time part may go on with the dist segment",
       "src/a.test.ts",
       "function f(suffix: string) {\n  return join(process.cwd(), `dist${suffix}`, \"x.js\");\n}",
+    ],
+    [
+      "a URL whose run-time part may go on with the dist segment",
+      "src/tests/a.test.ts",
+      "function f(suffix: string) {\n  return new URL(`../../dist${suffix}`, import.meta.url);\n}",
     ],
   ])("not %s", (_label, rel, body) => {
     expect(targets(rel, body)).toEqual([]);
