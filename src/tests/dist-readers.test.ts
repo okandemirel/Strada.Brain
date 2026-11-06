@@ -20,8 +20,10 @@
  * is join). A name imported from a relative module is worked out in that
  * module, from its own place: REPO_ROOT from ../helpers/local-fixtures.js is
  * the root its `export const` climbs to (re-exports, `export *`, a namespace
- * import and a default export are followed too). An import, import(),
- * vi.importActual or vi.importMock of a relative specifier counts. A path whose end
+ * import and a default export are followed too), and it counts where the test
+ * uses it as it is: existsSync(BUILT_CLI), [paths.BUILT_CLI]. An import,
+ * import(), vi.importActual, vi.importMock or import.meta.resolve of a
+ * relative specifier counts. A path whose end
  * comes at run time counts by its known start, up to its last whole segment:
  * join(repoRoot, "dist", name), `${repoRoot}/dist/${name}` and
  * new URL(`../dist/${name}`, import.meta.url) land in dist/ whatever name is.
@@ -289,8 +291,11 @@ function reader(file: string, source: string, root: string, modules: Modules): M
 
   const whole = (v: Value): string | undefined => (typeof v === "string" ? v : undefined);
 
+  const isImportMeta = (expr: ts.Expression): expr is ts.MetaProperty =>
+    ts.isMetaProperty(expr) && expr.keywordToken === ts.SyntaxKind.ImportKeyword;
+
   const propertyValue = (n: ts.PropertyAccessExpression): Value => {
-    if (ts.isMetaProperty(n.expression) && n.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
+    if (isImportMeta(n.expression)) {
       if (n.name.text === "url") return pathToFileURL(file).href;
       if (n.name.text === "dirname") return path.dirname(file);
       if (n.name.text === "filename") return file;
@@ -307,6 +312,13 @@ function reader(file: string, source: string, root: string, modules: Modules): M
   };
 
   const callValue = (n: ts.CallExpression): Value => {
+    if (ts.isPropertyAccessExpression(n.expression) && isImportMeta(n.expression.expression) && n.expression.name.text === "resolve") {
+      const spec = n.arguments[0] === undefined ? undefined : value(n.arguments[0]);
+      // A relative or absolute specifier resolves from the test file, as new URL(…, import.meta.url)
+      // does; a package name or an import-map alias goes through resolution this check does not run.
+      const text = typeof spec === "string" ? spec : settled(spec);
+      return /^(\.\.?\/|\/|file:)/.test(text) ? resolveUrl(spec, pathToFileURL(file).href) : undefined;
+    }
     const fn = callee(n.expression);
     if (!fn) return undefined;
     if (PROCESS.has(fn.from) && fn.name === "cwd") return root;
@@ -314,8 +326,8 @@ function reader(file: string, source: string, root: string, modules: Modules): M
     const takesOne =
       (PATH_MODULES.has(fn.from) && (fn.name === "dirname" || fn.name === "normalize")) ||
       (URL_MODULES.has(fn.from) && fn.name === "fileURLToPath");
-    // Only a path function's arguments are worked out, so an imported name is
-    // followed into its module only where it feeds a path.
+    // Only a path function's result is a path; the arguments of any other call
+    // are visited on their own.
     if (!joins && !takesOne) return undefined;
     // A spread (`...parts`) is not a value here, so it counts as a run-time part.
     const parts = n.arguments.map(value);
@@ -343,9 +355,14 @@ function reader(file: string, source: string, root: string, modules: Modules): M
 
   const urlValue = (n: ts.NewExpression): Value => {
     if (!ts.isIdentifier(n.expression) || n.expression.text !== "URL" || !n.arguments?.[0]) return undefined;
-    const spec = value(n.arguments[0]);
     const base = n.arguments[1] === undefined ? undefined : whole(value(n.arguments[1]));
-    if (spec === undefined || (n.arguments[1] !== undefined && base === undefined)) return undefined;
+    if (n.arguments[1] !== undefined && base === undefined) return undefined;
+    return resolveUrl(value(n.arguments[0]), base);
+  };
+
+  /** The URL `spec` names against `base`, as new URL(spec, base) gives it. */
+  function resolveUrl(spec: Value, base: string | undefined): Value {
+    if (spec === undefined) return undefined;
     try {
       if (typeof spec === "string") return new URL(spec, base).href;
       // A spec whose end comes at run time resolves by its whole segments, as a
@@ -354,7 +371,7 @@ function reader(file: string, source: string, root: string, modules: Modules): M
     } catch {
       return undefined;
     }
-  };
+  }
 
   /**
    * What a string- or path-valued expression comes to: the whole of it when
@@ -403,8 +420,38 @@ function reader(file: string, source: string, root: string, modules: Modules): M
     return (fn?.from === "vitest" || fn?.from === "vi") && (fn.name === "importActual" || fn.name === "importMock");
   };
 
+  /** The names the file's imports bind. */
+  const importedNames = new Set<string>();
+  for (const statement of sf.statements) {
+    const clause = ts.isImportDeclaration(statement) ? statement.importClause : undefined;
+    if (clause?.name) importedNames.add(clause.name.text);
+    const bindings = clause?.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) importedNames.add(bindings.name.text);
+    else if (bindings) for (const element of bindings.elements) importedNames.add(element.name.text);
+  }
+
+  /**
+   * A name the file imports, or a member of a namespace it imports, where it
+   * stands for its value: BUILT_CLI in existsSync(BUILT_CLI), paths.BUILT_CLI
+   * in [paths.BUILT_CLI]. A helper's const is visited in the helper, so the
+   * test that uses it as it is would otherwise build nothing of its own.
+   */
+  const usesImport = (node: ts.Node): node is ts.Identifier | ts.PropertyAccessExpression => {
+    const member = ts.isPropertyAccessExpression(node);
+    const owner = member ? node.expression : node;
+    // Only a name an import binds can resolve to one; putting every name to the checker adds seconds to a scan.
+    if (!ts.isIdentifier(owner) || !importedNames.has(owner.text)) return false;
+    // The name in the import itself, and a function being called, are no path.
+    if (!member && (ts.isImportSpecifier(node.parent) || ts.isImportClause(node.parent))) return false;
+    if ((ts.isCallExpression(node.parent) || ts.isNewExpression(node.parent)) && node.parent.expression === node) return false;
+    const from = imported(owner);
+    return from !== undefined && (member ? from.name === "*" : from.name !== "*");
+  };
+
   const hits: Hit[] = [];
   const visit = (node: ts.Node): void => {
+    // A type is gone at run time (an `extends` clause is not).
+    if (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) return;
     let target: { at: string; open: boolean } | undefined;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       target = place(node.moduleSpecifier.text, true);
@@ -415,6 +462,8 @@ function reader(file: string, source: string, root: string, modules: Modules): M
     ) {
       target = place(value(node.arguments[0]), true);
     } else if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTemplateExpression(node) || ts.isBinaryExpression(node)) {
+      target = place(value(node));
+    } else if (usesImport(node)) {
       target = place(value(node));
     }
     if (target !== undefined && isAtOrInside(dist, target.at)) {
@@ -550,6 +599,19 @@ describe("a test that reads the repository's dist/ says so (docs/contracts/dist-
       unmarked: ["src/via-helper.test.ts:4 builds dist/core/tool.js"],
     });
   });
+
+  it("turns red on a test that uses a helper's dist/ path as it is, though the test never spells the word", () => {
+    const root = tempRoot();
+    writeAll(root, {
+      "src/helpers/paths.ts": 'export const CLI = join(process.cwd(), "dist", "index.js");\n',
+      "src/bare.test.ts": 'import { CLI } from "./helpers/paths.js";\nexpect(existsSync(CLI)).toBe(true);\n',
+      "src/namespace.test.ts": 'import * as paths from "./helpers/paths.js";\nexecFileSync(process.execPath, [paths.CLI, "--help"]);\n',
+    });
+    expect(scan(root)).toEqual({
+      readers: ["src/bare.test.ts", "src/namespace.test.ts"],
+      unmarked: ["src/bare.test.ts:4 builds dist/index.js", "src/namespace.test.ts:4 builds dist/index.js"],
+    });
+  });
 });
 
 describe("a name imported from another module of the repository", () => {
@@ -561,6 +623,10 @@ describe("a name imported from another module of the repository", () => {
     return pathsIntoDist(path.join(root, TEST), IMPORTS + (files[TEST] ?? ""), root).map((hit) => hit.target);
   };
   const ROOT_TS = { "src/tests/root.ts": "export const ROOT = process.cwd();" };
+  const BUILT_TS = {
+    ...ROOT_TS,
+    "src/tests/paths.ts": 'import { ROOT } from "./root.js";\nexport const BUILT = join(ROOT, "dist", "index.js");',
+  };
 
   it.each<[string, Record<string, string>, string]>([
     ["a const root exported by a helper", { ...ROOT_TS, [TEST]: 'import { ROOT } from "../root.js";\njoin(ROOT, "dist", "x.js");' }, "dist/x.js"],
@@ -598,6 +664,24 @@ describe("a name imported from another module of the repository", () => {
       },
       "dist/index.js",
     ],
+    [
+      "a helper's dist/ path the test uses as it is",
+      { ...BUILT_TS, [TEST]: 'import { BUILT } from "../paths.js";\nexistsSync(BUILT);' },
+      "dist/index.js",
+    ],
+    [
+      "a helper's dist/ path the test uses as it is, through a namespace import",
+      { ...BUILT_TS, [TEST]: 'import * as paths from "../paths.js";\nspawn(process.execPath, [paths.BUILT]);' },
+      "dist/index.js",
+    ],
+    [
+      "a helper's default export of a dist/ path, used as it is",
+      {
+        "src/tests/paths.ts": 'export default join(process.cwd(), "dist", "index.js");',
+        [TEST]: 'import BUILT from "../paths.js";\nconst cli = BUILT;',
+      },
+      "dist/index.js",
+    ],
   ])("%s", (_label, files, target) => {
     expect(targetsWith(files)).toContain(target);
   });
@@ -608,6 +692,18 @@ describe("a name imported from another module of the repository", () => {
       { "src/tests/root.ts": 'export const ROOT = mkdtempSync("x-");', [TEST]: 'import { ROOT } from "../root.js";\njoin(ROOT, "dist", "x.js");' },
     ],
     ["not a package's export", { [TEST]: 'import { ROOT } from "some-package";\njoin(ROOT, "dist", "x.js");' }],
+    [
+      "not a helper's temp dist/ the test uses as it is",
+      {
+        "src/tests/paths.ts": 'export const OWN = join(mkdtempSync("x-"), "dist");',
+        [TEST]: 'import { OWN } from "../paths.js";\nimport * as paths from "../paths.js";\nexistsSync(OWN);\nexistsSync(paths.OWN);',
+      },
+    ],
+    ["not a helper's dist/ path named only in a type", { ...BUILT_TS, [TEST]: 'import { BUILT } from "../paths.js";\nlet cli: typeof BUILT;' }],
+    [
+      "not a helper's root the test uses as it is",
+      { ...ROOT_TS, [TEST]: 'import { ROOT } from "../root.js";\nimport * as fixtures from "../root.js";\nconst roots = [ROOT, fixtures.ROOT];' },
+    ],
     [
       "not modules that import and re-export each other, and the scan ends",
       {
@@ -702,6 +798,18 @@ describe("what counts as a path into dist/", () => {
       'it.each(["database-backup"])("%s", async (name) => {\n  await import(new URL(`../../../dist/core/${name}.js`, import.meta.url).href);\n});',
       "dist/core/…",
     ],
+    [
+      "import.meta.resolve of a relative specifier",
+      "src/tests/unit/a.test.ts",
+      'await import(import.meta.resolve("../../../dist/core/x.js"));',
+      "dist/core/x.js",
+    ],
+    [
+      "import.meta.resolve whose end comes at run time",
+      "src/tests/unit/a.test.ts",
+      "function f(name: string) {\n  return readFileSync(fileURLToPath(import.meta.resolve(`../../../dist/${name}.js`)));\n}",
+      "dist/…",
+    ],
   ])("%s", (_label, rel, body, target) => {
     expect(targets(rel, body)).toContain(target);
   });
@@ -733,6 +841,8 @@ describe("what counts as a path into dist/", () => {
       'const vi = { importActual: (s: string) => s };\nvi.importActual("../../../dist/core/x.js");',
     ],
     ["a dist/ path in a command string", "src/a.test.ts", 'const command = "node dist/index.js start --channel web";'],
+    // Beside the root, "dist/index.js" read as a relative path would land in dist/; it names a package.
+    ["import.meta.resolve of a package named dist", "a.test.ts", 'import.meta.resolve("dist/index.js");'],
     ["a run-time part before dist", "src/a.test.ts", 'function f(sub: string) {\n  return join(process.cwd(), sub, "dist", "x.js");\n}'],
     [
       "a template whose run-time part may go on with the dist segment",

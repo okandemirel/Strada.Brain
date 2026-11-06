@@ -52,6 +52,11 @@ message is never selected, and the same false red comes back for it.
     (`export { x } from`, `export * from`), a namespace import
     (`fixtures.REPO_ROOT`) and a default export are followed, through as many
     modules as it takes;
+  - such a name counts where the test uses it as it is, too: a helper's
+    `export const BUILT_CLI = join(REPO_ROOT, "dist", "index.js")` makes
+    `existsSync(BUILT_CLI)` and `[paths.BUILT_CLI]` (a namespace import) reads
+    of `dist/index.js`. A name in a type, and a function being called or
+    constructed, are not worked out: neither is a path;
   - a path whose end comes only at run time counts by its known start:
     `path.join(process.cwd(), "dist", name)` with `name` a loop variable or a
     helper's parameter, `join(root, "dist", ...parts)`, and
@@ -62,11 +67,16 @@ message is never selected, and the same false red comes back for it.
     `` `${root}/dist${suffix}` ``, `` new URL(`../../dist${suffix}`, import.meta.url) ``
     and `join(root, sub, "dist")`, whose dist/ part is not fixed, do not;
   - an `import`, `import()`, `vi.importActual()` or `vi.importMock()` of a
-    relative specifier counts too.
+    relative specifier counts too, and so does `import.meta.resolve()` of a
+    relative or absolute one, resolved from the test file as
+    `new URL(…, import.meta.url)` is.
 
   A test file is parsed when it, or a module it imports from by a relative
   specifier, spells `dist`. Parsing every test file instead takes a scan of
-  the repository from about 2 s to 8–16 s.
+  the repository from about 2 s to 8–16 s. Following the names a test uses
+  as they are into their modules parses about 55 modules more and costs the
+  scan about 0.8 s of CPU (3.4–4.2 s against 2.6–3.3 s, measured on a loaded
+  machine).
 
   A file with a path that lands in `<repo>/dist` and no `READS_BUILD` match
   fails the detector, which names the line and the path.
@@ -112,9 +122,14 @@ message is never selected, and the same false red comes back for it.
   (`src/channels/web/channel.ts`, `src/core/setup-wizard.ts`) keep it in an
   unexported list of static-folder fallbacks.
 - **A value imported by package name or loaded at run time:** a name from a
-  package, a `#` import-map alias, a `require()`, or a module object from
-  `await import("./helper.js")`. Only static imports of relative specifiers
-  are followed.
+  package, a `#` import-map alias (also through `import.meta.resolve`), a
+  `require()`, or a module object from `await import("./helper.js")`. Only
+  static imports of relative specifiers are followed.
+- **An imported name taken apart before use:** destructured from a namespace
+  (`const { BUILT_CLI } = paths`), read by key (`paths["BUILT_CLI"]`), or
+  handed on in an object shorthand (`run({ BUILT_CLI })`). The name itself,
+  a namespace member (`paths.BUILT_CLI`) and a `const` copy of either are
+  seen.
 - **A dist/ segment spelled two modules away:** a test that never writes
   `dist`, importing from a helper that never writes it either but re-exports
   a third module's dist/ path. The test is not parsed (see above). With every
@@ -178,3 +193,14 @@ without the message failed the detector at their line: one that read
 `join(REPO_ROOT, "dist", "index.js")` with `REPO_ROOT` imported from
 `../helpers/local-fixtures.js`, and one that loaded
 `vi.importActual("../../../dist/core/database-backup.js")`.
+
+With imported names followed where a test uses them as they are, and
+`import.meta.resolve` read as a URL from the test file: 1,121 test files at
+the HEAD of this change, the detector among them; 117 of them are parsed, and
+180 modules in all. The scan still finds exactly the three readers, with 0
+findings. Three tests added without the message, beside a helper that
+exported `BUILT_CLI = join(REPO_ROOT, "dist", "index.js")`, failed the
+detector at their line: `expect(existsSync(BUILT_CLI))`,
+`execFileSync(process.execPath, [paths.BUILT_CLI, "--help"])` through a
+namespace import, and
+`await import(import.meta.resolve("../../../dist/core/database-backup.js"))`.
