@@ -149,14 +149,43 @@ function getSystemPrompt(messages) {
   return extractText(system?.content);
 }
 
+/**
+ * The first line of the turn context the agent loop sends after the history
+ * (TURN_CONTEXT_HEADER in src/agents/turn-context.ts; a test pins the two
+ * equal). It carries the phase, plan and run state that used to be in the
+ * system prompt, at the end of the last user turn, or as a user turn of its
+ * own when the history ends on an assistant turn (the visible plan of a
+ * decomposed task). It is not a message from the user. A real model reads the
+ * whole conversation; this mock answers by the user's last words, so it reads
+ * those without the turn context, and the phase from the system prompt and the
+ * turn context together.
+ */
+export const TURN_CONTEXT_HEADER =
+  "[Turn context from Strada Brain, rebuilt for this call: the current phase, plan, role and run state. It is not a message from the user.]";
+
+/** A user turn's text split at the turn context: what was said before it, and the context itself. */
+function splitTurnContext(text) {
+  const at = text.indexOf(TURN_CONTEXT_HEADER);
+  return at < 0 ? { said: text, context: "" } : { said: text.slice(0, at), context: text.slice(at) };
+}
+
+/** The last user turn's text without the turn context; a turn that holds only the turn context is skipped. */
 function getLastUserText(messages) {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (message?.role === "user") {
-      return extractText(message.content).trim();
+      const { said, context } = splitTurnContext(extractText(message.content));
+      if (context && !said.trim()) continue;
+      return said.trim();
     }
   }
   return "";
+}
+
+/** The turn context this request carries, "" when it carries none: it rides on the last user turn. */
+function getTurnContext(messages) {
+  const last = messages.findLast((message) => message?.role === "user");
+  return last ? splitTurnContext(extractText(last.content)).context : "";
 }
 
 function getLastToolResult(messages) {
@@ -260,6 +289,8 @@ function buildResponse(body) {
   const conversationText = getConversationText(messages).toLowerCase();
   const normalizedUserText = lastUserText.toLowerCase();
   const normalizedSystemPrompt = systemPrompt.toLowerCase();
+  // The phase sections: in the system prompt before the turn context took them, in the turn context now.
+  const normalizedPhaseText = `${systemPrompt}\n${getTurnContext(messages)}`.toLowerCase();
   const normalizedToolResult = lastToolResult.toLowerCase();
   const nameMatch = systemPrompt.match(/^Name:\s*(.+)$/m);
   const rememberedName = nameMatch?.[1]?.trim();
@@ -452,7 +483,7 @@ function buildResponse(body) {
       result.includes(`$ ${PAOR_VERIFY_COMMAND}`) && result.includes("exit code: 0"),
     );
     const inReflection =
-      normalizedUserText.includes("## reflection phase") || normalizedSystemPrompt.includes("## reflection phase");
+      normalizedUserText.includes("## reflection phase") || normalizedPhaseText.includes("## reflection phase");
 
     if (inReflection) {
       return buildChatCompletion({
@@ -467,7 +498,7 @@ function buildResponse(body) {
       });
     }
 
-    if (normalizedSystemPrompt.includes("## replanning phase") && !proofWritten) {
+    if (normalizedPhaseText.includes("## replanning phase") && !proofWritten) {
       return buildChatCompletion({
         text: [
           "1. Stop retrying the missing file read.",
