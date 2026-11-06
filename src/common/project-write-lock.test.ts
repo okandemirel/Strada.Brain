@@ -88,8 +88,12 @@ describe("the project write lock", () => {
 
   it("a lock with no owner file falls back to age", async () => {
     mkdirSync(lockDir(), { recursive: true });
+    // Younger than the stale window: left alone for as long as we watch.
     expect((await acquireProjectWriteLock(root, { timeoutMs: 200, staleMs: 10 * 60_000 })).acquired).toBe(false);
-    expect((await acquireProjectWriteLock(root, { timeoutMs: 200, staleMs: 0 })).acquired).toBe(true);
+    // Older than it: broken and taken. The timeout is a budget, not part of
+    // the claim: 200 ms is shorter than one poll, so a single slow or busy
+    // filesystem step on the Windows runner used it up before the take.
+    expect((await acquireProjectWriteLock(root, { timeoutMs: 10_000, staleMs: 0 })).acquired).toBe(true);
   });
 
   it("holderIsAlive says 'unknown' for another machine", () => {
