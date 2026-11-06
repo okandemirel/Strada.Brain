@@ -4,7 +4,7 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { RecallLedger, withoutRecalledMemory } from "./recall-ledger.js";
+import { keepRecalls, RecallLedger, withoutRecalledMemory } from "./recall-ledger.js";
 import { SessionManager, type Session, type SessionManagerDeps } from "./orchestrator-session-manager.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { ConversationMessage } from "./providers/provider-core.interface.js";
@@ -142,6 +142,41 @@ describe("RecallLedger", () => {
     expect(ledger.restore(messages)).toBe(1);
     expect(text(messages)).toContain("third");
     expect(text(messages)).not.toContain("second");
+  });
+});
+
+describe("keepRecalls (the compaction before a hard-timeout retry, with no ledger at hand)", () => {
+  it("puts back each recall the compaction dropped, once, and leaves alone one it kept", () => {
+    const ledger = new RecallLedger();
+    const history: ConversationMessage[] = [{ role: "user", content: "Fire the next batch" }, ...toolStep(1)];
+    ledger.add(history, RECALL);
+    for (let step = 2; step <= 12; step++) history.push(...toolStep(step));
+    ledger.add(history, "## Recalled during this task\n\nThe glaze cools for six hours.");
+    const result = compactSession(history, { maxTokens: 200, preserveRecent: 4, maxGroups: 20 });
+    expect(result.compacted).toBe(true);
+    const compacted = result.messages as ConversationMessage[];
+    expect(text(compacted)).not.toContain("kilns.toml");
+    expect(text(compacted)).toContain("six hours");
+
+    expect(keepRecalls(history, compacted)).toBe(1);
+    expect(JSON.stringify(compacted.at(-1))).toContain("kilns.toml");
+    expect(text(compacted).split("six hours").length - 1).toBe(1);
+    // Nothing left to carry: a second pass changes nothing.
+    expect(keepRecalls(history, compacted)).toBe(0);
+  });
+
+  it("closes a recall an earlier compaction cut, so the user's words after it are not taken for recall", () => {
+    const ledger = new RecallLedger();
+    const history: ConversationMessage[] = [{ role: "user", content: "Fire the next batch" }];
+    ledger.add(history, RECALL);
+    const content = history[0]!.content as string;
+    history[0] = { role: "user", content: content.slice(0, content.indexOf("kilns") + 5) };
+    const compacted: ConversationMessage[] = [{ role: "user", content: "Then glaze the second shelf" }];
+
+    expect(keepRecalls(history, compacted)).toBe(1);
+    expect(JSON.stringify(compacted)).toContain("kilns");
+    compacted[0] = { role: "user", content: `${compacted[0]!.content as string}\n\nAlso check the vents` };
+    expect(withoutRecalledMemory(compacted)[0]!.content).toBe("Then glaze the second shelf\n\nAlso check the vents");
   });
 });
 

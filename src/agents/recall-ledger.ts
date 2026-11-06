@@ -12,10 +12,13 @@
  * prompt it had stayed until the run ended.
  *
  * So each recall carries a marker with the run's token and its number, and
- * after every trim and compaction the ledger appends the ones the history no
- * longer holds to the turn about to be sent. A trim or a compaction has just
- * rewritten the head of the history, so the provider's prefix cache misses at
- * that call anyway; the restore costs nothing extra there.
+ * after every step's trim and compaction the ledger appends the ones the
+ * history no longer holds to the turn about to be sent. The compaction before
+ * the retry after a hard timeout has no ledger at hand; it carries the recalls
+ * it summarized away from the history itself (keepRecalls). A trim or a
+ * compaction has just rewritten the head of the history, so the provider's
+ * prefix cache misses at that call anyway; the restore costs nothing extra
+ * there.
  *
  * The same markers let memory leave the recall out when it stores a trimmed
  * conversation (withoutRecalledMemory): a recall is what memory already held,
@@ -42,8 +45,11 @@ const START = "<!-- strada:recall ";
 const END = "<!-- /strada:recall ";
 const CLOSE = " -->";
 
-/** A marked recall: from its start marker to its end marker, or to the end of the text when compaction cut it. */
-const MARKED_RECALL = /\n*<!-- strada:recall [^\s>]+ -->[\s\S]*?(?:<!-- \/strada:recall [^\s>]+ -->|$)/g;
+/**
+ * A marked recall, its key captured: from its start marker to its end marker,
+ * or to the end of the text when compaction cut it.
+ */
+const MARKED_RECALL = /\n*<!-- strada:recall ([^\s>]+) -->[\s\S]*?(?:<!-- \/strada:recall [^\s>]+ -->|$)/g;
 
 interface Recall {
   readonly key: string;
@@ -76,6 +82,20 @@ function appendToHistory(messages: ConversationMessage[], text: string): boolean
   return true;
 }
 
+/**
+ * Append to the end of `messages` each of `recalls` it no longer holds, oldest
+ * first. A recall compaction shortened still counts as held: compaction cut it
+ * to fit the window. Returns how many it put back; 0 when none was missing or
+ * the history ends on a turn that awaits a tool result.
+ */
+function appendMissing(messages: ConversationMessage[], recalls: readonly Recall[]): number {
+  if (recalls.length === 0) return 0;
+  const held = textsOf(messages).join("\n");
+  const missing = recalls.filter((r) => !held.includes(`${START}${r.key}${CLOSE}`));
+  if (missing.length === 0) return 0;
+  return appendToHistory(messages, missing.map((r) => r.block).join("\n\n")) ? missing.length : 0;
+}
+
 export class RecallLedger {
   private readonly runToken = randomUUID().slice(0, 8);
   private count = 0;
@@ -98,19 +118,34 @@ export class RecallLedger {
   }
 
   /**
-   * Append to the end of `messages` every kept recall it no longer holds,
-   * oldest first. A recall compaction shortened still counts as held:
-   * compaction cut it to fit the window. Returns how many it restored; 0 when
-   * none was missing or the history ends on a turn that awaits a tool result
-   * (the next step tries again).
+   * Append to the end of `messages` every kept recall it no longer holds
+   * (appendMissing). Returns how many it restored; when it could not, the next
+   * step tries again.
    */
   restore(messages: ConversationMessage[]): number {
-    if (this.recalls.length === 0) return 0;
-    const held = textsOf(messages).join("\n");
-    const missing = this.recalls.filter((r) => !held.includes(`${START}${r.key}${CLOSE}`));
-    if (missing.length === 0) return 0;
-    return appendToHistory(messages, missing.map((r) => r.block).join("\n\n")) ? missing.length : 0;
+    return appendMissing(messages, this.recalls);
   }
+}
+
+/**
+ * Put back on the end of `compacted` every marked recall `history` held and
+ * `compacted` no longer does (appendMissing), for a compaction run where the
+ * run's ledger is not at hand: the retry after a hard timeout
+ * (orchestrator.ts compactSessionAfterHardTimeout). Returns how many it put
+ * back.
+ */
+export function keepRecalls(history: readonly ConversationMessage[], compacted: ConversationMessage[]): number {
+  const recalls = new Map<string, Recall>();
+  for (const text of textsOf(history)) {
+    for (const match of text.matchAll(MARKED_RECALL)) {
+      const key = match[1]!;
+      const end = `${END}${key}${CLOSE}`;
+      // A recall an earlier compaction cut is closed again, so it does not run on into what follows it.
+      const block = match[0].trimStart();
+      recalls.set(key, { key, block: block.endsWith(end) ? block : `${block}\n${end}` });
+    }
+  }
+  return appendMissing(compacted, [...recalls.values()]);
 }
 
 /** `text` without its marked recalls. */
