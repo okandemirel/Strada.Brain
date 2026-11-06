@@ -10,9 +10,10 @@
  * background task; the supervisor admits it and the goal decomposer splits it
  * into two dependent nodes; the execute-node bridge hands each node to the
  * background executor, which runs a worker loop on the orchestrator (plan,
- * act with file_write, report); the second node's prompt carries the first
- * node's result; each node is verified; the answer reaches the chat, the files
- * reach the project and the task is recorded as completed.
+ * act with file_write, report) in a workspace lease of the node's own; the
+ * second node's prompt carries the first node's result; each node is
+ * verified; the answer reaches the chat, the files reach the project when the
+ * leases are published, and the task is recorded as completed.
  *
  * When a deliberate change alters the calls the loop makes, the failure names
  * the step it expected and the call it got. Update SCRIPT in the same commit
@@ -20,7 +21,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 vi.mock("../../agents/providers/provider-registry.js", async (original) =>
@@ -42,6 +43,7 @@ import {
 import {
   GOLDEN_RUN_TIMEOUT_MS,
   GOLDEN_WORKING_DIR,
+  isolationDisabled,
   runGolden,
   settledWhenAnswered,
 } from "../helpers/golden-run-harness.js";
@@ -182,6 +184,16 @@ describe("golden run: a two-node task through the real bootstrap", () => {
     expect(readFileSync(join(project, "notes", "alpha.txt"), "utf8")).toBe("ALPHA\n");
     expect(readFileSync(join(project, "notes", "beta.txt"), "utf8")).toBe("BETA\n");
     expect(existsSync(join(project, "README.md"))).toBe(true);
+
+    // It reached the project through workspace leases: each node's worker wrote into a lease
+    // of its own, and its one file landed when the lease was published. Every lease was then
+    // released. Until 2026-11-06 a golden run had no lease, and workers wrote the project directly.
+    expect(isolationDisabled(run), "the run had no workspace leases").toEqual([]);
+    expect(run.logged.filter((l) => l.message === "Workspace lease committed").map((l) => l.meta)).toEqual([
+      expect.objectContaining({ files: 1, conflicts: 0 }),
+      expect.objectContaining({ files: 1, conflicts: 0 }),
+    ]);
+    expect(readdirSync(run.leaseRoot), "a lease was never released").toEqual([]);
 
     // A node's worker sends one system prompt, byte for byte, on every call, and the same tool
     // list on its two EXECUTING calls. What a step rebuilds (the plan, the iteration, the role)
