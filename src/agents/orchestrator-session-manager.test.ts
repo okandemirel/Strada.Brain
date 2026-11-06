@@ -308,6 +308,24 @@ describe("SessionManager", () => {
     expect(sm.extractLastUserContent(session)).toEqual([{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }]);
   });
 
+  it("a user turn that holds only a recall is passed over for the user's words before it (recall-ledger.ts)", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    const ledger = new RecallLedger();
+    const recall = "## Relevant Memory: [user] an earlier, unrelated conversation";
+
+    // A decomposed task's visible plan is an assistant turn, so the history ends on it, and a
+    // recall added or restored now opens a user turn of its own.
+    sm.appendVisibleUserMessage(session, "rename the spawner");
+    sm.appendVisibleAssistantMessage(session, "**Plan**\n\n1. Rename the spawner.");
+    ledger.add(session.messages, recall);
+    expect(session.messages.at(-1)?.role).toBe("user");
+    expect(JSON.stringify(session.messages.at(-1))).toContain(recall);
+
+    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
+    expect(sm.extractLastUserContent(session)).toBe("rename the spawner");
+  });
+
   it("trimSession returns empty array when under limit", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");

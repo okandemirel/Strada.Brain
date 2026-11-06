@@ -1196,7 +1196,12 @@ export class SessionManager {
       // ORC-21: a provider-failure notice is not what the user last said (shell
       // review and correction detection read this), nor is a recall (recall-ledger.ts).
       if (msg.role === "user" && !isProviderFailureNotice(msg)) {
-        return withoutRecalledMemory([msg])[0]!.content as string | MessageContent[] | null;
+        const content = withoutRecalledMemory([msg])[0]!.content as string | MessageContent[] | null;
+        // A turn that held nothing but a recall is one the ledger opened after an
+        // assistant turn (a decomposed task's visible plan): the user spoke before it.
+        const onlyRecall = content !== msg.content && (Array.isArray(content) ? content.length === 0 : !content?.trim());
+        if (onlyRecall) continue;
+        return content;
       }
     }
     return null;
