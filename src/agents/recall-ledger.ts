@@ -20,10 +20,14 @@
  * prefix cache misses at that call anyway; the restore costs nothing extra
  * there.
  *
- * The same markers let memory leave the recall out when it stores a trimmed
+ * The same markers keep the recall out of two readers that take the history
+ * for something else. Memory leaves it out when it stores a trimmed
  * conversation (withoutRecalledMemory): a recall is what memory already held,
  * and storing it again as conversation would bring it back on a later run
- * under a new content hash.
+ * under a new content hash. And it is not what the user last said: the recall
+ * rides on a tool-result turn, which the session manager's last-user-message
+ * reads (the shell reviewer's task, the end-turn prompt) used to return as the
+ * user's words (SessionManager.extractLastUserContent).
  */
 
 import { randomUUID } from "node:crypto";
@@ -154,8 +158,9 @@ function stripRecalls(text: string): string {
 }
 
 /**
- * `messages` with every marked recall taken out, for what memory stores. A
- * text block left empty is dropped. `messages` itself is never changed.
+ * `messages` with every marked recall taken out, for what memory stores and
+ * for what the user last said. A text block left empty is dropped. `messages`
+ * itself is never changed, and a message without a recall is returned as is.
  */
 export function withoutRecalledMemory(messages: readonly ConversationMessage[]): ConversationMessage[] {
   return messages.map((message) => {

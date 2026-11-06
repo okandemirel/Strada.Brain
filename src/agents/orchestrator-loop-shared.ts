@@ -183,7 +183,8 @@ function recalledBlock(memory: string | undefined, rag: string | undefined): str
  * turns, and the refresher never recalls the same content twice (ORC-12: it dedups against
  * everything it ever injected). So the caller hands the recall to the run's RecallLedger, which
  * puts it back on the turn about to be sent whenever a trim or compaction drops it
- * (recall-ledger.ts), and memory never stores it as conversation.
+ * (recall-ledger.ts); memory never stores it as conversation, and no reader takes it for what
+ * the user last said.
  *
  * Non-fatal: any error is caught and swallowed.
  */

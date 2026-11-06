@@ -1194,9 +1194,9 @@ export class SessionManager {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
       // ORC-21: a provider-failure notice is not what the user last said (shell
-      // review and correction detection read this).
+      // review and correction detection read this), nor is a recall (recall-ledger.ts).
       if (msg.role === "user" && !isProviderFailureNotice(msg)) {
-        return msg.content as string | MessageContent[] | null;
+        return withoutRecalledMemory([msg])[0]!.content as string | MessageContent[] | null;
       }
     }
     return null;
