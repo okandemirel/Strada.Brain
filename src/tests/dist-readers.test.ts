@@ -17,8 +17,11 @@
  * path.dirname, fileURLToPath, new URL(…), .pathname, template strings, `+`
  * and the const a name was declared with (in its own scope) are followed; an
  * imported function is judged by its name in its module (`join as joinPath`
- * is join), and an import of a relative specifier counts too. A test that builds a dist/ in
- * its own temp folder points somewhere else and is not a reader.
+ * is join), and an import of a relative specifier counts too. A path whose end
+ * comes at run time counts by its known start, up to its last whole segment:
+ * join(repoRoot, "dist", name) and `${repoRoot}/dist/${name}` land in dist/
+ * whatever name is. A test that builds a dist/ in its own temp folder points
+ * somewhere else and is not a reader.
  *
  * The message is assembled below and never written out whole: this file names
  * dist/ paths in its fixtures, and with the message in it the gate would build
@@ -85,6 +88,26 @@ function unwrap(node: ts.Expression): ts.Expression {
   return n;
 }
 
+/**
+ * A value whose start is known and whose rest comes only at run time:
+ * `${repoRoot}/dist/${name}` is open after "<root>/dist/".
+ */
+interface Open {
+  open: string;
+}
+
+/** What an expression comes to: the whole of it, its known start, or nothing. */
+type Value = string | Open | undefined;
+
+/**
+ * The whole segments an open value starts with, up to its last separator:
+ * "<root>/dist/" of `${root}/dist/${name}`, but "<root>/" of `${root}/dist${suffix}`,
+ * whose run-time part may go on with the segment ("dist-old").
+ */
+function settled(value: Open | undefined): string {
+  return value?.open.match(/^[\s\S]*[\\/]/)?.[0] ?? "";
+}
+
 /** A file URL as a path, an absolute path as itself, anything else as nothing. */
 function asPath(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
@@ -137,7 +160,7 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     return checker.getSymbolAtLocation(owner) ? undefined : { from: owner.text, name: expr.name.text };
   };
 
-  const nameValue = (id: ts.Identifier): string | undefined => {
+  const nameValue = (id: ts.Identifier): Value => {
     const decl = checker.getSymbolAtLocation(id)?.valueDeclaration;
     if (decl && ts.isVariableDeclaration(decl) && decl.initializer && ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) {
       if (following.has(decl)) return undefined;
@@ -154,40 +177,52 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     return undefined;
   };
 
-  const propertyValue = (n: ts.PropertyAccessExpression): string | undefined => {
+  const whole = (v: Value): string | undefined => (typeof v === "string" ? v : undefined);
+
+  const propertyValue = (n: ts.PropertyAccessExpression): Value => {
     if (ts.isMetaProperty(n.expression) && n.expression.keywordToken === ts.SyntaxKind.ImportKeyword) {
       if (n.name.text === "url") return pathToFileURL(file).href;
       if (n.name.text === "dirname") return path.dirname(file);
       if (n.name.text === "filename") return file;
       return undefined;
     }
-    if (n.name.text === "href") return value(n.expression);
-    if (n.name.text === "pathname") return asPath(value(n.expression));
+    if (n.name.text === "href") return whole(value(n.expression));
+    if (n.name.text === "pathname") return asPath(whole(value(n.expression)));
     return undefined;
   };
 
-  const callValue = (n: ts.CallExpression): string | undefined => {
+  const callValue = (n: ts.CallExpression): Value => {
     const fn = callee(n.expression);
     if (!fn) return undefined;
     if (PROCESS.has(fn.from) && fn.name === "cwd") return root;
+    // A spread (`...parts`) is not a value here, so it counts as a run-time part.
     const parts = n.arguments.map(value);
-    if (parts.some((part) => part === undefined)) return undefined;
-    const args = parts as string[];
-    if (PATH_MODULES.has(fn.from)) {
-      if (fn.name === "join") return path.join(...args);
+    if (PATH_MODULES.has(fn.from) && (fn.name === "join" || fn.name === "resolve")) {
       // A relative resolve() starts from the working directory, which is the root.
-      if (fn.name === "resolve") return path.resolve(root, ...args);
-      if (fn.name === "dirname" && args[0] !== undefined) return path.dirname(args[0]);
-      if (fn.name === "normalize" && args[0] !== undefined) return path.normalize(args[0]);
+      const build = (args: string[]): string => (fn.name === "join" ? path.join(...args) : path.resolve(root, ...args));
+      const runTime = parts.findIndex((part) => typeof part !== "string");
+      if (runTime === -1) return build(parts as string[]);
+      // The parts before the first run-time one fix where the path starts:
+      // join(repoRoot, "dist", name) is under dist/ whatever name is.
+      const known = parts.slice(0, runTime) as string[];
+      return { open: path.join(build([...known, settled(parts[runTime] as Open | undefined)]), "/") };
     }
-    if (URL_MODULES.has(fn.from) && fn.name === "fileURLToPath") return args[0]?.startsWith("file:") ? asPath(args[0]) : undefined;
+    const args = parts.map(whole);
+    if (args.some((arg) => arg === undefined)) return undefined;
+    const [first] = args;
+    if (first === undefined) return undefined;
+    if (PATH_MODULES.has(fn.from)) {
+      if (fn.name === "dirname") return path.dirname(first);
+      if (fn.name === "normalize") return path.normalize(first);
+    }
+    if (URL_MODULES.has(fn.from) && fn.name === "fileURLToPath") return first.startsWith("file:") ? asPath(first) : undefined;
     return undefined;
   };
 
-  const urlValue = (n: ts.NewExpression): string | undefined => {
+  const urlValue = (n: ts.NewExpression): Value => {
     if (!ts.isIdentifier(n.expression) || n.expression.text !== "URL" || !n.arguments?.[0]) return undefined;
-    const spec = value(n.arguments[0]);
-    const base = n.arguments[1] === undefined ? undefined : value(n.arguments[1]);
+    const spec = whole(value(n.arguments[0]));
+    const base = n.arguments[1] === undefined ? undefined : whole(value(n.arguments[1]));
     if (spec === undefined || (n.arguments[1] !== undefined && base === undefined)) return undefined;
     try {
       return new URL(spec, base).href;
@@ -196,23 +231,27 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     }
   };
 
-  /** What a string- or path-valued expression comes to, when every part of it is known. */
-  function value(node: ts.Expression): string | undefined {
+  /**
+   * What a string- or path-valued expression comes to: the whole of it when
+   * every part is known, its start when only its end comes at run time.
+   */
+  function value(node: ts.Expression): Value {
     const n = unwrap(node);
     if (ts.isStringLiteralLike(n)) return n.text;
     if (ts.isTemplateExpression(n)) {
       let text = n.head.text;
       for (const span of n.templateSpans) {
         const part = value(span.expression);
-        if (part === undefined) return undefined;
+        if (typeof part !== "string") return { open: text + (part?.open ?? "") };
         text += part + span.literal.text;
       }
       return text;
     }
     if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = value(n.left);
+      if (typeof left !== "string") return left;
       const right = value(n.right);
-      return left === undefined || right === undefined ? undefined : left + right;
+      return typeof right === "string" ? left + right : { open: left + (right?.open ?? "") };
     }
     if (ts.isIdentifier(n)) return nameValue(n);
     if (ts.isPropertyAccessExpression(n)) return propertyValue(n);
@@ -221,24 +260,34 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     return undefined;
   }
 
-  /** An import specifier as the file it loads: relative to the test file, a file URL, or absolute. */
-  const specifierPath = (spec: string | undefined): string | undefined =>
-    spec !== undefined && /^\.\.?\//.test(spec) ? path.resolve(path.dirname(file), spec) : asPath(spec);
+  /**
+   * Where a value lands on disk, an open one by the whole segments it starts
+   * with. `specifier` reads it as an import does: relative to the test file.
+   */
+  const place = (v: Value, specifier = false): { at: string; open: boolean } | undefined => {
+    if (v === undefined) return undefined;
+    const open = typeof v !== "string";
+    const text = open ? settled(v) : v;
+    const at = specifier && /^\.\.?\//.test(text) ? path.resolve(path.dirname(file), text) : asPath(text);
+    return at === undefined ? undefined : { at, open };
+  };
 
   const hits: Hit[] = [];
   const visit = (node: ts.Node): void => {
-    let target: string | undefined;
+    let target: { at: string; open: boolean } | undefined;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      target = specifierPath(node.moduleSpecifier.text);
+      target = place(node.moduleSpecifier.text, true);
     } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0]) {
-      target = specifierPath(value(node.arguments[0]));
+      target = place(value(node.arguments[0]), true);
     } else if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTemplateExpression(node) || ts.isBinaryExpression(node)) {
-      target = asPath(value(node));
+      target = place(value(node));
     }
-    if (target !== undefined && isAtOrInside(dist, target)) {
+    if (target !== undefined && isAtOrInside(dist, target.at)) {
+      const rel = path.relative(root, target.at).split(path.sep).join("/");
       hits.push({
         line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
-        target: path.relative(root, target).split(path.sep).join("/"),
+        // An open path is named by its known start: dist/core/… for join(root, "dist", "core", name).
+        target: target.open ? `${rel}/…` : rel,
       });
     }
     ts.forEachChild(node, visit);
@@ -354,6 +403,36 @@ describe("what counts as a path into dist/", () => {
       'import { join as joinPath } from "node:path";\njoinPath(process.cwd(), "dist", "core", "x.js");',
       "dist/core/x.js",
     ],
+    [
+      "a loop over names under dist/",
+      "src/a.test.ts",
+      'for (const name of ["a.js", "b.js"]) existsSync(path.join(process.cwd(), "dist", name));',
+      "dist/…",
+    ],
+    [
+      "a helper's parameter under dist/",
+      "src/a.test.ts",
+      'const repoRoot = process.cwd();\nfunction entry(name: string) {\n  return path.join(repoRoot, "dist", name);\n}',
+      "dist/…",
+    ],
+    [
+      "the rest of the path spread in",
+      "src/a.test.ts",
+      'function at(...parts: string[]) {\n  return join(process.cwd(), "dist", "core", ...parts);\n}',
+      "dist/core/…",
+    ],
+    [
+      "a template string whose end comes at run time",
+      "src/a.test.ts",
+      'const repoRoot = process.cwd();\nit.each(["a.js"])("%s", (name) => readFileSync(`${repoRoot}/dist/${name}`));',
+      "dist/…",
+    ],
+    [
+      "string concatenation whose end comes at run time",
+      "src/a.test.ts",
+      'function f(name: string) {\n  return process.cwd() + "/dist/core/" + name;\n}',
+      "dist/core/…",
+    ],
   ])("%s", (_label, rel, body, target) => {
     expect(targets(rel, body)).toContain(target);
   });
@@ -380,6 +459,17 @@ describe("what counts as a path into dist/", () => {
     ],
     ["a local that is only named path", "src/a.test.ts", 'function f(path: { join(...p: string[]): string }) {\n  return path.join(process.cwd(), "dist");\n}'],
     ["a dist/ path in a command string", "src/a.test.ts", 'const command = "node dist/index.js start --channel web";'],
+    ["a run-time part before dist", "src/a.test.ts", 'function f(sub: string) {\n  return join(process.cwd(), sub, "dist", "x.js");\n}'],
+    [
+      "a template whose run-time part may go on with the dist segment",
+      "src/a.test.ts",
+      "const root = process.cwd();\nfunction f(suffix: string) {\n  return `${root}/dist${suffix}`;\n}",
+    ],
+    [
+      "a join whose run-time part may go on with the dist segment",
+      "src/a.test.ts",
+      "function f(suffix: string) {\n  return join(process.cwd(), `dist${suffix}`, \"x.js\");\n}",
+    ],
   ])("not %s", (_label, rel, body) => {
     expect(targets(rel, body)).toEqual([]);
   });
