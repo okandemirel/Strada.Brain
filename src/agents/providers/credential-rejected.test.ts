@@ -94,6 +94,32 @@ describe("a provider whose credential was refused", () => {
     );
   });
 
+  // Measured 2026-11-06 in golden-run-failover.test.ts: the refusal went down
+  // the generic failure ladder first and was benched only afterwards, so the
+  // seat counted two failures for one call, and the chain judged its
+  // redundancy while the refused seat still read as available.
+  it("counts the refusal once", async () => {
+    const bad = provider("Revoked", UNAUTHORIZED);
+    const good = provider("Healthy", "ok");
+    await ask(new FallbackChainProvider([bad.provider, good.provider], { attemptTimeoutMs: 5_000 }));
+
+    expect(ProviderHealthRegistry.getInstance().getEntry("Revoked")).toMatchObject({
+      status: "down",
+      consecutiveFailures: 1,
+    });
+  });
+
+  it("warns that no fallback remains when the bench leaves the chain one live seat", async () => {
+    const bad = provider("Revoked", UNAUTHORIZED);
+    const good = provider("Healthy", "ok");
+    await ask(new FallbackChainProvider([bad.provider, good.provider], { attemptTimeoutMs: 5_000 }));
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("collapsed to a single working provider"),
+      expect.objectContaining({ configured: 2, available: 1, liveProvider: "Healthy" }),
+    );
+  });
+
   it("still fails the call when it was the only provider", async () => {
     const bad = provider("Revoked", UNAUTHORIZED);
     const chain = new FallbackChainProvider([bad.provider], { attemptTimeoutMs: 5_000 });
