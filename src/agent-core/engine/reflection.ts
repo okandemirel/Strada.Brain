@@ -125,7 +125,7 @@ export function buildReflectionCoreContext(
   return {
     chatId: runCtx.chatId,
     identityKey: runCtx.identityKey,
-    prompt: deps.sessionManager.extractLastUserMessage(runCtx.session),
+    prompt: runCtx.requestText,
     responseText,
     // v1 threads response.usage; the v2 spine does not carry per-step usage into the dispatch
     // ctx, so a zero usage is the faithful default (telemetry treats it as optional).

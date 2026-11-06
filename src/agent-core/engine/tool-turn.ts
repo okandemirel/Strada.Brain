@@ -173,7 +173,9 @@ export async function portExecuteToolTurn(
     const session = runCtx.session;
     const assignment = runCtx.lastAssignment as SupervisorAssignment;
     const strategy = runCtx.executionStrategy as SupervisorExecutionStrategy;
-    const lastUserMessage = deps.sessionManager.extractLastUserMessage(session);
+    // The run's request, pinned at setup: the session's last user-role message is a tool result
+    // or a gate note after the first tool turn (EngineRunContext.requestText).
+    const requestText = runCtx.requestText;
 
     // Clean verdicts before this batch; SelfVerification.track counts them as the tools run.
     const cleanVerdictsBefore = runCtx.selfVerification.getCleanVerdictCount();
@@ -209,7 +211,7 @@ export async function portExecuteToolTurn(
         // it needs rather than because anything was wrong. The task description
         // is right there in agent state, and is already used for drift
         // detection twenty lines below.
-        taskPrompt: reviewTaskPrompt(lastUserMessage, agentState.taskDescription),
+        taskPrompt: reviewTaskPrompt(requestText, agentState.taskDescription),
         sessionMessages: session.messages,
         onUsage: runCtx.onUsage,
         identityKey: runCtx.identityKey,
@@ -292,7 +294,7 @@ export async function portExecuteToolTurn(
         confidenceEstimator: deps.confidenceEstimator,
         providerManager: deps.providerManager,
         taskClassifier: deps.taskClassifier,
-        prompt: lastUserMessage,
+        prompt: requestText,
         responseText,
         toolCalls,
         currentAssignment: assignment,
@@ -387,7 +389,7 @@ export async function portExecuteToolTurn(
       // prompt (v1 @ a3de7d1 :4756) so drift detection never runs against planner boilerplate.
       queryContext: isInteractiveTurn
         ? deps.sessionManager.extractLastUserMessage(session)
-        : agentState.taskDescription || lastUserMessage,
+        : agentState.taskDescription || requestText,
       chatId,
       agentState: step.agentState,
       // v1 interactive parity (trio catch, a3de7d1 :6444-6452): surface refreshed instinct IDs —
@@ -437,7 +439,7 @@ export async function portExecuteToolTurn(
     let progressSignal: TaskProgressSignal | undefined;
     try {
       progressSignal = deps.buildToolBatchProgressSignal({
-        prompt: agentState.taskDescription || lastUserMessage,
+        prompt: agentState.taskDescription || requestText,
         title: runCtx.progressTitle,
         toolCalls,
         language: runCtx.progressLanguage,

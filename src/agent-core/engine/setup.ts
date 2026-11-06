@@ -535,6 +535,7 @@ export async function setupAgentCoreRun(
       iterationHealth,
       healthAdapter,
       session,
+      requestText: lastUserMessage,
       chatId,
       metricId,
       toolExecMode:

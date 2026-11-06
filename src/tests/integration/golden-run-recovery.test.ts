@@ -129,18 +129,19 @@ const twoNodes = (first: string, second: string): string =>
 
 /**
  * A worker that runs outside the supervisor has its final draft reviewed
- * before the user sees it. Measured 2026-11-06: the review's "User request"
- * is not the request. It reads the session's last user-role message, which
- * after a tool call is a tool result (no text) or a system nudge. Not pinned
- * either way here.
+ * before the user sees it, against the request it was given. Measured
+ * 2026-11-06: the review's "User request" was the session's last user-role
+ * message, which after a tool call is a tool result (no text) or a system
+ * nudge, so the reviewer judged the draft without the request.
  */
-function visibilityReviewStep(step: string, draft: string): Step {
+function visibilityReviewStep(step: string, request: string, draft: string): Step {
   return {
     step,
     check: (call) => {
       const prompt = textOf(call.messages.at(-1));
       return requires([
         !prompt.startsWith("Decide whether the current worker draft is safe to surface") && "this is not the visibility review",
+        !prompt.includes(`User request:\n${request}\n`) && `the reviewer is not shown the request "${request.slice(0, 60)}…"`,
         !prompt.includes(`Candidate visible draft:\n${draft}`) && `the reviewer is not shown "${draft}"`,
       ]);
     },
@@ -172,7 +173,7 @@ const SHORT_SCRIPT: readonly Step[] = [
   planStep("gamma: plan", SHORT_REQUEST),
   actStep("gamma: act", SHORT_REQUEST, [writeCall("call_gamma", "notes/gamma.txt", "GAMMA\n")]),
   reportStep("gamma: report", SHORT_REQUEST, ["call_gamma"], GAMMA_DONE),
-  visibilityReviewStep("gamma: review the draft", GAMMA_DONE),
+  visibilityReviewStep("gamma: review the draft", SHORT_REQUEST, GAMMA_DONE),
 ];
 
 // ─── Run 2: the supervisor throws ────────────────────────────────────────────
@@ -198,7 +199,7 @@ const FALLBACK_SCRIPT: readonly Step[] = [
     writeCall("call_omega", "notes/omega.txt", "OMEGA\n"),
   ]),
   reportStep("worker: report", FALLBACK_REQUEST, ["call_delta", "call_omega"], FALLBACK_DONE),
-  visibilityReviewStep("worker: review the draft", FALLBACK_DONE),
+  visibilityReviewStep("worker: review the draft", FALLBACK_REQUEST, FALLBACK_DONE),
 ];
 
 // ─── Run 3: everything fails once ────────────────────────────────────────────

@@ -53,6 +53,8 @@ function setup() {
   const runCtx = {
     iterationHealth: new IterationHealthTracker(Date.now()),
     session,
+    // What setup read from this session: it holds no user turn.
+    requestText: "",
     chatId: "worker-1",
     toolExecMode: "background",
     executionJournal: bundle.executionJournal,

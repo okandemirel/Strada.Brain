@@ -40,6 +40,14 @@ export interface EngineRunContext {
   readonly iterationHealth: IterationHealthTracker;
   readonly healthAdapter: IterationHealthCoreAdapter;
   readonly session: Session;
+  /**
+   * The request this run serves, read from the session once at setup. Every reviewer that judges
+   * the run against "the user's request" reads this, never the session's last user-role message:
+   * after a tool turn that is a tool result (no text) or a gate note such as "[VERIFY] …", so the
+   * visibility review and the consensus step were judging drafts without the request (measured
+   * 2026-11-06 in the golden run).
+   */
+  readonly requestText: string;
   readonly chatId: string;
   readonly metricId: string | undefined;
   /** Tool-execution mode for the bound executeToolCalls turn (v1 ToolExecutionMode parity). */
