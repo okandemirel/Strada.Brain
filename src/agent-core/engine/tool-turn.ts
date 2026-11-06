@@ -40,7 +40,6 @@ import type { EngineRunContext } from "./engine-deps.js";
 import type { ParentRunScope } from "../runner/agent-runner.js";
 import type { SetupDeps } from "./setup.js";
 import { instinctScopeKey } from "./instinct-scope.js";
-import { appendToLastUserTurn } from "../../agents/turn-context.js";
 
 /** v1 parity: the PAOR reflection cadence on the agent-core route (orchestrator const copy). */
 const REFLECT_INTERVAL_AGENT_CORE = 3;
@@ -377,7 +376,8 @@ export async function portExecuteToolTurn(
     // reassigns state). step5-parity: the run's MemoryRefresher threads through runCtx so mid-run
     // re-retrieval fires exactly as the v1 loops did (it was passed null — "opt-in" — which
     // silently killed re-retrieval on v2). The recall goes into the history, not the system
-    // prompt, which stays the same bytes for the provider's prefix cache (turn-context.ts).
+    // prompt, which stays the same bytes for the provider's prefix cache (turn-context.ts); the
+    // run's recall ledger puts it back whenever a trim or compaction drops it (recall-ledger.ts).
     const isInteractiveTurn = runCtx.toolExecMode === "interactive";
     const mem = await refreshMemoryIfNeeded({
       memoryRefresher: runCtx.memoryRefresher,
@@ -411,7 +411,7 @@ export async function portExecuteToolTurn(
           }
         : {}),
     });
-    if (mem.recalled) appendToLastUserTurn(session.messages, mem.recalled);
+    if (mem.recalled) runCtx.recallLedger.add(session.messages, mem.recalled);
 
     const trace = toolCalls.map((tc, i) => {
       const tr = toolResults[i];

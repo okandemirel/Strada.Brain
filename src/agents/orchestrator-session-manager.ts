@@ -35,6 +35,7 @@ import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
 import { conversationTranscript, messageTextPreview } from "./session-memory-transcript.js";
+import { withoutRecalledMemory } from "./recall-ledger.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
 import { getLogger } from "../utils/logger.js";
 import { writeFileAtomic } from "../common/atomic-file.js";
@@ -1312,8 +1313,9 @@ export class SessionManager {
      */
     owner: { readonly userId: string | undefined } = { userId: session?.memoryOwnerId },
   ): Promise<void> {
-    // Tracked whether or not the caller awaits it: an eviction and a mid-run trim do not.
-    return this.trackWrite(this.storeSessionInMemory(chatId, messages, force, session, owner));
+    // Tracked whether or not the caller awaits it: an eviction and a mid-run trim do not. A run's
+    // recalled memory is not conversation; storing it again would echo it back (recall-ledger.ts).
+    return this.trackWrite(this.storeSessionInMemory(chatId, withoutRecalledMemory(messages), force, session, owner));
   }
 
   private async storeSessionInMemory(

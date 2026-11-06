@@ -8,7 +8,7 @@ Scan the topic you are about to work in, and open only the entries that match. P
 - [guideline] (core) Every verdict names what it measured, what it left out, and why — `entries/2026-08-21-evidence-names-what-it-measured.md` · src/**
 - [gotcha] Unit tests that build their own subject cannot see an argument nobody passes; check the construction site — `entries/2026-09-18-tested-but-never-wired.md` · src/core/bootstrap.ts, src/agents/multi/agent-manager.ts, src/agents/multi/delegation-manager.ts
 - [spike] Mask old tool output deterministically, but as a rare cliff with byte-stable stubs, and only after the cache hit rate is measured — `entries/2026-11-04-compaction-must-respect-the-prefix-cache.md` · src/agents/session-compaction.ts, src/agents/providers/provider-call-log.ts, src/agents/compaction-replay/**, scripts/eval/compaction-replay.mjs
-- [decision] The worker's system prompt is the run's prompt, byte for byte; per-step sections ride after the history as an unstored turn context, and mid-run memory recall is appended to the history once — `entries/2026-11-06-system-prompt-is-byte-stable.md` · src/agents/turn-context.ts, src/agent-core/engine/prepare-iteration.ts, src/agent-core/engine/tool-turn.ts, src/agents/orchestrator-loop-shared.ts, src/agents/orchestrator.ts
+- [decision] The worker's system prompt is the run's prompt, byte for byte; per-step sections ride after the history as an unstored turn context, and mid-run memory recall is appended to the history once — `entries/2026-11-06-system-prompt-is-byte-stable.md` · src/agents/turn-context.ts, src/agents/recall-ledger.ts, src/agent-core/engine/prepare-iteration.ts, src/agent-core/engine/tool-turn.ts, src/agent-core/engine/port.ts, src/agents/orchestrator-loop-shared.ts, src/agents/orchestrator.ts
 
 ## campaign
 
@@ -24,7 +24,7 @@ Scan the topic you are about to work in, and open only the entries that match. P
 
 - [gotcha] Provider cooldowns persist across restarts in provider-health.json; read it first when every call is refused — `entries/2026-09-10-key-rotation-inherits-cooldown.md` · src/agents/providers/**
 - [spike] Mask old tool output deterministically, but as a rare cliff with byte-stable stubs, and only after the cache hit rate is measured — `entries/2026-11-04-compaction-must-respect-the-prefix-cache.md` · src/agents/session-compaction.ts, src/agents/providers/provider-call-log.ts, src/agents/compaction-replay/**, scripts/eval/compaction-replay.mjs
-- [decision] The worker's system prompt is the run's prompt, byte for byte; per-step sections ride after the history as an unstored turn context, and mid-run memory recall is appended to the history once — `entries/2026-11-06-system-prompt-is-byte-stable.md` · src/agents/turn-context.ts, src/agent-core/engine/prepare-iteration.ts, src/agent-core/engine/tool-turn.ts, src/agents/orchestrator-loop-shared.ts, src/agents/orchestrator.ts
+- [decision] The worker's system prompt is the run's prompt, byte for byte; per-step sections ride after the history as an unstored turn context, and mid-run memory recall is appended to the history once — `entries/2026-11-06-system-prompt-is-byte-stable.md` · src/agents/turn-context.ts, src/agents/recall-ledger.ts, src/agent-core/engine/prepare-iteration.ts, src/agent-core/engine/tool-turn.ts, src/agent-core/engine/port.ts, src/agents/orchestrator-loop-shared.ts, src/agents/orchestrator.ts
 
 ## learning-memory
 
