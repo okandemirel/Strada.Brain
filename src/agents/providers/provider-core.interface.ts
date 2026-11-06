@@ -110,6 +110,13 @@ export interface TokenUsage {
   readonly totalTokens: number;
   readonly cacheCreationInputTokens?: number;
   readonly cacheReadInputTokens?: number;
+  /**
+   * The provider's own name for the usage field(s) `cacheReadInputTokens` was
+   * read from ("prompt_cache_hit_tokens"), "+"-joined when several came. Set
+   * only by the parsers that read more than one field name, so a run's log
+   * says which one its provider sends. Not a count: nothing sums it.
+   */
+  readonly cacheReadField?: string;
 }
 
 /**

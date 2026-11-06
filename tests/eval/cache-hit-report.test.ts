@@ -54,9 +54,9 @@ describe("cache-hit-report", () => {
 
     expect(files.map((f: { cause: string | null }) => f.cause)).toEqual([null, null]);
     expect(groups).toEqual([
-      { label: "streaming", provider: "opencode", calls: 1, withUsage: 1, withCacheField: 0, inputTokens: 4000, cachedInputTokens: 0, hitRate: null },
-      { label: "turn", provider: "opencode", calls: 4, withUsage: 3, withCacheField: 2, inputTokens: 4000, cachedInputTokens: 2400, hitRate: 0.6 },
-      { label: "turn", provider: "claude", calls: 1, withUsage: 1, withCacheField: 1, inputTokens: 500, cachedInputTokens: 0, hitRate: 0 },
+      { label: "streaming", provider: "opencode", calls: 1, withUsage: 1, withCacheField: 0, inputTokens: 4000, cachedInputTokens: 0, cacheFields: [], hitRate: null },
+      { label: "turn", provider: "opencode", calls: 4, withUsage: 3, withCacheField: 2, inputTokens: 4000, cachedInputTokens: 2400, cacheFields: [], hitRate: 0.6 },
+      { label: "turn", provider: "claude", calls: 1, withUsage: 1, withCacheField: 1, inputTokens: 500, cachedInputTokens: 0, cacheFields: [], hitRate: 0 },
     ]);
 
     const text = formatReport({ log, since: null, files, groups });
@@ -64,6 +64,33 @@ describe("cache-hit-report", () => {
     expect(text).toMatch(/turn\s+claude\s+.*\s0\.0%/);
     expect(text).toMatch(/streaming\s+opencode\s+.*not measured/);
     expect(text).toContain("do not add rows across labels");
+  });
+
+  // Since the OpenAI-compatible parsers keep a reported 0, a run of misses is
+  // 0%, and only a provider that sends no cache field is "not measured".
+  it("rates a group of reported misses 0%, names the cache fields each group's lines came in, and keeps a group with no field unmeasured", () => {
+    writeFileSync(
+      log,
+      [
+        line({ timestamp: "2026-11-05 11:00:00", label: "turn", provider: "opencode", inputTokens: 3000, cachedInputTokens: 0, cacheField: "prompt_cache_hit_tokens" }),
+        line({ timestamp: "2026-11-05 11:01:00", label: "turn", provider: "opencode", inputTokens: 1000, cachedInputTokens: 0, cacheField: "prompt_cache_hit_tokens" }),
+        line({ timestamp: "2026-11-05 11:02:00", label: "turn", provider: "relay", inputTokens: 2000, cachedInputTokens: 500, cacheField: "prompt_tokens_details.cached_tokens" }),
+        line({ timestamp: "2026-11-05 11:03:00", label: "turn", provider: "relay", inputTokens: 2000, cachedInputTokens: 0, cacheField: "prompt_cache_hit_tokens" }),
+        line({ timestamp: "2026-11-05 11:04:00", label: "turn", provider: "silent", inputTokens: 1000 }),
+      ].join("\n"),
+    );
+    const { files, calls } = readProviderCalls(log);
+    const groups = cacheHitReport(calls);
+
+    expect(groups).toEqual([
+      { label: "turn", provider: "opencode", calls: 2, withUsage: 2, withCacheField: 2, inputTokens: 4000, cachedInputTokens: 0, cacheFields: ["prompt_cache_hit_tokens"], hitRate: 0 },
+      { label: "turn", provider: "relay", calls: 2, withUsage: 2, withCacheField: 2, inputTokens: 4000, cachedInputTokens: 500, cacheFields: ["prompt_cache_hit_tokens", "prompt_tokens_details.cached_tokens"], hitRate: 0.125 },
+      { label: "turn", provider: "silent", calls: 1, withUsage: 1, withCacheField: 0, inputTokens: 1000, cachedInputTokens: 0, cacheFields: [], hitRate: null },
+    ]);
+    const text = formatReport({ log, since: null, files, groups });
+    expect(text).toMatch(/turn\s+opencode\s+2\s+2\s+2\s+4,000\s+0\s+0\.0%\s+prompt_cache_hit_tokens\n/);
+    expect(text).toMatch(/turn\s+relay\s+.*12\.5%\s+prompt_cache_hit_tokens, prompt_tokens_details\.cached_tokens\n/);
+    expect(text).toMatch(/turn\s+silent\s+.*not measured\s+-\n/);
   });
 
   it("--since keeps only the calls logged at or after it", () => {

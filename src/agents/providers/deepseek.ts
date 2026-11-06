@@ -7,6 +7,7 @@ import type {
 import { OpenAIProvider, OPENAI_STOP_REASON_MAP, retainedReasoningContent, stripReasoningBlocks } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 import type { AssistantMessage } from "./provider-core.interface.js";
+import { promptCacheUsage } from "./openai-compat.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -119,7 +120,7 @@ export class DeepSeekProvider extends OpenAIProvider {
         inputTokens: usage?.prompt_tokens ?? 0,
         outputTokens: usage?.completion_tokens ?? 0,
         totalTokens: usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0),
-        cacheReadInputTokens: usage?.prompt_cache_hit_tokens,
+        ...promptCacheUsage(usage),
       },
     };
   }
