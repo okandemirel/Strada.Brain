@@ -48,6 +48,7 @@ const DETECTORS = [
   "src/team-memory.test.ts",
   "src/governance.test.ts",
   "src/tests/clean-checkout.test.ts",
+  "src/tests/dist-readers.test.ts",
   // Scans every script and src file, so `vitest related` never selects it.
   "src/tests/integration/entry-guard-symlink.test.ts",
 ];
