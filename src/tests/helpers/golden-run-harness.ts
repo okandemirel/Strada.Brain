@@ -15,6 +15,8 @@
  * - The provider and channel factories, and the framework vault targets:
  *   see golden-run-edges.ts. The request enters through the real message
  *   handler bootstrap wires; the answer leaves through the real reporter.
+ *   A run whose chain has several seats replaces only the seats' provider
+ *   classes, so the real fallback chain and health registry run between them.
  * - The network. Every in-process socket connect is refused (fetch included),
  *   git children may not reach a remote, and the framework sync's git
  *   fallback — which would clone from GitHub when the project has no Strada
@@ -201,11 +203,11 @@ class RunClock {
   }
 }
 
-function makeConfig(project: string, memoryDir: string): Config {
+function makeConfig(project: string, memoryDir: string, chain: readonly string[]): Config {
   const loaded = loadConfig({
     UNITY_PROJECT_PATH: project,
-    PROVIDER_CHAIN: "deepseek",
-    DEEPSEEK_API_KEY: "golden-run-not-a-key",
+    PROVIDER_CHAIN: chain.join(","),
+    ...Object.fromEntries(chain.map((seat) => [`${seat.toUpperCase()}_API_KEY`, `golden-run-not-a-${seat}-key`])),
     MEMORY_DB_PATH: memoryDir,
     // Relative by default: it, and the dynamic profiles opened beside it,
     // would land in the checkout (vitest.worker-setup.ts sets it in
@@ -243,6 +245,8 @@ export interface GoldenRequest {
   readonly name: string;
   readonly request: string;
   readonly script: readonly Step[];
+  /** PROVIDER_CHAIN's seats, in order; each needs its scriptedSeat edge. One deepseek seat when unset. */
+  readonly chain?: readonly string[];
   /**
    * Whether the run is over, read every 50 ms once the request is handed off:
    * the chat's tasks, oldest first (a retry submits a new one), and the texts
@@ -268,6 +272,8 @@ export interface GoldenOutcome {
   readonly project: string;
   /** Where the run's workspace leases were made: a folder beside the project. */
   readonly leaseRoot: string;
+  /** Where bootstrap keeps provider health: what the next boot restores. */
+  readonly providerHealthFile: string;
   /** Every line the run logged, from boot to shutdown, in order. */
   readonly logged: readonly LoggedLine[];
   /** `.strada*` entries the run left in the working directory. */
@@ -301,13 +307,14 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
   // Provider health is a process singleton: a failure one run recorded must
   // not cool the provider down for the next run in the same file.
   ProviderHealthRegistry.resetInstance();
-  const run = loadScript(request.script);
-  resetEdges(run.provider);
+  const chain = request.chain ?? ["deepseek"];
+  const run = loadScript(request.script, chain);
+  resetEdges(run);
   const clock = new RunClock(run);
   const toChat = (): Delivered[] => edges.delivered.filter((m) => m.chatId === GOLDEN_CHAT_ID);
 
   const { bootstrap } = await import("../../core/bootstrap.js");
-  const booting = bootstrap({ channelType: "cli", config: makeConfig(project, memoryDir), daemonMode: false });
+  const booting = bootstrap({ channelType: "cli", config: makeConfig(project, memoryDir, chain), daemonMode: false });
   const app = await clock.within("bootstrap", clock.bootAndRunLeft(), booting).catch((error: unknown) => {
     // A boot that finishes after its limit is still shut down.
     void booting.then((late) => late.shutdown()).catch(() => undefined);
@@ -361,6 +368,7 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
     toolResults: run.provider.getToolResults(),
     project,
     leaseRoot,
+    providerHealthFile: join(memoryDir, "provider-health.json"),
     logged: runLog.lines,
     strayEntries: newRuntimeEntries(workingDir, entriesBefore),
   };
