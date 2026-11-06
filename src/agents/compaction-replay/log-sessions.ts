@@ -14,8 +14,8 @@
  * 3, ...). So the calls are assigned to tracks. A call fits an open track when
  * it extends that track's count by 0 to MAX_STEP messages and its history is
  * consistent with it: the same size when the count did not move, otherwise
- * not smaller. "History" here is the call's input minus its system prompt and
- * tool schemas. Among the tracks that fit, the one whose last system prompt
+ * not smaller. "History" here is the call's input minus its system prompt,
+ * tool schemas and turn context. Among the tracks that fit, the one whose last system prompt
  * is closest in size wins: concurrent sessions run different prompts. A call
  * that fits none is classed as follows:
  * - a new session, when its count is at most two;
@@ -42,6 +42,11 @@ export interface TurnLine {
   readonly toolCalls: number;
   readonly promptChars: number;
   readonly toolChars: number;
+  /**
+   * The turn context the call sent after its history and never stored (src/agents/turn-context.ts);
+   * 0 on lines written before it existed, when those sections sat inside the system prompt.
+   */
+  readonly turnContextChars: number;
   /** The "Tool call" lines logged after this call and before the chat's next one. */
   readonly tools: ToolLine[];
 }
@@ -98,11 +103,16 @@ function turnLineOf(entry: Record<string, unknown>): TurnLine | null {
   const { messages, inputTokens, outputTokens, toolCalls, promptChars, toolChars } = entry;
   if (!isCount(messages) || !isCount(inputTokens) || !isCount(outputTokens)) return null;
   if (!isCount(toolCalls) || !isCount(promptChars) || !isCount(toolChars)) return null;
-  return { messages, inputTokens, outputTokens, toolCalls, promptChars, toolChars, tools: [] };
+  const turnContextChars = isCount(entry.turnContextChars) ? entry.turnContextChars : 0;
+  return { messages, inputTokens, outputTokens, toolCalls, promptChars, toolChars, turnContextChars, tools: [] };
 }
 
-/** The history's share of a call: its input minus the system prompt and tool schemas (chars / 4). */
-const historyTokens = (t: TurnLine): number => t.inputTokens - Math.ceil(t.promptChars / 4) - Math.ceil(t.toolChars / 4);
+/** What a call sent besides its history: the system prompt, the tool schemas and the turn context (chars / 4). */
+export const overheadTokens = (t: TurnLine): number =>
+  Math.ceil(t.promptChars / 4) + Math.ceil(t.toolChars / 4) + Math.ceil(t.turnContextChars / 4);
+
+/** The history's share of a call: its input minus everything it sent besides the history. */
+const historyTokens = (t: TurnLine): number => t.inputTokens - overheadTokens(t);
 
 /** The most recent call that still has unanswered tool calls owns the next "Tool call" line. */
 function ownerOf(calls: readonly (TurnLine | null)[]): TurnLine | undefined {

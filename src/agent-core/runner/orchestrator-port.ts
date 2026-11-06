@@ -73,7 +73,10 @@ export type RunnerModeLike = RunnerMode;
 /** Everything prepareIteration rebuilds for one step (gauntlet #2–#6, minus the call). */
 export interface PreparedIteration {
   readonly executionStrategy: SupervisorExecutionStrategy;
+  /** The system prompt: the same bytes on every step of a run (prepare-iteration.ts). */
   readonly activePrompt: string;
+  /** What the step rebuilt, sent at the end of the last user turn and never stored (turn-context.ts). */
+  readonly turnContext: string;
   readonly currentAssignment: SupervisorAssignment;
   /** The provider FallbackChain already selected — handed straight to gateway.call(). */
   readonly currentProvider: IAIProvider;

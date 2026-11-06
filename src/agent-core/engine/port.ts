@@ -199,10 +199,9 @@ export function createAgentCorePort(
           identityKey: params.identityKey,
           agentState: params.agentState,
           executionJournal: params.executionJournal,
-          // trio HIGH catch: use the LIVE prompt (runCtx.systemPrompt — STEP G's memory refresh
-          // reassigns it mid-run), NOT the spine's frozen setup.systemPrompt snapshot; v1's loops
-          // consumed the reassigned loop-local the same way. Without this the refreshed
-          // "## Relevant Memory"/RAG sections were computed and silently dropped.
+          // The run's prompt as setupRun built it (runCtx.systemPrompt). It no longer changes
+          // mid-run: STEP G's memory refresh appends its recall to the history instead, so the
+          // prompt stays the same bytes for the provider's prefix cache (turn-context.ts).
           systemPrompt: ctx().systemPrompt,
           fallbackProvider: params.fallbackProvider,
           toolTurnAffinity: params.toolTurnAffinity,

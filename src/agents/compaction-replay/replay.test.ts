@@ -121,4 +121,21 @@ describe("compaction replay", () => {
     expect(f.p90AbsError).toBeCloseTo(150 / 1_650);
     expect(replayFidelity([chat([call([say("user", "task")])])])).toEqual({ calls: 0, medianAbsError: null, p90AbsError: null });
   });
+
+  it("sends the turn context after the history on every call and never serves it from the cache", () => {
+    // 400 context chars: 100 tokens. It is not head and not history (src/agents/turn-context.ts).
+    const tail = { turnContextChars: 400 };
+    const session = chat([
+      call([say("user", "task")], { ...tail, inputTokens: 1_200 }),
+      call([say("assistant", "a1"), say("user", "u1")], { ...tail, inputTokens: 1_400 }),
+      call([say("assistant", "a2"), say("user", "u2")], { ...tail, inputTokens: 1_600 }),
+    ]);
+    const r = replayArm(APPEND_ONLY, [session], PRICES);
+    expect(r.inputTokens).toBe(1_200 + 1_400 + 1_600);
+    // The same cache as without a context: the head and the earlier history, never the tail.
+    expect(r.cachedStableHead).toBe(0 + 1_100 + 1_300);
+    expect(r.cachedLoggedHead).toBe(r.cachedStableHead);
+    expect(headChurn([session])).toEqual({ transitions: 2, promptChanged: 0, toolsChanged: 0 });
+    expect(replayFidelity([session]).medianAbsError).toBe(0);
+  });
 });

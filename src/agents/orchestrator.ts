@@ -74,6 +74,7 @@ import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { logProviderCall, toolDefinitionChars, turnRequestFields } from "./providers/provider-call-log.js";
+import { withTurnContext } from "./turn-context.js";
 import { archiveToolFailure } from "./tool-failure-archive.js";
 import { unknownToolMessage } from "./unknown-tool-hint.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
@@ -4339,6 +4340,7 @@ export class Orchestrator {
     }>,
     externalSignal: AbortSignal | undefined,
     chatId: string,
+    turnContext?: string,
     runClock?: RunClock,
   ): Promise<ProviderResponse> {
     // The hard-timeout retry compacts just before this call, so the summary is
@@ -4364,7 +4366,7 @@ export class Orchestrator {
           return externalSignal ? AbortSignal.any([externalSignal, timeoutSignal]) : timeoutSignal;
         })();
     try {
-      const fallbackResponse = await provider.chat(effectivePrompt, session.messages, toolDefinitions, {
+      const fallbackResponse = await provider.chat(effectivePrompt, withTurnContext(session.messages, turnContext), toolDefinitions, {
         signal: fallbackSignal,
         externalSignal,
       });
@@ -4430,6 +4432,7 @@ export class Orchestrator {
     externalSignal?: AbortSignal,
     onLiveness?: () => void,
     runClock?: RunClock, // Phase 1b — flag-ON only; undefined keeps the verbatim v1 watchdog path.
+    turnContext?: string, // after the history, never stored: the prompt stays byte-stable (turn-context.ts)
   ): Promise<ProviderResponse> => {
     // Reasoning models get an extended stall window equal to the initial timeout
     // because they may enter long silent thinking phases with no SSE events.
@@ -4438,6 +4441,7 @@ export class Orchestrator {
       : undefined;
     this.normalizeSessionForCall(session, chatId);
     const effectivePrompt = this.withCompactionSummary(systemPrompt, session);
+    const requestOverheadChars = effectivePrompt.length + (turnContext?.length ?? 0) + toolDefinitionChars(toolDefinitions);
 
     // STREAMING_ENABLED=false: the operator asked for no provider streaming (a
     // proxy that breaks SSE, say). Run the non-streaming path the engine already
@@ -4445,7 +4449,7 @@ export class Orchestrator {
     // instead of opening a stream first.
     if (!this.streamingEnabled) {
       return await this.silentStreamFallback(
-        provider, systemPrompt, session, toolDefinitions, externalSignal, chatId, runClock,
+        provider, systemPrompt, session, toolDefinitions, externalSignal, chatId, turnContext, runClock,
       );
     }
 
@@ -4473,7 +4477,7 @@ export class Orchestrator {
       try {
         const streamPromise = (provider as IStreamingProvider).chatStream(
           effectivePrompt,
-          session.messages,
+          withTurnContext(session.messages, turnContext),
           toolDefinitions,
           (chunk) => {
             // Visible token → firstTokenSeen (flip first-response → stall) + touch (re-arm).
@@ -4508,7 +4512,7 @@ export class Orchestrator {
         if (!isEmptyProviderResponse(response)) scope.firstTokenSeen();
         logProviderCall("turn", provider, turnStartedAt, { response }, {
           chatId,
-          ...turnRequestFields({ systemPrompt: effectivePrompt, messages: session?.messages, tools: toolDefinitions }),
+          ...turnRequestFields({ systemPrompt: effectivePrompt, messages: session?.messages, tools: toolDefinitions, turnContext }),
         });
         this.classifySilentStreamResponse(response, provider);
         return response;
@@ -4543,9 +4547,9 @@ export class Orchestrator {
           throw err;
         }
         // Non-cancel error → the same non-streaming fallback v1 runs, under a fresh scope.
-        this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, (effectivePrompt?.length ?? 0) + toolDefinitionChars(toolDefinitions));
+        this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, requestOverheadChars);
         return await this.silentStreamFallback(
-          provider, systemPrompt, session, toolDefinitions, externalSignal, chatId, runClock,
+          provider, systemPrompt, session, toolDefinitions, externalSignal, chatId, turnContext, runClock,
         );
       } finally {
         scope.leave();
@@ -4571,7 +4575,7 @@ export class Orchestrator {
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(
         effectivePrompt,
-        session.messages,
+        withTurnContext(session.messages, turnContext),
         toolDefinitions,
         (chunk) => {
           // Non-empty chunk = real visible content (flip to stall window); empty
@@ -4606,6 +4610,7 @@ export class Orchestrator {
         systemPrompt: effectivePrompt,
         messages: session?.messages,
         tools: toolDefinitions,
+        turnContext,
       }));
       // Route empty 200s to the health-failure path (the shared breaker predicate, audit #9).
       this.classifySilentStreamResponse(response, provider);
@@ -4623,11 +4628,11 @@ export class Orchestrator {
       }
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
-      this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, (effectivePrompt?.length ?? 0) + toolDefinitionChars(toolDefinitions));
+      this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, requestOverheadChars);
       // Fallback to non-streaming under the SAME per-call deadline v1 used (extracted; the
       // OFF call passes no runClock → AbortSignal.timeout, byte-identical to the prior inline).
       return await this.silentStreamFallback(
-        provider, systemPrompt, session, toolDefinitions, externalSignal, chatId,
+        provider, systemPrompt, session, toolDefinitions, externalSignal, chatId, turnContext,
       );
     }
   };
