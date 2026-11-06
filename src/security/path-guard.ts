@@ -198,6 +198,33 @@ function outsideProjectError(projectRoot: string): string {
 }
 
 /**
+ * The refusals this guard gives about the TARGET a call named: outside the
+ * project, a sensitive file, a framework package, no path, a bad character, a
+ * parent that is not there. Each is returned before the tool touches
+ * anything. "Project root does not exist" is not one: it is about the
+ * environment, and no other target would fix it.
+ */
+const TARGET_REFUSALS: readonly RegExp[] = [
+  /^Path resolves outside the project directory\b/,
+  /^Absolute path is outside the project directory\b/,
+  /^Path is required\b/,
+  /^Path contains invalid characters\b/,
+  /^Parent directory does not exist\b/,
+  /^Access to sensitive files is not permitted\b/,
+  /^\S+ is inside the \S+ framework package, which agents do not write\b/,
+];
+
+/**
+ * Whether a tool's failure text is this guard refusing the target the call
+ * named, as a file tool reports it (`Error: <refusal>`). Anchored at the
+ * start: a command whose output quotes one of these sentences did run.
+ */
+export function isPathTargetRefusal(text: string): boolean {
+  const refusal = text.replace(/^Error:\s*/, "");
+  return TARGET_REFUSALS.some((pattern) => pattern.test(refusal));
+}
+
+/**
  * The real checkout a workspace lease was seeded from, read from the
  * lease's owner file (written by the lease manager), or undefined when the
  * root is not a lease. Cached while the owner file's size, mtime, ctime and

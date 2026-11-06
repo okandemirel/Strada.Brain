@@ -3,6 +3,7 @@ import { verifierOutputVerdict, type VerificationState } from "./self-verificati
 import type { LogEntry } from "../../utils/logger.js";
 import { analyzePromptTargets } from "../prompt-targets.js";
 import { PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
+import { isPathTargetRefusal } from "../../security/path-guard.js";
 
 export interface CompletionReviewEvidence {
   readonly touchedFiles: readonly string[];
@@ -145,7 +146,7 @@ export function collectCompletionReviewEvidence(params: {
     params.verificationState.lastVerificationAt ?? params.taskStartedAtMs,
   );
   const recentFailures = params.state.stepResults
-    .filter((step) => !step.success && step.timestamp >= reviewCutoff)
+    .filter((step, i, steps) => !step.success && step.timestamp >= reviewCutoff && !refusalRetriedOk(step, steps.slice(i + 1)))
     .slice(-5)
     .map((step) => `${step.toolName}: ${step.summary}`);
   const recentSteps = params.state.stepResults
@@ -171,6 +172,20 @@ export function collectCompletionReviewEvidence(params: {
       .slice(-8),
     verificationState: params.verificationState,
   };
+}
+
+/**
+ * A failure that a later call has answered: the path guard refused the target
+ * the call named, so the tool did nothing, and a later call of the same tool
+ * succeeded. Measured 2026-11-06 (golden run): a worker wrote outside the
+ * project, read the refusal and wrote the right path, and the refusal stayed a
+ * "failing path" that only a verification could close. In a project with no
+ * build and no tests there is none, so the node was asked six times and
+ * blocked. Any other failure still waits for a verification: a tool that ran
+ * and failed has a failing path to re-run.
+ */
+function refusalRetriedOk(step: StepResult, later: readonly StepResult[]): boolean {
+  return isPathTargetRefusal(step.summary) && later.some((next) => next.success && next.toolName === step.toolName);
 }
 
 export function shouldRunCompletionReview(
