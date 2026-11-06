@@ -33,7 +33,7 @@
  */
 
 import { vi, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +43,7 @@ import { ProviderHealthRegistry } from "../../agents/providers/provider-health.j
 import { TaskStorage } from "../../tasks/task-storage.js";
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
 import { createLogger, getLogRingBuffer } from "../../utils/logger.js";
+import { newRuntimeEntries, runtimeEntriesIn } from "./checkout-runtime-entries.js";
 import { edges, loadScript, resetEdges, type Delivered, type ScriptedRun, type Step } from "./golden-run-edges.js";
 import type { CapturedToolResult } from "./mock-provider.js";
 
@@ -69,25 +70,12 @@ function refuseNetwork(): void {
 }
 
 /**
- * Every path under the working directory's `.strada*` entries. A relative
- * default (`.strada-memory/…`, a vault's `<root>/.strada/vault`) lands in the
- * working directory, and a test runs in the checkout: the run must leave
- * nothing there. vitest.worker-setup.ts points process.env's databases away
- * from it, but loadConfig below is handed an environment built by hand.
+ * Where the test runs: the checkout. A run must leave no `.strada*` entry here.
+ * A relative default (`.strada-memory/…`, a vault's `<root>/.strada/vault`)
+ * lands in the working directory. vitest.worker-setup.ts points process.env's
+ * databases away from it, but loadConfig below is handed an environment built
+ * by hand.
  */
-function stradaEntriesIn(dir: string): Set<string> {
-  const entries = new Set<string>();
-  for (const name of readdirSync(dir)) {
-    if (!name.startsWith(".strada")) continue;
-    entries.add(name);
-    const top = join(dir, name);
-    if (!statSync(top).isDirectory()) continue;
-    for (const nested of readdirSync(top, { recursive: true })) entries.add(join(name, String(nested)));
-  }
-  return entries;
-}
-
-/** Where the test runs: the checkout. A run must leave no `.strada*` entry here. */
 export const GOLDEN_WORKING_DIR = process.cwd();
 const workingDir = GOLDEN_WORKING_DIR;
 let root: string | undefined;
@@ -264,7 +252,7 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
   const memoryDir = join(folder, "memory");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "README.md"), "# A tiny project with no Unity in it\n");
-  const entriesBefore = stradaEntriesIn(workingDir);
+  const entriesBefore = runtimeEntriesIn(workingDir);
   // Provider health is a process singleton: a failure one run recorded must
   // not cool the provider down for the next run in the same file.
   ProviderHealthRegistry.resetInstance();
@@ -321,6 +309,6 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
     violations: run.violations,
     toolResults: run.provider.getToolResults(),
     project,
-    strayEntries: [...stradaEntriesIn(workingDir)].filter((entry) => !entriesBefore.has(entry)),
+    strayEntries: newRuntimeEntries(workingDir, entriesBefore),
   };
 }
