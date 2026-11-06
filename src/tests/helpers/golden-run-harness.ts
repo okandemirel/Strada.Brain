@@ -74,7 +74,8 @@ function refuseNetwork(): void {
  * A relative default (`.strada-memory/…`, a vault's `<root>/.strada/vault`)
  * lands in the working directory. vitest.worker-setup.ts points process.env's
  * databases away from it, but loadConfig below is handed an environment built
- * by hand.
+ * by hand. The worker setup checks every test file the same way when the file
+ * ends; here it is checked right after each run, by name.
  */
 export const GOLDEN_WORKING_DIR = process.cwd();
 const workingDir = GOLDEN_WORKING_DIR;

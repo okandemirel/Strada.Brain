@@ -15,16 +15,25 @@
  *   and the model catalog fall back to MEMORY_DB_PATH too.
  * - The user's home, as os.homedir() answers it in this process, is an empty
  *   directory per test file (see installDecoyHome).
+ * - The checkout itself cannot be moved, so it is watched: a file that ends
+ *   with a new `.strada…` entry in it fails, naming the path (see
+ *   watchCheckout).
  *
  * Set on every file, not defaulted: a file that changed one of them and did
  * not put it back must not hand that to the next file in the worker.
  */
-import { mkdirSync, readdirSync } from "node:fs";
+import { mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll } from "vitest";
 import { newDecoyHome } from "./src/tests/helpers/decoy-home.js";
+import {
+  leakedEntriesMessage,
+  newRuntimeEntries,
+  runtimeEntriesIn,
+} from "./src/tests/helpers/checkout-runtime-entries.js";
 
 const runRoot = process.env["STRADA_VITEST_TMP_ROOT"];
 if (runRoot) {
@@ -35,6 +44,7 @@ if (runRoot) {
   process.env["MODEL_INTELLIGENCE_DB_PATH"] = join(home, ".strada-memory", "model-intelligence.db");
   installDecoyHome(runRoot);
 }
+watchCheckout([process.cwd(), fileURLToPath(new URL(".", import.meta.url))]);
 
 interface HomedirPatch {
   readonly realHomedir: () => string;
@@ -78,5 +88,34 @@ function installDecoyHome(root: string): void {
           "that is the developer's own ~/.strada. Resolve the path with resolveStradaHomeEntry().",
       );
     }
+  });
+}
+
+/**
+ * A relative default resolves against the working directory, and a vault or
+ * lock built from the install root lands beside the source; under vitest both
+ * are the checkout. Tests opened <repo>/.strada-memory/*.db (2026-10-11), and
+ * the golden run wrote model-intelligence.db, dynamic-profiles.db and a 9 MB
+ * .strada/vault/index.db there (a474355c). .gitignore hides all of it, so only
+ * a reviewer listing ignored files saw either. docs/contracts/clean-checkout.md
+ *
+ * Unlike the home, the checkout cannot be swapped for a decoy: the install
+ * root comes from the module's own URL, and tests read the source through
+ * process.cwd(). So each root is listed before the file and after it, and the
+ * file fails on what is new — the same entry left by a file running in
+ * another worker at the same time included; the message says so. Here the two
+ * roots are one directory; src/tests/clean-checkout.test.ts runs a copy of
+ * this file with them apart.
+ */
+function watchCheckout(roots: readonly string[]): void {
+  const watched = [...new Set(roots.map((root) => realpathSync.native(root)))].map((root) => ({
+    root,
+    before: runtimeEntriesIn(root),
+  }));
+  afterAll(() => {
+    const leaked = watched.flatMap(({ root, before }) =>
+      newRuntimeEntries(root, before).map((entry) => join(root, entry)),
+    );
+    if (leaked.length > 0) throw new Error(leakedEntriesMessage(leaked));
   });
 }

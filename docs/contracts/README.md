@@ -14,6 +14,7 @@ is.
 | [test-integrity](test-integrity.md) | Changing an existing test: removing, skipping, commenting out or rewriting a case or assertion; moving a ratchet's pinned number | Before editing a test because it fails; before any skip/only/todo; before raising a BASELINE or PINNED number; when check-test-integrity prints |
 | [file-size](file-size.md) | How long a source file under `src/` may grow | Adding code to a file near or over 1,000 lines; when the size ratchet names a file |
 | [governance](governance.md) | The files that enforce the rules: the commit checker, hooks, workflows, contracts | Before changing the checker, a hook, a workflow, a contract or src/contracts.test.ts; when the checker prints 'governed file changed' |
+| [clean-checkout](clean-checkout.md) | What a test run may leave in the checkout it runs from: no new `.strada…` runtime entry at its root | A test builds a config, store, vault or lock from defaults or a hand-made env; a test resolves a runtime path against `process.cwd()`; when the worker setup fails a file with 'left … in the checkout it runs from' |
 
 ## Adding a contract
 
