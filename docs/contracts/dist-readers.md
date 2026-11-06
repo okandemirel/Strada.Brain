@@ -46,10 +46,12 @@ message is never selected, and the same false red comes back for it.
   - a path whose end comes only at run time counts by its known start:
     `path.join(process.cwd(), "dist", name)` with `name` a loop variable or a
     helper's parameter, `join(root, "dist", ...parts)`, and
-    `` `${repoRoot}/dist/${name}` `` or `root + "/dist/" + name` all land in
-    dist/. The start counts up to its last whole segment, so
-    `` `${root}/dist${suffix}` `` and `join(root, sub, "dist")`, whose dist/
-    part is not fixed, do not;
+    `` `${repoRoot}/dist/${name}` ``, `root + "/dist/" + name`,
+    `` new URL(`../../dist/${name}`, import.meta.url) `` and
+    `` import(new URL(`…/dist/${name}.js`, import.meta.url).href) `` all land
+    in dist/. The start counts up to its last whole segment, so
+    `` `${root}/dist${suffix}` ``, `` new URL(`../../dist${suffix}`, import.meta.url) ``
+    and `join(root, sub, "dist")`, whose dist/ part is not fixed, do not;
   - an `import` or `import()` of a relative specifier counts too.
 
   A file with a path that lands in `<repo>/dist` and no `READS_BUILD` match
@@ -91,6 +93,12 @@ message is never selected, and the same false red comes back for it.
   from a function parameter, a `let` or an environment variable, or a dist/
   segment assembled at run time. A path whose root and dist/ are fixed and
   only its end varies is seen (above).
+- **A root returned by a local function:** `function repoRoot() { return
+  process.cwd(); }` and then `path.join(repoRoot(), "dist", "index.js")`. A
+  call is followed only into the path and URL functions listed above, not into
+  a function the file declares. No test builds the repository root this way
+  today (the `projectRoot()` in `workspace-submodules.test.ts` returns a temp
+  folder).
 - **A run-time end that leaves dist/ again** (`join(root, "dist", "../src")`,
   or a `resolve()` part that turns out absolute) still counts as a reader.
   This errs toward the gate building dist/ for nothing, not toward a missed
@@ -122,7 +130,12 @@ up a dist/ in a temp folder, such as `backup-script`, `source-launcher`,
 for the check, each reading dist/ under another message, failed the detector
 at their line: one that read `dist/core/database-backup.js` from
 `process.cwd()`, one that read it through `join as joinPath` from
-`node:path`, and three whose file name came at run time (a loop over names,
+`node:path`, three whose file name came at run time (a loop over names,
 an `it.each` template `` `${repoRoot}/dist/${name}` ``, a helper
-`entry(name)` joining `repoRoot`, `"dist"` and `name`). The detector adds one
-test file of its own, which contains `dist` and builds no path into it.
+`entry(name)` joining `repoRoot`, `"dist"` and `name`), and two that built
+the URL at run time (`` import(new URL(`../../../dist/core/${name}.js`,
+import.meta.url).href) `` and `` readFileSync(new URL(`../../../dist/${name}`,
+import.meta.url)) ``). One beside them reading `` new URL(`../../../dist${suffix}`,
+import.meta.url) `` was not counted. The repository scan with the URL change
+still finds exactly the three readers. The detector adds one test file of its
+own, which contains `dist` and builds no path into it.
