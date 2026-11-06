@@ -71,6 +71,13 @@ message is never selected, and the same false red comes back for it.
     relative or absolute one, resolved from the test file as
     `new URL(…, import.meta.url)` is.
 
+  An expression not on this list is not worked out, and a path built from it
+  does not count: a conditional (`process.env.ROOT ?? process.cwd()`,
+  `ci ? a : b`), a member of an imported object or array other than a
+  namespace import (`PATHS.cli`, `for (const entry of ENTRIES)`, `P.cli` on a
+  default-exported object), `pathToFileURL`, and the value a function call
+  returns (below).
+
   A test file is parsed when it, or a module it imports from by a relative
   specifier, spells `dist`. Parsing every test file instead takes a scan of
   the repository from about 2 s to 8–16 s. Following the names a test uses
@@ -111,14 +118,17 @@ message is never selected, and the same false red comes back for it.
 
 ## What it cannot see
 
-- **A path a function returns, in this file or another:** `function
-  repoRoot() { return process.cwd(); }` and then `path.join(repoRoot(),
-  "dist", "index.js")`, or a helper's `cliPath()`. A call is followed only
-  into the path and URL functions listed above, not into a function a module
-  declares. No test builds the repository root this way today (the
-  `projectRoot()` in `workspace-submodules.test.ts` returns a temp folder),
-  and no test helper returns a dist/ path: of the modules tests import, only
-  production modules spell `dist`, and the two that build a path into dist/
+- **A root or path that comes out of a function call, in this file or
+  another:** `function repoRoot() { return process.cwd(); }` and then
+  `path.join(repoRoot(), "dist", "index.js")`, or a helper's `cliPath()`. A
+  call is followed only into the path and URL functions listed above, not
+  into a function a module declares. The path a local function builds in its
+  own body is seen there: `function cli() { return join(process.cwd(),
+  "dist", "index.js"); }` counts at the line of its `join`. No test builds
+  the repository root this way today (the `projectRoot()` in
+  `workspace-submodules.test.ts` returns a temp folder), and no test helper
+  returns a dist/ path: of the modules tests import, only production modules
+  spell `dist`, and the two that build a path into dist/
   (`src/channels/web/channel.ts`, `src/core/setup-wizard.ts`) keep it in an
   unexported list of static-folder fallbacks.
 - **A value imported by package name or loaded at run time:** a name from a
@@ -204,3 +214,16 @@ detector at their line: `expect(existsSync(BUILT_CLI))`,
 `execFileSync(process.execPath, [paths.BUILT_CLI, "--help"])` through a
 namespace import, and
 `await import(import.meta.resolve("../../../dist/core/database-backup.js"))`.
+
+The scan of the repository took 3.0–5.6 s at load averages of 42–84 on
+2026-11-06. It runs in the test that makes it first, and vitest fails a test
+that outlasts its limit even after it passes: the 30 s default would turn the
+detector red for a busy machine, not for a reader. The two tests that read the
+scan carry a limit of 120 s (`REPO_SCAN_TIMEOUT_MS`), as the long-running
+detector in `clean-checkout.test.ts` does. With the limit set to 1 s, each failed with
+"Test timed out in 1000ms" after a 4.3–5.1 s scan. Probed the same day with
+tests added without the message and deleted after: a root from `??` or from a
+conditional, a member of an imported object, an imported array, a member of
+a default-exported object, a `pathToFileURL` base and a root a local function
+returns were not counted, as listed above; a local function that builds the
+dist/ path in its own body was counted at its line.

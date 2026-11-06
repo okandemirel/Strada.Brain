@@ -547,6 +547,15 @@ function writeAll(root: string, files: Record<string, string>): void {
 let repoScan: ReturnType<typeof scan> | undefined;
 /** The repository's own scan, made once for the tests that read it. */
 const scanRepo = (): ReturnType<typeof scan> => (repoScan ??= scan(REPO));
+/**
+ * The scan reads every test file and parses about 180 modules: 3-6 s measured
+ * at load averages of 42-84, and longer still when many agents run the gates
+ * at once, which leaves vitest's 30 s default little room. Vitest fails a
+ * test that outlasts its limit even after it passes, which would be a false
+ * red from the gate's own detector. Either test that reads the scan may be
+ * the one to make it (`-t` picks one alone), so both carry the limit.
+ */
+const REPO_SCAN_TIMEOUT_MS = 120_000;
 
 describe("a test that reads the repository's dist/ says so (docs/contracts/dist-readers.md)", () => {
   it("every test file that builds a path into dist/ fails asking for npm run build, so the build gate picks it", () => {
@@ -557,7 +566,7 @@ describe("a test that reads the repository's dist/ says so (docs/contracts/dist-
         "never builds dist/ for them and a fresh worktree shows them red. Check the path before the read, failing with " +
         `"<path> is missing: ${MESSAGE.replace(/\\`/g, "`")}", or build the dist/ the test needs in its own temp folder.`,
     ).toEqual([]);
-  });
+  }, REPO_SCAN_TIMEOUT_MS);
 
   it("finds today's readers by the paths they build, and not the tests that set up a dist/ of their own", () => {
     const { readers } = scanRepo();
@@ -571,7 +580,7 @@ describe("a test that reads the repository's dist/ says so (docs/contracts/dist-
     for (const fixtureDist of ["src/tests/unit/backup-script.test.ts", "src/tests/integration/source-launcher.test.ts"]) {
       expect(readers).not.toContain(fixtureDist);
     }
-  });
+  }, REPO_SCAN_TIMEOUT_MS);
 
   it("turns red on a new test that reads dist/ without the message, and not on one with it or one with its own dist/", () => {
     const root = tempRoot();
