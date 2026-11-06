@@ -10,7 +10,9 @@
  * agent spent its turn diagnosing the environment instead of its change.
  *
  * A test says it reads the build in its failure message: "run `npm run build`
- * before this test" (READS_BUILD). The gate builds only when such a test is
+ * before this test" (READS_BUILD). A test that points into dist/ without it
+ * is a finding of docs/contracts/dist-readers.md (src/tests/dist-readers.test.ts),
+ * because this gate would never build for it. The gate builds only when such a test is
  * among the tests the gates will run (a contract detector, or one vitest's
  * `related` selects for the changed files) and dist/ is missing or older than
  * its inputs. A failed build is a red gate.
@@ -47,17 +49,23 @@ function* walk(dir) {
   }
 }
 
-/** The test files (vitest's include: src/ and tests/) that say they read dist/, repo-relative. */
-export function testsThatReadBuild(root) {
+/** Every test file vitest's include holds (src/ and tests/), repo-relative and sorted. */
+export function testFiles(root) {
   const found = [];
   for (const top of ["src", "tests"]) {
     for (const file of walk(path.join(root, top))) {
-      if (file.endsWith(".test.ts") && READS_BUILD.test(fs.readFileSync(file, "utf8"))) {
-        found.push(toPosix(path.relative(root, file)));
-      }
+      if (file.endsWith(".test.ts")) found.push(toPosix(path.relative(root, file)));
     }
   }
   return found.sort();
+}
+
+/**
+ * The test files that say they read dist/, repo-relative. A test that reads
+ * dist/ without saying so is a finding of docs/contracts/dist-readers.md.
+ */
+export function testsThatReadBuild(root) {
+  return testFiles(root).filter((file) => READS_BUILD.test(fs.readFileSync(path.join(root, file), "utf8")));
 }
 
 /**
