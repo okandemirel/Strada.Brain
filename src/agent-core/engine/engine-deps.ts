@@ -24,6 +24,7 @@ import type {
   SupervisorExecutionStrategy,
 } from "../../agents/orchestrator-supervisor-routing.js";
 import type { WorkerRunCollector } from "../../agents/orchestrator-intervention-pipeline.js";
+import type { RecallLedger } from "../../agents/recall-ledger.js";
 
 /** v1 ToolExecutionMode parity (module-local in orchestrator/intervention-pipeline; engine copy). */
 export type ToolExecutionMode = "interactive" | "background" | "delegated";
@@ -117,6 +118,9 @@ export interface EngineRunContext {
   /** step5-parity: v1 refreshed memory per tool turn via this refresher (mid-run re-retrieval);
    *  the port's tool turn threads it into refreshMemoryIfNeeded exactly as the v1 loops did. */
   readonly memoryRefresher: ReturnType<SessionManager["createMemoryRefresher"]> | null;
+  /** What the refreshes recalled: the tool turn adds to it, the port restores it after every
+   *  trim and compaction, so a recall reaches every later call of the run (recall-ledger.ts). */
+  readonly recallLedger: RecallLedger;
   /** step5-parity: the supervisor provider pin's fixed all-roles strategy (undefined = unpinned). */
   readonly fixedExecutionStrategy: SupervisorExecutionStrategy | undefined;
   /**
