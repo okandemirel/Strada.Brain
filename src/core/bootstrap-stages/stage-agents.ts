@@ -29,7 +29,8 @@ import type { AgentId } from "../../agents/multi/agent-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
 import { collectProviderCredentials } from "../provider-config.js";
-import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "../../agents/multi/workspace-lease-manager.js";
+import type { WorkspaceLeaseManager } from "../../agents/multi/workspace-lease-manager.js";
+import { createWorkspaceLeaseManager } from "./workspace-lease-setup.js";
 import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import type { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
@@ -219,14 +220,7 @@ export async function initializeMultiAgentDelegationStage(
       : [...(deps.defaultDelegationTypes ?? DEFAULT_DELEGATION_TYPES)];
     let workspaceLeaseManager: WorkspaceLeaseManager | undefined;
     try {
-      const envExcludes = process.env["WORKSPACE_COPY_EXCLUDES"];
-      const additionalExcludes = envExcludes
-        ? envExcludes.split(",").map((s) => s.trim()).filter(Boolean)
-        : [...DEFAULT_WORKSPACE_COPY_EXCLUDES];
-      workspaceLeaseManager = new WorkspaceLeaseManager({
-        projectRoot: params.config.unityProjectPath,
-        additionalExcludes,
-      });
+      workspaceLeaseManager = createWorkspaceLeaseManager(params.config.unityProjectPath);
     } catch (error) {
       params.logger.warn("Workspace isolation disabled for delegation manager", {
         error: error instanceof Error ? error.message : String(error),
