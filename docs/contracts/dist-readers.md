@@ -39,7 +39,9 @@ message is never selected, and the same false red comes back for it.
   - `import.meta.url`, `import.meta.dirname` and `__dirname` are the test
     file's own place;
   - `path.join`, `path.resolve`, `path.dirname`, `fileURLToPath`, `new URL`,
-    `.pathname`, template strings and `+` are followed;
+    `.pathname`, template strings and `+` are followed, also when the
+    function is imported under another name (`import { join as joinPath }`):
+    a call is judged by the name it has in its module, not by the local one;
   - a name is followed to the `const` it was declared with, in its own scope;
   - an `import` or `import()` of a relative specifier counts too.
 
@@ -85,6 +87,10 @@ message is never selected, and the same false red comes back for it.
   script it runs. `scripts/backup.sh` reads `dist/core/database-backup.js`;
   `restore-script.test.ts` is seen because it checks that path itself.
 - **Joins other than the ones listed,** such as `[root, "dist"].join("/")`.
+- **A path function reached other than by `import`:** taken from
+  `require("node:path")`, or destructured (`const { join } = path`).
+- **`require.resolve("../../dist/…")`** on a `require` made with
+  `createRequire(import.meta.url)`.
 - **A `process.cwd()` the test moved with `process.chdir`:** it is still taken
   as the root, which can count a temp folder's dist/ as the repository's.
 - **Tests outside vitest's include.** `web-portal/` has its own dist/ and
@@ -92,12 +98,15 @@ message is never selected, and the same false red comes back for it.
 
 ## Calibration
 
-Measured on 2026-11-06 on main at dd0b094d. There are 1,120 test files under
-`src/` and `tests/`; 31 of them contain the word `dist`, and 3 build a path
-into the repository's dist/: `live-verify-providers`, `live-verify-weights`
+Measured on 2026-11-06 on main at 801fcdae, before this change. There are
+1,119 test files under `src/` and `tests/`; 30 of them contain the word
+`dist`, and 3 build a path into the repository's dist/: `live-verify-providers`, `live-verify-weights`
 and `restore-script`. All three carry the message, so there are 0 findings
 and the rule gates with no baseline. The tests that set up a dist/ in a temp
 folder, such as `backup-script`, `source-launcher`, `setup-doctor` and
 `auto-updater-health-check`, are not counted. A test added for the check, one
 that read `dist/core/database-backup.js` from `process.cwd()` under another
-message, failed the detector at its line.
+message, failed the detector at its line. So did one that imported
+`join as joinPath` from `node:path` and read the same file through it. The
+detector adds one test file of its own, which contains `dist` and builds no
+path into it.
