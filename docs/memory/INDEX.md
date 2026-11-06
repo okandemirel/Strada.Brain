@@ -23,6 +23,7 @@ Scan the topic you are about to work in, and open only the entries that match. P
 
 - [gotcha] Provider cooldowns persist across restarts in provider-health.json; read it first when every call is refused — `entries/2026-09-10-key-rotation-inherits-cooldown.md` · src/agents/providers/**
 - [spike] Mask old tool output deterministically, but as a rare cliff with byte-stable stubs, and only after the cache hit rate is measured — `entries/2026-11-04-compaction-must-respect-the-prefix-cache.md` · src/agents/session-compaction.ts, src/agents/providers/provider-call-log.ts, src/agents/compaction-replay/**, scripts/eval/compaction-replay.mjs
+- [decision] Project health is measured model-free by the real-tree guardian; HEARTBEAT.md ships no trigger, and a test fails if one opens a task on a healthy project — `entries/2026-11-06-project-health-is-the-guardian-not-a-trigger.md` · HEARTBEAT.md, src/daemon/**, src/core/bootstrap-stages/stage-daemon.ts
 
 ## learning-memory
 
@@ -48,3 +49,4 @@ Scan the topic you are about to work in, and open only the entries that match. P
 - [gotcha] A vendored Strada.MCP needs npm install inside it, or every Unity tool silently vanishes — `entries/2026-08-23-vendored-mcp-needs-its-dependencies.md` · src/config/strada-deps.ts, src/core/terminal-wizard.ts
 - [gotcha] Provider cooldowns persist across restarts in provider-health.json; read it first when every call is refused — `entries/2026-09-10-key-rotation-inherits-cooldown.md` · src/agents/providers/**
 - [decision] Order comes from a sequence, identity from (host, pid), and another process's lock file is never removed — `entries/2026-09-18-a-clock-is-not-an-order.md` · src/budget/**, src/common/**
+- [decision] Project health is measured model-free by the real-tree guardian; HEARTBEAT.md ships no trigger, and a test fails if one opens a task on a healthy project — `entries/2026-11-06-project-health-is-the-guardian-not-a-trigger.md` · HEARTBEAT.md, src/daemon/**, src/core/bootstrap-stages/stage-daemon.ts

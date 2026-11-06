@@ -27,7 +27,7 @@ A ruthless code-and-live-evidence audit of the README's ten headline claims
 | Deployment subsystem | unit-proven only; off by default and daemon-gated — never initialized here | 0 log hits |
 | Skill ecosystem + git registry | **works-live** (8 skills load; registry reachable; honest gating) | boot log each start |
 | Memory consolidation + HNSW | HNSW live but hash-fallback vectors (no embedding provider); consolidation never ran (0 log rows) | `agentdb` files + `consolidation_log` |
-| 24/7 daemon + proactive triggers | not running here (CLI); engine real; this repo's HEARTBEAT.md defines a single cron trigger | `heartbeat-loop.ts`; 0 log hits |
+| 24/7 daemon + proactive triggers | not running here (CLI); engine real; this repo's HEARTBEAT.md defines no trigger since 2026-11-06 (its 5-minute health-check cron asked a model on every fire; the real-tree guardian measures project health without one) | `heartbeat-loop.ts`; 0 log hits |
 
 Same-day closures (2026-08-30 afternoon): learning's creation gate was a
 structural zero (cap 0.5 vs gate 0.6) — fixed with a strict regression test;
