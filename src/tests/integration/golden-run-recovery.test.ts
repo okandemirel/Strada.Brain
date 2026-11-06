@@ -13,10 +13,13 @@
  * 2. The supervisor throws. The orchestrator catches it and one worker runs
  *    the request. What the user is told about it is pinned.
  * 3. Everything fails once. The planner answers in prose and is asked again;
- *    a node's tool is refused, it cannot verify its fix, and it is blocked;
- *    the blocked goal is resumed without waiting for a person and the node
- *    runs again; the provider drops two calls of the next node, which is
- *    asked again at once without streaming and then on its next turn.
+ *    a node's write is refused for its target, and the node writes the right
+ *    path and finishes; the provider drops two calls of the next node, which
+ *    is asked again at once without streaming and then on its next turn.
+ * 4. A node's write fails at run time. Its next write succeeds, but the
+ *    failure waits for a verification the project has none of, and the node
+ *    is blocked; the blocked goal is resumed without waiting for a person
+ *    and the node runs again.
  *
  * When a deliberate change alters the calls a run makes, the failure names
  * the step it expected and the call it got. Update that run's script in the
@@ -218,38 +221,12 @@ const BETA_DONE = "Wrote notes/beta.txt.";
 const RECOVERY_ANSWER = `${ALPHA_DONE}\n\n${BETA_DONE}`;
 /** Outside the project: file_write refuses it, and the worker must read the refusal and write again. */
 const ESCAPING_PATH = "../outside/alpha.txt";
-/** What the worker answers a gate it cannot satisfy: the project has no build and no tests. */
-const CANNOT_VERIFY = "notes/alpha.txt is written. This project has no build and no tests to run.";
-/**
- * What the user is told when alpha is blocked: each step by its task, why it
- * did not finish, and that the executor resumes the goal on its own.
- */
-const BLOCKED =
-  "Steps finished: 0 of 2.\n\n" +
-  `Could not finish "${NODE_ALPHA}" (it kept trying without making progress)\n` +
-  `Did not start "${NODE_BETA}" (a step it depends on did not finish)\n\n` +
-  "Retrying automatically now (automatic retry 1); finished steps are kept.";
 /** The provider drops two of beta's calls in a row, the way a busy upstream does. */
 const PROVIDER_DROP = "503 Service Unavailable: the upstream is overloaded";
 /** What the session is told when a turn's every attempt dropped. */
 const isFailureNotice = (call: ProviderCall): boolean =>
   textOf(call.messages.at(-1)).startsWith("[System: The AI provider (deepseek) failed to respond") &&
   textOf(call.messages.at(-1)).includes(PROVIDER_DROP);
-
-/**
- * A failed step stays open until a verification runs after it, and the
- * project has none to run. The worker is told so after each answer, told it
- * is stalling, and blocked by loop detection after its third text-only turn.
- */
-function gateStep(n: number, marker: string): Step {
-  return {
-    step: `alpha: gate ${n}, "${marker}"`,
-    check: (call) => requires([isWorkerOn(NODE_ALPHA)(call), lastSays(call, marker)]),
-    reply: say(CANNOT_VERIFY),
-  };
-}
-const UNVERIFIED = "[VERIFIER PIPELINE] Internal verification is not clean yet.";
-const STALLING = "[STALE ANALYSIS DETECTED]";
 
 const RECOVERY_SCRIPT: readonly Step[] = [
   decomposeStep("decompose: the planner answers in prose", RECOVERY_REQUEST,
@@ -262,18 +239,12 @@ const RECOVERY_SCRIPT: readonly Step[] = [
   actStep("alpha: act again, after reading the refusal", NODE_ALPHA,
     [writeCall("call_alpha_fixed", "notes/alpha.txt", "ALPHA\n")],
     (call) => carriesResult(call, "call_alpha_escape")),
+  // The refused write did nothing and the next write succeeded, so the
+  // refusal leaves no failing path open: alpha is done on its first attempt.
+  // Measured 2026-11-06, before the fix: the refusal waited for a
+  // verification this project has none of; the worker was asked six times,
+  // blocked, and alpha ran again from the start.
   reportStep("alpha: report", NODE_ALPHA, ["call_alpha_fixed"], ALPHA_DONE),
-  gateStep(1, UNVERIFIED),
-  gateStep(2, UNVERIFIED),
-  gateStep(3, STALLING),
-  gateStep(4, STALLING),
-  gateStep(5, UNVERIFIED),
-  gateStep(6, UNVERIFIED),
-  // Loop detection blocks alpha, beta is skipped, and the task is blocked.
-  // The executor resumes the blocked goal at once: alpha runs again, fresh.
-  planStep("alpha, resumed: plan", NODE_ALPHA),
-  actStep("alpha, resumed: act", NODE_ALPHA, [writeCall("call_alpha", "notes/alpha.txt", "ALPHA\n")]),
-  reportStep("alpha, resumed: report", NODE_ALPHA, ["call_alpha"], ALPHA_DONE),
   planStep("beta: plan", NODE_BETA),
   // Two layers retry a dropped call. The turn asks again at once without
   // streaming; when that drops too, the turn ends empty with a notice in the
@@ -287,8 +258,76 @@ const RECOVERY_SCRIPT: readonly Step[] = [
   actStep("beta: act, the next turn, told the provider failed", NODE_BETA, [writeCall("call_beta", "notes/beta.txt", "BETA\n")],
     (call) => !isFailureNotice(call) && "the session carries no notice of the drop"),
   reportStep("beta: report", NODE_BETA, ["call_beta"], BETA_DONE),
-  verifyStep("alpha", ALPHA_DONE),
+  // Cheapest node first (ResultAggregator): beta answered in three calls, alpha in four.
   verifyStep("beta", BETA_DONE),
+  verifyStep("alpha", ALPHA_DONE),
+];
+
+// ─── Run 4: a write fails at run time ────────────────────────────────────────
+
+const RUNTIME_REQUEST =
+  "Create two plain text files in the project: notes/kappa.txt containing the word KAPPA, " +
+  "and notes/sigma.txt containing the word SIGMA. Nothing else.";
+const NODE_KAPPA = "Create notes/kappa.txt containing the word KAPPA";
+const NODE_SIGMA = "Create notes/sigma.txt containing the word SIGMA";
+const KAPPA_DONE = "Wrote notes/kappa.txt.";
+const SIGMA_DONE = "Wrote notes/sigma.txt.";
+const RUNTIME_ANSWER = `${KAPPA_DONE}\n\n${SIGMA_DONE}`;
+/** Inside the project, under a FILE: the guard lets it through, and the filesystem fails the write. */
+const UNDER_A_FILE = "README.md/kappa.txt";
+/** What the worker answers a gate it cannot satisfy: the project has no build and no tests. */
+const CANNOT_VERIFY = "notes/kappa.txt is written. This project has no build and no tests to run.";
+/**
+ * What the user is told when kappa is blocked: each step by its task, why it
+ * did not finish, and that the executor resumes the goal on its own.
+ */
+const BLOCKED =
+  "Steps finished: 0 of 2.\n\n" +
+  `Could not finish "${NODE_KAPPA}" (it kept trying without making progress)\n` +
+  `Did not start "${NODE_SIGMA}" (a step it depends on did not finish)\n\n` +
+  "Retrying automatically now (automatic retry 1); finished steps are kept.";
+
+/**
+ * A step that failed at run time stays open until a verification runs after
+ * it, and the project has none to run. The worker is told so after each
+ * answer, told it is stalling, and blocked by loop detection after its third
+ * text-only turn.
+ */
+function gateStep(n: number, marker: string): Step {
+  return {
+    step: `kappa: gate ${n}, "${marker}"`,
+    check: (call) => requires([isWorkerOn(NODE_KAPPA)(call), lastSays(call, marker)]),
+    reply: say(CANNOT_VERIFY),
+  };
+}
+const UNVERIFIED = "[VERIFIER PIPELINE] Internal verification is not clean yet.";
+const STALLING = "[STALE ANALYSIS DETECTED]";
+
+const RUNTIME_SCRIPT: readonly Step[] = [
+  decomposeStep("decompose", RUNTIME_REQUEST, twoNodes(NODE_KAPPA, NODE_SIGMA)),
+  planStep("kappa: plan", NODE_KAPPA),
+  actStep("kappa: act, on a path under a file", NODE_KAPPA,
+    [writeCall("call_kappa_fails", UNDER_A_FILE, "KAPPA\n")]),
+  actStep("kappa: act again, after reading the failure", NODE_KAPPA,
+    [writeCall("call_kappa_fixed", "notes/kappa.txt", "KAPPA\n")],
+    (call) => carriesResult(call, "call_kappa_fails")),
+  reportStep("kappa: report", NODE_KAPPA, ["call_kappa_fixed"], KAPPA_DONE),
+  gateStep(1, UNVERIFIED),
+  gateStep(2, UNVERIFIED),
+  gateStep(3, STALLING),
+  gateStep(4, STALLING),
+  gateStep(5, UNVERIFIED),
+  gateStep(6, UNVERIFIED),
+  // Loop detection blocks kappa, sigma is skipped, and the task is blocked.
+  // The executor resumes the blocked goal at once: kappa runs again, fresh.
+  planStep("kappa, resumed: plan", NODE_KAPPA),
+  actStep("kappa, resumed: act", NODE_KAPPA, [writeCall("call_kappa", "notes/kappa.txt", "KAPPA\n")]),
+  reportStep("kappa, resumed: report", NODE_KAPPA, ["call_kappa"], KAPPA_DONE),
+  planStep("sigma: plan", NODE_SIGMA),
+  actStep("sigma: act", NODE_SIGMA, [writeCall("call_sigma", "notes/sigma.txt", "SIGMA\n")]),
+  reportStep("sigma: report", NODE_SIGMA, ["call_sigma"], SIGMA_DONE),
+  verifyStep("kappa", KAPPA_DONE),
+  verifyStep("sigma", SIGMA_DONE),
 ];
 
 /**
@@ -382,7 +421,7 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
       name: "recovery",
       request: RECOVERY_REQUEST,
       script: RECOVERY_SCRIPT,
-      settled: settledAfterResume(),
+      settled: settledWhenAnswered,
     });
 
     expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
@@ -393,7 +432,6 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
       { id: "call_alpha_escape", isError: true },
       { id: "call_alpha_fixed", isError: false },
-      { id: "call_alpha", isError: false },
       { id: "call_beta", isError: false },
     ]);
     expect(run.toolResults[0]?.content).toMatch(/^Error: Path resolves outside the project directory/);
@@ -402,6 +440,43 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     // The work reached the project.
     expect(readFileSync(join(run.project, "notes", "alpha.txt"), "utf8")).toBe("ALPHA\n");
     expect(readFileSync(join(run.project, "notes", "beta.txt"), "utf8")).toBe("BETA\n");
+
+    // One task, completed with the answer on its first attempt: nothing was
+    // blocked and nothing resumed.
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(run.task?.result).toBe(RECOVERY_ANSWER);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, RECOVERY_ANSWER]);
+    // The supervisor ran this request and did not fail: no fallback sentence,
+    // and no fallback note in the task record.
+    expect(texts(run)).not.toContain(FALLBACK_NOTICE);
+    expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("a node whose write failed at run time waits for a verification: blocked, then resumed on its own", async () => {
+    const run = await runGolden({
+      name: "runtime-failure",
+      request: RUNTIME_REQUEST,
+      script: RUNTIME_SCRIPT,
+      settled: settledAfterResume(),
+    });
+
+    expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(run.violations).toEqual([]);
+    expect(run.served).toEqual(RUNTIME_SCRIPT.map((s) => s.step));
+
+    // What each tool reported back: the failed write first, then every write.
+    expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
+      { id: "call_kappa_fails", isError: true },
+      { id: "call_kappa_fixed", isError: false },
+      { id: "call_kappa", isError: false },
+      { id: "call_sigma", isError: false },
+    ]);
+    // The guard let the path through: the write ran, and the filesystem failed it.
+    expect(run.toolResults[0]?.content).toMatch(/^Error: could not write file \(E[A-Z]+\)\n/);
+
+    // The work reached the project.
+    expect(readFileSync(join(run.project, "notes", "kappa.txt"), "utf8")).toBe("KAPPA\n");
+    expect(readFileSync(join(run.project, "notes", "sigma.txt"), "utf8")).toBe("SIGMA\n");
 
     // The task records: the first run blocked, and the resume is a new task
     // in its lineage that completed with the answer.
@@ -413,14 +488,14 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(blocked?.result).toBe(BLOCKED);
     expect(blocked?.result, "an internal goal id reached the user").not.toMatch(/goal_/);
     expect(resumed?.parentId).toBe(blocked?.id);
-    expect(resumed?.result).toBe(RECOVERY_ANSWER);
+    expect(resumed?.result).toBe(RUNTIME_ANSWER);
 
     // What the user read, in order: which step stopped and why, which step
     // never started, and that the work is being retried on its own; then the
     // answer. Measured 2026-11-06, before the fix: "Blocked:\n[goal_…]
     // blocked\n\nSkipped:\n[goal_…] Skipped: dependency failed", internal ids
     // with no reason, and nothing said the work was being resumed.
-    expect(texts(run)).toEqual([SYSTEM_STATUS, BLOCKED, RECOVERY_ANSWER]);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, BLOCKED, RUNTIME_ANSWER]);
     // The supervisor ran this request and did not fail: no fallback sentence,
     // and no fallback note in either task record.
     expect(texts(run)).not.toContain(FALLBACK_NOTICE);
