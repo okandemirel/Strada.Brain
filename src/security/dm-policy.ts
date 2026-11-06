@@ -7,7 +7,6 @@
  * only decides whether approval is required and tracks per-session prefs.
  */
 
-import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { FileDiff, BatchDiff } from "../utils/diff-generator.js";
 import { lexShell, type ShellLex, type ShellWord } from "./shell-lexer.js";
 
@@ -64,7 +63,12 @@ export class DMPolicy {
   private readonly sessionPrefs = new Map<string, SessionApprovalPrefs>();
   private readonly autonomousExpiry = new Map<string, number>();
 
-  constructor(_channel: IChannelAdapter, config: Partial<DMPolicyConfig> = {}) {
+  /**
+   * @param _channel Never read: the confirmation prompt goes through the
+   *   channel in orchestrator-write-gate.ts. Typed `unknown` so this foundation
+   *   module does not import channels; callers still pass their adapter.
+   */
+  constructor(_channel: unknown, config: Partial<DMPolicyConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
@@ -255,7 +259,7 @@ export class DMPolicy {
 // ─── Factory & Utilities ─────────────────────────────────────────────────────
 
 export function createDMPolicy(
-  channel: IChannelAdapter,
+  channel: unknown,
   config?: Partial<DMPolicyConfig>,
 ): DMPolicy {
   return new DMPolicy(channel, config);

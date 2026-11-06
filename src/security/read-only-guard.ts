@@ -2,8 +2,6 @@
  * Read-Only Guard - Prevents write operations when in read-only mode
  */
 
-import type { ITool } from "../agents/tools/tool.interface.js";
-
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const READ_ONLY_TIMEOUT_MS = 120_000; // 2 minutes
@@ -234,24 +232,6 @@ export function filterToolsForReadOnly<T extends { name: string }>(
     const base = t.name.includes(":") ? t.name.split(":").pop()! : t.name;
     return !WRITE_TOOLS.has(base);
   });
-}
-
-export function wrapToolForReadOnly(tool: ITool, readOnlyMode: boolean): ITool {
-  if (!readOnlyMode) return tool;
-
-  const check = checkReadOnlyBlock(tool.name, true);
-
-  if (check.allowed) return tool;
-
-  return {
-    name: tool.name,
-    description: `[READ-ONLY] ${tool.description} (This tool is currently disabled)`,
-    inputSchema: tool.inputSchema,
-    execute: async () => ({
-      content: `${check.error}\n\n${check.suggestion}`,
-      isError: true,
-    }),
-  };
 }
 
 // ─── ReadOnlyGuard Class ─────────────────────────────────────────────────────

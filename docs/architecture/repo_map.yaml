@@ -99,7 +99,7 @@ nodes:
   budget:
     purpose: "The single source of truth for LLM cost: the cost model, daily and monthly limits, and per-source sub-limits."
     entrypoints: ["src/budget/unified-budget-manager.ts", "src/budget/cost-model.ts", "src/budget/budget-types.ts"]
-    depends_on: ["utils"]
+    depends_on: ["common", "utils"]
     contracts: []
     read_when:
       - "recording or limiting LLM spend; a call refused for budget"
@@ -131,7 +131,7 @@ nodes:
       - "the dashboard's HTTP routes and monitor → dashboard"
 
   common:
-    purpose: "Shared helpers any module may use: runtime paths and STRADA_HOME, path containment, atomic files, fetch with retry, errors, write locks, token estimates."
+    purpose: "Shared helpers any module may use: runtime paths and STRADA_HOME, path containment, atomic files, fetch with retry, errors, write locks, token estimates, the provider cost model (cost-model.ts)."
     entrypoints: ["src/common/runtime-paths.ts", "src/common/path-containment.ts", "src/common/atomic-file.ts", "src/common/fetch-with-retry.ts"]
     depends_on: ["security", "utils"]
     contracts: ["path-containment"]
@@ -319,17 +319,13 @@ nodes:
   security:
     purpose: "Security boundaries: the path guard, secret patterns and sanitizer, API-key redaction, prompt-injection stripping, auth, rate limits, DM policy, origin and host validation, shell lexing."
     entrypoints: ["src/security/path-guard.ts", "src/security/secret-sanitizer.ts", "src/security/auth.ts", "src/security/rate-limiter.ts"]
-    depends_on: ["agents", "budget", "channels", "utils"]
+    depends_on: ["common", "utils"]
     contracts: ["file-size", "path-containment"]
     read_when:
       - "a tool may read or write a path it should not"
       - "secrets in logs or output, authentication, rate limits, who may DM the bot"
       - "origin, host or shell-command validation"
       - "prompt-injection stripping of stored or retrieved text (memory, vault, learned guidance) before it reaches a prompt"
-    violations:
-      agents: "read-only-guard.ts takes the ITool type from agents/tools/tool.interface.ts; through utils/logger.ts and common/errors.ts every module then reaches the agent loop. Follow-up: #15."
-      budget: "rate-limiter.ts takes the cost model from budget/cost-model.ts and re-exports estimateCost. Follow-up: #15."
-      channels: "dm-policy.ts takes the IChannelAdapter type from channels/channel.interface.ts. Follow-up: #15."
 
   skills:
     purpose: "Installable skills: load, gate, trust, pin and install them and register their tools, plus the bundled skills."

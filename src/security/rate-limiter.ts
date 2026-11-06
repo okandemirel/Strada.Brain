@@ -8,9 +8,9 @@
  */
 
 import { getLogger } from "../utils/logger.js";
-import { estimateCostWithCache } from "../budget/cost-model.js";
+import { estimateCostWithCache } from "../common/cost-model.js";
 
-export { estimateCost } from "../budget/cost-model.js";
+export { estimateCost } from "../common/cost-model.js";
 
 // ---------- Types ----------
 
