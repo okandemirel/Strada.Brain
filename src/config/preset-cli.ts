@@ -6,7 +6,7 @@
 
 import { Command } from "commander";
 import { listPresets, getPreset, PROVIDER_MODEL_OPTIONS } from "./presets.js";
-import { persistSetup } from "../core/setup-env-persistence.js";
+import { persistSetup } from "../common/setup-env-persistence.js";
 
 export interface PresetCommandOptions {
   /** The .env `preset set` writes; the runtime's cwd is its config root. */

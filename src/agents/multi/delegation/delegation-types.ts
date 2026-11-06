@@ -11,13 +11,14 @@ import type { AgentId } from "../agent-types.js";
 import type { ToolContext } from "../../tools/tool-core.interface.js";
 import type { WorkerRunResult } from "../../supervisor/supervisor-types.js";
 import type { BudgetSlice } from "../../../agent-core/control/budget.js";
+import type { DelegationTypeConfig, ModelTier } from "../../../config/subsystem-config-types.js";
 
 // =============================================================================
 // CORE TYPES
 // =============================================================================
 
-/** Model tier for delegation routing */
-export type ModelTier = "local" | "cheap" | "standard" | "premium";
+/** Model tier for delegation routing: declared in config, the foundation layer. */
+export type { ModelTier };
 
 /** Delegation execution mode */
 export type DelegationMode = "sync" | "async";
@@ -29,24 +30,9 @@ export type DelegationStatus = "running" | "completed" | "failed" | "timeout" | 
 // CONFIG INTERFACES
 // =============================================================================
 
-/** Configuration for a single delegation type */
-export interface DelegationTypeConfig {
-  readonly name: string;
-  readonly tier: ModelTier;
-  readonly timeoutMs: number;
-  readonly maxIterations: number;
-  readonly systemPrompt?: string;
-}
-
-/** Top-level delegation subsystem configuration */
-export interface DelegationConfig {
-  readonly enabled: boolean;
-  readonly maxDepth: number;
-  readonly maxConcurrentPerParent: number;
-  readonly tiers: Record<ModelTier, string>;
-  readonly types: DelegationTypeConfig[];
-  readonly verbosity: "quiet" | "normal" | "verbose";
-}
+/** One delegation type, and the subsystem's configuration: declared in config, the foundation layer. */
+export type { DelegationTypeConfig };
+export type { DelegationConfig } from "../../../config/subsystem-config-types.js";
 
 // =============================================================================
 // REQUEST / RESULT

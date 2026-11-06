@@ -5,12 +5,14 @@
  * quiet hours config, digest config, and storage entry types.
  */
 
+import type { UrgencyLevel } from "../../config/subsystem-config-types.js";
+
 // =============================================================================
 // URGENCY LEVELS
 // =============================================================================
 
-/** Five-level urgency classification for notifications */
-export type UrgencyLevel = "silent" | "low" | "medium" | "high" | "critical";
+/** Five-level urgency classification for notifications: declared in config, the foundation layer. */
+export type { UrgencyLevel };
 
 /** Numeric priority mapping for urgency comparison (silent=0, critical=4) */
 export const URGENCY_ORDER: Record<UrgencyLevel, number> = {
@@ -60,29 +62,8 @@ export interface NotificationPayload {
 // CONFIG TYPES
 // =============================================================================
 
-/** Notification routing configuration */
-export interface NotificationConfig {
-  readonly minLevel: UrgencyLevel;
-  readonly routing: Record<UrgencyLevel, string[]>;
-  readonly groupingWindowMs: number;
-}
-
-/** Quiet hours configuration */
-export interface QuietHoursConfig {
-  readonly enabled: boolean;
-  readonly startHour: number;
-  readonly endHour: number;
-  readonly timezone: string;
-  readonly bufferMax: number;
-}
-
-/** Digest report configuration */
-export interface DigestConfig {
-  readonly enabled: boolean;
-  readonly schedule: string;
-  readonly timezone: string;
-  readonly dashboardHistoryDepth: number;
-}
+/** Notification routing, quiet hours and digest configuration: declared in config, the foundation layer. */
+export type { NotificationConfig, QuietHoursConfig, DigestConfig } from "../../config/subsystem-config-types.js";
 
 // =============================================================================
 // STORAGE ENTRY TYPES

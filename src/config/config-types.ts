@@ -9,19 +9,20 @@
  *   - config.ts         (re-exports everything; keeps loadConfig/validateConfig/assembly)
  */
 
-import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
-import type { ToolChainConfig } from "../learning/chains/chain-types.js";
-import type { DaemonConfig } from "../daemon/daemon-types.js";
 import type {
+  AgentConfig,
+  BayesianConfig,
+  CrossSessionConfig,
+  DaemonConfig,
+  DelegationConfig,
+  DeploymentConfig,
+  DigestConfig,
   NotificationConfig,
   QuietHoursConfig,
-  DigestConfig,
-} from "../daemon/reporting/notification-types.js";
-import type { AgentConfig } from "../agents/multi/agent-types.js";
-import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
-import type { DeploymentConfig } from "../daemon/deployment/deployment-types.js";
-import type { SupervisorConfig } from "../supervisor/supervisor-types.js";
-import type { ScopeGateMode } from "../campaign/scope-types.js";
+  SupervisorConfig,
+  ToolChainConfig,
+} from "./subsystem-config-types.js";
+import type { ScopeGateMode } from "./scope-gate-mode.js";
 
 // =============================================================================
 // ENVIRONMENT VARIABLE TYPES

@@ -108,7 +108,7 @@ nodes:
   campaign:
     purpose: "Campaigns, GDD in and finished game out: the state machine from idea through GDD, approval, milestone ladder and sprints to delivery, with its acceptance gates, evidence ledgers and play-through verdicts."
     entrypoints: ["src/campaign/campaign-manager.ts", "src/campaign/campaign-planner.ts", "src/campaign/types.ts", "src/campaign/index.ts"]
-    depends_on: ["agents", "channels", "common", "core", "daemon", "history", "memory", "security", "supervisor", "tasks", "utils"]
+    depends_on: ["agents", "channels", "common", "config", "core", "daemon", "history", "memory", "security", "supervisor", "tasks", "utils"]
     contracts: ["file-size", "path-containment"]
     read_when:
       - "a campaign step, milestone, sprint or delivery behaves wrongly"
@@ -131,7 +131,7 @@ nodes:
       - "the dashboard's HTTP routes and monitor → dashboard"
 
   common:
-    purpose: "Shared helpers any module may use: runtime paths and STRADA_HOME, path containment, atomic files, fetch with retry, errors, write locks, token estimates, the provider cost model (cost-model.ts)."
+    purpose: "Shared helpers any module may use: runtime paths and STRADA_HOME, path containment, atomic files, fetch with retry, errors, write locks, token estimates, the provider cost model (cost-model.ts), the .env setup writer (setup-env-persistence.ts)."
     entrypoints: ["src/common/runtime-paths.ts", "src/common/path-containment.ts", "src/common/atomic-file.ts", "src/common/fetch-with-retry.ts"]
     depends_on: ["security", "utils"]
     contracts: ["path-containment"]
@@ -145,20 +145,13 @@ nodes:
   config:
     purpose: "Configuration: the Zod schema behind 90+ environment variables, presets, retired settings, and the check that a Unity project has the Strada packages."
     entrypoints: ["src/config/config.ts", "src/config/config-schema.ts", "src/config/strada-deps.ts", "src/config/presets.ts"]
-    depends_on: ["agents", "campaign", "common", "core", "daemon", "learning", "security", "supervisor", "types"]
+    depends_on: ["common", "security", "types"]
     contracts: ["file-size", "path-containment"]
     read_when:
       - "adding, renaming or retiring an environment variable or setting"
       - "detecting Strada.Core, Strada.Modules or a vendored Strada.MCP in a Unity project"
     skip_when:
       - "the setup wizard and doctor that write and check the settings → core"
-    violations:
-      agents: "config-types.ts and config.ts take AgentConfig and DelegationConfig from agents/multi. Follow-up: #16."
-      campaign: "config-types.ts takes the ScopeGateMode type and config.ts the parseScopeGateMode function from campaign/scope-types.ts. Follow-up: #16."
-      core: "config-schema.ts takes the BIND_HOST schema from core/bind-host.ts and preset-cli.ts calls persistSetup from core/setup-env-persistence.ts. Follow-up: #16."
-      daemon: "config-types.ts takes the daemon, deployment and notification config types from daemon/. Follow-up: #16."
-      learning: "config-types.ts takes the Bayesian, cross-session and tool-chain config types from learning/. Follow-up: #16."
-      supervisor: "config-types.ts takes SupervisorConfig from supervisor/supervisor-types.ts. Follow-up: #16."
 
   core:
     purpose: "Process wiring: the CLI entry calls bootstrap, whose stages build providers, memory, channels and the DI container; plus the event bus, tool registry, runtime lock, auto-updater, setup wizard and doctor."
@@ -178,7 +171,7 @@ nodes:
   daemon:
     purpose: "The always-on daemon: the heartbeat loop that evaluates triggers each tick, its storage, approvals, budget, deployment, dedup, resilience and reporting."
     entrypoints: ["src/daemon/heartbeat-loop.ts", "src/daemon/daemon-storage.ts", "src/daemon/daemon-types.ts", "src/daemon/daemon-cli.ts"]
-    depends_on: ["agent-core", "agents", "budget", "channels", "core", "goals", "history", "learning", "memory", "tasks", "utils"]
+    depends_on: ["agent-core", "agents", "budget", "channels", "config", "core", "goals", "history", "learning", "memory", "tasks", "utils"]
     contracts: ["file-size", "path-containment"]
     read_when:
       - "triggers (cron, webhook, file, checklist) and what fires on a tick"
@@ -341,7 +334,7 @@ nodes:
   supervisor:
     purpose: "The multi-provider supervisor: decompose a task, match capabilities, assign providers, dispatch, verify and aggregate the results."
     entrypoints: ["src/supervisor/supervisor-brain.ts", "src/supervisor/supervisor-types.ts", "src/supervisor/supervisor-dispatcher.ts", "src/supervisor/result-aggregator.ts"]
-    depends_on: ["agent-core", "agents", "campaign", "dashboard", "goals", "utils"]
+    depends_on: ["agent-core", "agents", "campaign", "config", "dashboard", "goals", "utils"]
     contracts: ["file-size"]
     read_when:
       - "a task split across providers, or the evidence a node must return"

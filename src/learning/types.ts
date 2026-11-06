@@ -86,8 +86,8 @@ export type InstinctStatus =
 /** Milliseconds per calendar day */
 export const MS_PER_DAY = 86_400_000;
 
-/** Scope filter mode for cross-session retrieval */
-export type ScopeFilterMode = 'project-only' | 'project+universal' | 'all';
+/** Scope filter mode for cross-session retrieval: declared in config, the foundation layer. */
+export type { ScopeFilterMode } from "../config/subsystem-config-types.js";
 
 /** Confidence level thresholds */
 export const CONFIDENCE_THRESHOLDS = {
@@ -303,45 +303,8 @@ export interface InstinctAgeExpiredEvent {
   readonly timestamp: number;
 }
 
-/** Cross-session learning configuration */
-export interface CrossSessionConfig {
-  readonly enabled: boolean;
-  readonly maxAgeDays: number;
-  readonly scopeFilter: ScopeFilterMode;
-  readonly recencyBoost: number;
-  readonly scopeBoost: number;
-  readonly promotionThreshold: number;
-}
-
-/** Confidence system configuration (hybrid weighted scoring with alpha/beta evidence tracking) */
-export interface BayesianConfig {
-  /** Master toggle for confidence system */
-  readonly enabled: boolean;
-  /** Threshold below which instinct is deprecated */
-  readonly deprecatedThreshold: number;
-  /** Threshold to become active */
-  readonly activeThreshold: number;
-  /** Threshold for evolution consideration */
-  readonly evolutionThreshold: number;
-  /** Auto-evolution threshold */
-  readonly autoEvolveThreshold: number;
-  /** Maximum initial confidence for new instincts */
-  readonly maxInitial: number;
-  /** Cooling period in days before deprecation */
-  readonly coolingPeriodDays: number;
-  /** Minimum total observations before cooling can start */
-  readonly coolingMinObservations: number;
-  /** Maximum consecutive failures during cooling before deprecation */
-  readonly coolingMaxFailures: number;
-  /** Minimum observations for permanent promotion */
-  readonly promotionMinObservations: number;
-  /** Verdict score for clean success (no retries) */
-  readonly verdictCleanSuccess: number;
-  /** Verdict score for retry success */
-  readonly verdictRetrySuccess: number;
-  /** Verdict score for hard failure */
-  readonly verdictFailure: number;
-}
+/** Cross-session learning and confidence-system configuration: declared in config, the foundation layer. */
+export type { CrossSessionConfig, BayesianConfig } from "../config/subsystem-config-types.js";
 
 // =============================================================================
 // TRAJECTORY TYPES

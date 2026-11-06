@@ -148,70 +148,16 @@ export type HeartbeatTriggerDef =
 // DAEMON CONFIGURATION
 // =============================================================================
 
-/** Heartbeat loop timing and file configuration */
-export interface DaemonHeartbeatConfig {
-  readonly intervalMs: number;
-  readonly heartbeatFile: string;
-  readonly idlePause: boolean;
-}
-
-/** Security policy configuration for daemon-initiated tool calls */
-export interface DaemonSecurityConfig {
-  readonly approvalTimeoutMin: number;
-  readonly autoApproveTools: string[];
-}
-
-/**
- * What `dailyBudgetUsd` is a cap on: "daemon" when it is a dedicated daemon
- * sub-limit (STRADA_DAEMON_DAILY_BUDGET set), "system" when the daemon shares
- * the system-wide wallet (the STRADA_BUDGET_DAILY_USD fallback).
- */
-export type DaemonBudgetScope = "daemon" | "system";
-
-/** Daily LLM budget configuration */
-export interface DaemonBudgetConfig {
-  readonly dailyBudgetUsd: number | undefined;
-  readonly warnPct: number;
-  /** Defaults to "system" when absent — the shared-wallet reading. */
-  readonly limitScope?: DaemonBudgetScope;
-}
-
-/** Exponential backoff and circuit breaker configuration */
-export interface DaemonBackoffConfig {
-  readonly baseCooldownMs: number;
-  readonly maxCooldownMs: number;
-  readonly failureThreshold: number;
-}
-
-/** Phase 15 trigger-specific configuration */
-export interface DaemonTriggersConfig {
-  /** Webhook authentication secret (STRADA_WEBHOOK_SECRET) */
-  readonly webhookSecret?: string;
-  /** Webhook rate limit string e.g. '10/min' (STRADA_WEBHOOK_RATE_LIMIT) */
-  readonly webhookRateLimit: string;
-  /** Global cross-trigger dedup window in ms (STRADA_DAEMON_DEDUP_WINDOW_MS) */
-  readonly dedupWindowMs: number;
-  /** Default file watch debounce in ms (STRADA_DAEMON_DEFAULT_DEBOUNCE_MS) */
-  readonly defaultDebounceMs: number;
-  /** Hour for 'every morning' checklist items (STRADA_CHECKLIST_MORNING_HOUR) */
-  readonly checklistMorningHour: number;
-  /** Hour for 'every afternoon' checklist items (STRADA_CHECKLIST_AFTERNOON_HOUR) */
-  readonly checklistAfternoonHour: number;
-  /** Hour for 'every evening' checklist items (STRADA_CHECKLIST_EVENING_HOUR) */
-  readonly checklistEveningHour: number;
-}
-
-/** Complete daemon configuration -- added to Config interface */
-export interface DaemonConfig {
-  readonly heartbeat: DaemonHeartbeatConfig;
-  readonly security: DaemonSecurityConfig;
-  readonly budget: DaemonBudgetConfig;
-  readonly backoff: DaemonBackoffConfig;
-  readonly timezone: string;
-  readonly triggers: DaemonTriggersConfig;
-  /** Retention period for trigger fire history entries in days (Phase 21) */
-  readonly triggerFireRetentionDays: number;
-}
+/** The daemon's configuration and its sections: declared in config, the foundation layer. */
+export type {
+  DaemonHeartbeatConfig,
+  DaemonSecurityConfig,
+  DaemonBudgetScope,
+  DaemonBudgetConfig,
+  DaemonBackoffConfig,
+  DaemonTriggersConfig,
+  DaemonConfig,
+} from "../config/subsystem-config-types.js";
 
 // =============================================================================
 // APPROVAL QUEUE

@@ -14,31 +14,8 @@ import type { CircuitState } from "../daemon-types.js";
 // CONFIGURATION
 // =============================================================================
 
-/** Deployment subsystem configuration (maps to DEPLOY_* env vars) */
-export interface DeploymentConfig {
-  /** Master switch -- defaults to false per DEPLOY-03 */
-  readonly enabled: boolean;
-  /** Path to deployment script (optional, validated at runtime against projectRoot) */
-  readonly scriptPath?: string;
-  /** Test command to run for readiness check */
-  readonly testCommand: string;
-  /** Git branch required for deployment */
-  readonly targetBranch: string;
-  /** Whether clean git state is required */
-  readonly requireCleanGit: boolean;
-  /** Timeout for test command in ms */
-  readonly testTimeoutMs: number;
-  /** Timeout for deployment script execution in ms */
-  readonly executionTimeoutMs: number;
-  /** Cooldown after rejection before re-proposing, in minutes */
-  readonly cooldownMinutes: number;
-  /** Notification urgency for deployment proposals */
-  readonly notificationUrgency: "low" | "medium" | "high" | "critical";
-  /** Optional post-deploy verification script path */
-  readonly postScriptPath?: string;
-  /** Optional rollback script path executed when deployment fails */
-  readonly rollbackScriptPath?: string;
-}
+/** Deployment subsystem configuration (maps to DEPLOY_* env vars): declared in config, the foundation layer. */
+export type { DeploymentConfig } from "../../config/subsystem-config-types.js";
 
 // =============================================================================
 // READINESS

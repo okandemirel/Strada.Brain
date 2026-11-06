@@ -164,30 +164,15 @@ export interface VerificationReport {
   readonly sameProvider?: number;
 }
 
-/** Configuration for the verification subsystem */
-export interface VerificationConfig {
-  readonly mode: "always" | "critical-only" | "sampling" | "disabled";
-  readonly samplingRate: number;
-  readonly preferDifferentProvider: boolean;
-  readonly maxVerificationCost: number;
-}
+/** Configuration for the verification subsystem: declared in config, the foundation layer. */
+export type { VerificationConfig } from "../config/subsystem-config-types.js";
 
 // =============================================================================
 // SUPERVISOR CONFIGURATION
 // =============================================================================
 
-/** Top-level configuration for the Supervisor Brain */
-export interface SupervisorConfig {
-  readonly enabled: boolean;
-  readonly complexityThreshold: "moderate" | "complex";
-  readonly maxParallelNodes: number;
-  readonly nodeTimeoutMs: number;
-  readonly verificationMode: VerificationConfig["mode"];
-  readonly verificationBudgetPct: number;
-  readonly triageProvider: string;
-  readonly maxFailureBudget: number;
-  readonly diversityCap: number;
-}
+/** Top-level configuration for the Supervisor Brain: declared in config, the foundation layer. */
+export type { SupervisorConfig } from "../config/subsystem-config-types.js";
 
 // =============================================================================
 // SUPERVISOR CONTEXT & RESULT

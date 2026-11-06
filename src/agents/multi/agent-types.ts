@@ -24,14 +24,8 @@ export type AgentStatus = "active" | "stopped" | "budget_exceeded" | "evicted";
 // CONFIG INTERFACE
 // =============================================================================
 
-/** Multi-agent subsystem configuration */
-export interface AgentConfig {
-  readonly enabled: boolean;
-  readonly defaultBudgetUsd: number;
-  readonly maxConcurrent: number;
-  readonly idleTimeoutMs: number;
-  readonly maxMemoryEntries: number;
-}
+/** Multi-agent subsystem configuration: declared in config, the foundation layer. */
+export type { AgentConfig } from "../../config/subsystem-config-types.js";
 
 // =============================================================================
 // AGENT INSTANCE

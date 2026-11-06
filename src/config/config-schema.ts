@@ -3,7 +3,7 @@
  *
  * Contains the Zod object schema (configSchema) and its private helper schemas.
  * Runtime-free: imports z from zod, types from ./config-types.js, and the
- * side-effect-free BIND_HOST schema from ../core/bind-host.js (one definition
+ * side-effect-free BIND_HOST schema from ./bind-host.js (one definition
  * shared with the listeners that consume it).
  * Extracted from config.ts (plan 028 step 3).
  *
@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import { DEFAULT_BIND_HOST, bindHostSchema } from "../core/bind-host.js";
+import { DEFAULT_BIND_HOST, bindHostSchema } from "./bind-host.js";
 import {
   DEFAULT_STRADA_CORE_REPO_URL,
   DEFAULT_STRADA_MODULES_REPO_URL,

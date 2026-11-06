@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import type { TrajectoryStep } from "../types.js";
+import type { ChainResilienceConfig } from "../../config/subsystem-config-types.js";
 
 // =============================================================================
 // ZOD SCHEMAS
@@ -319,13 +320,8 @@ export interface RollbackReport {
   readonly finalState: "fully_rolled_back" | "partially_rolled_back" | "rollback_failed";
 }
 
-/** Configuration for chain resilience features */
-export interface ChainResilienceConfig {
-  readonly rollbackEnabled: boolean;
-  readonly parallelEnabled: boolean;
-  readonly maxParallelBranches: number;
-  readonly compensationTimeoutMs: number;
-}
+/** Configuration for chain resilience features: declared in config, the foundation layer. */
+export type { ChainResilienceConfig };
 
 /** Default chain resilience config (used when no config is provided) */
 export const DEFAULT_RESILIENCE_CONFIG: ChainResilienceConfig = {
@@ -387,29 +383,5 @@ export interface CandidateChain {
   readonly key: string;
 }
 
-/**
- * Configuration for the tool chain synthesis system.
- * All fields are configurable via environment variables.
- */
-export interface ToolChainConfig {
-  /** Master toggle for tool chain detection and synthesis */
-  readonly enabled: boolean;
-  /** Minimum occurrences before a chain is considered for synthesis */
-  readonly minOccurrences: number;
-  /** Minimum success rate threshold for chain synthesis */
-  readonly successRateThreshold: number;
-  /** Maximum number of active composite tools */
-  readonly maxActive: number;
-  /** Maximum age in days before a chain is invalidated */
-  readonly maxAgeDays: number;
-  /** Maximum LLM calls per detection cycle */
-  readonly llmBudgetPerCycle: number;
-  /** Minimum number of tools in a chain */
-  readonly minChainLength: number;
-  /** Maximum number of tools in a chain */
-  readonly maxChainLength: number;
-  /** Interval between detection cycles in milliseconds */
-  readonly detectionIntervalMs: number;
-  /** Chain resilience configuration (Phase 22) */
-  readonly resilience: ChainResilienceConfig;
-}
+/** Configuration for the tool chain synthesis system: declared in config, the foundation layer. */
+export type { ToolChainConfig } from "../../config/subsystem-config-types.js";
