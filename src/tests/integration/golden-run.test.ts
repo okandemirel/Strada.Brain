@@ -46,16 +46,7 @@
  */
 
 import { describe, it, expect, vi, afterAll } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,6 +95,7 @@ import { MockAIProvider as ScriptedProvider } from "../helpers/mock-provider.js"
 import { TaskStorage } from "../../tasks/task-storage.js";
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
 import { createLogger, getLogRingBuffer } from "../../utils/logger.js";
+import { newRuntimeEntries, runtimeEntriesIn } from "../helpers/checkout-runtime-entries.js";
 
 // ─── The task ────────────────────────────────────────────────────────────────
 
@@ -303,24 +295,12 @@ function refuseNetwork(): void {
 }
 
 /**
- * Every path under the working directory's `.strada*` entries. A relative
- * default (`.strada-memory/…`, a vault's `<root>/.strada/vault`) lands in the
- * working directory, and a test runs in the checkout: the run must leave
- * nothing there. vitest.worker-setup.ts points process.env's databases away
- * from it, but loadConfig below is handed an environment built by hand.
+ * A relative default (`.strada-memory/…`, a vault's `<root>/.strada/vault`)
+ * lands in the working directory, and a test runs in the checkout: the run
+ * must leave no `.strada*` entry there. vitest.worker-setup.ts points
+ * process.env's databases away from it, but loadConfig below is handed an
+ * environment built by hand.
  */
-function stradaEntriesIn(dir: string): Set<string> {
-  const entries = new Set<string>();
-  for (const name of readdirSync(dir)) {
-    if (!name.startsWith(".strada")) continue;
-    entries.add(name);
-    const top = join(dir, name);
-    if (!statSync(top).isDirectory()) continue;
-    for (const nested of readdirSync(top, { recursive: true })) entries.add(join(name, String(nested)));
-  }
-  return entries;
-}
-
 const workingDir = process.cwd();
 const root = mkdtempSync(join(tmpdir(), "golden-run-"));
 afterAll(() => {
@@ -427,7 +407,7 @@ describe("golden run: a two-node task through the real bootstrap", () => {
     const memoryDir = join(root, "memory");
     mkdirSync(project, { recursive: true });
     writeFileSync(join(project, "README.md"), "# A tiny project with no Unity in it\n");
-    const entriesBefore = stradaEntriesIn(workingDir);
+    const entriesBefore = runtimeEntriesIn(workingDir);
     refuseNetwork();
     quietInfoLogger();
     edges.provider = loadScript();
@@ -474,7 +454,7 @@ describe("golden run: a two-node task through the real bootstrap", () => {
 
     // Nothing landed in the checkout the test runs from.
     expect(
-      [...stradaEntriesIn(workingDir)].filter((entry) => !entriesBefore.has(entry)),
+      newRuntimeEntries(workingDir, entriesBefore),
       `the run wrote into the working directory ${workingDir}: a path resolved against it`,
     ).toEqual([]);
 
