@@ -1065,7 +1065,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // re-pick the dead provider next call.
         const isQuotaHardStop = error instanceof QuotaExhaustedError || QUOTA_HARD_STOP_RE.test(errorMsg);
         const isSingleProvider = this.providers.length === 1;
-        this.recordClassifiedFailure(health, provider, error, errorMsg);
+        // A refused key is benched before the redundancy check below reads the
+        // chain: classified generically first, it counted twice and never warned.
+        if (isCredentialRejection(error)) health.recordCredentialRejected(provider.name, errorMsg);
+        else this.recordClassifiedFailure(health, provider, error, errorMsg);
 
         // Reset thinking success counter on any failure
         health.resetThinkingSuccessCounter(provider.name);
@@ -1130,12 +1133,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           throw lastError;
         }
 
-        // Before the non-retryable check, because this is the case that used to
-        // be swept into it. Benched for the session so no later call rediscovers
-        // it, then treated as an ordinary provider failure so the loop moves on
-        // to a sibling that may be perfectly healthy.
+        // Before the non-retryable check, which used to sweep it in: benched
+        // above, it is an ordinary failure and the loop moves on to a sibling.
         if (isCredentialRejection(error)) {
-          health.recordCredentialRejected(provider.name, errorMsg);
           logger.error(`Provider credential rejected; benched for this session (${label})`, {
             provider: provider.name,
             error: sanitizeSecrets(errorMsg),
