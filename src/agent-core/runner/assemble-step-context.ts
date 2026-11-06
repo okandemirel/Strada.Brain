@@ -34,7 +34,8 @@ export function assembleStepContext(
     setup.session,
     prepared.currentAssignment.providerName,
     prepared.currentAssignment.modelId,
-    prepared.activePrompt,
+    // Everything the call sends besides the history: the turn context rides at its end.
+    prepared.activePrompt + prepared.turnContext,
     prepared.currentToolDefinitions.reduce((chars, d) => chars + JSON.stringify(d).length, 0),
   );
   return prepared;
