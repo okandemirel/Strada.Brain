@@ -73,7 +73,7 @@ import { checkStradaDeps, installStradaDep } from "../config/strada-deps.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
-import { conversationChars, logProviderCall, toolDefinitionChars } from "./providers/provider-call-log.js";
+import { logProviderCall, toolDefinitionChars, turnRequestFields } from "./providers/provider-call-log.js";
 import { archiveToolFailure } from "./tool-failure-archive.js";
 import { unknownToolMessage } from "./unknown-tool-hint.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
@@ -4508,13 +4508,7 @@ export class Orchestrator {
         if (!isEmptyProviderResponse(response)) scope.firstTokenSeen();
         logProviderCall("turn", provider, turnStartedAt, { response }, {
           chatId,
-          promptChars: effectivePrompt?.length ?? 0,
-          messages: session?.messages?.length ?? 0,
-          tools: toolDefinitions?.length ?? 0,
-          toolChars: toolDefinitionChars(toolDefinitions),
-          // What the loop RE-SENDS every turn. Without it a 20M-token
-          // milestone could not be aimed at anything (2026-10-14).
-          ...conversationChars(session?.messages),
+          ...turnRequestFields({ systemPrompt: effectivePrompt, messages: session?.messages, tools: toolDefinitions }),
         });
         this.classifySilentStreamResponse(response, provider);
         return response;
@@ -4608,15 +4602,11 @@ export class Orchestrator {
       });
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
-      logProviderCall("turn", provider, turnStartedAt, { response }, {
-        // Where the input tokens come from: measured 2026-09-07 21:56, the
-        // FIRST turn of a run carried 48 490 input tokens.
-        promptChars: effectivePrompt?.length ?? 0,
-        messages: session?.messages?.length ?? 0,
-        tools: toolDefinitions?.length ?? 0,
-        toolChars: toolDefinitionChars(toolDefinitions),
-        ...conversationChars(session?.messages),
-      });
+      logProviderCall("turn", provider, turnStartedAt, { response }, turnRequestFields({
+        systemPrompt: effectivePrompt,
+        messages: session?.messages,
+        tools: toolDefinitions,
+      }));
       // Route empty 200s to the health-failure path (the shared breaker predicate, audit #9).
       this.classifySilentStreamResponse(response, provider);
       return response;
