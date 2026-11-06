@@ -164,20 +164,19 @@ describe("executeAndTrackTools", () => {
 describe("refreshMemoryIfNeeded", () => {
   const baseState = createInitialState("test task");
 
-  it("returns unchanged prompt/state when refresher is null", async () => {
+  it("returns the state unchanged and recalls nothing when refresher is null", async () => {
     const result = await refreshMemoryIfNeeded({
       memoryRefresher: null,
       iteration: 1,
       queryContext: "hello",
       chatId: "c1",
-      systemPrompt: "original prompt",
       agentState: baseState,
     });
-    expect(result.systemPrompt).toBe("original prompt");
+    expect(result.recalled).toBeUndefined();
     expect(result.agentState).toBe(baseState);
   });
 
-  it("returns unchanged prompt/state when shouldRefresh returns false", async () => {
+  it("recalls nothing when shouldRefresh returns false", async () => {
     const refresher = {
       shouldRefresh: vi.fn().mockResolvedValue({ should: false, reason: "none" }),
       refresh: vi.fn(),
@@ -187,14 +186,13 @@ describe("refreshMemoryIfNeeded", () => {
       iteration: 1,
       queryContext: "hello",
       chatId: "c1",
-      systemPrompt: "original prompt",
       agentState: baseState,
     });
-    expect(result.systemPrompt).toBe("original prompt");
+    expect(result.recalled).toBeUndefined();
     expect(refresher.refresh).not.toHaveBeenCalled();
   });
 
-  it("updates system prompt sections when refresh triggers", async () => {
+  it("returns the new memory and code context as one block for the history when refresh triggers", async () => {
     const refresher = {
       shouldRefresh: vi.fn().mockResolvedValue({ should: true, reason: "periodic" }),
       refresh: vi.fn().mockResolvedValue({
@@ -206,27 +204,22 @@ describe("refreshMemoryIfNeeded", () => {
         retrievalNumber: 1,
       }),
     };
-    // replaceSection uses <!-- tag:start --> / <!-- tag:end --> markers
-    const prompt =
-      "start\n<!-- re-retrieval:memory:start -->\nold memory\n<!-- re-retrieval:memory:end -->\n" +
-      "<!-- re-retrieval:rag:start -->\nold rag\n<!-- re-retrieval:rag:end -->\nend";
     const result = await refreshMemoryIfNeeded({
       memoryRefresher: refresher as any,
       iteration: 3,
       queryContext: "context",
       chatId: "c1",
-      systemPrompt: prompt,
       agentState: baseState,
     });
-    expect(result.systemPrompt).toContain("new memory");
-    expect(result.systemPrompt).toContain("new rag");
-    // ORC-12: a refresh adds to the sections. It used to replace them, which dropped the
-    // initial RAG block for good (its chunks stay deduped as "already injected").
-    expect(result.systemPrompt).toContain("old memory");
-    expect(result.systemPrompt).toContain("old rag");
+    expect(result.recalled).toContain("## Relevant Memory\nnew memory");
+    expect(result.recalled).toContain("new rag");
+    // The system prompt is not rewritten: a prompt that changes mid-run breaks the provider's
+    // prefix cache for the whole history behind it (turn-context.ts).
+    expect(result).not.toHaveProperty("systemPrompt");
+    expect(result.recalled!.startsWith("## Recalled during this task")).toBe(true);
   });
 
-  it("keeps the initial RAG chunk when a refresh brings a new one, and accumulates insights (ORC-12)", async () => {
+  it("returns each refresh's own recall, and accumulates insights (ORC-12)", async () => {
     const refresher = {
       shouldRefresh: vi.fn().mockResolvedValue({ should: true, reason: "periodic" }),
       refresh: vi
@@ -234,13 +227,11 @@ describe("refreshMemoryIfNeeded", () => {
         .mockResolvedValueOnce({ triggered: true, reason: "periodic", newRagContext: "chunk Y", newInsights: ["b"], durationMs: 1, retrievalNumber: 1 })
         .mockResolvedValueOnce({ triggered: true, reason: "periodic", newRagContext: "chunk Z", newMemoryContext: "memory M", durationMs: 1, retrievalNumber: 2 }),
     };
-    const initial = "base\n\n<!-- re-retrieval:rag:start -->\nchunk X\n<!-- re-retrieval:rag:end -->\n";
     const first = await refreshMemoryIfNeeded({
       memoryRefresher: refresher as any,
       iteration: 5,
       queryContext: "q",
       chatId: "c1",
-      systemPrompt: initial,
       agentState: { ...baseState, learnedInsights: ["a"] },
     });
     const second = await refreshMemoryIfNeeded({
@@ -248,33 +239,33 @@ describe("refreshMemoryIfNeeded", () => {
       iteration: 10,
       queryContext: "q",
       chatId: "c1",
-      systemPrompt: first.systemPrompt,
       agentState: first.agentState,
     });
-    for (const chunk of ["chunk X", "chunk Y", "chunk Z", "## Relevant Memory\nmemory M"]) {
-      expect(second.systemPrompt).toContain(chunk);
+    // Each recall is appended to the history once, so an earlier one stays where it was put:
+    // the second carries only what is new.
+    for (const chunk of ["chunk Z", "## Relevant Memory\nmemory M"]) {
+      expect(second.recalled).toContain(chunk);
     }
-    expect(second.systemPrompt.match(/re-retrieval:rag:start/g)).toHaveLength(1);
+    expect(first.recalled).toContain("chunk Y");
+    expect(second.recalled).not.toContain("chunk Y");
     expect(second.agentState.learnedInsights).toEqual(["a", "b"]);
   });
 
-  it("bounds an accumulating section, keeping its head and its newest additions (ORC-12)", async () => {
+  it("bounds what one refresh adds to the history, keeping its head and its tail", async () => {
     const refresher = {
       shouldRefresh: vi.fn().mockResolvedValue({ should: true, reason: "periodic" }),
-      refresh: vi.fn().mockResolvedValue({ triggered: true, reason: "periodic", newRagContext: `NEWEST ${"n".repeat(8_000)}`, durationMs: 1, retrievalNumber: 1 }),
+      refresh: vi.fn().mockResolvedValue({ triggered: true, reason: "periodic", newMemoryContext: `FIRST ${"i".repeat(8_000)}`, newRagContext: `NEWEST ${"n".repeat(8_000)}`, durationMs: 1, retrievalNumber: 1 }),
     };
-    const initial = `<!-- re-retrieval:rag:start -->\nINITIAL ${"i".repeat(8_000)}\n<!-- re-retrieval:rag:end -->\n`;
     const result = await refreshMemoryIfNeeded({
       memoryRefresher: refresher as any,
       iteration: 5,
       queryContext: "q",
       chatId: "c1",
-      systemPrompt: initial,
       agentState: baseState,
     });
-    expect(result.systemPrompt.length).toBeLessThan(13_000);
-    expect(result.systemPrompt).toContain("INITIAL");
-    expect(result.systemPrompt).toContain("n".repeat(100) + "\n<!-- re-retrieval:rag:end -->");
+    expect(result.recalled!.length).toBeLessThan(13_000);
+    expect(result.recalled).toContain("FIRST");
+    expect(result.recalled!.endsWith("n".repeat(100))).toBe(true);
   });
 
   it("updates agentState insights when refresh provides them", async () => {
@@ -293,7 +284,6 @@ describe("refreshMemoryIfNeeded", () => {
       iteration: 1,
       queryContext: "q",
       chatId: "c1",
-      systemPrompt: "prompt",
       agentState: baseState,
     });
     expect(result.agentState.learnedInsights).toEqual(["insight-1"]);
@@ -316,7 +306,6 @@ describe("refreshMemoryIfNeeded", () => {
       iteration: 1,
       queryContext: "q",
       chatId: "c1",
-      systemPrompt: "prompt",
       agentState: baseState,
       onNewInstinctIds: callback,
     });
@@ -340,10 +329,9 @@ describe("refreshMemoryIfNeeded", () => {
       iteration: 1,
       queryContext: "q",
       chatId: "c1",
-      systemPrompt: "prompt",
       agentState: baseState,
     });
-    expect(result.systemPrompt).toBe("prompt");
+    expect(result.recalled).toBeUndefined();
   });
 
   it("swallows errors from shouldRefresh", async () => {
@@ -356,10 +344,9 @@ describe("refreshMemoryIfNeeded", () => {
       iteration: 1,
       queryContext: "q",
       chatId: "c1",
-      systemPrompt: "prompt",
       agentState: baseState,
     });
-    expect(result.systemPrompt).toBe("prompt");
+    expect(result.recalled).toBeUndefined();
   });
 });
 

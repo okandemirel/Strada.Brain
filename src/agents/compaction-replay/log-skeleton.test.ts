@@ -47,6 +47,19 @@ describe("buildSkeleton", () => {
     expect(sessions[0]!.turns[0]).toMatchObject({ promptChars: PROMPT, toolChars: TOOLS, inputTokens: HEAD + 500 });
   });
 
+  it("counts the turn context as neither the task nor the history's growth", () => {
+    // 2 000 context chars (500 tokens) on every call: sent after the history, never stored.
+    const ctx = { turnContextChars: 2_000 };
+    const lines = [turn(1, 500 + 500, ctx), tool(4_000), turn(3, 500 + 100 + 1_000 + 500, ctx)];
+    const { sessions, stats } = buildSkeleton(lines);
+    expect(String(sessions[0]!.turns[0]!.append[0]!.content)).toHaveLength(2_000);
+    expect(sessions[0]!.turns[0]).toMatchObject({ turnContextChars: 2_000 });
+    expect(resultBlocks(sessions[0]!.turns[1]!.append[1]).map((b) => b.content.length)).toEqual([4_000]);
+    expect(stats).toMatchObject({ calibratedTransitions: 1 });
+    // A line written before the field existed carries no context.
+    expect(buildSkeleton([turn(1, 500)]).sessions[0]!.turns[0]).not.toHaveProperty("turnContextChars");
+  });
+
   it("sizes a result the log did not record from the input's growth, so the rebuild matches the provider's count", () => {
     // 100 output tokens + a logged 4 000-char result (1 000 tokens) + an unlogged one: 3 000 tokens left over.
     const lines = [turn(1, 500, { toolCalls: 2 }), tool(4_000), turn(3, 500 + 100 + 1_000 + 3_000)];

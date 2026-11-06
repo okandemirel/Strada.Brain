@@ -19,9 +19,11 @@ interface Call {
   h: number;
   prompt?: number;
   toolCalls?: number;
+  /** Turn context chars: sent after the history, never stored (src/agents/turn-context.ts). */
+  ctx?: number;
 }
 
-const turn = ({ chat = "chat-a", m, h, prompt = PROMPT, toolCalls = 1 }: Call): string =>
+const turn = ({ chat = "chat-a", m, h, prompt = PROMPT, toolCalls = 1, ctx }: Call): string =>
   JSON.stringify({
     timestamp: "2026-11-05 10:00:00",
     level: "info",
@@ -29,11 +31,12 @@ const turn = ({ chat = "chat-a", m, h, prompt = PROMPT, toolCalls = 1 }: Call): 
     label: "turn",
     chatId: chat,
     messages: m,
-    inputTokens: h + prompt / 4 + TOOLS / 4,
+    inputTokens: h + prompt / 4 + TOOLS / 4 + (ctx ?? 0) / 4,
     outputTokens: 50,
     toolCalls,
     promptChars: prompt,
     toolChars: TOOLS,
+    ...(ctx === undefined ? {} : { turnContextChars: ctx }),
   });
 
 const tool = (bytes: number, chat = "chat-a"): string =>
@@ -46,6 +49,18 @@ const run = (calls: number, opts: Partial<Call> & { from?: number; start?: numbe
 const counts = (sessions: { turns: readonly { messages: number }[] }[]) => sessions.map((s) => s.turns.map((t) => t.messages));
 
 describe("readLogSessions", () => {
+  it("follows a session whose turn context shrank, because the context is not history", () => {
+    // The planning call's context (the planning prompt) is 32 000 chars, 8 000 tokens; the
+    // executing calls' is 2 000. Counted as history, the drop would read as a cut.
+    const calls = [{ m: 1, h: 400, ctx: 32_000 }, { m: 3, h: 900, ctx: 2_000 }, { m: 5, h: 1_400, ctx: 2_400 }];
+    const { sessions, stats } = readLogSessions(calls.map(turn));
+    expect(counts(sessions)).toEqual([[1, 3, 5]]);
+    expect(sessions[0]!.turns.map((t) => t.turnContextChars)).toEqual([32_000, 2_000, 2_400]);
+    expect(stats).toMatchObject({ interleavedTurns: 0, sessionsWithUnknownStart: 0 });
+    // A line written before the field existed reads as no context.
+    expect(readLogSessions([turn({ m: 1, h: 400 })]).sessions[0]!.turns[0]!.turnContextChars).toBe(0);
+  });
+
   it("starts a new session where a chat's count restarts", () => {
     const { sessions } = readLogSessions([...run(3), ...run(2, { start: 300 })].map(turn));
     expect(counts(sessions)).toEqual([[1, 3, 5], [1, 3]]);

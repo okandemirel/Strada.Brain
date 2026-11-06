@@ -13,7 +13,6 @@ import type { ToolTrackingParams } from "./orchestrator-tool-execution.js";
 import { trackAndRecordToolResults } from "./orchestrator-tool-execution.js";
 import type { ConsensusVerificationParams } from "./orchestrator-consensus.js";
 import { runConsensusVerification } from "./orchestrator-consensus.js";
-import { replaceSection } from "./orchestrator-runtime-utils.js";
 import type {
   ExecutionPhase,
   PhaseOutcomeStatus,
@@ -138,53 +137,54 @@ export interface RefreshMemoryParams {
   /** For Interactive: extracted from session. For BG: the task prompt. */
   queryContext: string;
   chatId: string;
-  systemPrompt: string;
   agentState: AgentState;
   /** Interactive-only: callback to handle new instinct IDs from re-retrieval. */
   onNewInstinctIds?: (ids: string[]) => void;
 }
 
 export interface RefreshMemoryResult {
-  systemPrompt: string;
   agentState: AgentState;
+  /**
+   * What the refresh recalled that the run was never shown, ready to append to the history at
+   * the turn about to be sent (turn-context.ts appendToLastUserTurn). Undefined when nothing new
+   * came back.
+   */
+  recalled?: string;
 }
 
-/** Bound for a re-retrieval section that accumulates across refreshes (~3k tokens). */
-const REFRESHED_SECTION_MAX_CHARS = 12_000;
+/** Bound for what one refresh adds to the history (~3k tokens). */
+const RECALLED_MAX_CHARS = 12_000;
 /** Bound for the insights a run carries after repeated refreshes. */
 const MAX_LEARNED_INSIGHTS = 20;
-const SECTION_TRUNCATION_MARKER = "\n[… older retrieved context truncated …]\n";
+const RECALL_TRUNCATION_MARKER = "\n[… recalled context truncated …]\n";
 
-/** The body between a section's markers, or undefined when the prompt has no such section. */
-function readSection(prompt: string, tag: string): string | undefined {
-  const startMarker = `<!-- ${tag}:start -->`;
-  const endMarker = `<!-- ${tag}:end -->`;
-  const startIdx = prompt.indexOf(startMarker);
-  const endIdx = prompt.indexOf(endMarker);
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) return undefined;
-  return prompt.slice(startIdx + startMarker.length, endIdx).replace(/^\n/, "").replace(/\n$/, "");
-}
-
-/**
- * Add newly retrieved content to a section, keeping what it already holds. Over the bound, the
- * head (the initial retrieval, the most relevant to the task) and the newest additions are kept.
- */
-function appendToSection(prompt: string, tag: string, addition: string, header = ""): string {
-  const existing = readSection(prompt, tag)?.trim();
-  const combined = existing ? `${existing}\n---\n${addition}` : `${header}${addition}`;
-  if (combined.length <= REFRESHED_SECTION_MAX_CHARS) return replaceSection(prompt, tag, combined);
-  const budget = REFRESHED_SECTION_MAX_CHARS - SECTION_TRUNCATION_MARKER.length;
+/** The recalled memory and code context as one block, its head and tail kept when it is over the bound. */
+function recalledBlock(memory: string | undefined, rag: string | undefined): string | undefined {
+  const parts = [memory ? `## Relevant Memory\n${memory}` : "", rag ?? ""].filter((part) => part.trim().length > 0);
+  if (parts.length === 0) return undefined;
+  const block = `## Recalled during this task\n\n${parts.join("\n\n")}`;
+  if (block.length <= RECALLED_MAX_CHARS) return block;
+  const budget = RECALLED_MAX_CHARS - RECALL_TRUNCATION_MARKER.length;
   const head = Math.floor(budget * 0.5);
-  const capped = combined.slice(0, head) + SECTION_TRUNCATION_MARKER + combined.slice(combined.length - (budget - head));
-  return replaceSection(prompt, tag, capped);
+  return block.slice(0, head) + RECALL_TRUNCATION_MARKER + block.slice(block.length - (budget - head));
 }
 
 /**
  * Performs memory re-retrieval if the refresher triggers.
  *
- * Checks shouldRefresh, calls refresh(), then updates system prompt
- * sections and agent state insights. The optional `onNewInstinctIds`
- * callback handles instinct ID deduplication (Interactive-only).
+ * Checks shouldRefresh, calls refresh(), and returns what it recalled plus the agent state with
+ * any new insights. The optional `onNewInstinctIds` callback handles instinct ID deduplication
+ * (Interactive-only).
+ *
+ * What it recalled goes into the history, once, and not into the system prompt. A refresh fires
+ * every few iterations, and rewriting the system prompt each time broke the provider's prefix
+ * cache for the whole history behind it (turn-context.ts). The history alone does not keep it:
+ * every step trims the history to the provider's message cap and compaction summarizes old
+ * turns, and the refresher never recalls the same content twice (ORC-12: it dedups against
+ * everything it ever injected). So the caller hands the recall to the run's RecallLedger, which
+ * puts it back on the turn about to be sent whenever a trim or compaction drops it
+ * (recall-ledger.ts); memory never stores it as conversation, and no reader takes it for what
+ * the user last said.
  *
  * Non-fatal: any error is caught and swallowed.
  */
@@ -198,10 +198,11 @@ export async function refreshMemoryIfNeeded(
     chatId,
     onNewInstinctIds,
   } = params;
-  let { systemPrompt, agentState } = params;
+  let { agentState } = params;
+  let recalled: string | undefined;
 
   if (!memoryRefresher) {
-    return { systemPrompt, agentState };
+    return { agentState };
   }
 
   try {
@@ -216,20 +217,8 @@ export async function refreshMemoryIfNeeded(
       );
       if (refreshed.triggered) {
         // A refresh returns only what was NOT shown before (the refresher dedups against
-        // everything it ever injected), so the sections accumulate: replacing them with the
-        // new items dropped the initial RAG block and every earlier recall for the rest of
-        // the run, and they could never come back (their hashes stay "injected").
-        if (refreshed.newMemoryContext) {
-          systemPrompt = appendToSection(
-            systemPrompt,
-            "re-retrieval:memory",
-            refreshed.newMemoryContext,
-            "## Relevant Memory\n",
-          );
-        }
-        if (refreshed.newRagContext) {
-          systemPrompt = appendToSection(systemPrompt, "re-retrieval:rag", refreshed.newRagContext);
-        }
+        // everything it ever injected).
+        recalled = recalledBlock(refreshed.newMemoryContext, refreshed.newRagContext);
         if (refreshed.newInsights?.length) {
           const merged = [...new Set([...(agentState.learnedInsights ?? []), ...refreshed.newInsights])];
           agentState = { ...agentState, learnedInsights: merged.slice(-MAX_LEARNED_INSIGHTS) };
@@ -243,7 +232,7 @@ export async function refreshMemoryIfNeeded(
     getLoggerSafe().warn("Memory re-retrieval failed", { error: err instanceof Error ? err.message : String(err) });
   }
 
-  return { systemPrompt, agentState };
+  return recalled === undefined ? { agentState } : { agentState, recalled };
 }
 
 // =============================================================================
