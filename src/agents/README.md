@@ -128,6 +128,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | `orchestrator-loop-shared.ts` | Shared loop functions: executeAndTrackTools, refreshMemoryIfNeeded, runConsensusIfAvailable, checkPendingBlocks |
 | `orchestrator-loop-utils.ts` | PAOR state transitions: handlePlanPhaseTransition, processReflectionPreamble, applyReflectionContinuation, handleReplanDecision |
 | `orchestrator-session-manager.ts` | SessionManager class — session state, transcript, persistence, plan review |
+| `session-memory-transcript.ts` | The text of a conversation as memory stores it (`[role] text` lines, a message preview) |
 | `orchestrator-autonomy-tracker.ts` | AutonomyBundle factory — creates ErrorRecovery, TaskPlanner, SelfVerification, ExecutionJournal per loop |
 | `orchestrator-consensus.ts` | Consensus verification orchestration |
 | `orchestrator-tool-execution.ts` | Tool execution + autonomy result tracking |
