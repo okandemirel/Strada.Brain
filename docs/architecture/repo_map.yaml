@@ -365,13 +365,14 @@ nodes:
       - "campaign sprints that submit tasks → campaign"
 
   tests:
-    purpose: "Tests that span modules (integration and unit suites) and the shared test helpers: mock provider, mock channel, decoy home, local fixtures."
+    purpose: "Tests that span modules (integration and unit suites) and the shared test helpers: mock provider, mock channel, decoy home, local fixtures, and the golden-run harness (src/tests/helpers/golden-run-harness.ts) that drives one request through the real bootstrap with a scripted provider."
     entrypoints: ["src/tests/helpers/mock-provider.ts", "src/tests/helpers/mock-channel.ts", "src/tests/helpers/local-fixtures.ts", "src/tests/helpers/universality-scan.ts"]
-    depends_on: ["agents", "channels", "types"]
+    depends_on: ["agents", "channels", "config", "core", "tasks", "types", "utils"]
     contracts: ["path-containment"]
     read_when:
       - "a test needs a mock provider, a mock channel or an isolated home"
       - "an integration test across modules fails"
+      - "a golden run fails or needs a new scenario: a scripted provider walking the real loop, its happy path or its failure and recovery paths"
       - "the universality scan: its shingles and rolling-hash prefilter (RollSet)"
 
   types:
