@@ -32,9 +32,10 @@ message is never selected, and the same false red comes back for it.
   `testsThatReadBuild` in `scripts/ci/dist-build.mjs`. `distBuildGate` builds
   dist/ only when a test on that list is among the tests the gates will run,
   and dist/ is missing or stale.
-- **The check:** `src/tests/dist-readers.test.ts` parses every test file in
-  vitest's include (`testFiles`, from the same module). It works out each
-  path expression from its parts:
+- **The check:** `src/tests/dist-readers.test.ts` reads every test file in
+  vitest's include (`testFiles`, from the same module) and parses the ones
+  that can reach dist/ (below). It works out each path expression from its
+  parts:
   - `process.cwd()` is the repository root, as vitest runs here;
   - `import.meta.url`, `import.meta.dirname` and `__dirname` are the test
     file's own place;
@@ -43,6 +44,14 @@ message is never selected, and the same false red comes back for it.
     function is imported under another name (`import { join as joinPath }`):
     a call is judged by the name it has in its module, not by the local one;
   - a name is followed to the `const` it was declared with, in its own scope;
+  - a name imported from a relative module (`./` or `../`, `.js` read as
+    the `.ts` source) is worked out in that module, from that module's own
+    place: `REPO_ROOT` from `src/tests/helpers/local-fixtures.ts` is the root
+    its `new URL("../../../", import.meta.url)` climbs to, not a climb from the
+    test. An `export const`, `export { a as b }`, a re-export
+    (`export { x } from`, `export * from`), a namespace import
+    (`fixtures.REPO_ROOT`) and a default export are followed, through as many
+    modules as it takes;
   - a path whose end comes only at run time counts by its known start:
     `path.join(process.cwd(), "dist", name)` with `name` a loop variable or a
     helper's parameter, `join(root, "dist", ...parts)`, and
@@ -52,7 +61,12 @@ message is never selected, and the same false red comes back for it.
     in dist/. The start counts up to its last whole segment, so
     `` `${root}/dist${suffix}` ``, `` new URL(`../../dist${suffix}`, import.meta.url) ``
     and `join(root, sub, "dist")`, whose dist/ part is not fixed, do not;
-  - an `import` or `import()` of a relative specifier counts too.
+  - an `import`, `import()`, `vi.importActual()` or `vi.importMock()` of a
+    relative specifier counts too.
+
+  A test file is parsed when it, or a module it imports from by a relative
+  specifier, spells `dist`. Parsing every test file instead takes a scan of
+  the repository from about 2 s to 8–16 s.
 
   A file with a path that lands in `<repo>/dist` and no `READS_BUILD` match
   fails the detector, which names the line and the path.
@@ -87,18 +101,28 @@ message is never selected, and the same false red comes back for it.
 
 ## What it cannot see
 
-- **A path built in another file:** a constant or helper imported from a
-  module. Each file is parsed alone.
+- **A path a function returns, in this file or another:** `function
+  repoRoot() { return process.cwd(); }` and then `path.join(repoRoot(),
+  "dist", "index.js")`, or a helper's `cliPath()`. A call is followed only
+  into the path and URL functions listed above, not into a function a module
+  declares. No test builds the repository root this way today (the
+  `projectRoot()` in `workspace-submodules.test.ts` returns a temp folder),
+  and no test helper returns a dist/ path: of the modules tests import, only
+  production modules spell `dist`, and the two that build a path into dist/
+  (`src/channels/web/channel.ts`, `src/core/setup-wizard.ts`) keep it in an
+  unexported list of static-folder fallbacks.
+- **A value imported by package name or loaded at run time:** a name from a
+  package, a `#` import-map alias, a `require()`, or a module object from
+  `await import("./helper.js")`. Only static imports of relative specifiers
+  are followed.
+- **A dist/ segment spelled two modules away:** a test that never writes
+  `dist`, importing from a helper that never writes it either but re-exports
+  a third module's dist/ path. The test is not parsed (see above). With every
+  test file parsed, today's scan finds the same three readers.
 - **A path whose root or dist/ part is known only at run time:** a root taken
   from a function parameter, a `let` or an environment variable, or a dist/
   segment assembled at run time. A path whose root and dist/ are fixed and
   only its end varies is seen (above).
-- **A root returned by a local function:** `function repoRoot() { return
-  process.cwd(); }` and then `path.join(repoRoot(), "dist", "index.js")`. A
-  call is followed only into the path and URL functions listed above, not into
-  a function the file declares. No test builds the repository root this way
-  today (the `projectRoot()` in `workspace-submodules.test.ts` returns a temp
-  folder).
 - **A run-time end that leaves dist/ again** (`join(root, "dist", "../src")`,
   or a `resolve()` part that turns out absolute) still counts as a reader.
   This errs toward the gate building dist/ for nothing, not toward a missed
@@ -107,7 +131,11 @@ message is never selected, and the same false red comes back for it.
   directory is the root, and a reader that reaches dist/ only through a
   script it runs. `scripts/backup.sh` reads `dist/core/database-backup.js`;
   `restore-script.test.ts` is seen because it checks that path itself.
-- **Joins other than the ones listed,** such as `[root, "dist"].join("/")`.
+- **Joins other than the ones listed,** such as `[root, "dist"].join("/")`,
+  and `dist` spelled in pieces (`"di" + "st"`), which the parse would follow
+  but the word check before it does not see.
+- **`vi.mock("../dist/…")` and `vi.doMock`** name a module without loading
+  it. The import that loads it is what counts.
 - **A path function reached other than by `import`:** taken from
   `require("node:path")`, or destructured (`const { join } = path`).
 - **`require.resolve("../../dist/…")`** on a `require` made with
@@ -139,3 +167,14 @@ import.meta.url)) ``). One beside them reading `` new URL(`../../../dist${suffix
 import.meta.url) `` was not counted. The repository scan with the URL change
 still finds exactly the three readers. The detector adds one test file of its
 own, which contains `dist` and builds no path into it.
+
+With names followed into the modules they are imported from: 116 of the
+1,120 test files spell `dist` or import from a module that does, and the scan
+parses those. The repository's shared root, `REPO_ROOT` in
+`src/tests/helpers/local-fixtures.ts`, is imported by one test file,
+`src/universality.test.ts`, which builds no path into dist/ with it. A scan
+that parsed every test file found the same three readers. Two tests added
+without the message failed the detector at their line: one that read
+`join(REPO_ROOT, "dist", "index.js")` with `REPO_ROOT` imported from
+`../helpers/local-fixtures.js`, and one that loaded
+`vi.importActual("../../../dist/core/database-backup.js")`.

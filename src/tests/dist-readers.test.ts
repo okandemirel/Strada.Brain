@@ -17,7 +17,11 @@
  * path.dirname, fileURLToPath, new URL(…), .pathname, template strings, `+`
  * and the const a name was declared with (in its own scope) are followed; an
  * imported function is judged by its name in its module (`join as joinPath`
- * is join), and an import of a relative specifier counts too. A path whose end
+ * is join). A name imported from a relative module is worked out in that
+ * module, from its own place: REPO_ROOT from ../helpers/local-fixtures.js is
+ * the root its `export const` climbs to (re-exports, `export *`, a namespace
+ * import and a default export are followed too). An import, import(),
+ * vi.importActual or vi.importMock of a relative specifier counts. A path whose end
  * comes at run time counts by its known start, up to its last whole segment:
  * join(repoRoot, "dist", name), `${repoRoot}/dist/${name}` and
  * new URL(`../dist/${name}`, import.meta.url) land in dist/ whatever name is.
@@ -28,7 +32,7 @@
  * dist/ paths in its fixtures, and with the message in it the gate would build
  * dist/ every time the detectors run.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -122,21 +126,75 @@ function asPath(value: string | undefined): string | undefined {
   return path.isAbsolute(value) ? value : undefined;
 }
 
+function isFile(at: string): boolean {
+  try {
+    return statSync(at).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The source file a relative specifier names, as the sources hold it:
+ * "./root.js" is ./root.ts. A package name names no file here.
+ */
+function relativeModule(from: string, specifier: string): string | undefined {
+  if (!/^\.\.?\//.test(specifier)) return undefined;
+  const at = path.resolve(path.dirname(from), specifier);
+  return [at.replace(/\.(m?)js$/, ".$1ts"), at].find(isFile);
+}
+
+/** A module read for the paths into dist/ it builds and for what its exports come to. */
+interface Module {
+  hits(): Hit[];
+  exported(name: string): Value;
+}
+
+/** The modules one scan has read, by file: a helper that many tests import is parsed once. */
+type Modules = Map<string, Module>;
+
+function moduleAt(file: string, root: string, modules: Modules): Module {
+  let found = modules.get(file);
+  if (!found) {
+    found = reader(file, readFileSync(file, "utf8"), root, modules);
+    modules.set(file, found);
+  }
+  return found;
+}
+
 /**
  * Every path the source builds that lands at or below `root`/dist, with
  * `root` standing for process.cwd(). `file` is where the source sits.
  */
-function pathsIntoDist(file: string, source: string, root: string): Hit[] {
+function pathsIntoDist(file: string, source: string, root: string, modules: Modules = new Map()): Hit[] {
+  const found = reader(file, source, root, modules);
+  modules.set(file, found);
+  return found.hits();
+}
+
+/**
+ * One module of a scan. A name it imports from a relative module is worked
+ * out in that module, from that module's own place: REPO_ROOT in
+ * `import { REPO_ROOT } from "../helpers/local-fixtures.js"` is the
+ * `export const` there, with its import.meta.url.
+ */
+function reader(file: string, source: string, root: string, modules: Modules): Module {
   const { sf, checker } = parse(file, source);
   const dist = path.join(root, "dist");
   const following = new Set<ts.Node>();
+  const exporting = new Set<string>();
+
+  /** What export `name` of the module `specifier` names comes to; nothing for a package. */
+  const foreign = (specifier: string, name: string): Value => {
+    const target = relativeModule(file, specifier);
+    return target === undefined ? undefined : moduleAt(target, root, modules).exported(name);
+  };
 
   /**
    * The module an imported name came from and the name it has there: "node:path"
    * and `join` for `joinPath` in `import { join as joinPath } from "node:path"`.
    */
-  const imported = (id: ts.Identifier): { from: string; name: string } | undefined => {
-    const decl = checker.getSymbolAtLocation(id)?.declarations?.[0];
+  const importOf = (decl: ts.Declaration | undefined): { from: string; name: string } | undefined => {
     if (!decl) return undefined;
     const [statement, name] = ts.isImportSpecifier(decl)
       ? [decl.parent.parent.parent, (decl.propertyName ?? decl.name).text]
@@ -147,6 +205,9 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
           : [undefined, ""];
     return statement && ts.isStringLiteral(statement.moduleSpecifier) ? { from: statement.moduleSpecifier.text, name } : undefined;
   };
+
+  const imported = (id: ts.Identifier): { from: string; name: string } | undefined =>
+    importOf(checker.getSymbolAtLocation(id)?.declarations?.[0]);
 
   /** `join` from "node:path" for `join(…)`, `path.join(…)` and `path.posix.join(…)`; `cwd` from "process" for process.cwd(). */
   const callee = (expr: ts.Expression): { from: string; name: string } | undefined => {
@@ -161,10 +222,10 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     return checker.getSymbolAtLocation(owner) ? undefined : { from: owner.text, name: expr.name.text };
   };
 
-  const nameValue = (id: ts.Identifier): Value => {
-    const decl = checker.getSymbolAtLocation(id)?.valueDeclaration;
-    if (decl && ts.isVariableDeclaration(decl) && decl.initializer && ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) {
-      if (following.has(decl)) return undefined;
+  /** What a declaration comes to: a const by its initializer, an imported name by its export in a relative module. */
+  const declValue = (decl: ts.Declaration | undefined): Value => {
+    if (decl && ts.isVariableDeclaration(decl)) {
+      if (!decl.initializer || !(ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) || following.has(decl)) return undefined;
       following.add(decl);
       try {
         return value(decl.initializer);
@@ -172,10 +233,58 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
         following.delete(decl);
       }
     }
-    if (decl) return undefined;
+    const from = importOf(decl);
+    return from === undefined || from.name === "*" ? undefined : foreign(from.from, from.name);
+  };
+
+  const nameValue = (id: ts.Identifier): Value => {
+    const symbol = checker.getSymbolAtLocation(id);
+    // An imported name has no value declaration in this file, only its import.
+    const decl = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    if (decl) return declValue(decl);
     if (id.text === "__dirname") return path.dirname(file);
     if (id.text === "__filename") return file;
     return undefined;
+  };
+
+  /**
+   * What the module's export `name` comes to: an exported const, a name it
+   * exports or re-exports under that name (`export * from` too), or its default.
+   */
+  const exported = (name: string): Value => {
+    if (exporting.has(name)) return undefined;
+    exporting.add(name);
+    try {
+      const stars: string[] = [];
+      for (const statement of sf.statements) {
+        if (ts.isVariableStatement(statement) && statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) {
+          const decl = statement.declarationList.declarations.find((d) => ts.isIdentifier(d.name) && d.name.text === name);
+          if (decl) return declValue(decl);
+        } else if (name === "default" && ts.isExportAssignment(statement) && !statement.isExportEquals) {
+          return value(statement.expression);
+        } else if (ts.isExportDeclaration(statement) && !statement.isTypeOnly) {
+          const from = statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined;
+          const clause = statement.exportClause;
+          if (clause === undefined) {
+            if (from !== undefined) stars.push(from);
+            continue;
+          }
+          const spec = ts.isNamedExports(clause) ? clause.elements.find((e) => e.name.text === name) : undefined;
+          if (!spec) continue;
+          if (from !== undefined) return foreign(from, (spec.propertyName ?? spec.name).text);
+          const local = checker.getExportSpecifierLocalTargetSymbol(spec);
+          return declValue(local?.valueDeclaration ?? local?.declarations?.[0]);
+        }
+      }
+      // `export *` never carries a default.
+      for (const from of name === "default" ? [] : stars) {
+        const found = foreign(from, name);
+        if (found !== undefined) return found;
+      }
+      return undefined;
+    } finally {
+      exporting.delete(name);
+    }
   };
 
   const whole = (v: Value): string | undefined => (typeof v === "string" ? v : undefined);
@@ -187,6 +296,11 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
       if (n.name.text === "filename") return file;
       return undefined;
     }
+    // A namespace import of a relative module: fixtures.REPO_ROOT is that module's REPO_ROOT.
+    if (ts.isIdentifier(n.expression)) {
+      const from = imported(n.expression);
+      if (from?.name === "*") return foreign(from.from, n.name.text);
+    }
     if (n.name.text === "href") return whole(value(n.expression));
     if (n.name.text === "pathname") return asPath(whole(value(n.expression)));
     return undefined;
@@ -196,9 +310,16 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     const fn = callee(n.expression);
     if (!fn) return undefined;
     if (PROCESS.has(fn.from) && fn.name === "cwd") return root;
+    const joins = PATH_MODULES.has(fn.from) && (fn.name === "join" || fn.name === "resolve");
+    const takesOne =
+      (PATH_MODULES.has(fn.from) && (fn.name === "dirname" || fn.name === "normalize")) ||
+      (URL_MODULES.has(fn.from) && fn.name === "fileURLToPath");
+    // Only a path function's arguments are worked out, so an imported name is
+    // followed into its module only where it feeds a path.
+    if (!joins && !takesOne) return undefined;
     // A spread (`...parts`) is not a value here, so it counts as a run-time part.
     const parts = n.arguments.map(value);
-    if (PATH_MODULES.has(fn.from) && (fn.name === "join" || fn.name === "resolve")) {
+    if (joins) {
       // A relative resolve() starts from the working directory, which is the root.
       const build = (args: string[]): string => (fn.name === "join" ? path.join(...args) : path.resolve(root, ...args));
       const runTime = parts.findIndex((part) => typeof part !== "string");
@@ -276,12 +397,22 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     return at === undefined ? undefined : { at, open };
   };
 
+  /** vi.importActual(…) and vi.importMock(…) load the module they name, as import() does. */
+  const loadsModule = (expr: ts.Expression): boolean => {
+    const fn = callee(expr);
+    return (fn?.from === "vitest" || fn?.from === "vi") && (fn.name === "importActual" || fn.name === "importMock");
+  };
+
   const hits: Hit[] = [];
   const visit = (node: ts.Node): void => {
     let target: { at: string; open: boolean } | undefined;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       target = place(node.moduleSpecifier.text, true);
-    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments[0]) {
+    } else if (
+      ts.isCallExpression(node) &&
+      node.arguments[0] &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword || loadsModule(node.expression))
+    ) {
       target = place(value(node.arguments[0]), true);
     } else if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTemplateExpression(node) || ts.isBinaryExpression(node)) {
       target = place(value(node));
@@ -296,19 +427,45 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
     }
     ts.forEachChild(node, visit);
   };
-  visit(sf);
-  return hits;
+
+  return {
+    hits: () => {
+      hits.length = 0;
+      visit(sf);
+      return [...hits];
+    },
+    exported,
+  };
 }
+
+const SPELLS_DIST = /\bdist\b/;
+const RELATIVE_FROM = /\bfrom\s*["'](\.\.?\/[^"']*)["']/g;
 
 /** The test files under `root` that build a path into its dist/, and those of them the gate cannot see. */
 function scan(root: string): { readers: string[]; unmarked: string[] } {
   const readers: string[] = [];
   const unmarked: string[] = [];
+  const modules: Modules = new Map();
+  const texts = new Map<string, string>();
+  const text = (file: string): string => {
+    const known = texts.get(file) ?? readFileSync(file, "utf8");
+    texts.set(file, known);
+    return known;
+  };
   for (const rel of distBuild.testFiles(root)) {
-    const source = readFileSync(path.join(root, rel), "utf8");
-    // Every path into dist/ spells the word somewhere; the rest need no parse.
-    if (!/\bdist\b/.test(source)) continue;
-    const [first] = pathsIntoDist(path.join(root, rel), source, root);
+    const file = path.join(root, rel);
+    const source = text(file);
+    // A path into dist/ spells the word in the test or in a module it imports
+    // from; parsing every test file instead would take a full scan from
+    // seconds to a quarter of a minute.
+    const spells =
+      SPELLS_DIST.test(source) ||
+      [...source.matchAll(RELATIVE_FROM)].some(([, specifier]) => {
+        const target = specifier === undefined ? undefined : relativeModule(file, specifier);
+        return target !== undefined && SPELLS_DIST.test(text(target));
+      });
+    if (!spells) continue;
+    const [first] = pathsIntoDist(file, source, root, modules);
     if (!first) continue;
     readers.push(rel);
     if (!distBuild.READS_BUILD.test(source)) unmarked.push(`${rel}:${first.line} builds ${first.target}`);
@@ -330,9 +487,21 @@ function tempRoot(): string {
 
 const IMPORTS = 'import path, { join } from "node:path";\nimport { fileURLToPath } from "node:url";\n';
 
+/** Writes each file under `root`, below the imports every fixture starts with. */
+function writeAll(root: string, files: Record<string, string>): void {
+  for (const [rel, body] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    writeFileSync(path.join(root, rel), IMPORTS + body, "utf8");
+  }
+}
+
+let repoScan: ReturnType<typeof scan> | undefined;
+/** The repository's own scan, made once for the tests that read it. */
+const scanRepo = (): ReturnType<typeof scan> => (repoScan ??= scan(REPO));
+
 describe("a test that reads the repository's dist/ says so (docs/contracts/dist-readers.md)", () => {
   it("every test file that builds a path into dist/ fails asking for npm run build, so the build gate picks it", () => {
-    const { unmarked } = scan(REPO);
+    const { unmarked } = scanRepo();
     expect(
       unmarked,
       "These tests build a path into dist/ and never fail asking for `npm run build`, so scripts/ci/dist-build.mjs " +
@@ -342,7 +511,7 @@ describe("a test that reads the repository's dist/ says so (docs/contracts/dist-
   });
 
   it("finds today's readers by the paths they build, and not the tests that set up a dist/ of their own", () => {
-    const { readers } = scan(REPO);
+    const { readers } = scanRepo();
     expect(readers).toEqual(
       expect.arrayContaining([
         "src/tests/unit/live-verify-providers.test.ts",
@@ -357,21 +526,98 @@ describe("a test that reads the repository's dist/ says so (docs/contracts/dist-
 
   it("turns red on a new test that reads dist/ without the message, and not on one with it or one with its own dist/", () => {
     const root = tempRoot();
-    const write = (rel: string, body: string): void => {
-      mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
-      writeFileSync(path.join(root, rel), IMPORTS + body, "utf8");
-    };
-    write("src/new-reader.test.ts", 'const cli = join(process.cwd(), "dist", "core", "tool.js");\n');
-    write(
-      "src/said-reader.test.ts",
-      'const cli = join(process.cwd(), "dist", "core", "tool.js");\n' +
+    writeAll(root, {
+      "src/new-reader.test.ts": 'const cli = join(process.cwd(), "dist", "core", "tool.js");\n',
+      "src/said-reader.test.ts":
+        'const cli = join(process.cwd(), "dist", "core", "tool.js");\n' +
         `expect(existsSync(cli), \`\${cli} is missing: ${MESSAGE}\`).toBe(true);\n`,
-    );
-    write("tests/own-dist.test.ts", 'const root = mkdtempSync("own-");\nconst cli = join(root, "dist", "core", "tool.js");\n');
+      "tests/own-dist.test.ts": 'const root = mkdtempSync("own-");\nconst cli = join(root, "dist", "core", "tool.js");\n',
+    });
     expect(scan(root)).toEqual({
       readers: ["src/new-reader.test.ts", "src/said-reader.test.ts"],
       unmarked: ["src/new-reader.test.ts:3 builds dist/core/tool.js"],
     });
+  });
+
+  it("turns red on a test that reads dist/ through a path its helper exports, though the test never spells the word", () => {
+    const root = tempRoot();
+    writeAll(root, {
+      "src/helpers/paths.ts": 'export const BUILD = join(process.cwd(), "dist");\n',
+      "src/via-helper.test.ts": 'import { BUILD } from "./helpers/paths.js";\nconst cli = join(BUILD, "core", "tool.js");\n',
+    });
+    expect(scan(root)).toEqual({
+      readers: ["src/via-helper.test.ts"],
+      unmarked: ["src/via-helper.test.ts:4 builds dist/core/tool.js"],
+    });
+  });
+});
+
+describe("a name imported from another module of the repository", () => {
+  const TEST = "src/tests/unit/a.test.ts";
+  /** The dist/ targets the test file builds, with it and its helpers on disk under a temp root. */
+  const targetsWith = (files: Record<string, string>): string[] => {
+    const root = tempRoot();
+    writeAll(root, files);
+    return pathsIntoDist(path.join(root, TEST), IMPORTS + (files[TEST] ?? ""), root).map((hit) => hit.target);
+  };
+  const ROOT_TS = { "src/tests/root.ts": "export const ROOT = process.cwd();" };
+
+  it.each<[string, Record<string, string>, string]>([
+    ["a const root exported by a helper", { ...ROOT_TS, [TEST]: 'import { ROOT } from "../root.js";\njoin(ROOT, "dist", "x.js");' }, "dist/x.js"],
+    [
+      "a root the helper climbs to from its own import.meta.url, not the test's",
+      {
+        // Climbed from the test's place instead, "../../" would land in src/, not the root.
+        "src/tests/fixtures.ts": 'export const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));',
+        [TEST]: 'import { REPO_ROOT } from "../fixtures.js";\nreadFileSync(join(REPO_ROOT, "dist", "index.js"));',
+      },
+      "dist/index.js",
+    ],
+    ["a namespace import", { ...ROOT_TS, [TEST]: 'import * as fixtures from "../root.js";\njoin(fixtures.ROOT, "dist", "x.js");' }, "dist/x.js"],
+    [
+      "a default export",
+      { "src/tests/root.ts": "export default process.cwd();", [TEST]: 'import ROOT from "../root.js";\njoin(ROOT, "dist", "x.js");' },
+      "dist/x.js",
+    ],
+    [
+      "a name exported under another name, through export * and a renaming re-export",
+      {
+        "src/tests/root.ts": "const base = process.cwd();\nexport { base as ROOT };",
+        "src/tests/barrel.ts": 'export * from "./root.js";',
+        "src/tests/index.ts": 'export { ROOT as REPO } from "./barrel.js";',
+        [TEST]: 'import { REPO } from "../index.js";\njoin(REPO, "dist", "x.js");',
+      },
+      "dist/x.js",
+    ],
+    [
+      "a helper's const that imports its root in turn",
+      {
+        ...ROOT_TS,
+        "src/tests/paths.ts": 'import { ROOT } from "./root.js";\nexport const BUILD = join(ROOT, "dist");',
+        [TEST]: 'import { BUILD } from "../paths.js";\nexistsSync(join(BUILD, "index.js"));',
+      },
+      "dist/index.js",
+    ],
+  ])("%s", (_label, files, target) => {
+    expect(targetsWith(files)).toContain(target);
+  });
+
+  it.each<[string, Record<string, string>]>([
+    [
+      "not a helper's temp folder",
+      { "src/tests/root.ts": 'export const ROOT = mkdtempSync("x-");', [TEST]: 'import { ROOT } from "../root.js";\njoin(ROOT, "dist", "x.js");' },
+    ],
+    ["not a package's export", { [TEST]: 'import { ROOT } from "some-package";\njoin(ROOT, "dist", "x.js");' }],
+    [
+      "not modules that import and re-export each other, and the scan ends",
+      {
+        "src/tests/one.ts": 'import { B } from "./two.js";\nexport const A = B;\nexport * from "./two.js";',
+        "src/tests/two.ts": 'import { A } from "./one.js";\nexport const B = A;\nexport * from "./one.js";',
+        [TEST]: 'import { A, C } from "../one.js";\njoin(A, "dist", "x.js");\njoin(C, "dist", "x.js");',
+      },
+    ],
+  ])("%s", (_label, files) => {
+    expect(targetsWith(files)).toEqual([]);
   });
 });
 
@@ -401,6 +647,13 @@ describe("what counts as a path into dist/", () => {
     ["a relative resolve(), from the working directory", "src/a.test.ts", 'path.resolve("dist", "index.js");', "dist/index.js"],
     ["a dynamic import of a relative specifier", "src/tests/unit/a.test.ts", 'await import("../../../dist/core/x.js");', "dist/core/x.js"],
     ["a static import of a relative specifier", "src/a.test.ts", 'import { x } from "../dist/core/x.js";', "dist/core/x.js"],
+    ["vi.importActual of a relative specifier", "src/tests/unit/a.test.ts", 'await vi.importActual("../../../dist/core/x.js");', "dist/core/x.js"],
+    [
+      "vi.importMock, with vi imported from vitest",
+      "src/tests/unit/a.test.ts",
+      'import { vi } from "vitest";\nawait vi.importMock("../../../dist/core/x.js");',
+      "dist/core/x.js",
+    ],
     [
       "a path function imported under another name",
       "src/a.test.ts",
@@ -474,6 +727,11 @@ describe("what counts as a path into dist/", () => {
       'import { relative as resolve } from "node:path";\nresolve(process.cwd(), "dist");',
     ],
     ["a local that is only named path", "src/a.test.ts", 'function f(path: { join(...p: string[]): string }) {\n  return path.join(process.cwd(), "dist");\n}'],
+    [
+      "a local vi's importActual",
+      "src/tests/unit/a.test.ts",
+      'const vi = { importActual: (s: string) => s };\nvi.importActual("../../../dist/core/x.js");',
+    ],
     ["a dist/ path in a command string", "src/a.test.ts", 'const command = "node dist/index.js start --channel web";'],
     ["a run-time part before dist", "src/a.test.ts", 'function f(sub: string) {\n  return join(process.cwd(), sub, "dist", "x.js");\n}'],
     [
