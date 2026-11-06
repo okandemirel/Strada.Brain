@@ -1025,6 +1025,66 @@ describe("Orchestrator Integration", () => {
       expect(result.length).toBeGreaterThan(0);
     });
 
+    it("puts what a mid-run refresh recalled into the history, and leaves the system prompt as it was", async () => {
+      // A refresh fires every few iterations. Rewriting the system prompt each time made the
+      // provider's prefix cache miss the whole history behind it; the recall is appended to the
+      // history once instead (orchestrator-loop-shared.ts refreshMemoryIfNeeded, turn-context.ts).
+      const RECALLED = "refreshed context after tool run";
+      const mockMemMgr = {
+        retrieve: vi
+          .fn()
+          .mockResolvedValueOnce({ kind: "ok", value: [{ entry: { content: "initial context" }, score: 0.9 }] })
+          .mockResolvedValue({ kind: "ok", value: [{ entry: { content: RECALLED }, score: 0.95 }] }),
+        store: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+      mockProvider.chat
+        .mockResolvedValueOnce(toolResponse("Plan: analyze with memory refresh"))
+        .mockResolvedValueOnce(toolResponse("Step 1: read", "file_read"))
+        .mockResolvedValueOnce(toolResponse("Step 2: read more", "file_read"))
+        .mockResolvedValueOnce(toolResponse("Step 3: analyze", "file_read"))
+        .mockResolvedValueOnce(toolResponse("All steps completed.\n**DONE**"))
+        .mockResolvedValue(approvalResponse());
+
+      const orch = createOrchestrator({
+        providerManager: makeProviderManager(mockProvider),
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
+        memoryManager: mockMemMgr as any,
+        ragPipeline: { search: vi.fn().mockResolvedValue([]), formatContext: vi.fn(() => "") } as any,
+        reRetrievalConfig: {
+          enabled: true, interval: 2, topicShiftEnabled: false, topicShiftThreshold: 0.4,
+          maxReRetrievals: 10, timeoutMs: 5000, memoryLimit: 3, ragTopK: 6,
+        },
+      });
+      await runBackgroundTask(orch, "Analyze with memory refresh", {
+        chatId: "rr-bg-history-1",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+        channelType: "cli",
+      });
+
+      const calls = mockProvider.chat.mock.calls as unknown as Array<[string, Array<{ role: string; content: unknown }>]>;
+      const workerCalls = calls.filter(([, messages]) => JSON.stringify(messages.at(-1)).includes("Current worker role:"));
+      const first = workerCalls.findIndex(([, messages]) => JSON.stringify(messages).includes(RECALLED));
+      expect(first).toBeGreaterThan(-1);
+      for (const [system] of workerCalls) expect(system).not.toContain(RECALLED);
+      // Every worker call of the run carried one system prompt, byte for byte.
+      expect(new Set(workerCalls.map(([system]) => system)).size).toBe(1);
+      // The recall is stored, not sent once: every later worker call carries it in the same turn.
+      expect(workerCalls.length).toBeGreaterThan(first + 1);
+      const [, firstWith] = workerCalls[first]!;
+      const recallTurn = firstWith.findIndex((m) => m.role === "user" && JSON.stringify(m.content).includes(RECALLED));
+      expect(JSON.stringify(firstWith[recallTurn]!.content)).toContain("## Recalled during this task");
+      for (const [, messages] of workerCalls.slice(first + 1)) {
+        expect(JSON.stringify(messages[recallTurn]!.content)).toContain(RECALLED);
+      }
+    });
+
     it("does not trigger re-retrieval when config is disabled", async () => {
       const mockMemMgr = {
         retrieve: vi.fn().mockResolvedValue({

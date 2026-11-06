@@ -40,6 +40,7 @@ import type { EngineRunContext } from "./engine-deps.js";
 import type { ParentRunScope } from "../runner/agent-runner.js";
 import type { SetupDeps } from "./setup.js";
 import { instinctScopeKey } from "./instinct-scope.js";
+import { appendToLastUserTurn } from "../../agents/turn-context.js";
 
 /** v1 parity: the PAOR reflection cadence on the agent-core route (orchestrator const copy). */
 const REFLECT_INTERVAL_AGENT_CORE = 3;
@@ -372,9 +373,11 @@ export async function portExecuteToolTurn(
       content: (blocks.length === 1 && stateCtx ? stateCtx : blocks) as unknown as ConversationMessage["content"],
     } as ConversationMessage);
 
-    // STEP G — memory refresh (non-fatal; reassigns systemPrompt + state). step5-parity: the
-    // run's MemoryRefresher threads through runCtx so mid-run re-retrieval fires exactly as the
-    // v1 loops did (it was passed null — "opt-in" — which silently killed re-retrieval on v2).
+    // STEP G — memory refresh (non-fatal; appends what it recalled to the turn just pushed, and
+    // reassigns state). step5-parity: the run's MemoryRefresher threads through runCtx so mid-run
+    // re-retrieval fires exactly as the v1 loops did (it was passed null — "opt-in" — which
+    // silently killed re-retrieval on v2). The recall goes into the history, not the system
+    // prompt, which stays the same bytes for the provider's prefix cache (turn-context.ts).
     const isInteractiveTurn = runCtx.toolExecMode === "interactive";
     const mem = await refreshMemoryIfNeeded({
       memoryRefresher: runCtx.memoryRefresher,
@@ -386,7 +389,6 @@ export async function portExecuteToolTurn(
         ? deps.sessionManager.extractLastUserMessage(session)
         : agentState.taskDescription || lastUserMessage,
       chatId,
-      systemPrompt: runCtx.systemPrompt,
       agentState: step.agentState,
       // v1 interactive parity (trio catch, a3de7d1 :6444-6452): surface refreshed instinct IDs —
       // dedupe+cap into the run's set (the final response's attribution reads it, LRN-20b). v1's
@@ -399,8 +401,8 @@ export async function portExecuteToolTurn(
               const current = deps.currentSessionInstinctIds.get(key) ?? [];
               const merged = [...new Set([...current, ...ids])].slice(0, 200);
               deps.currentSessionInstinctIds.set(key, merged);
-              // ROUND 12 #9: these ids entered the prompt NOW (the refreshed
-              // sections are written back into runCtx.systemPrompt below), and
+              // ROUND 12 #9: these ids entered the prompt NOW (the recall is
+              // appended to the turn just pushed, below), and
               // from here on every tool:result claims them. Report the NEW ones:
               // anything the prologue already showed keeps its earlier exposure
               // (noteGuidanceShown is earliest-wins).
@@ -409,7 +411,7 @@ export async function portExecuteToolTurn(
           }
         : {}),
     });
-    runCtx.systemPrompt = mem.systemPrompt;
+    if (mem.recalled) appendToLastUserTurn(session.messages, mem.recalled);
 
     const trace = toolCalls.map((tc, i) => {
       const tr = toolResults[i];

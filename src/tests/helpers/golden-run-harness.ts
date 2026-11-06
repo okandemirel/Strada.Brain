@@ -44,7 +44,7 @@ import { TaskStorage } from "../../tasks/task-storage.js";
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
 import { createLogger, getLogRingBuffer } from "../../utils/logger.js";
 import { newRuntimeEntries, runtimeEntriesIn } from "./checkout-runtime-entries.js";
-import { edges, loadScript, resetEdges, type Delivered, type ScriptedRun, type Step } from "./golden-run-edges.js";
+import { edges, loadScript, resetEdges, type Delivered, type ProviderCall, type ScriptedRun, type Step } from "./golden-run-edges.js";
 import type { CapturedToolResult } from "./mock-provider.js";
 
 // ─── The edges of the process ────────────────────────────────────────────────
@@ -227,6 +227,8 @@ export interface GoldenOutcome {
   /** Every message the chat received, in order. */
   readonly delivered: readonly Delivered[];
   readonly served: readonly string[];
+  /** The call each served step answered, in the order of `served`. */
+  readonly calls: readonly ProviderCall[];
   readonly violations: readonly string[];
   /** What each tool reported back to the worker, in order. */
   readonly toolResults: readonly CapturedToolResult[];
@@ -307,6 +309,7 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
     tasks,
     delivered: toChat(),
     served: run.served,
+    calls: run.calls,
     violations: run.violations,
     toolResults: run.provider.getToolResults(),
     project,

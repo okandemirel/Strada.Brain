@@ -511,6 +511,7 @@ export class V2AgentRunner implements AgentRunner {
                 {
                   chatId: request.chatId,
                   systemPrompt: prepared.activePrompt,
+                  turnContext: prepared.turnContext,
                   session: setup.session,
                   provider: prepared.currentProvider,
                   toolDefinitions: prepared.currentToolDefinitions,
