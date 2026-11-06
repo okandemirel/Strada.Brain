@@ -15,10 +15,12 @@
  * - Hit rate = cached input tokens / input tokens, over the calls whose line
  *   reported input tokens. Failed calls carry no usage and are not read.
  * - A line without `cachedInputTokens` counts as zero cached, and is counted
- *   on its own: the OpenAI-compatible parsers drop the field when nothing was
- *   cached, so its absence cannot tell a miss from a provider that does not
- *   report. A group where no line carries the field has no rate ("not
- *   measured"); lines written before 75167cd2 never carry it.
+ *   on its own. Since 2026-11-06 the OpenAI-compatible parsers write a miss
+ *   the provider reports as `cachedInputTokens: 0`, with `cacheField` naming
+ *   the provider's field, so a group of misses rates 0%. A group where no line
+ *   carries the field has no rate ("not measured"): its provider sent no cache
+ *   field, or its lines predate that change, when a miss also left no field
+ *   (and lines written before 75167cd2 never carry it).
  * - The agent loop's "turn" line and the fallback chain's "streaming"/"chat"
  *   line can describe the same call, so no total is summed across labels.
  *
@@ -100,20 +102,24 @@ export function readProviderCalls(path, sinceMs) {
         provider: typeof entry.provider === "string" ? entry.provider : "(no provider)",
         inputTokens: isCount(entry.inputTokens) ? entry.inputTokens : undefined,
         cachedInputTokens: isCount(entry.cachedInputTokens) ? entry.cachedInputTokens : undefined,
+        cacheField: typeof entry.cacheField === "string" ? entry.cacheField : undefined,
       });
     }
   }
   return { files, calls };
 }
 
-/** The calls grouped by label and provider, with each group's hit rate (null when not measured). */
+/**
+ * The calls grouped by label and provider, with each group's hit rate (null
+ * when not measured) and the provider field names its cache shares came in.
+ */
 export function cacheHitReport(calls) {
   const groups = new Map();
   for (const call of calls) {
     const key = `${call.label}\u0000${call.provider}`;
     let g = groups.get(key);
     if (!g) {
-      g = { label: call.label, provider: call.provider, calls: 0, withUsage: 0, withCacheField: 0, inputTokens: 0, cachedInputTokens: 0 };
+      g = { label: call.label, provider: call.provider, calls: 0, withUsage: 0, withCacheField: 0, inputTokens: 0, cachedInputTokens: 0, cacheFields: new Set() };
       groups.set(key, g);
     }
     g.calls++;
@@ -123,15 +129,21 @@ export function cacheHitReport(calls) {
     if (call.cachedInputTokens === undefined) continue;
     g.withCacheField++;
     g.cachedInputTokens += call.cachedInputTokens;
+    if (call.cacheField !== undefined) g.cacheFields.add(call.cacheField);
   }
   return [...groups.values()]
-    .map((g) => ({ ...g, hitRate: g.withCacheField > 0 && g.inputTokens > 0 ? g.cachedInputTokens / g.inputTokens : null }))
+    .map((g) => ({
+      ...g,
+      cacheFields: [...g.cacheFields].sort(),
+      hitRate: g.withCacheField > 0 && g.inputTokens > 0 ? g.cachedInputTokens / g.inputTokens : null,
+    }))
     .sort((a, b) => a.label.localeCompare(b.label) || b.inputTokens - a.inputTokens);
 }
 
 const NOTES = [
   "hit rate = cached / input tokens over the calls that reported usage; a call without the cache field counts as 0 cached.",
-  "not measured = no call in the group carried cachedInputTokens: the provider reported none, or every call missed.",
+  "not measured = no call in the group carried cachedInputTokens: the provider sent no cache field, or the lines predate 2026-11-06, when a miss left none either.",
+  "cache field = the provider's own field name(s) the cached share came in; - when no line named one.",
   '"turn" and the fallback chain\'s "streaming"/"chat" lines can describe the same call: do not add rows across labels.',
 ];
 
@@ -143,7 +155,7 @@ export function formatReport({ log, since, files, groups }) {
     out.push(`no "${PROVIDER_CALL}" line in ${files.length} file(s) read`);
     return out.join("\n");
   }
-  const header = ["label", "provider", "calls", "with usage", "with cache field", "input tokens", "cached tokens", "hit rate"];
+  const header = ["label", "provider", "calls", "with usage", "with cache field", "input tokens", "cached tokens", "hit rate", "cache field"];
   const rows = groups.map((g) => [
     g.label,
     g.provider,
@@ -153,9 +165,11 @@ export function formatReport({ log, since, files, groups }) {
     n(g.inputTokens),
     n(g.cachedInputTokens),
     g.hitRate === null ? "not measured" : `${(100 * g.hitRate).toFixed(1)}%`,
+    g.cacheFields.length === 0 ? "-" : g.cacheFields.join(", "),
   ]);
   const widths = header.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
-  const render = (cells) => cells.map((c, i) => (i < 2 ? c.padEnd(widths[i]) : c.padStart(widths[i]))).join("  ");
+  const text = new Set([0, 1, header.length - 1]);
+  const render = (cells) => cells.map((c, i) => (text.has(i) ? c.padEnd(widths[i]) : c.padStart(widths[i]))).join("  ").trimEnd();
   out.push("", render(header), ...rows.map(render), "", ...NOTES);
   return out.join("\n");
 }

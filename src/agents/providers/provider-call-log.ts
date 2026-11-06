@@ -27,11 +27,14 @@ import { getLogger } from "../../utils/logger.js";
  * spends money depends on it. The usage parsers read it, but no log line
  * carried it, so no run could say what its hit rate was (2026-11-04).
  */
-export function usageFields(usage: ProviderResponse["usage"] | undefined): Record<string, number | undefined> {
+export function usageFields(usage: ProviderResponse["usage"] | undefined): Record<string, number | string | undefined> {
   return {
     inputTokens: usage?.inputTokens,
     outputTokens: usage?.outputTokens,
+    // 0 included: a reported miss is not a provider that reports nothing.
     ...(usage?.cacheReadInputTokens === undefined ? {} : { cachedInputTokens: usage.cacheReadInputTokens }),
+    // Which of the provider's field names it came in, so one run says which one it sends.
+    ...(usage?.cacheReadField === undefined ? {} : { cacheField: usage.cacheReadField }),
   };
 }
 

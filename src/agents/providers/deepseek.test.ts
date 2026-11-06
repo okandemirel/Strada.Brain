@@ -89,6 +89,15 @@ describe("DeepSeekProvider", () => {
       expect(result.usage.totalTokens).toBe(150);
     });
 
+    it("keeps a cache hit of 0 and names the field it came in; no field, no cache share", () => {
+      const reply = (usage: Record<string, number>) => parse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }], usage }) as { usage: Record<string, unknown> };
+      expect(reply({ prompt_tokens: 100, completion_tokens: 5, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 100 }).usage)
+        .toMatchObject({ cacheReadInputTokens: 0, cacheReadField: "prompt_cache_hit_tokens" });
+      const none = reply({ prompt_tokens: 100, completion_tokens: 5 }).usage;
+      expect(none).not.toHaveProperty("cacheReadInputTokens");
+      expect(none).not.toHaveProperty("cacheReadField");
+    });
+
     it("uses calculated total when total_tokens not provided", () => {
       const data = {
         choices: [{

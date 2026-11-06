@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OpencodeProvider } from "./opencode.js";
-import { cachedPromptTokens } from "./openai-compat.js";
+import { promptCacheUsage } from "./openai-compat.js";
 
 vi.mock("../../utils/logger.js", () => ({
   getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -220,7 +220,7 @@ describe("the prefix-cache share is read when a DeepSeek model answers through O
       usage: deepSeekUsage,
     }), { status: 200, headers: { "content-type": "application/json" } }));
     const { usage } = await new OpencodeProvider("k", "deepseek-v4-flash").chat("sys", USER, []);
-    expect(usage).toEqual({ inputTokens: 1520, outputTokens: 84, totalTokens: 1604, cacheReadInputTokens: 1408 });
+    expect(usage).toEqual({ inputTokens: 1520, outputTokens: 84, totalTokens: 1604, cacheReadInputTokens: 1408, cacheReadField: "prompt_cache_hit_tokens" });
   });
 
   it("chatStream(): the final usage chunk's prompt_cache_hit_tokens becomes cacheReadInputTokens", async () => {
@@ -233,14 +233,44 @@ describe("the prefix-cache share is read when a DeepSeek model answers through O
       status: 200, headers: { "content-type": "text/event-stream" },
     }));
     const { usage } = await new OpencodeProvider("k", "deepseek-v4-flash").chatStream("sys", USER, [], () => {});
-    expect(usage).toEqual({ inputTokens: 1520, outputTokens: 84, totalTokens: 1604, cacheReadInputTokens: 1408 });
+    expect(usage).toEqual({ inputTokens: 1520, outputTokens: 84, totalTokens: 1604, cacheReadInputTokens: 1408, cacheReadField: "prompt_cache_hit_tokens" });
   });
 
   it("a relay that adds cached_tokens: 0 beside DeepSeek's field still reports the hit; OpenAI's own non-zero field wins", () => {
-    expect(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 0 }, prompt_cache_hit_tokens: 1408 })).toBe(1408);
-    expect(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 900 }, prompt_cache_hit_tokens: 1408 })).toBe(900);
-    expect(cachedPromptTokens({ prompt_tokens_details: { cached_tokens: 900 } })).toBe(900);
-    expect(cachedPromptTokens({})).toBe(0);
-    expect(cachedPromptTokens(undefined)).toBe(0);
+    const both = "prompt_tokens_details.cached_tokens+prompt_cache_hit_tokens";
+    expect(promptCacheUsage({ prompt_tokens_details: { cached_tokens: 0 }, prompt_cache_hit_tokens: 1408 })).toEqual({ cacheReadInputTokens: 1408, cacheReadField: both });
+    expect(promptCacheUsage({ prompt_tokens_details: { cached_tokens: 900 }, prompt_cache_hit_tokens: 1408 })).toEqual({ cacheReadInputTokens: 900, cacheReadField: both });
+    expect(promptCacheUsage({ prompt_tokens_details: { cached_tokens: 900 } })).toEqual({ cacheReadInputTokens: 900, cacheReadField: "prompt_tokens_details.cached_tokens" });
+    expect(promptCacheUsage({})).toEqual({});
+    expect(promptCacheUsage(undefined)).toEqual({});
+  });
+
+  // A miss and a provider that never reports the field were the same line, so
+  // cache-hit-report.mjs called a run of misses "not measured" (2026-11-05).
+  it("a cache field that came as 0 is kept as 0 with its name; a field that never came, or came empty, stays absent", () => {
+    expect(promptCacheUsage({ prompt_cache_hit_tokens: 0 })).toEqual({ cacheReadInputTokens: 0, cacheReadField: "prompt_cache_hit_tokens" });
+    expect(promptCacheUsage({ prompt_tokens_details: { cached_tokens: 0 } })).toEqual({ cacheReadInputTokens: 0, cacheReadField: "prompt_tokens_details.cached_tokens" });
+    expect(promptCacheUsage({ prompt_tokens_details: {} })).toEqual({});
+    expect(promptCacheUsage({ prompt_cache_hit_tokens: null } as never)).toEqual({});
+  });
+
+  it("chat() and chatStream(): a miss reported as prompt_cache_hit_tokens: 0 reaches usage as 0 cached, not as no field", async () => {
+    const missUsage = { ...deepSeekUsage, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1520 };
+    const expected = { inputTokens: 1520, outputTokens: 84, totalTokens: 1604, cacheReadInputTokens: 0, cacheReadField: "prompt_cache_hit_tokens" };
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({
+      choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+      usage: missUsage,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    expect((await new OpencodeProvider("k", "deepseek-v4-flash").chat("sys", USER, [])).usage).toEqual(expected);
+
+    const lines = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] })}`,
+      `data: ${JSON.stringify({ choices: [], usage: missUsage })}`,
+      "data: [DONE]",
+    ];
+    fetchSpy.mockResolvedValueOnce(new Response(lines.map((l) => `${l}\n\n`).join(""), {
+      status: 200, headers: { "content-type": "text/event-stream" },
+    }));
+    expect((await new OpencodeProvider("k", "deepseek-v4-flash").chatStream("sys", USER, [], () => {})).usage).toEqual(expected);
   });
 });
