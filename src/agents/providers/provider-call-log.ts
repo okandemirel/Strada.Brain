@@ -75,6 +75,29 @@ export function conversationChars(
   return { historyChars: total, largestMessageChars: largest };
 }
 
+/**
+ * What a worker turn's "Provider call" line says about the request it sent: the system prompt,
+ * the stored history and the tool schemas. One shape for both of silentStream's paths, which the
+ * replay (src/agents/compaction-replay/log-sessions.ts) reads to rebuild each session.
+ */
+export function turnRequestFields(request: {
+  readonly systemPrompt: string | undefined;
+  readonly messages: ReadonlyArray<{ readonly content?: unknown }> | undefined;
+  readonly tools: ReadonlyArray<unknown> | undefined;
+}): Record<string, number> {
+  return {
+    // Where the input tokens come from: measured 2026-09-07 21:56, the
+    // FIRST turn of a run carried 48 490 input tokens.
+    promptChars: request.systemPrompt?.length ?? 0,
+    messages: request.messages?.length ?? 0,
+    tools: request.tools?.length ?? 0,
+    toolChars: toolDefinitionChars(request.tools),
+    // What the loop RE-SENDS every turn. Without it a 20M-token
+    // milestone could not be aimed at anything (2026-10-14).
+    ...conversationChars(request.messages),
+  };
+}
+
 /** The size of a non-string content block, or 0 when it cannot be measured. */
 function safeSize(content: unknown): number {
   try {
