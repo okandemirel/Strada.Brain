@@ -10,6 +10,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { TURN_CONTEXT_HEADER } from "../../agents/turn-context.js";
 
 const realFetch = globalThis.fetch;
 const KIMI_URL = "https://api.kimi.com/coding/v1/chat/completions";
@@ -33,12 +34,14 @@ interface Completion {
 }
 
 let verifyCommand = "";
+let hookTurnContextHeader = "";
 
 beforeAll(async () => {
   // A non-literal specifier: the hook is a .mjs script with no declarations.
   const hookUrl = pathToFileURL(path.join(process.cwd(), "scripts", "release", "mock-kimi-hook.mjs")).href;
-  const hook = (await import(hookUrl)) as { PAOR_VERIFY_COMMAND: string };
+  const hook = (await import(hookUrl)) as { PAOR_VERIFY_COMMAND: string; TURN_CONTEXT_HEADER: string };
   verifyCommand = hook.PAOR_VERIFY_COMMAND;
+  hookTurnContextHeader = hook.TURN_CONTEXT_HEADER;
 });
 
 afterAll(() => {
@@ -119,6 +122,54 @@ describe("mock-kimi-hook PAOR recovery script", () => {
     // VERIFICATION_COMMAND_HEAD_RE in self-verification.ts: an npm test run is
     // a verification; `test -f … && grep …` never was one.
     expect(verifyCommand).toBe("npm test");
+  });
+});
+
+/**
+ * The agent loop sends the phase, plan and run state after the history as a
+ * turn context (src/agents/turn-context.ts), not in the system prompt: on the
+ * last user turn, or as a user turn of its own when the history ends on an
+ * assistant turn. The mock answers by the user's last words, so it must not
+ * take the turn context for them. CI's release smoke went red when it did: the
+ * visible plan of a decomposed task is an assistant turn, the next call's last
+ * user turn held only the turn context, and the preference step got "mock ok".
+ */
+describe("mock-kimi-hook reads past the turn context", () => {
+  const turnContext = (body: string): string => `${TURN_CONTEXT_HEADER}\n\n${body}`;
+
+  it("knows the agent loop's turn context header", () => {
+    expect(hookTurnContextHeader).toBe(TURN_CONTEXT_HEADER);
+  });
+
+  it("answers the user's request when the last user turn holds only the turn context", async () => {
+    const reply = await complete([
+      { role: "system", content: "You are Strada." },
+      { role: "user", content: "Adın Atlas olsun. Bundan sonra şu formatta cevap ver: önce kısa başlık, sonra 3 madde." },
+      { role: "assistant", content: "**Plan**\n\n1. Adın Atlas olsun." },
+      { role: "user", content: turnContext("## Current Plan\n\n1. Adın Atlas olsun.\n\nCurrent iteration: 0") },
+    ]);
+    expect(reply.text).toBe("Preference update acknowledged.");
+  });
+
+  it("answers the words before the turn context on the same turn, not the plan inside it", async () => {
+    const reply = await complete([
+      { role: "system", content: "You are Strada." },
+      { role: "user", content: `Reply with only: "Atlas"\n\n${turnContext("## Current Plan\n\nMy name is CodexTester, the user said earlier.")}` },
+    ]);
+    expect(reply.text).toBe("Atlas\nExtra details that should never reach the user.");
+  });
+
+  it("reads the replanning phase from the turn context", async () => {
+    const failed = (id: string): ChatMessage[] =>
+      toolTurn(id, "file_read", { path: "Assets/missing-proof.txt" }, NOT_FOUND);
+    const replan = await complete([
+      { role: "system", content: "You are Strada." },
+      { role: "user", content: PAOR_PROMPT },
+      ...failed("r1"),
+      ...failed("r2"),
+      { role: "user", content: `Please create a new plan.\n\n${turnContext("## Replanning Phase\n\n### Failed Approaches")}` },
+    ]);
+    expect(replan.tools).toEqual([{ name: "file_write", input: { path: "Assets/paor-proof.txt", content: "paor ok\n" } }]);
   });
 });
 
