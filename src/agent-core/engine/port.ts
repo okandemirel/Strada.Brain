@@ -270,10 +270,16 @@ export function createAgentCorePort(
           ) ?? prepared.currentProvider;
         return { ...prepared, currentProvider: resilientProvider } as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]
       },
-      maybeCompactSession: (session, providerName, modelId, systemPrompt, toolChars) =>
-        deps.maybeCompactSession(session as Session, providerName, modelId, systemPrompt, toolChars),
-      trimContextWindow: (session, mode) =>
-        engine.trimContextWindowForRun(session as unknown as Session, mode, ctx()),
+      // Both drop turns from the head of the history; what a memory refresh recalled into a dropped
+      // turn goes back on the turn about to be sent (recall-ledger.ts).
+      maybeCompactSession: (session, providerName, modelId, systemPrompt, toolChars) => {
+        deps.maybeCompactSession(session as Session, providerName, modelId, systemPrompt, toolChars);
+        ctx().recallLedger.restore((session as Session).messages);
+      },
+      trimContextWindow: (session, mode) => {
+        engine.trimContextWindowForRun(session as unknown as Session, mode, ctx());
+        ctx().recallLedger.restore((session as unknown as Session).messages);
+      },
 
       // ── C. accounting / trace ──────────────────────────────────────────────────────────────
       recordExecutionTrace: (params) =>

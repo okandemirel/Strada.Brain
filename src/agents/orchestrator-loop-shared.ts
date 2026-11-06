@@ -178,10 +178,12 @@ function recalledBlock(memory: string | undefined, rag: string | undefined): str
  *
  * What it recalled goes into the history, once, and not into the system prompt. A refresh fires
  * every few iterations, and rewriting the system prompt each time broke the provider's prefix
- * cache for the whole history behind it (turn-context.ts). In the history it stays for the rest
- * of the run, as the system-prompt sections did (ORC-12: a recall must not drop earlier ones,
- * since the refresher dedups against everything it ever injected), until compaction summarizes
- * that part of the conversation.
+ * cache for the whole history behind it (turn-context.ts). The history alone does not keep it:
+ * every step trims the history to the provider's message cap and compaction summarizes old
+ * turns, and the refresher never recalls the same content twice (ORC-12: it dedups against
+ * everything it ever injected). So the caller hands the recall to the run's RecallLedger, which
+ * puts it back on the turn about to be sent whenever a trim or compaction drops it
+ * (recall-ledger.ts), and memory never stores it as conversation.
  *
  * Non-fatal: any error is caught and swallowed.
  */

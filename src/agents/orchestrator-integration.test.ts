@@ -1085,6 +1085,88 @@ describe("Orchestrator Integration", () => {
       }
     });
 
+    it("keeps a mid-run recall in every later call of a long run, through the message-cap trims, and never stores it as conversation", async () => {
+      // A recall rides in one history turn. Every step trims the history to the provider's
+      // message cap (40 for a 128k model, hard cap 80), and the refresher never recalls the
+      // same content twice, so a trimmed recall was gone for the rest of the run; the trim
+      // also handed it to memory as conversation (recall-ledger.ts).
+      const RECALLED = "RECALLED-ITEM-42: the build reads its settings from a sidecar file";
+      const TOOL_STEPS = 64;
+      const mockMemMgr = {
+        retrieve: vi
+          .fn()
+          .mockResolvedValueOnce({ kind: "ok", value: [{ entry: { content: "initial context" }, score: 0.9 }] })
+          .mockResolvedValue({ kind: "ok", value: [{ entry: { content: RECALLED }, score: 0.95 }] }),
+        store: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+        storeConversation: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+        getCachedAnalysis: vi.fn().mockResolvedValue({ kind: "ok", value: { kind: "none" } }),
+      };
+      let toolSteps = 0;
+      let calls = 0;
+      mockProvider.chat.mockImplementation(async () => {
+        calls++;
+        if (calls === 1) return toolResponse("Plan: read every file in turn");
+        if (toolSteps < TOOL_STEPS) {
+          toolSteps++;
+          return {
+            ...toolResponse(`Reading file ${toolSteps}`),
+            toolCalls: [{ id: `tc-long-${toolSteps}`, name: "file_read", input: { path: `src/file-${toolSteps}.cs` } }],
+            stopReason: "tool_use" as const,
+          };
+        }
+        if (toolSteps === TOOL_STEPS) {
+          toolSteps++;
+          return toolResponse("All files read.\n**DONE**");
+        }
+        return approvalResponse();
+      });
+
+      const orch = createOrchestrator({
+        providerManager: makeProviderManager(mockProvider),
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        memoryDbPath: TEST_MEMORY_DB_PATH,
+        memoryManager: mockMemMgr as any,
+        ragPipeline: { search: vi.fn().mockResolvedValue([]), formatContext: vi.fn(() => "") } as any,
+        reRetrievalConfig: {
+          enabled: true, interval: 2, topicShiftEnabled: false, topicShiftThreshold: 0.4,
+          maxReRetrievals: 10, timeoutMs: 5000, memoryLimit: 3, ragTopK: 6,
+        },
+        taskConfig: { ...DEFAULT_TASK_CONFIG, backgroundEpochMaxIterations: 200 },
+      });
+      await runBackgroundTask(orch, "Read every file of the project", {
+        chatId: "rr-bg-long-trim-1",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+        channelType: "cli",
+      });
+
+      const sent = mockProvider.chat.mock.calls as unknown as Array<[string, Array<{ role: string; content: unknown }>]>;
+      const workerCalls = sent.filter(([, messages]) => JSON.stringify(messages.at(-1)).includes("Current worker role:"));
+      expect(readTool.execute.mock.calls.length).toBeGreaterThanOrEqual(60);
+      const first = workerCalls.findIndex(([, messages]) => JSON.stringify(messages).includes(RECALLED));
+      expect(first).toBeGreaterThan(-1);
+      const later = workerCalls.slice(first + 1);
+      // The run went on long enough for the cap to trim the turn that first carried the recall.
+      const recallTurn = workerCalls[first]![1].findIndex((m) => JSON.stringify(m.content).includes(RECALLED));
+      const firstTurn = JSON.stringify(workerCalls[first]![1][recallTurn]);
+      expect(later.some(([, messages]) => !messages.some((m) => JSON.stringify(m) === firstTurn))).toBe(true);
+      expect(Math.max(...later.map(([, messages]) => messages.length))).toBeLessThanOrEqual(81);
+      expect(later.length).toBeGreaterThanOrEqual(55);
+      // Every later worker call still carries the recall.
+      for (const [, messages] of later) expect(JSON.stringify(messages)).toContain(RECALLED);
+      // The trimmed turns reached memory, the recall did not.
+      const stored = mockMemMgr.storeConversation.mock.calls as unknown as Array<[string, string, { userMessage?: string; assistantMessage?: string }]>;
+      expect(stored.some(([, transcript]) => transcript.includes("Reading file 1"))).toBe(true);
+      for (const [, transcript, fields] of stored) {
+        expect(transcript).not.toContain(RECALLED);
+        expect(JSON.stringify(fields)).not.toContain(RECALLED);
+      }
+    });
+
     it("does not trigger re-retrieval when config is disabled", async () => {
       const mockMemMgr = {
         retrieve: vi.fn().mockResolvedValue({
