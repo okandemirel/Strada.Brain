@@ -299,7 +299,8 @@ function refuseNetwork(): void {
  * lands in the working directory, and a test runs in the checkout: the run
  * must leave no `.strada*` entry there. vitest.worker-setup.ts points
  * process.env's databases away from it, but loadConfig below is handed an
- * environment built by hand.
+ * environment built by hand. The worker setup checks every file the same way
+ * when the file ends; here it is checked right after the run, by name.
  */
 const workingDir = process.cwd();
 const root = mkdtempSync(join(tmpdir(), "golden-run-"));

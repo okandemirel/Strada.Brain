@@ -1,6 +1,8 @@
 /**
  * What the runtime writes for itself — `.strada`, `.strada-memory`,
  * `.strada-update.lock` — as a test run finds it in the checkout it stands in.
+ * vitest.worker-setup.ts fails a test file that leaves a new one there.
+ * docs/contracts/clean-checkout.md
  */
 import { readdirSync, statSync } from "node:fs";
 import { join, sep } from "node:path";
@@ -48,4 +50,17 @@ export function runtimeEntriesIn(dir: string): Set<string> {
 export function newRuntimeEntries(dir: string, before: ReadonlySet<string>): string[] {
   const added = [...runtimeEntriesIn(dir)].filter((entry) => !before.has(entry));
   return added.filter((entry) => !added.some((other) => other.startsWith(`${entry}/`))).sort();
+}
+
+/** Why a test file fails when it ends with `leaked` (absolute paths) in the checkout. */
+export function leakedEntriesMessage(leaked: readonly string[]): string {
+  return (
+    `This test file left ${leaked.join(", ")} in the checkout it runs from; .gitignore hides them from git status. ` +
+    "A relative default (.strada-memory/…) resolves against the working directory, and a vault or lock built " +
+    "from the install root lands beside the source: give the test a path inside its own temp folder. " +
+    "Measured: runtime entries that appeared between this file's setup and its end. Not measured: an entry " +
+    "that was already there (delete it after the fix, or this check stays blind to it), and which file wrote " +
+    "it — files in other workers share this checkout, so if this one does not write it, run it alone to " +
+    "confirm. docs/contracts/clean-checkout.md"
+  );
 }
