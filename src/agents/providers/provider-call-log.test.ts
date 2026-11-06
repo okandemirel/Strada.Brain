@@ -33,11 +33,21 @@ describe("logProviderCall", () => {
     expect(loggerSpies.info.mock.calls[0]![1]).toMatchObject({ inputTokens: 60000, cachedInputTokens: 48000 });
   });
 
+  // A miss used to leave no field on the line, so a run of misses read as a
+  // provider that never reports its cache (2026-11-05).
+  it("writes a cache share that came as 0, and which provider field it came in", () => {
+    logProviderCall("turn", { name: "chain" }, Date.now(), {
+      response: { text: "x", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 9000, outputTokens: 20, cacheReadInputTokens: 0, cacheReadField: "prompt_cache_hit_tokens" } } as never,
+    });
+    expect(loggerSpies.info.mock.calls[0]![1]).toMatchObject({ inputTokens: 9000, cachedInputTokens: 0, cacheField: "prompt_cache_hit_tokens" });
+  });
+
   it("says nothing about the cache when the provider reported nothing — absence is not zero", () => {
     logProviderCall("turn", { name: "chain" }, Date.now(), {
       response: { text: "x", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 10, outputTokens: 1 } } as never,
     });
     expect(loggerSpies.info.mock.calls[0]![1]).not.toHaveProperty("cachedInputTokens");
+    expect(loggerSpies.info.mock.calls[0]![1]).not.toHaveProperty("cacheField");
   });
 
   it("writes 'Provider call failed' with the error when the call threw", () => {
