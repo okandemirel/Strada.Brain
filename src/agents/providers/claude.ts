@@ -421,6 +421,8 @@ function buildUsage(usage: {
     outputTokens: usage.output_tokens,
     totalTokens: inputTokens + usage.output_tokens,
     ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
-    ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
+    // A read that came as 0 is kept: a miss Anthropic reports is not a
+    // provider that reports nothing, and the hit-rate report rates it 0%.
+    ...(typeof usage.cache_read_input_tokens === "number" ? { cacheReadInputTokens: cacheRead } : {}),
   };
 }

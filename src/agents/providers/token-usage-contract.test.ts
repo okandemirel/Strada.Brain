@@ -93,6 +93,24 @@ describe("TokenUsage contract", () => {
     expectContract(usage!);
   });
 
+  // A miss used to leave no field, so the hit-rate report could not tell a run
+  // of Claude misses from a provider that reports nothing (2026-11-06).
+  it("keeps a cache read Anthropic reports as 0, and leaves out one it sends as null", async () => {
+    const { ClaudeProvider } = await import("./claude.js");
+    const provider = new ClaudeProvider("test-api-key");
+    const ask = async (usage: Record<string, number | null>) => {
+      sdk.__mockCreate.mockResolvedValueOnce({ content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage });
+      return (await provider.chat("sys", [{ role: "user", content: "hi" }], [])).usage!;
+    };
+
+    const miss = await ask({ input_tokens: 100, output_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+    expect(miss).toEqual({ inputTokens: 100, outputTokens: 50, totalTokens: 150, cacheReadInputTokens: 0 });
+    expectContract(miss);
+
+    const unreported = await ask({ input_tokens: 100, output_tokens: 50, cache_read_input_tokens: null });
+    expect(unreported).toEqual({ inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+  });
+
   it("accepts the already-subset shape OpenAI and DeepSeek report", () => {
     // Both send the full prompt count plus a cached share of it; no
     // normalisation needed, but the contract must still hold.

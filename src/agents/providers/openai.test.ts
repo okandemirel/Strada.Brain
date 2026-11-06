@@ -1033,6 +1033,20 @@ describe("OpenAIProvider stream failure and truncation events", () => {
     expect(result.usage).toMatchObject({ inputTokens: 7, outputTokens: 9, totalTokens: 16 });
   });
 
+  // A miss used to leave no field, so the hit-rate report could not tell a run
+  // of misses from a provider that reports nothing (2026-11-06).
+  it("keeps a cached share the subscription stream reports as 0; no field, no share", async () => {
+    const completed = (usage: string) => sse([
+      "event: response.completed",
+      `data: {"response":{"usage":${usage},"output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`,
+      "",
+    ].join("\n"));
+    mockFetch.mockResolvedValueOnce(completed('{"input_tokens":7,"output_tokens":1,"total_tokens":8,"input_tokens_details":{"cached_tokens":0}}'));
+    expect((await ask(subscription())).usage).toEqual({ inputTokens: 7, outputTokens: 1, totalTokens: 8, cacheReadInputTokens: 0 });
+    mockFetch.mockResolvedValueOnce(completed('{"input_tokens":7,"output_tokens":1,"total_tokens":8}'));
+    expect((await ask(subscription())).usage).toEqual({ inputTokens: 7, outputTokens: 1, totalTokens: 8 });
+  });
+
   it("rejects a chat-completions stream chunk that carries an upstream error", async () => {
     mockFetch.mockResolvedValue(sse([
       'data: {"choices":[{"delta":{"content":"partial"}}]}',
