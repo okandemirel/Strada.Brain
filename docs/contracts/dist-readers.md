@@ -43,6 +43,13 @@ message is never selected, and the same false red comes back for it.
     function is imported under another name (`import { join as joinPath }`):
     a call is judged by the name it has in its module, not by the local one;
   - a name is followed to the `const` it was declared with, in its own scope;
+  - a path whose end comes only at run time counts by its known start:
+    `path.join(process.cwd(), "dist", name)` with `name` a loop variable or a
+    helper's parameter, `join(root, "dist", ...parts)`, and
+    `` `${repoRoot}/dist/${name}` `` or `root + "/dist/" + name` all land in
+    dist/. The start counts up to its last whole segment, so
+    `` `${root}/dist${suffix}` `` and `join(root, sub, "dist")`, whose dist/
+    part is not fixed, do not;
   - an `import` or `import()` of a relative specifier counts too.
 
   A file with a path that lands in `<repo>/dist` and no `READS_BUILD` match
@@ -80,8 +87,14 @@ message is never selected, and the same false red comes back for it.
 
 - **A path built in another file:** a constant or helper imported from a
   module. Each file is parsed alone.
-- **A path from a function parameter, a `let`, or a value known only at run
-  time,** such as an environment variable or a loop over names.
+- **A path whose root or dist/ part is known only at run time:** a root taken
+  from a function parameter, a `let` or an environment variable, or a dist/
+  segment assembled at run time. A path whose root and dist/ are fixed and
+  only its end varies is seen (above).
+- **A run-time end that leaves dist/ again** (`join(root, "dist", "../src")`,
+  or a `resolve()` part that turns out absolute) still counts as a reader.
+  This errs toward the gate building dist/ for nothing, not toward a missed
+  reader.
 - **A relative `"dist/…"` handed to `fs` or to a child process** whose working
   directory is the root, and a reader that reaches dist/ only through a
   script it runs. `scripts/backup.sh` reads `dist/core/database-backup.js`;
@@ -98,15 +111,18 @@ message is never selected, and the same false red comes back for it.
 
 ## Calibration
 
-Measured on 2026-11-06 on main at 801fcdae, before this change. There are
-1,119 test files under `src/` and `tests/`; 30 of them contain the word
-`dist`, and 3 build a path into the repository's dist/: `live-verify-providers`, `live-verify-weights`
-and `restore-script`. All three carry the message, so there are 0 findings
-and the rule gates with no baseline. The tests that set up a dist/ in a temp
-folder, such as `backup-script`, `source-launcher`, `setup-doctor` and
-`auto-updater-health-check`, are not counted. A test added for the check, one
-that read `dist/core/database-backup.js` from `process.cwd()` under another
-message, failed the detector at its line. So did one that imported
-`join as joinPath` from `node:path` and read the same file through it. The
-detector adds one test file of its own, which contains `dist` and builds no
-path into it.
+Measured on 2026-11-06 on main at 5e9c61de, before this change, with the
+detector that also counts paths whose end comes at run time. There are 1,120
+test files under `src/` and `tests/`; 30 of them contain the word `dist`, and
+3 build a path into the repository's dist/: `live-verify-providers`,
+`live-verify-weights` and `restore-script`. All three carry the message, so
+there are 0 findings and the rule gates with no baseline. The tests that set
+up a dist/ in a temp folder, such as `backup-script`, `source-launcher`,
+`setup-doctor` and `auto-updater-health-check`, are not counted. Tests added
+for the check, each reading dist/ under another message, failed the detector
+at their line: one that read `dist/core/database-backup.js` from
+`process.cwd()`, one that read it through `join as joinPath` from
+`node:path`, and three whose file name came at run time (a loop over names,
+an `it.each` template `` `${repoRoot}/dist/${name}` ``, a helper
+`entry(name)` joining `repoRoot`, `"dist"` and `name`). The detector adds one
+test file of its own, which contains `dist` and builds no path into it.
