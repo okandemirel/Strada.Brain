@@ -104,6 +104,8 @@ describe("ResultAggregator", () => {
     // skipped said "All nodes failed" while listing 3 of 4. The mixed branch
     // then rendered every skip as the bare word "skipped", erasing the reason
     // the dispatcher recorded (budget exhausted vs dependency failed).
+    // Since 2026-11-06 the text names steps, never node ids
+    // (stopped-plan-summary.ts); the tallies and both reasons still show.
     it("does not say 'All nodes failed' when zero nodes failed (all skipped)", () => {
       const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
       const results = [
@@ -117,8 +119,12 @@ describe("ResultAggregator", () => {
       expect(output.failed).toBe(0);
       expect(output.skipped).toBe(3);
       expect(output.output).not.toContain("All nodes failed");
-      expect(output.output).toContain("No node succeeded: 0 failed, 3 skipped, 0 cancelled");
-      expect(output.output).toContain("[A] Skipped: budget exhausted");
+      expect(output.output).toBe(
+        "Steps finished: 0 of 3.\n\n" +
+        "Did not start step 1 (too many steps had failed, so no new step was started)\n" +
+        "Did not start step 2 (too many steps had failed, so no new step was started)\n" +
+        "Did not start step 3 (too many steps had failed, so no new step was started)",
+      );
     });
 
     it("does not say 'All nodes failed' when some nodes were skipped or cancelled, and names the skip reason", () => {
@@ -134,9 +140,13 @@ describe("ResultAggregator", () => {
       expect(output.failed).toBe(2);
       expect(output.skipped).toBe(1);
       expect(output.output).not.toContain("All nodes failed");
-      expect(output.output).toContain("No node succeeded: 2 failed, 1 skipped, 1 cancelled");
-      expect(output.output).toContain("[A] boom A");
-      expect(output.output).toContain("[C] Skipped: dependency failed");
+      expect(output.output).toBe(
+        "Steps finished: 0 of 4.\n\n" +
+        "Could not finish step 1 (boom A)\n" +
+        "Could not finish step 2 (boom B)\n" +
+        "Did not start step 3 (a step it depends on did not finish)\n" +
+        "Stopped step 4 before it finished",
+      );
     });
 
     it("keeps the skip reason in a partial result", () => {
@@ -148,8 +158,12 @@ describe("ResultAggregator", () => {
       ];
       const output = agg.synthesize(results);
       expect(output.partial).toBe(true);
-      expect(output.output).toContain("[B] Skipped: budget exhausted");
-      expect(output.output).toContain("[C] Skipped: dependency failed");
+      expect(output.output).toBe(
+        "Steps finished: 1 of 3.\n\n" +
+        "Finished step 1:\ndid A\n\n" +
+        "Did not start step 2 (too many steps had failed, so no new step was started)\n" +
+        "Did not start step 3 (a step it depends on did not finish)",
+      );
     });
 
     it("treats blocked node results as partial work instead of total failure", () => {
@@ -162,9 +176,11 @@ describe("ResultAggregator", () => {
       expect(output.success).toBe(false);
       expect(output.partial).toBe(true);
       expect(output.failed).toBe(2);
-      expect(output.output).toContain("Blocked:");
-      expect(output.output).toContain("Need clarification from the user");
-      expect(output.output).toContain("Missing API credentials");
+      expect(output.output).toBe(
+        "Steps finished: 0 of 2.\n\n" +
+        "Could not finish step 1 (Need clarification from the user)\n" +
+        "Could not finish step 2 (Missing API credentials)",
+      );
     });
   });
 

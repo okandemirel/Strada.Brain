@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { decideAutoResume, MAX_AUTO_RESUMES, MAX_AUTO_REPLANS , decideMissionKeepAlive, stripRetryMachinery } from "./auto-resume.js";
+import { decideAutoResume, MAX_AUTO_RESUMES, MAX_AUTO_REPLANS , decideMissionKeepAlive, stripRetryMachinery, withGoalResume } from "./auto-resume.js";
 
 describe("picking a blocked goal back up", () => {
   it("retries the first block even when nothing succeeded", () => {
@@ -97,7 +97,7 @@ describe("picking a blocked goal back up", () => {
 
   it("is what the block branch actually does", () => {
     const source = readFileSync("src/tasks/background-executor.ts", "utf8");
-    const at = source.indexOf("if (supervisorResult.partial) {");
+    const at = source.indexOf("if (supervisorResult.partial && !admission.supervisorGoalTree?.rootId) {");
     const end = source.indexOf("this.autoResumeBlockedGoal(", at);
     const branch = source.slice(at, end);
 
@@ -118,7 +118,7 @@ describe("picking a blocked goal back up", () => {
     const body = method.slice(0, method.indexOf("\n  }\n"));
 
     expect(body).toContain("replanGoalRoot(rootId, nodeOutcomes)");
-    expect(source).toContain("summariseNodeOutcomes(supervisorResult.nodeResults),\n          );");
+    expect(source).toContain("summariseNodeOutcomes(supervisorResult.nodeResults),\n            supervisorResult.output,\n          );");
   });
 
   it("does not spend a replay budget on a replan, or the other way round", () => {
@@ -208,6 +208,55 @@ describe("stripRetryMachinery is used where a result reaches a model (Codex 2026
     expect(stripRetryMachinery("Reaped: no progress signal for 60 minutes.")).toBe("");
     // A real cause beside the machinery survives.
     expect(stripRetryMachinery("Transient failure — keep-alive re-armed after restart. Compile error CS0246.")).toBe("Compile error CS0246.");
+  });
+});
+
+/**
+ * A blocked goal resumed without a person says so in the block itself.
+ * Measured 2026-11-06 (golden run): the goal was resumed in the same tick as
+ * the block and nothing said so. The sentence is the executor's bookkeeping,
+ * so it must leave a result before the result reaches a model.
+ */
+describe("what the block says happens next", () => {
+  const STOPPED = "Steps finished: 0 of 2.\n\nCould not finish \"Sort the recipe cards\" (boom)";
+  const EN = "Group the recipes by season and fix the index.";
+  const TR = "Tarifleri mevsime göre grupla ve dizini düzelt.";
+
+  it("adds one sentence for a replay and one for a fresh plan, in the request's language", () => {
+    expect(withGoalResume(STOPPED, { action: "resume", attempt: 1 }, EN)).toBe(
+      `${STOPPED}\n\nRetrying automatically now (automatic retry 1); finished steps are kept.`,
+    );
+    expect(withGoalResume(STOPPED, { action: "replan", attempt: 2 }, EN)).toBe(
+      `${STOPPED}\n\nThe last retry finished no new step, so the unfinished work is being planned again ` +
+      "automatically (new plan 2); finished steps are kept.",
+    );
+    expect(withGoalResume(STOPPED, { action: "resume", attempt: 3 }, TR)).toBe(
+      `${STOPPED}\n\nİş otomatik olarak yeniden deneniyor (otomatik deneme 3); tamamlanan adımlar korunuyor.`,
+    );
+    expect(withGoalResume(STOPPED, { action: "replan", attempt: 1 }, TR)).toBe(
+      `${STOPPED}\n\nSon deneme yeni bir adım bitirmediği için kalan iş otomatik olarak yeniden planlanıyor ` +
+      "(yeni plan 1); tamamlanan adımlar korunuyor.",
+    );
+  });
+
+  it("adds nothing when the executor does not pick the goal back up itself", () => {
+    expect(withGoalResume(STOPPED, undefined, EN)).toBe(STOPPED);
+  });
+
+  it("is removed by stripRetryMachinery, in every form, and the run's own words stay", () => {
+    for (const request of [EN, TR]) {
+      for (const action of ["resume", "replan"] as const) {
+        expect(stripRetryMachinery(withGoalResume(STOPPED, { action, attempt: 1 }, request))).toBe(STOPPED);
+      }
+    }
+  });
+
+  it("is stripped from the replay prompt's checkpoint, which a replan quotes", () => {
+    // replanGoalRoot reads the blocked task's result right after the block.
+    const taskManager = readFileSync("src/tasks/task-manager.ts", "utf8");
+    const at = taskManager.indexOf("Last known checkpoint:");
+    expect(at).toBeGreaterThan(0);
+    expect(taskManager.slice(at, at + 120)).toContain("stripRetryMachinery(result)");
   });
 });
 

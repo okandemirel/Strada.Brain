@@ -1072,7 +1072,7 @@ export class TaskManager extends EventEmitter {
     // from a retry countdown.
     const result = task.result?.trim();
     if (result && !/Auto-retry \d+\/\d+ in ~\d+s/.test(result)) {
-      lines.push("", `Last known checkpoint:\n${result.slice(0, 1200)}`);
+      lines.push("", `Last known checkpoint:\n${stripRetryMachinery(result).slice(0, 1200)}`);
     }
     if (task.error) {
       // Stripped like the result is: "Reaped: no progress signal for 60

@@ -1,3 +1,5 @@
+import { detectSupervisorFeedbackLanguage, type SupervisorFeedbackLanguage } from "../supervisor/supervisor-feedback.js";
+
 /** How many times a blocked goal tree is replayed without a human. */
 export const MAX_AUTO_RESUMES = 3;
 /** How many times a stalled goal is planned again from scratch. */
@@ -73,6 +75,46 @@ export function decideAutoResume(
 }
 
 // ---------------------------------------------------------------------------
+// What the user reads when a blocked goal is picked back up without a person.
+// ---------------------------------------------------------------------------
+
+/** How the executor picks a blocked goal back up on its own. */
+export interface GoalResumeNext {
+  readonly action: "resume" | "replan";
+  /** Which replay, or which fresh plan, of this mission it is: 1 for the first. */
+  readonly attempt: number;
+}
+
+function goalResumeSentence(next: GoalResumeNext, language: SupervisorFeedbackLanguage): string {
+  if (language === "tr") {
+    return next.action === "replan"
+      ? `Son deneme yeni bir adım bitirmediği için kalan iş otomatik olarak yeniden planlanıyor (yeni plan ${next.attempt}); tamamlanan adımlar korunuyor.`
+      : `İş otomatik olarak yeniden deneniyor (otomatik deneme ${next.attempt}); tamamlanan adımlar korunuyor.`;
+  }
+  return next.action === "replan"
+    ? `The last retry finished no new step, so the unfinished work is being planned again automatically (new plan ${next.attempt}); finished steps are kept.`
+    : `Retrying automatically now (automatic retry ${next.attempt}); finished steps are kept.`;
+}
+
+/** Every sentence goalResumeSentence writes, for stripRetryMachinery. */
+const GOAL_RESUME_SENTENCE_RE =
+  /(?:Retrying automatically now|The last retry finished no new step|İş otomatik olarak yeniden deneniyor|Son deneme yeni bir adım bitirmediği için)[^\n]*/g;
+
+/**
+ * A blocked goal's message, ending with what the executor does next when it
+ * picks the goal back up itself. Measured 2026-11-06 (golden run): the goal
+ * was resumed in the same tick as the block and nothing said so; the user
+ * read a failure, then an answer nobody had explained. The sentence is the
+ * executor's bookkeeping, not the work's, so stripRetryMachinery removes it
+ * wherever a result is fed back to a model.
+ */
+export function withGoalResume(message: string, next: GoalResumeNext | undefined, request: string): string {
+  if (!next) return message;
+  const sentence = goalResumeSentence(next, detectSupervisorFeedbackLanguage(request));
+  return message.trim() ? `${message}\n\n${sentence}` : sentence;
+}
+
+// ---------------------------------------------------------------------------
 // Mission keep-alive — the LAST stop is a report, not silence.
 // ---------------------------------------------------------------------------
 
@@ -103,6 +145,7 @@ export function stripRetryMachinery(text: string): string {
     // the previous one's final report (Codex 2026-09-11 G#10).
     .replace(/(?:could not resubmit after backoff —\s*)?keep-alive re-armed after restart(?:\s*—[^.]*)?\.?/gi, "")
     .replace(/Transient failure —\s*/g, "")
+    .replace(GOAL_RESUME_SENTENCE_RE, "")
     .replace(/^[\s.—-]+|[\s—-]+$/g, "")
     .trim();
 }
