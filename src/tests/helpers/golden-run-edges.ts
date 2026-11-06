@@ -9,9 +9,14 @@
  *
  * - The provider factory. provider-registry's createProvider and
  *   buildProviderChain hand out one MockAIProvider walking the script, so the
- *   preflight, the chain and the ProviderManager all run for real on top of
- *   it. Every call must be the step the script expects next; a call that is
- *   not is recorded with what it actually was, and the run fails on it.
+ *   preflight and the ProviderManager run for real on top of it. Every call
+ *   must be the step the script expects next; a call that is not is recorded
+ *   with what it actually was, and the run fails on it.
+ * - Or, for a run whose chain has several seats, the seats' provider classes
+ *   (scriptedSeat): provider-registry runs for real, so buildProviderChain
+ *   builds the real FallbackChainProvider over them and the real health
+ *   registry decides which seat each call reaches. Every seat answers from
+ *   the one script, and each step names the seat its call must reach.
  * - The channel factory. bootstrap-channels' initializeChannel hands out a
  *   MockChannelAdapter: the request enters through the real message handler
  *   bootstrap wires, and the answer leaves through the real progress reporter.
@@ -32,12 +37,15 @@ import type {
   ConversationMessage,
   ToolDefinition,
 } from "../../agents/providers/provider-core.interface.js";
+import type { IAIProvider, IStreamingProvider } from "../../agents/providers/provider.interface.js";
 import { MockAIProvider, type MockResponse } from "./mock-provider.js";
 import { MockChannelAdapter } from "./mock-channel.js";
 
 // ─── The script ──────────────────────────────────────────────────────────────
 
 export interface ProviderCall {
+  /** The chain seat that took the call, by its PROVIDER_CHAIN id. */
+  readonly seat: string;
   readonly systemPrompt: string;
   readonly messages: readonly ConversationMessage[];
   readonly tools: readonly ToolDefinition[];
@@ -46,6 +54,8 @@ export interface ProviderCall {
 export interface Step {
   /** What the loop is doing when it makes this call. */
   readonly step: string;
+  /** The seat the call must reach, by its PROVIDER_CHAIN id. The chain's first seat when unset. */
+  readonly seat?: string;
   /** Undefined when the call is this step; otherwise what is wrong with it. */
   readonly check: (call: ProviderCall) => string | undefined;
   /** The provider's answer, or the error the provider fails the call with. */
@@ -87,7 +97,10 @@ export const say = (text: string): Partial<MockResponse> => ({ text, toolCalls: 
 
 /** One scripted provider and what it has seen. */
 export interface ScriptedRun {
+  /** Answers every call, whichever seat took it, and keeps what the tools reported. */
   readonly provider: MockAIProvider;
+  /** A seat of the chain, under the name its provider class gives it: it answers from the script. */
+  readonly seat: (id: string, name: string) => IAIProvider & IStreamingProvider;
   /** The steps served so far, in order. */
   readonly served: string[];
   /** The call each served step answered, in the same order as `served`. */
@@ -96,17 +109,32 @@ export interface ScriptedRun {
   readonly violations: string[];
 }
 
-export function loadScript(script: readonly Step[]): ScriptedRun {
+/**
+ * `chain` is PROVIDER_CHAIN's seats, in order. A call made on the provider
+ * itself (the provider-registry edge hands it out whole) is taken by the
+ * first seat; a seat made by scriptedSeat says which seat it is.
+ */
+export function loadScript(script: readonly Step[], chain: readonly string[] = ["deepseek"]): ScriptedRun {
   const provider = new MockAIProvider({ name: "deepseek", streaming: false });
   const served: string[] = [];
   const calls: ProviderCall[] = [];
   const violations: string[] = [];
+  // Set by a seat just before it hands the call on. The handler runs
+  // synchronously at the start of the call, so it reads its own seat.
+  let takenBy: string | undefined;
   provider.registerResponseHandler("golden-script", ({ systemPrompt, messages, tools }) => {
+    const seat = takenBy ?? chain[0] ?? "(no seat)";
+    takenBy = undefined;
     // A copy: the loop may hand over the session's own array and keep appending to it.
-    const call: ProviderCall = { systemPrompt, messages: [...messages], tools };
+    const call: ProviderCall = { seat, systemPrompt, messages: [...messages], tools };
     const index = served.length + violations.length;
     const step = script[served.length];
-    const problem = step ? step.check(call) : "the script has ended";
+    const expectedSeat = step?.seat ?? chain[0];
+    const problem = !step
+      ? "the script has ended"
+      : seat !== expectedSeat
+        ? `it reached ${seat}, not ${expectedSeat ?? "(no seat)"}`
+        : step.check(call);
     if (step && !problem) {
       served.push(step.step);
       calls.push(call);
@@ -121,11 +149,23 @@ export function loadScript(script: readonly Step[]): ScriptedRun {
     }
     violations.push(
       `call ${index} should be step ${served.length} "${step?.step ?? "(none)"}", but ${problem}. ` +
-        `The call: ${describeCall(call)}`,
+        `The call, on ${seat}: ${describeCall(call)}`,
     );
     throw new Error(`golden run: unscripted provider call (${violations.at(-1)})`);
   });
-  return { provider, served, calls, violations };
+  const seat = (id: string, name: string): IAIProvider & IStreamingProvider => ({
+    name,
+    capabilities: provider.capabilities,
+    chat: (systemPrompt, messages, tools) => {
+      takenBy = id;
+      return provider.chat(systemPrompt, messages, tools);
+    },
+    chatStream: (systemPrompt, messages, tools, onChunk) => {
+      takenBy = id;
+      return provider.chatStream(systemPrompt, messages, tools, onChunk);
+    },
+  });
+  return { provider, seat, served, calls, violations };
 }
 
 // ─── The factory edges ───────────────────────────────────────────────────────
@@ -137,17 +177,17 @@ export interface Delivered {
   readonly text: string;
 }
 
-/** What bootstrap was handed. Set per run: the provider before boot, the channel by boot. */
+/** What bootstrap was handed. Set per run: the script before boot, the channel by boot. */
 export const edges = {
-  provider: undefined as MockAIProvider | undefined,
+  run: undefined as ScriptedRun | undefined,
   channel: undefined as MockChannelAdapter | undefined,
   /** Text and markdown, interleaved as sent: the adapter keeps them in two lists. */
   delivered: [] as Delivered[],
 };
 
-/** Before a boot: this run's provider, and nothing left from the run before it. */
-export function resetEdges(provider: MockAIProvider): void {
-  edges.provider = provider;
+/** Before a boot: this run's script, and nothing left from the run before it. */
+export function resetEdges(run: ScriptedRun): void {
+  edges.run = run;
   edges.channel = undefined;
   edges.delivered.length = 0;
 }
@@ -155,10 +195,29 @@ export function resetEdges(provider: MockAIProvider): void {
 export async function scriptedProviderRegistry<T extends object>(importOriginal: () => Promise<T>): Promise<T> {
   const actual = await importOriginal();
   const scripted = (): MockAIProvider => {
-    if (!edges.provider) throw new Error("golden run: a provider was built before the script was loaded");
-    return edges.provider;
+    if (!edges.run) throw new Error("golden run: a provider was built before the script was loaded");
+    return edges.run.provider;
   };
   return { ...actual, createProvider: scripted, buildProviderChain: scripted };
+}
+
+/**
+ * One seat's provider class, replaced by a seat of the script. provider-registry
+ * builds it as it builds the real class, `new Class(apiKey, model, baseUrl,
+ * label)`, and the seat takes the label as its name, as the real class does:
+ * health and routing key on that name.
+ *
+ *   vi.mock("../../agents/providers/kimi.js", async (original) =>
+ *     (await import("../helpers/golden-run-edges.js")).scriptedSeat(original, "KimiProvider", "kimi"));
+ */
+export async function scriptedSeat<T extends object>(importOriginal: () => Promise<T>, className: string, id: string): Promise<T> {
+  const actual = await importOriginal();
+  // A function, not a class: a constructor that returns an object hands back that object.
+  function ScriptedSeat(_apiKey: string, _model?: string, _baseUrl?: string, label?: string): IAIProvider {
+    if (!edges.run) throw new Error(`golden run: the ${id} seat was built before the script was loaded`);
+    return edges.run.seat(id, label ?? id);
+  }
+  return { ...actual, [className]: ScriptedSeat };
 }
 
 export async function scriptedChannels<T extends object>(importOriginal: () => Promise<T>): Promise<T> {
