@@ -134,6 +134,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | `orchestrator-supervisor-routing.ts` | Provider routing, supervisor assignment, multi-provider strategy |
 | `orchestrator-clarification.ts` | User boundary detection, clarification intervention logic |
 | `orchestrator-context-builder.ts` | System prompt construction, context layers, soul personality injection |
+| `turn-context.ts` | The per-call turn context (phase, plan, role, run state): sent after the last user turn, never stored, so the system prompt stays byte-stable for the prefix cache |
 | `orchestrator-interaction-policy.ts` | Execution policy, shell review, autonomous mode |
 | `orchestrator-phase-telemetry.ts` | PAOR phase transition telemetry |
 | `orchestrator-runtime-utils.ts` | Reflection parsing, phase transitions, step result mapping |

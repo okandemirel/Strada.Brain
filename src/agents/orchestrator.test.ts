@@ -88,6 +88,17 @@ vi.mock("./context/strada-knowledge.js", () => ({
   buildToolUsageHints: () => "",
 }));
 
+/**
+ * The turn context a worker call sent: the text of its last user turn, where the per-step
+ * sections (phase, plan, role, provider intelligence) ride since they left the system prompt
+ * (turn-context.ts). `call` is a provider mock's `[systemPrompt, messages, ...]`.
+ */
+function turnContextOf(call: readonly unknown[] | undefined): string {
+  const last = (call?.[1] as Array<{ content: unknown }> | undefined)?.at(-1)?.content;
+  if (typeof last === "string") return last;
+  return Array.isArray(last) ? last.map((b: { text?: string }) => b.text ?? "").join("\n") : "";
+}
+
 function createMockProvider() {
   return {
     name: "mock",
@@ -836,8 +847,8 @@ describe("Orchestrator", () => {
     await promise;
 
     expect(scopedProviderManager.getActiveInfo).toHaveBeenCalledWith("user-scoped");
-    expect(mockProvider.chat.mock.calls[0]?.[0]).toContain("Provider: persona-worker");
-    expect(mockProvider.chat.mock.calls[0]?.[0]).toContain("Model: persona-model");
+    expect(turnContextOf(mockProvider.chat.mock.calls[0])).toContain("Provider: persona-worker");
+    expect(turnContextOf(mockProvider.chat.mock.calls[0])).toContain("Model: persona-model");
   });
 
   it("keeps the selected provider as executor while routing plan and synthesis through orchestrator-assigned workers", async () => {
@@ -964,11 +975,11 @@ describe("Orchestrator", () => {
     expect(executorProvider.chat).toHaveBeenCalledTimes(2);
     expect(reviewerProvider.chat).toHaveBeenCalledTimes(0);
     expect(synthProvider.chat).toHaveBeenCalledTimes(1);
-    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: planner");
-    expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Provider: planner");
-    expect(plannerProvider.chat.mock.calls[0]?.[0]).not.toContain("Provider: executor");
-    expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: executor");
-    expect(executorProvider.chat.mock.calls[0]?.[0]).toContain("Provider: executor");
+    expect(turnContextOf(plannerProvider.chat.mock.calls[0])).toContain("Current worker role: planner");
+    expect(turnContextOf(plannerProvider.chat.mock.calls[0])).toContain("Provider: planner");
+    expect(turnContextOf(plannerProvider.chat.mock.calls[0])).not.toContain("Provider: executor");
+    expect(turnContextOf(executorProvider.chat.mock.calls[0])).toContain("Current worker role: executor");
+    expect(turnContextOf(executorProvider.chat.mock.calls[0])).toContain("Provider: executor");
     expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: synthesizer");
     expect(synthProvider.chat.mock.calls[0]?.[0]).toContain("Provider: synth");
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
@@ -2124,8 +2135,8 @@ describe("Orchestrator", () => {
       { name: "synth", calls: synthProvider.chat.mock.calls },
     ].flatMap(({ name, calls }) =>
       calls
-        .filter((call) => String(call[0] ?? "").includes("Current worker role: executor"))
-        .map((call) => ({ name, prompt: String(call[0] ?? "") })),
+        .filter((call) => turnContextOf(call).includes("Current worker role: executor"))
+        .map((call) => ({ name, prompt: turnContextOf(call) })),
     );
     expect(executionTurns.length).toBeGreaterThanOrEqual(1);
     if (executionTurns.length > 1) {
@@ -7584,7 +7595,7 @@ DONE`,
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      const firstCallPrompt = chatSpy.mock.calls[0]![0] as string;
+      const firstCallPrompt = turnContextOf(chatSpy.mock.calls[0]);
       expect(firstCallPrompt).toContain("PLAN");
     });
 
