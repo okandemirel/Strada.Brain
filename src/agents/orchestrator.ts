@@ -75,6 +75,7 @@ import type { RateLimiter } from "../security/rate-limiter.js";
 import { getLogger, getLogRingBuffer } from "../utils/logger.js";
 import { logProviderCall, toolDefinitionChars, turnRequestFields } from "./providers/provider-call-log.js";
 import { withTurnContext } from "./turn-context.js";
+import { keepRecalls } from "./recall-ledger.js";
 import { archiveToolFailure } from "./tool-failure-archive.js";
 import { unknownToolMessage } from "./unknown-tool-hint.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
@@ -4248,6 +4249,7 @@ export class Orchestrator {
     }
     const result = compactForRetry(session.messages, session.compactionSummary);
     if (!result.compacted) return false;
+    keepRecalls(session.messages, result.messages); // what a memory refresh recalled rides on to the retry
     session.messages = result.messages;
     if (result.summary) session.compactionSummary = result.summary;
     getLogger().warn("Session compacted after hard-timeout — retrying with a smaller prompt", {
