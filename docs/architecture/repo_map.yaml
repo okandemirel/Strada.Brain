@@ -334,7 +334,7 @@ nodes:
   supervisor:
     purpose: "The multi-provider supervisor: decompose a task, match capabilities, assign providers, dispatch, verify and aggregate the results."
     entrypoints: ["src/supervisor/supervisor-brain.ts", "src/supervisor/supervisor-types.ts", "src/supervisor/supervisor-dispatcher.ts", "src/supervisor/result-aggregator.ts"]
-    depends_on: ["agent-core", "agents", "campaign", "config", "dashboard", "goals", "utils"]
+    depends_on: ["agent-core", "agents", "campaign", "config", "dashboard", "goals", "security", "utils"]
     contracts: ["file-size"]
     read_when:
       - "a task split across providers, or the evidence a node must return"

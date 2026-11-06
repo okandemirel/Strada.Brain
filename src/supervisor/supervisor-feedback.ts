@@ -1,5 +1,6 @@
 import type { WorkspaceEventMap } from "../dashboard/workspace-events.js";
 import type { TaggedGoalNode, SupervisorResult } from "./supervisor-types.js";
+import { sanitizeSecrets } from "../security/secret-patterns.js";
 
 const TURKISH_HINT_RE = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle|görev|dağıt)\b/iu;
 const MAX_CANVAS_TITLE = 84;
@@ -131,6 +132,39 @@ export function buildSupervisorActivationNarrative(task: string): {
       "- I started breaking the request into multi-agent work.",
       "- Next: I'll distribute the work across the best-fit providers and workers.",
     ].join("\n"),
+  };
+}
+
+const MAX_FALLBACK_ERROR = 200;
+
+/**
+ * What the user and the task record are told when the supervisor throws and
+ * one worker takes the request over. Measured 2026-11-06 (golden run): the
+ * fallthrough left one log line, so the user read the worker's own plan as
+ * though the request had been planned as usual, and the task record held no
+ * trace of it. `sentence` is for the user; `note` is for the record and names
+ * the error (first line, secrets masked before it is cut).
+ */
+export function buildSupervisorFallbackNotice(task: string, error: unknown): {
+  language: SupervisorFeedbackLanguage;
+  sentence: string;
+  note: string;
+} {
+  const language = detectSupervisorFeedbackLanguage(task);
+  const message = error instanceof Error ? error.message : String(error);
+  const firstLine = sanitizeSecrets(message).split("\n")[0]?.trim() || "(no message)";
+  const detail = truncate(firstLine, MAX_FALLBACK_ERROR);
+  if (language === "tr") {
+    return {
+      language,
+      sentence: "Birden fazla ajanla planlama hata verdi; bu isteği tek bir ajan yürütüyor.",
+      note: `Supervisor hata verdi; isteği tek bir ajan devralıyor. Hata: ${detail}`,
+    };
+  }
+  return {
+    language,
+    sentence: "Planning across several agents failed, so one agent is handling this request on its own.",
+    note: `Supervisor failed; one agent takes the request over. Error: ${detail}`,
   };
 }
 

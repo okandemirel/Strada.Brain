@@ -253,6 +253,7 @@ import {
 import {
   buildSupervisorActivationNarrative,
 } from "../supervisor/supervisor-feedback.js";
+import { announceSupervisorFallback } from "./orchestrator-supervisor-fallback.js";
 import { SessionManager, replaceProviderFailureNotice, type Session } from "./orchestrator-session-manager.js";
 import {
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
@@ -1946,6 +1947,7 @@ export class Orchestrator {
       };
     } catch (err) {
       getLogger().warn("Supervisor brain failed, falling through to PAOR", { error: String(err) });
+      await announceSupervisorFallback(this.channel, params, err);
       return {
         path: fallbackPath,
         reason: "supervisor_error",

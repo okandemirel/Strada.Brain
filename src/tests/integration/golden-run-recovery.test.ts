@@ -185,6 +185,10 @@ const FALLBACK_REQUEST =
 const FALLBACK_DONE = "Wrote notes/delta.txt and notes/omega.txt.";
 /** What the supervisor fails with. The orchestrator catches it and hands the request to one worker. */
 const SUPERVISOR_FAULT = "golden run: the supervisor failed before planning";
+/** The one sentence the user is told when the supervisor fails and one worker takes the request over. */
+const FALLBACK_NOTICE = "Planning across several agents failed, so one agent is handling this request on its own.";
+/** The note the task record keeps of it: what failed, and with which error. */
+const FALLBACK_NOTE = `Supervisor failed; one agent takes the request over. Error: ${SUPERVISOR_FAULT}`;
 
 const FALLBACK_SCRIPT: readonly Step[] = [
   planStep("worker: plan", FALLBACK_REQUEST),
@@ -302,6 +306,8 @@ function settledAfterResume(): (tasks: readonly Task[], delivered: readonly stri
 const SYSTEM_STATUS = expect.stringMatching(/^\*System Status\*\n/);
 
 const texts = (run: { delivered: readonly { text: string }[] }): string[] => run.delivered.map((m) => m.text);
+/** Every progress note the run's task records hold, oldest task first. */
+const progressOf = (run: { tasks: readonly Task[] }): string[] => run.tasks.flatMap((t) => t.progress.map((p) => p.message));
 
 describe("golden run: failure and recovery paths through the real bootstrap", () => {
   it("a short request goes straight to one worker: no supervisor, no decomposition, no node verifier", async () => {
@@ -318,6 +324,7 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
     expect(run.task?.result).toBe(GAMMA_DONE);
     expect(texts(run)).toEqual([SYSTEM_STATUS, GAMMA_DONE]);
+    expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("a supervisor that throws hands the request to one worker", async () => {
@@ -340,21 +347,25 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(readFileSync(join(run.project, "notes", "delta.txt"), "utf8")).toBe("DELTA\n");
     expect(readFileSync(join(run.project, "notes", "omega.txt"), "utf8")).toBe("OMEGA\n");
 
-    // The task record: completed with the worker's answer. Nothing in it
-    // says the supervisor failed.
+    // The task record: completed with the worker's answer, and a note of the
+    // failure that names the supervisor's error. Until 2026-11-06 only a log
+    // line said the supervisor had failed.
     expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
     expect(run.task?.result).toBe(FALLBACK_DONE);
     expect(run.task?.error).toBeUndefined();
+    expect(progressOf(run)).toContain(FALLBACK_NOTE);
 
-    // What the user read, in order. Measured 2026-11-06: nothing says the
-    // supervisor failed or that one worker took the request over. The
-    // worker's own plan reads as though the request was planned as usual.
+    // What the user read, in order: one sentence that the supervisor failed
+    // and one agent took the request over, before the worker's own plan.
+    // Measured 2026-11-06, before the fix: nothing said so, and the worker's
+    // plan read as though the request had been planned as usual.
     expect(texts(run)).toEqual([
       SYSTEM_STATUS,
+      FALLBACK_NOTICE,
       expect.stringMatching(/^\*\*Execution Plan\*\*\n\nI broke this work into 2 steps\.\n/),
       FALLBACK_DONE,
     ]);
-    expect(texts(run).join("\n")).not.toMatch(/supervisor|failed/i);
+    expect(texts(run).filter((t) => t === FALLBACK_NOTICE), "the user is told once").toHaveLength(1);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("a node recovers from a refused tool, dropped provider calls and a planner that answered in prose", async () => {
@@ -399,5 +410,9 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     // as internal goal ids with no reason, and nothing says the work is
     // being resumed; the answer follows.
     expect(texts(run)).toEqual([SYSTEM_STATUS, expect.stringMatching(BLOCKED), RECOVERY_ANSWER]);
+    // The supervisor ran this request and did not fail: no fallback sentence,
+    // and no fallback note in either task record.
+    expect(texts(run)).not.toContain(FALLBACK_NOTICE);
+    expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 });

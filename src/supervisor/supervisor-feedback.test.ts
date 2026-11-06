@@ -5,6 +5,7 @@ import {
   supervisorSummaryShapeId,
   supervisorNodeShapeId,
   buildSupervisorActivationNarrative,
+  buildSupervisorFallbackNotice,
   buildSupervisorPlanNarrative,
   buildSupervisorWaveNarrative,
   buildSupervisorVerificationNarrative,
@@ -154,6 +155,46 @@ describe("buildSupervisorActivationNarrative", () => {
     const result = buildSupervisorActivationNarrative("hata bul");
     expect(result.language).toBe("tr");
     expect(result.markdown).toContain("**Aşama:**");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSupervisorFallbackNotice
+// ---------------------------------------------------------------------------
+describe("buildSupervisorFallbackNotice", () => {
+  it("tells the user in one sentence, and the record names the error", () => {
+    const result = buildSupervisorFallbackNotice("Refactor the auth module", new Error("planner timed out"));
+    expect(result.language).toBe("en");
+    expect(result.sentence).toBe("Planning across several agents failed, so one agent is handling this request on its own.");
+    expect(result.sentence.match(/[.;!?]/g)).toHaveLength(1);
+    expect(result.sentence).not.toContain("planner timed out");
+    expect(result.note).toBe("Supervisor failed; one agent takes the request over. Error: planner timed out");
+  });
+
+  it("answers a Turkish request in Turkish", () => {
+    const result = buildSupervisorFallbackNotice("hata bul ve düzelt", new Error("zaman aşımı"));
+    expect(result.language).toBe("tr");
+    expect(result.sentence).toBe("Birden fazla ajanla planlama hata verdi; bu isteği tek bir ajan yürütüyor.");
+    expect(result.note).toBe("Supervisor hata verdi; isteği tek bir ajan devralıyor. Hata: zaman aşımı");
+  });
+
+  it("keeps the error's first line, masks a secret before cutting it, and caps its length", () => {
+    const key = `sk-ant-api03-${"a".repeat(40)}`;
+    const result = buildSupervisorFallbackNotice("Refactor the auth module", new Error(`401: key ${key} rejected\n    at stack frame`));
+    expect(result.note).toBe("Supervisor failed; one agent takes the request over. Error: 401: key [REDACTED_OPENAI_KEY] rejected");
+    expect(result.note).not.toContain(key);
+
+    const long = buildSupervisorFallbackNotice("Refactor the auth module", new Error("x".repeat(500)));
+    const detail = long.note.slice(long.note.indexOf("Error: ") + "Error: ".length);
+    expect(detail).toHaveLength(200);
+    expect(detail.endsWith("…")).toBe(true);
+  });
+
+  it("names a thrown non-Error, and says when there was no message", () => {
+    expect(buildSupervisorFallbackNotice("Refactor the auth module", "provider refused").note)
+      .toBe("Supervisor failed; one agent takes the request over. Error: provider refused");
+    expect(buildSupervisorFallbackNotice("Refactor the auth module", new Error("")).note)
+      .toBe("Supervisor failed; one agent takes the request over. Error: (no message)");
   });
 });
 
