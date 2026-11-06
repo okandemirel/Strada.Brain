@@ -85,7 +85,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
-import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery } from "./auto-resume.js";
+import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery, withGoalResume, type GoalResumeNext } from "./auto-resume.js";
 
 // Shared outage measurement (also used by goal auto-resume and campaign
 // self-revival); re-exported so existing importers keep their path.
@@ -2011,26 +2011,16 @@ export class BackgroundExecutor {
           integrateAfterWriteBack = true;
           return;
         }
-        if (supervisorResult.partial) {
+        if (supervisorResult.partial && !admission.supervisorGoalTree?.rootId) {
           requestFailed = true;
           this.taskManager.block(task.id, supervisorResult.output);
-          if (!admission.supervisorGoalTree?.rootId) {
-            // No tree ever formed — decomposition itself failed (measured
-            // 2026-08-26: an all-provider cooldown storm failed the planning
-            // LLM call, the task settled partial with zero nodes, and parked
-            // forever: no tree to resume, and this return path never reached
-            // the mission keep-alive). A planning-stage outage is a
-            // mission-level retry, on the slow clock.
-            if (this.scheduleMissionKeepAlive(task, supervisorResult.output || "supervisor run failed before planning")) {
-              return;
-            }
-          }
-          this.autoResumeBlockedGoal(
-            task,
-            admission.supervisorGoalTree,
-            supervisorResult.succeeded,
-            summariseNodeOutcomes(supervisorResult.nodeResults),
-          );
+          // No tree ever formed — decomposition itself failed (measured
+          // 2026-08-26: an all-provider cooldown storm failed the planning
+          // LLM call, the task settled partial with zero nodes, and parked
+          // forever: no tree to resume, and this return path never reached
+          // the mission keep-alive). A planning-stage outage is a
+          // mission-level retry, on the slow clock.
+          this.scheduleMissionKeepAlive(task, supervisorResult.output || "supervisor run failed before planning");
           return;
         }
         // A FULL failure is exactly where replaying the same tree changes
@@ -2040,14 +2030,15 @@ export class BackgroundExecutor {
         // hours (Codex 2026-09-12 R#2). The partial branch
         // already has the right decision — retry once, then REPLAN when
         // nothing completed, then escalate — so a full failure takes it too.
+        // The block itself is written there, once the next step is known.
         if (admission.supervisorGoalTree?.rootId) {
           requestFailed = true;
-          this.taskManager.block(task.id, supervisorResult.output);
           this.autoResumeBlockedGoal(
             task,
             admission.supervisorGoalTree,
             supervisorResult.succeeded,
             summariseNodeOutcomes(supervisorResult.nodeResults),
+            supervisorResult.output,
           );
           return;
         }
@@ -3286,15 +3277,19 @@ export class BackgroundExecutor {
     tree: { rootId: string } | undefined,
     succeeded: number,
     nodeOutcomes: readonly string[] = [],
+    /** What the user is told about the run. Blocked here, before acting, so it can say what happens next. */
+    stopped: string,
   ): void {
     if (!tree?.rootId || !this.taskManager) return;
     const rootId = tree.rootId;
+    const block = (next?: GoalResumeNext): void => this.taskManager?.block(task.id, withGoalResume(stopped, next, task.prompt));
 
     // A CANCELLED lineage is a deliberate stop and outranks every automatic
     // continuation. The mission keep-alive learned this on 2026-09-03; the
     // goal auto-resume did not, so a delivered campaign's work came back
     // through "Replanning a stalled goal" instead.
     if (this.isLineageCancelled(task)) {
+      block();
       getLoggerSafe().info("Goal auto-resume abandoned — the lineage was cancelled", {
         taskId: task.id,
         goalRootId: rootId,
@@ -3311,6 +3306,7 @@ export class BackgroundExecutor {
     // sat in cooldown. The mission keep-alive has always refused to retry
     // ask_user for exactly this reason; the goal level now matches it.
     if (nodeOutcomes.some((outcome) => /ask_user/i.test(outcome))) {
+      block();
       getLogger().warn("Goal paused on a question for the user — auto-resume skipped", {
         goalRootId: rootId,
       });
@@ -3333,6 +3329,7 @@ export class BackgroundExecutor {
     // intact.
     const outageWaitMs = this.allProvidersCoolingDownMs();
     if (outageWaitMs > 0) {
+      block();
       getLogger().info("Goal auto-resume deferred — all providers cooling down", {
         goalRootId: rootId,
         waitMs: outageWaitMs,
@@ -3365,6 +3362,7 @@ export class BackgroundExecutor {
     const decision = decideAutoResume(state, progressed);
 
     if (decision.action === "stop") {
+      block();
       getLogger().warn("Blocked goal left for a person", {
         goalRootId: rootId,
         attempts: state.attempts,
@@ -3391,6 +3389,7 @@ export class BackgroundExecutor {
     }
 
     const replanning = decision.action === "replan";
+    const next = { action: decision.action, attempt: replanning ? state.replans + 1 : state.attempts + 1 };
     this.autoResumeState.set(budgetKey, {
       attempts: replanning ? state.attempts : state.attempts + 1,
       replans: replanning ? state.replans + 1 : state.replans,
@@ -3402,10 +3401,11 @@ export class BackgroundExecutor {
         : "Resuming blocked goal without waiting for a person",
       {
         goalRootId: rootId,
-        attempt: replanning ? state.replans + 1 : state.attempts + 1,
+        attempt: next.attempt,
         reason: decision.reason,
       },
     );
+    block(next);
     try {
       if (replanning) {
         this.taskManager.replanGoalRoot(rootId, nodeOutcomes);

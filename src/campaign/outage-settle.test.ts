@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isOutageCausedSettle, RECENT_PROVIDER_FAILURE_MS } from "./campaign-manager.js";
+import { describeStoppedPlan } from "../supervisor/stopped-plan-summary.js";
+import type { NodeResult } from "../supervisor/supervisor-types.js";
 
 /**
  * Measured live 2026-09-04 19:36: mcov1 settled with
@@ -100,5 +102,34 @@ describe("who said it, and where", () => {
     expect(isOutageCausedSettle("The task made no progress for 600000ms.", 0, 1_000)).toBe(true);
     // A second line is still a line of its own.
     expect(isOutageCausedSettle("sprint failed\nAll providers failed or unavailable", 0)).toBe(true);
+  });
+});
+
+/**
+ * A SUPERVISED RUN'S BLOCK TEXT judges the same as it did with goal ids.
+ *
+ * Since 2026-11-06 a stopped supervised run names its steps instead of
+ * printing "[goal_…] <reason>" (stopped-plan-summary.ts). The reasons are the
+ * same words; this pins that the campaign reads them the same way: the
+ * executor's marker still counts anywhere, and a node's reason is still not a
+ * clause start of its own, as it was not after "[goal_…] ".
+ */
+describe("a supervised run's stopped summary", () => {
+  const plan = { request: "Tidy the recipe index.", nodes: [{ id: "goal_1", task: "Sort the recipe cards" }] };
+  const failedWith = (output: string): string =>
+    describeStoppedPlan([{
+      nodeId: "goal_1" as NodeResult["nodeId"], status: "failed", output, blockedReason: output,
+      artifacts: [], toolResults: [], provider: "deepseek", model: "worker", cost: 0, duration: 0,
+    }], plan);
+
+  it("keeps the executor's outage marker", () => {
+    expect(isOutageCausedSettle(failedWith("blocked:provider_unavailable"), 0)).toBe(true);
+    expect(isOutageCausedSettle("Blocked:\n[goal_1] blocked:provider_unavailable", 0)).toBe(true);
+  });
+
+  it("does not turn a node's chain verdict into a clause of its own", () => {
+    const chain = "All providers failed or unavailable. A recovery probe was already in flight.";
+    expect(isOutageCausedSettle(`Blocked:\n[goal_1] ${chain}`, 0)).toBe(false);
+    expect(isOutageCausedSettle(failedWith(chain), 0)).toBe(false);
   });
 });

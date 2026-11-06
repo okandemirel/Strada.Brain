@@ -491,7 +491,7 @@ export class SupervisorBrain {
               return this.makePartialResult([], "Aborted during resume re-verification");
             }
             // The report travels with the result here too.
-            const synthesized: SupervisorResult = { ...verifier.synthesize(verified), verification: report };
+            const synthesized: SupervisorResult = { ...verifier.synthesize(verified, { request: task, nodes: decomposedGoalTree.nodes.values() }), verification: report };
             // NOBODY LOOKED is not approval (C#4): a resume counts as done
             // only when every saved node was actually approved. A flagged or
             // unverified node keeps its explanation in the output.
@@ -846,7 +846,7 @@ export class SupervisorBrain {
       // The report travels with the result: it was dropped here, so nothing
       // past the brain could tell a reviewed node from one nobody read.
       const supervisorResult: SupervisorResult = {
-        ...aggregator.synthesize(verifiedResults),
+        ...aggregator.synthesize(verifiedResults, { request: task, nodes: decomposedGoalTree.nodes.values() }),
         verification: verificationReport,
       };
 

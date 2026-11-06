@@ -220,6 +220,15 @@ const RECOVERY_ANSWER = `${ALPHA_DONE}\n\n${BETA_DONE}`;
 const ESCAPING_PATH = "../outside/alpha.txt";
 /** What the worker answers a gate it cannot satisfy: the project has no build and no tests. */
 const CANNOT_VERIFY = "notes/alpha.txt is written. This project has no build and no tests to run.";
+/**
+ * What the user is told when alpha is blocked: each step by its task, why it
+ * did not finish, and that the executor resumes the goal on its own.
+ */
+const BLOCKED =
+  "Steps finished: 0 of 2.\n\n" +
+  `Could not finish "${NODE_ALPHA}" (it kept trying without making progress)\n` +
+  `Did not start "${NODE_BETA}" (a step it depends on did not finish)\n\n` +
+  "Retrying automatically now (automatic retry 1); finished steps are kept.";
 /** The provider drops two of beta's calls in a row, the way a busy upstream does. */
 const PROVIDER_DROP = "503 Service Unavailable: the upstream is overloaded";
 /** What the session is told when a turn's every attempt dropped. */
@@ -401,15 +410,17 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
       TaskStatus.blocked,
       TaskStatus.completed,
     ]);
-    const BLOCKED = /^Blocked:\n\[goal_\w+\] blocked\n\nSkipped:\n\[goal_\w+\] Skipped: dependency failed$/;
-    expect(blocked?.result).toMatch(BLOCKED);
+    expect(blocked?.result).toBe(BLOCKED);
+    expect(blocked?.result, "an internal goal id reached the user").not.toMatch(/goal_/);
     expect(resumed?.parentId).toBe(blocked?.id);
     expect(resumed?.result).toBe(RECOVERY_ANSWER);
 
-    // What the user read, in order. Measured 2026-11-06: the block arrives
-    // as internal goal ids with no reason, and nothing says the work is
-    // being resumed; the answer follows.
-    expect(texts(run)).toEqual([SYSTEM_STATUS, expect.stringMatching(BLOCKED), RECOVERY_ANSWER]);
+    // What the user read, in order: which step stopped and why, which step
+    // never started, and that the work is being retried on its own; then the
+    // answer. Measured 2026-11-06, before the fix: "Blocked:\n[goal_…]
+    // blocked\n\nSkipped:\n[goal_…] Skipped: dependency failed", internal ids
+    // with no reason, and nothing said the work was being resumed.
+    expect(texts(run)).toEqual([SYSTEM_STATUS, BLOCKED, RECOVERY_ANSWER]);
     // The supervisor ran this request and did not fail: no fallback sentence,
     // and no fallback note in either task record.
     expect(texts(run)).not.toContain(FALLBACK_NOTICE);

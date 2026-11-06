@@ -13,6 +13,7 @@ import type {
   VerificationVerdict,
   SupervisorResult,
 } from "./supervisor-types.js";
+import { describeStoppedPlan, type StoppedPlan } from "./stopped-plan-summary.js";
 
 /**
  * A verifier issue about the node's REPORT rather than its work: the output
@@ -342,8 +343,11 @@ export class ResultAggregator {
   // Stage 3: Synthesize
   // ---------------------------------------------------------------------------
 
-  /** Generate a SupervisorResult from collected node results. */
-  synthesize(results: NodeResult[]): SupervisorResult {
+  /**
+   * Generate a SupervisorResult from collected node results. `plan` names
+   * the steps in what the user reads when the run did not finish.
+   */
+  synthesize(results: NodeResult[], plan?: StoppedPlan): SupervisorResult {
     const { succeeded, failed, blocked, skipped, cancelled } = this.collect(results);
     const totalNodes = results.length;
     const totalCost = results.reduce((sum, r) => sum + r.cost, 0);
@@ -388,71 +392,15 @@ export class ResultAggregator {
       };
     }
 
-    // Total failure: every node ran and failed. audited 2026-09-02: this fired on
-    // "no successes, nothing blocked" alone, so an all-skipped run (failure
-    // budget 0) said "All nodes failed:" over an EMPTY list with failed:0, and
-    // 3 failed + 1 skipped said "All nodes failed" while listing 3 of 4. Runs
-    // with skipped or cancelled nodes fall through to the sectioned output,
-    // whose headline is built from the actual tallies.
-    if (
-      succeeded.length === 0 &&
-      blocked.length === 0 &&
-      failed.length > 0 &&
-      skipped.length === 0 &&
-      cancelled.length === 0
-    ) {
-      const failureDetails = failed
-        .map((r) => `[${r.nodeId}] ${r.output}`)
-        .join("\n");
-      return {
-        success: false,
-        partial: false,
-        output: `All nodes failed:\n${failureDetails}`,
-        totalNodes,
-        succeeded: 0,
-        failed: failed.length,
-        blocked: blocked.length,
-        skipped: skipped.length,
-        totalCost,
-        totalDuration,
-        nodeResults: results,
-      };
-    }
-
-    const sections: string[] = [];
-    const completedWork = succeeded.map((r) => r.output).join("\n\n");
-    const blockedList = blocked
-      .map((r) => `[${r.nodeId}] ${r.blockedReason ?? r.output}`)
-      .join("\n");
-    const failureList = failed.map((r) => `[${r.nodeId}] ${r.output}`).join("\n");
-    // Carry the reason the dispatcher recorded ("Skipped: budget exhausted" vs
-    // "Skipped: dependency failed") — it used to render as the bare word
-    // "skipped", so a run the failure budget stopped was indistinguishable from
-    // one whose dependencies collapsed (audited 2026-09-02).
-    const skippedList = skipped.map((r) => `[${r.nodeId}] ${r.output || "skipped"}`).join("\n");
-
-    if (succeeded.length === 0 && blocked.length === 0) {
-      sections.push(
-        `No node succeeded: ${failed.length} failed, ${skipped.length} skipped, ${cancelled.length} cancelled.`,
-      );
-    }
-    if (completedWork) {
-      sections.push(`Completed:\n${completedWork}`);
-    }
-    if (blockedList) {
-      sections.push(`Blocked:\n${blockedList}`);
-    }
-    if (failureList) {
-      sections.push(`Failed:\n${failureList}`);
-    }
-    if (skippedList) {
-      sections.push(`Skipped:\n${skippedList}`);
-    }
-
+    // Anything else stopped with work left in it. audited 2026-09-02: an "All
+    // nodes failed:" branch fired on "no successes, nothing blocked" alone, so
+    // an all-skipped run (failure budget 0) said it over an EMPTY list with
+    // failed:0, and 3 failed + 1 skipped said it while listing 3 of 4. The
+    // summary counts what the steps actually did and names every one of them.
     return {
       success: false,
       partial: succeeded.length > 0 || blocked.length > 0,
-      output: sections.join("\n\n"),
+      output: describeStoppedPlan(results, plan),
       totalNodes,
       succeeded: succeeded.length,
       failed: failed.length + blocked.length,

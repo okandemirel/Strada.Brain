@@ -612,14 +612,24 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       complete: vi.fn(),
       fail: vi.fn(),
       block: vi.fn(),
+      retryGoalRoot: vi.fn(),
     };
     executor.setTaskManager(mockTaskManager as any);
 
     executor.enqueue(task, new AbortController().signal, vi.fn());
 
+    // The block says the goal is being retried, and is written before the
+    // retry is submitted (a task still running cannot be retried).
     await vi.waitFor(() => {
-      expect(mockTaskManager.block).toHaveBeenCalledWith(task.id, "Completed:\nstep 1\n\nSkipped:\n[step-2] skipped");
+      expect(mockTaskManager.block).toHaveBeenCalledWith(
+        task.id,
+        "Completed:\nstep 1\n\nSkipped:\n[step-2] skipped\n\nRetrying automatically now (automatic retry 1); finished steps are kept.",
+      );
     }, { timeout: 5000 });
+    expect(mockTaskManager.block).toHaveBeenCalledTimes(1);
+    expect(mockTaskManager.retryGoalRoot).toHaveBeenCalledWith(goalTree.rootId);
+    expect(mockTaskManager.block.mock.invocationCallOrder[0]!)
+      .toBeLessThan(mockTaskManager.retryGoalRoot.mock.invocationCallOrder[0]!);
 
     expect(mockTaskManager.complete).not.toHaveBeenCalled();
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
