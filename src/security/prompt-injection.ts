@@ -39,9 +39,13 @@ const ROLE_HIJACK_RE =
 const CJK_ROLE_HIJACK_RE =
   /(?:你现在是|你(?:从现在起|从此)是|从现在开始你是|从现在起你是|あなたは[\s\S]{0,80}?として|君は[\s\S]{0,80}?として|당신은[\s\S]{0,80}?입니다|당신은[\s\S]{0,80}?이(?:에|에요|야))/g;
 
-/** Envelope patterns: XML <system>, pipe-delimited <|system|>, bracket [SYSTEM]. */
+/**
+ * Envelope patterns: XML <system>, pipe-delimited <|system|>, bracket [SYSTEM].
+ * A closing pipe tag may put its slash on either side of the pipe: `</|system|>`
+ * and `<|/system|>`. With only the first, the second left its payload behind.
+ */
 const ENVELOPE_RE =
-  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*\/?\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|im_end|start_header_id|end_header_id|eot_id|begin_of_text)\|>/gi;
+  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\/?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*\/?\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|im_end|start_header_id|end_header_id|eot_id|begin_of_text)\|>/gi;
 
 /**
  * Unopened/open-only envelope tags (e.g. lone `[SYSTEM]:` prefix, `<|system|>` header).
