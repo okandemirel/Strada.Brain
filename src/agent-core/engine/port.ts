@@ -199,10 +199,9 @@ export function createAgentCorePort(
           identityKey: params.identityKey,
           agentState: params.agentState,
           executionJournal: params.executionJournal,
-          // trio HIGH catch: use the LIVE prompt (runCtx.systemPrompt — STEP G's memory refresh
-          // reassigns it mid-run), NOT the spine's frozen setup.systemPrompt snapshot; v1's loops
-          // consumed the reassigned loop-local the same way. Without this the refreshed
-          // "## Relevant Memory"/RAG sections were computed and silently dropped.
+          // The run's prompt as setupRun built it (runCtx.systemPrompt). It no longer changes
+          // mid-run: STEP G's memory refresh appends its recall to the history instead, so the
+          // prompt stays the same bytes for the provider's prefix cache (turn-context.ts).
           systemPrompt: ctx().systemPrompt,
           fallbackProvider: params.fallbackProvider,
           toolTurnAffinity: params.toolTurnAffinity,
@@ -271,10 +270,16 @@ export function createAgentCorePort(
           ) ?? prepared.currentProvider;
         return { ...prepared, currentProvider: resilientProvider } as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]
       },
-      maybeCompactSession: (session, providerName, modelId, systemPrompt, toolChars) =>
-        deps.maybeCompactSession(session as Session, providerName, modelId, systemPrompt, toolChars),
-      trimContextWindow: (session, mode) =>
-        engine.trimContextWindowForRun(session as unknown as Session, mode, ctx()),
+      // Both drop turns from the head of the history; what a memory refresh recalled into a dropped
+      // turn goes back on the turn about to be sent (recall-ledger.ts).
+      maybeCompactSession: (session, providerName, modelId, systemPrompt, toolChars) => {
+        deps.maybeCompactSession(session as Session, providerName, modelId, systemPrompt, toolChars);
+        ctx().recallLedger.restore((session as Session).messages);
+      },
+      trimContextWindow: (session, mode) => {
+        engine.trimContextWindowForRun(session as unknown as Session, mode, ctx());
+        ctx().recallLedger.restore((session as unknown as Session).messages);
+      },
 
       // ── C. accounting / trace ──────────────────────────────────────────────────────────────
       recordExecutionTrace: (params) =>

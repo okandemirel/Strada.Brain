@@ -46,6 +46,7 @@ import {
   settledWhenAnswered,
 } from "../helpers/golden-run-harness.js";
 import { TaskStatus } from "../../tasks/types.js";
+import { TURN_CONTEXT_HEADER } from "../../agents/turn-context.js";
 
 // ─── The task ────────────────────────────────────────────────────────────────
 
@@ -181,6 +182,21 @@ describe("golden run: a two-node task through the real bootstrap", () => {
     expect(readFileSync(join(project, "notes", "alpha.txt"), "utf8")).toBe("ALPHA\n");
     expect(readFileSync(join(project, "notes", "beta.txt"), "utf8")).toBe("BETA\n");
     expect(existsSync(join(project, "README.md"))).toBe(true);
+
+    // A node's worker sends one system prompt, byte for byte, on every call, and the same tool
+    // list on its two EXECUTING calls. What a step rebuilds (the plan, the iteration, the role)
+    // rides at the end of the call's last user turn (src/agents/turn-context.ts): a system
+    // prompt that changed between calls made the provider's prefix cache miss the history.
+    for (const node of ["alpha", "beta"] as const) {
+      const callFor = (step: string): ProviderCall => run.calls[run.served.indexOf(`${node}: ${step}`)]!;
+      const [plan, act, report] = [callFor("plan"), callFor("act"), callFor("report")];
+      expect(act.systemPrompt, `${node}: the system prompt changed between plan and act`).toBe(plan.systemPrompt);
+      expect(report.systemPrompt, `${node}: the system prompt changed between act and report`).toBe(act.systemPrompt);
+      expect(JSON.stringify(report.tools), `${node}: the tool list changed within EXECUTING`).toBe(JSON.stringify(act.tools));
+      expect(plan.systemPrompt).not.toContain("Current iteration");
+      expect(textOf(act.messages.at(-1))).toContain(TURN_CONTEXT_HEADER);
+      expect(textOf(report.messages.at(-1))).toMatch(/Current iteration: \d+/);
+    }
 
     // The task is recorded as done, and the answer reached the chat.
     expect(task?.status, `task error: ${task?.error ?? "none"}`).toBe(TaskStatus.completed);

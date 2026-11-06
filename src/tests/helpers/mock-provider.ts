@@ -73,7 +73,7 @@ export class MockAIProvider implements IAIProvider, IStreamingProvider {
   private defaultResponse: MockResponse;
   private responseHandlers: Map<
     string,
-    (input: { messages: ConversationMessage[]; tools: ToolDefinition[] }) => MockResponse | undefined
+    (input: { systemPrompt: string; messages: ConversationMessage[]; tools: ToolDefinition[] }) => MockResponse | undefined
   > = new Map();
 
   // Captured interactions
@@ -160,6 +160,7 @@ export class MockAIProvider implements IAIProvider, IStreamingProvider {
   registerResponseHandler(
     name: string,
     handler: (input: {
+      systemPrompt: string;
       messages: ConversationMessage[];
       tools: ToolDefinition[];
     }) => MockResponse | undefined
@@ -277,7 +278,7 @@ export class MockAIProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     // Try response handlers first
     for (const handler of this.responseHandlers.values()) {
-      const handled = handler({ messages, tools });
+      const handled = handler({ systemPrompt, messages, tools });
       if (handled) {
         this.recordInteraction(systemPrompt, messages, tools, handled);
         await this.chatSpy(systemPrompt, messages, tools);
@@ -306,7 +307,7 @@ export class MockAIProvider implements IAIProvider, IStreamingProvider {
     let response: MockResponse;
 
     for (const handler of this.responseHandlers.values()) {
-      const handled = handler({ messages, tools });
+      const handled = handler({ systemPrompt, messages, tools });
       if (handled) {
         response = handled;
         break;

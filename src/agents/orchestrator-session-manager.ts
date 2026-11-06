@@ -34,6 +34,8 @@ import { MemoryRefresher } from "./memory-refresher.js";
 import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
+import { conversationTranscript, messageTextPreview } from "./session-memory-transcript.js";
+import { withoutRecalledMemory } from "./recall-ledger.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
 import { getLogger } from "../utils/logger.js";
 import { writeFileAtomic } from "../common/atomic-file.js";
@@ -1192,9 +1194,9 @@ export class SessionManager {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
       // ORC-21: a provider-failure notice is not what the user last said (shell
-      // review and correction detection read this).
+      // review and correction detection read this), nor is a recall (recall-ledger.ts).
       if (msg.role === "user" && !isProviderFailureNotice(msg)) {
-        return msg.content as string | MessageContent[] | null;
+        return withoutRecalledMemory([msg])[0]!.content as string | MessageContent[] | null;
       }
     }
     return null;
@@ -1311,8 +1313,9 @@ export class SessionManager {
      */
     owner: { readonly userId: string | undefined } = { userId: session?.memoryOwnerId },
   ): Promise<void> {
-    // Tracked whether or not the caller awaits it: an eviction and a mid-run trim do not.
-    return this.trackWrite(this.storeSessionInMemory(chatId, messages, force, session, owner));
+    // Tracked whether or not the caller awaits it: an eviction and a mid-run trim do not. A run's
+    // recalled memory is not conversation; storing it again would echo it back (recall-ledger.ts).
+    return this.trackWrite(this.storeSessionInMemory(chatId, withoutRecalledMemory(messages), force, session, owner));
   }
 
   private async storeSessionInMemory(
@@ -1336,20 +1339,7 @@ export class SessionManager {
     }
 
     try {
-      const summary = messages
-        .map((m) => {
-          if (typeof m.content === "string") return `[${m.role}] ${m.content}`;
-          if (Array.isArray(m.content)) {
-            const texts = (m.content as MessageContent[])
-              .filter((b): b is { type: "text"; text: string } => b.type === "text")
-              .map((b) => b.text);
-            return texts.length > 0
-              ? `[${m.role}] ${texts.join(" ")}`
-              : `[${m.role}] [media message]`;
-          }
-          return `[${m.role}] [complex content]`;
-        })
-        .join("\n");
+      const summary = conversationTranscript(messages);
 
       if (summary) {
         // Sanitize before persisting — strip any leaked API keys/secrets
@@ -1363,24 +1353,12 @@ export class SessionManager {
             break;
           }
         }
-        const extractText = (msg: ConversationMessage | undefined): string | undefined => {
-          if (!msg) return undefined;
-          if (typeof msg.content === "string") return msg.content.slice(0, 500);
-          if (Array.isArray(msg.content)) {
-            const texts = (msg.content as Array<{ type: string; text?: string }>)
-              .filter((b) => b.type === "text" && b.text)
-              .map((b) => b.text)
-              .join(" ");
-            return texts.slice(0, 500) || undefined;
-          }
-          return undefined;
-        };
         const result = await this.deps.memoryManager.storeConversation(
           chatId as ChatId,
           sanitized,
           {
-            userMessage: extractText(userMsg),
-            assistantMessage: extractText(assistantMsg),
+            userMessage: messageTextPreview(userMsg),
+            assistantMessage: messageTextPreview(assistantMsg),
             ...(owner.userId ? { userId: owner.userId } : {}),
           },
         );

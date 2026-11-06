@@ -13,6 +13,7 @@ import type { Session } from "./orchestrator-session-manager.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { FakeClock } from "../agent-core/control/clock.js";
 import { openRunClock, type RunClock } from "../agent-core/control/run-clock.js";
+import { RecallLedger } from "./recall-ledger.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -114,6 +115,28 @@ describe("hard-timeout retry prompt", () => {
       const retryPrompt = p.chat.mock.calls[0]![0] as unknown as string;
       expect(retryPrompt.startsWith(SYSTEM)).toBe(true);
       expect(retryPrompt).toContain(session.compactionSummary!);
+      orch.dispose();
+    });
+
+    it(`${label}: what a memory refresh recalled into a turn the compaction drops reaches the retry (recall-ledger.ts)`, async () => {
+      const p = provider();
+      const orch = orchestrator(p);
+      const session = longConversation();
+      const RECALLED = "RECALLED-NOTE-7: the spawner reads its rates from a sidecar file";
+      // The refresh appended its recall to an early user turn, as the tool turn does.
+      const early = session.messages.slice(0, 3);
+      new RecallLedger().add(early, RECALLED);
+      session.messages.splice(0, 3, ...early);
+      const recallTurn = JSON.stringify(session.messages[2]);
+
+      await silentStreamOf(orch)("chat-hung", SYSTEM, session, p, [], undefined, undefined, clock());
+
+      expect(p.chat).toHaveBeenCalledTimes(1);
+      const retryMessages = p.chat.mock.calls[0]![1] as unknown as Array<{ content: unknown }>;
+      // The compaction dropped the turn that carried the recall ...
+      expect(retryMessages.some((m) => JSON.stringify(m) === recallTurn)).toBe(false);
+      // ... and the recall rode on to the retry, once.
+      expect(JSON.stringify(retryMessages).split(RECALLED).length - 1).toBe(1);
       orch.dispose();
     });
   }

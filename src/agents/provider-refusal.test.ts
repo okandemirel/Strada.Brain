@@ -88,11 +88,16 @@ describe("a zero-output hard-timeout retries with a smaller prompt (2026-09-09)"
       const next = source.indexOf("silentStreamFallback(", at);
       const window = source.slice(at, next);
       expect(window, `streaming-error branch ${branches + 1} no longer compacts before the fallback`)
-        .toContain("this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, (effectivePrompt?.length ?? 0) + toolDefinitionChars(toolDefinitions))");
+        .toContain("this.compactSessionAfterHardTimeout(err, session, chatId, provider.name, requestOverheadChars)");
       branches += 1;
       cursor = next + 1;
     }
     expect(branches).toBe(2);
+    // The hung request's size is all of it besides the history: the system prompt, the turn
+    // context sent after the history (turn-context.ts) and the tool schemas.
+    expect(source).toContain(
+      "const requestOverheadChars = effectivePrompt.length + (turnContext?.length ?? 0) + toolDefinitionChars(toolDefinitions);",
+    );
   });
 
   it("the hung turn's size becomes the provider's learned context ceiling (2026-09-10, #37)", () => {

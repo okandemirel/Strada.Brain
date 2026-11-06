@@ -2,9 +2,13 @@
  * Agent Core v2 — engine prepare-iteration (relocation Step 3; blueprint: project_v2_engine_relocation).
  *
  * The per-iteration setup the port's prepareIteration binding runs on EVERY step: resolve the
- * execution strategy (or honor a fixed pin), build the phase-aware active prompt + supervisor role
- * prompt, resolve the tool-turn assignment/provider, and compute the tool definitions. Moved
- * VERBATIM from orchestrator.ts (mechanical this.X → deps.X / imported pure helper).
+ * execution strategy (or honor a fixed pin), build the turn context (phase section, supervisor role
+ * section, provider-health note), resolve the tool-turn assignment/provider, and compute the tool
+ * definitions. Moved from orchestrator.ts (mechanical this.X → deps.X / imported pure helper).
+ *
+ * The system prompt is passed through unchanged: what this step rebuilds goes into the turn
+ * context, which rides at the end of the call's last user turn (src/agents/turn-context.ts). A
+ * per-step section inside the system prompt broke the provider's prefix cache on almost every call.
  *
  * Import rule (cycle safety): orchestrator-FREE leaves only — the supervisor-routing helpers and
  * buildPhasePromptSection are all orchestrator-free; buildWorkerToolDefinitions is shell-stateful
@@ -27,9 +31,10 @@ import {
   type SupervisorExecutionStrategy,
 } from "../../agents/orchestrator-supervisor-routing.js";
 import { buildPhasePromptSection } from "../../agents/orchestrator-loop-utils.js";
+import { composeTurnContext } from "../../agents/turn-context.js";
 
 /**
- * The "Provider Health Awareness" system-prompt section, present only after a failure.
+ * The "Provider Health Awareness" turn-context section, present only after a failure.
  *
  * audited 2026-09-02: the previous text told the model to watch for "[Provider Health Report]"
  * messages — a string only `IterationHealthTracker.buildSessionHealthContext` produced, whose
@@ -80,7 +85,14 @@ export interface PrepareIterationParams {
 
 export interface PreparedIteration {
   executionStrategy: SupervisorExecutionStrategy;
+  /** The call's system prompt: the run's prompt as given, the same bytes on every step. */
   activePrompt: string;
+  /**
+   * What this step rebuilds: the phase section (plan, iteration, last reflection, execution
+   * journal), the worker-role section and the provider-health note, under TURN_CONTEXT_HEADER.
+   * Sent at the end of the call's last user turn and never stored; "" when there is none.
+   */
+  turnContext: string;
   currentAssignment: SupervisorAssignment;
   currentProvider: IAIProvider;
   currentToolDefinitions: WorkerToolDefinition[];
@@ -101,11 +113,9 @@ export function prepareIteration(
       params.projectWorldFingerprint,
     );
 
-  let activePrompt =
-    params.systemPrompt +
-    buildPhasePromptSection(params.agentState, params.executionJournal, {
-      enableGoalDetection: params.enableGoalDetection,
-    });
+  const phaseSection = buildPhasePromptSection(params.agentState, params.executionJournal, {
+    enableGoalDetection: params.enableGoalDetection,
+  });
 
   const currentAssignment = getPinnedToolTurnAssignmentHelper(
     executionStrategy,
@@ -119,15 +129,14 @@ export function prepareIteration(
     currentAssignment.role,
   );
   const currentToolNames = currentToolDefinitions.map((d) => d.name);
-  activePrompt += buildSupervisorRolePromptHelper(deps.getSupervisorRoutingContext(), executionStrategy, currentAssignment);
-
-  // Append provider health awareness when failures have occurred during this task.
+  const roleSection = buildSupervisorRolePromptHelper(deps.getSupervisorRoutingContext(), executionStrategy, currentAssignment);
+  // Present only after a failure during this task.
   const healthAwareness = params.iterationHealth && buildProviderHealthAwareness(params.iterationHealth);
-  if (healthAwareness) activePrompt += healthAwareness;
 
   return {
     executionStrategy,
-    activePrompt,
+    activePrompt: params.systemPrompt,
+    turnContext: composeTurnContext([phaseSection, roleSection, healthAwareness]),
     currentAssignment,
     currentProvider,
     currentToolDefinitions,
