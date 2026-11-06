@@ -113,22 +113,6 @@ describe("ModelGateway — delegation", () => {
     // The gateway never touched it (no enterCall thrown) — silentStream is the sole owner.
   });
 
-  it("FORWARDS req.turnContext into silentStream's 9th arg and leaves the system prompt alone", async () => {
-    // What a step rebuilds rides after the history (src/agents/turn-context.ts); folding it into
-    // the system prompt would break the provider's prefix cache on every call.
-    const clock = new FakeClock();
-    const bus = createAgentRunEventBus({ runId: "r", clock });
-    const port = vi.fn<SilentStreamPort>(async () => mkResponse("ok"));
-    const gw = new ModelGateway(port);
-
-    await gw.call({ ...mkRequest(mkProvider()), turnContext: "Current iteration: 3" }, bus);
-    await gw.call(mkRequest(mkProvider()), bus);
-
-    expect(port.mock.calls[0][1]).toBe("sys");
-    expect(port.mock.calls[0][8]).toBe("Current iteration: 3");
-    expect(port.mock.calls[1][8]).toBeUndefined();
-  });
-
   it("emits model.call.started then model.call.finished around the call", async () => {
     const clock = new FakeClock();
     const bus = createAgentRunEventBus({ runId: "r", clock });

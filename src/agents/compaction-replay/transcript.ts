@@ -22,11 +22,6 @@ export interface ReplayTurn {
   readonly promptChars: number;
   /** Tool schema characters the call carried. */
   readonly toolChars: number;
-  /**
-   * Turn context characters the call sent after its history (src/agents/turn-context.ts). Never
-   * stored, so never cached and never compacted; absent when the call sent none.
-   */
-  readonly turnContextChars?: number;
   /** What the provider counted for the call, when known. Read for fidelity, never for the arms. */
   readonly inputTokens?: number;
   /**
@@ -75,7 +70,6 @@ const transcriptFile = z.object({
         z.object({
           promptChars: count,
           toolChars: count,
-          turnContextChars: count.optional(),
           inputTokens: count.optional(),
           liveCut: z.boolean().optional(),
           append: z.array(message),
@@ -87,7 +81,7 @@ const transcriptFile = z.object({
 
 /**
  * Reads a recorded transcript file:
- * `{ "version": 1, "sessions": [{ "id", "turns": [{ "promptChars", "toolChars", "turnContextChars"?, "inputTokens"?, "liveCut"?, "append": [messages] }] }] }`.
+ * `{ "version": 1, "sessions": [{ "id", "turns": [{ "promptChars", "toolChars", "inputTokens"?, "liveCut"?, "append": [messages] }] }] }`.
  * Throws with the first schema error, naming its path, when the file does not match.
  */
 export function parseTranscript(json: unknown): ReplaySession[] {

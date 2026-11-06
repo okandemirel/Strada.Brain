@@ -76,13 +76,6 @@ export interface ModelCallRequest {
    * Optional: a non-streaming caller (or a test) may omit it (→ verbatim v1 watchdog path).
    */
   readonly runClock?: unknown;
-  /**
-   * What this step rebuilt (plan, iteration, role, run state), forwarded as silentStream's 9th
-   * arg, which sends it at the end of the last user turn without storing it. Kept out of
-   * `systemPrompt` so that prompt is the same bytes on every call and the provider's prefix
-   * cache reaches the history (src/agents/turn-context.ts).
-   */
-  readonly turnContext?: string;
 }
 
 export interface ModelCallResult {
@@ -95,7 +88,7 @@ export interface ModelCallResult {
 /**
  * The frozen silentStream, narrowed to a PORT — matches the SHIPPED signature exactly:
  * (chatId, systemPrompt, session, provider, toolDefinitions, externalSignal?, onLiveness?,
- *  runClock?, turnContext?). The Orchestrator supplies its own bound `silentStream` method here, with NO body
+ *  runClock?). The Orchestrator supplies its own bound `silentStream` method here, with NO body
  * change. The gateway uses the `onLiveness` slot (7th) for task-scope liveness; the `runClock`
  * slot (8th) is FORWARDED from req.runClock (Phase 1c) so the frozen silentStream — which owns the
  * RunClock-touch surface — re-arms call liveness (firstTokenSeen()/touch()) on each visible chunk.
@@ -113,7 +106,6 @@ export type SilentStreamPort = (
   externalSignal: AbortSignal | undefined,
   onLiveness: (() => void) | undefined,
   runClock: unknown,
-  turnContext?: string,
 ) => Promise<ProviderResponse>;
 
 /**
@@ -216,7 +208,6 @@ export class ModelGateway {
       // FORWARD the run's RunClock VERBATIM (Phase 1c) — silentStream owns the touch surface; the
       // gateway only forwards, never touch()/double-arm (see the ModelCallRequest.runClock doc).
       req.runClock,
-      req.turnContext,
     );
 
     // No chunk observer wired → derive the visible answer-delta from the final response so the

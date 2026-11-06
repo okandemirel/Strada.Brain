@@ -22,8 +22,6 @@
  *   strategy breaks the prefix;
  * - "head as logged": a call whose prompt or tool-schema length differs from
  *   the previous call's misses entirely.
- * The turn context (src/agents/turn-context.ts) is sent after the history and never stored, so
- * it counts in every request and is never cached.
  * Not modelled: cache expiry, provider block granularity, cross-session hits,
  * output tokens (the same in every arm), the live message-cap trim, and how
  * often the model re-fetches what a stub replaced.
@@ -118,11 +116,6 @@ const summaryPiece = (summary: string): Piece => ({
 });
 
 const headTokens = (turn: ReplayTurn): number => estimateTokens([], turn.promptChars) + toolSchemaTokens(turn.toolChars);
-/** The turn context rides after the history: it is sent, never cached, never compacted. */
-const tailTokens = (turn: ReplayTurn): number => (turn.turnContextChars ? estimateTokens([], turn.turnContextChars) : 0);
-/** What the live decision counts besides the history: the system prompt, the turn context and the summary. */
-const overheadChars = (state: ArmState, turn: ReplayTurn): number =>
-  turn.promptChars + (turn.turnContextChars ?? 0) + (state.summary?.length ?? 0);
 
 function commonPrefixLength(a: string, b: string): number {
   const n = Math.min(a.length, b.length);
@@ -163,7 +156,7 @@ interface ArmState {
 /** The live decision and call, as orchestrator.ts maybeCompactSession makes them. True when it compacted. */
 function compactLikeLive(state: ArmState, turn: ReplayTurn, contextWindow: number): boolean {
   const decision = decideCompaction({
-    estimatedTokens: estimateTokens(state.messages, overheadChars(state, turn)),
+    estimatedTokens: estimateTokens(state.messages, turn.promptChars + (state.summary?.length ?? 0)),
     toolTokens: toolSchemaTokens(turn.toolChars),
     observedInputTokens: state.lastInputTokens,
     contextWindow,
@@ -184,7 +177,7 @@ function compactLikeLive(state: ArmState, turn: ReplayTurn, contextWindow: numbe
 
 /** Conversation tokens above which decideCompaction would trigger for this call (its estimate, inverted). */
 function liveCeiling(state: ArmState, turn: ReplayTurn, contextWindow: number): number {
-  const head = estimateTokens([], overheadChars(state, turn)) + toolSchemaTokens(turn.toolChars);
+  const head = estimateTokens([], turn.promptChars + (state.summary?.length ?? 0)) + toolSchemaTokens(turn.toolChars);
   return Math.max(0, Math.floor(contextWindow * COMPACTION_TRIGGER_RATIO) - head);
 }
 
@@ -227,7 +220,7 @@ function replaySession(arm: ArmSpec, session: ReplaySession, contextWindow: numb
     beforeCall(arm, state, turn, contextWindow);
     const body = [...(state.summary ? [summaryPiece(state.summary)] : []), ...state.messages.map(messagePiece)];
     const head = headTokens(turn);
-    const request = head + body.reduce((sum, p) => sum + p.tokens, 0) + tailTokens(turn);
+    const request = head + body.reduce((sum, p) => sum + p.tokens, 0);
     const stable = prevPieces ? head + sharedPrefixTokens(prevPieces, body) : 0;
     const headSame = prevTurn !== null && prevTurn.promptChars === turn.promptChars && prevTurn.toolChars === turn.toolChars;
     totals.calls++;
@@ -290,7 +283,7 @@ export function replayFidelity(sessions: readonly ReplaySession[]): Fidelity {
       if (turn.liveCut) break;
       for (const m of turn.append) history += messagePiece(m).tokens;
       if (!turn.inputTokens) continue;
-      errors.push(Math.abs(headTokens(turn) + history + tailTokens(turn) - turn.inputTokens) / turn.inputTokens);
+      errors.push(Math.abs(headTokens(turn) + history - turn.inputTokens) / turn.inputTokens);
     }
   }
   const sorted = errors.sort((a, b) => a - b);

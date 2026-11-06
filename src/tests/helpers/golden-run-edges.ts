@@ -38,7 +38,6 @@ import { MockChannelAdapter } from "./mock-channel.js";
 // ─── The script ──────────────────────────────────────────────────────────────
 
 export interface ProviderCall {
-  readonly systemPrompt: string;
   readonly messages: readonly ConversationMessage[];
   readonly tools: readonly ToolDefinition[];
 }
@@ -90,8 +89,6 @@ export interface ScriptedRun {
   readonly provider: MockAIProvider;
   /** The steps served so far, in order. */
   readonly served: string[];
-  /** The call each served step answered, in the same order as `served`. */
-  readonly calls: ProviderCall[];
   /** Every call that was not the step the script expected. */
   readonly violations: string[];
 }
@@ -99,17 +96,14 @@ export interface ScriptedRun {
 export function loadScript(script: readonly Step[]): ScriptedRun {
   const provider = new MockAIProvider({ name: "deepseek", streaming: false });
   const served: string[] = [];
-  const calls: ProviderCall[] = [];
   const violations: string[] = [];
-  provider.registerResponseHandler("golden-script", ({ systemPrompt, messages, tools }) => {
-    // A copy: the loop may hand over the session's own array and keep appending to it.
-    const call: ProviderCall = { systemPrompt, messages: [...messages], tools };
+  provider.registerResponseHandler("golden-script", ({ messages, tools }) => {
+    const call: ProviderCall = { messages, tools };
     const index = served.length + violations.length;
     const step = script[served.length];
     const problem = step ? step.check(call) : "the script has ended";
     if (step && !problem) {
       served.push(step.step);
-      calls.push(call);
       if (step.reply instanceof Error) throw step.reply;
       return {
         text: "",
@@ -125,7 +119,7 @@ export function loadScript(script: readonly Step[]): ScriptedRun {
     );
     throw new Error(`golden run: unscripted provider call (${violations.at(-1)})`);
   });
-  return { provider, served, calls, violations };
+  return { provider, served, violations };
 }
 
 // ─── The factory edges ───────────────────────────────────────────────────────

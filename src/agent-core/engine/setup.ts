@@ -15,7 +15,6 @@
  */
 
 import type { Session } from "../../agents/orchestrator-session-manager.js";
-import { RecallLedger } from "../../agents/recall-ledger.js";
 import type { UserProfile } from "../../memory/unified/user-profile-store.js";
 import { resolveAutonomousModeWithDefault } from "../../memory/unified/user-profile-store.js";
 import type { ProgressLanguage } from "../../tasks/progress-signals.js";
@@ -590,7 +589,6 @@ export async function setupAgentCoreRun(
       joinsParentEpisode,
       workerMonitorScope,
       memoryRefresher,
-      recallLedger: new RecallLedger(),
       fixedExecutionStrategy,
       plainLoopStepIndex: 0, // BUG#1 P2: per-run tool-batch counter for the plain-loop live step DAG.
     };

@@ -46,7 +46,6 @@ import type {
   RecordExecutionTraceParams,
   RunSetup,
 } from "./orchestrator-port.js";
-import { assembleStepContext } from "./assemble-step-context.js";
 import type { RunMode } from "../control/policy.js";
 import { resolveRunBudgetPolicy } from "../control/policy.js";
 import type { Budget, ChildBudget, TokenUsage as BudgetTokenUsage } from "../control/budget.js";
@@ -151,6 +150,11 @@ export function stoppedStatus(
   // runs each spending to the same cap.
   if (reason.kind === "budget-exhausted") return "blocked";
   return "failed";
+}
+
+/** The v1 trim modes collapse to two; everything non-interactive trims as "background". */
+function trimMode(mode: RunnerMode): "interactive" | "background" {
+  return mode === "interactive" ? "interactive" : "background";
 }
 
 /** Provider `TokenUsage` → control-plane `Budget` usage, with the turn's estimated USD cost.
@@ -478,7 +482,25 @@ export class V2AgentRunner implements AgentRunner {
           const call = runClock.enterCall(callLimits);
 
           // ══ assembleStepContext: prepareIteration + compaction + trim (gauntlet #3,#4,#5) ═
-          const prepared = assembleStepContext(port, setup, { prompt: request.prompt, state, mode });
+          const prepared = port.prepareIteration({
+            prompt: request.prompt,
+            identityKey: setup.identityKey,
+            agentState: state,
+            executionJournal: setup.executionJournal,
+            systemPrompt: setup.systemPrompt,
+            fallbackProvider: setup.fallbackProvider,
+            toolTurnAffinity: null,
+            enableGoalDetection: setup.enableGoalDetection,
+            iterationHealth: setup.iterationHealth,
+          });
+          port.trimContextWindow(setup.session, trimMode(mode));
+          port.maybeCompactSession(
+            setup.session,
+            prepared.currentAssignment.providerName,
+            prepared.currentAssignment.modelId,
+            prepared.activePrompt,
+            prepared.currentToolDefinitions.reduce((chars, d) => chars + JSON.stringify(d).length, 0),
+          );
           // v1 parity (trio catch): attribute by the ASSIGNMENT's provider name (:4192/:5764) —
           // prepared.currentProvider may be a resilient FallbackChain whose synthetic name
           // ("chain(a→b→…)") would poison per-provider usage/cost/health keys. The callable is
@@ -511,7 +533,6 @@ export class V2AgentRunner implements AgentRunner {
                 {
                   chatId: request.chatId,
                   systemPrompt: prepared.activePrompt,
-                  turnContext: prepared.turnContext,
                   session: setup.session,
                   provider: prepared.currentProvider,
                   toolDefinitions: prepared.currentToolDefinitions,

@@ -12,7 +12,6 @@ import {
   type Session,
 } from "./orchestrator-session-manager.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
-import { RecallLedger } from "./recall-ledger.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
@@ -283,29 +282,6 @@ describe("SessionManager", () => {
 
     expect(sm.extractLastUserContent(session)).toEqual(content);
     expect(sm.extractLastUserMessage(session)).toBe("inspect this screenshot");
-  });
-
-  it("a recall on the last user turn is not what the user said (recall-ledger.ts)", () => {
-    const sm = new SessionManager(createMockDeps());
-    const session = sm.getOrCreateSession("chat-1");
-    const ledger = new RecallLedger();
-    const recall = "## Relevant Memory: [user] an earlier, unrelated conversation";
-
-    // On the user's own words: the words stay, the recall goes.
-    sm.appendVisibleUserMessage(session, "rename the spawner");
-    ledger.add(session.messages, recall);
-    expect(JSON.stringify(session.messages)).toContain(recall);
-    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
-
-    // On a tool-result turn that holds nothing else: no user text, as without the recall.
-    session.messages.push(
-      { role: "assistant", content: "", tool_calls: [{ id: "tc-1", name: "file_read", input: {} }] } as never,
-      { role: "user", content: [{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }] } as never,
-    );
-    ledger.add(session.messages, recall);
-    expect(JSON.stringify(session.messages.at(-1))).toContain(recall);
-    expect(sm.extractLastUserMessage(session)).toBe("");
-    expect(sm.extractLastUserContent(session)).toEqual([{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }]);
   });
 
   it("trimSession returns empty array when under limit", () => {

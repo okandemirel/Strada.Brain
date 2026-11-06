@@ -73,10 +73,7 @@ export type RunnerModeLike = RunnerMode;
 /** Everything prepareIteration rebuilds for one step (gauntlet #2–#6, minus the call). */
 export interface PreparedIteration {
   readonly executionStrategy: SupervisorExecutionStrategy;
-  /** The system prompt: the same bytes on every step of a run (prepare-iteration.ts). */
   readonly activePrompt: string;
-  /** What the step rebuilt, sent at the end of the last user turn and never stored (turn-context.ts). */
-  readonly turnContext: string;
   readonly currentAssignment: SupervisorAssignment;
   /** The provider FallbackChain already selected — handed straight to gateway.call(). */
   readonly currentProvider: IAIProvider;
@@ -366,17 +363,15 @@ export interface OrchestratorPort {
 
   // ════ Per-iteration prep (gauntlet #2–#6, minus the call) ══════════════════════════
   /**
-   * Rebuild strategy, pinned assignment and tool defs, and the turn context: the phase section
-   * (buildPhasePromptSection), role prompt and health-awareness, sent after the last user turn.
-   * activePrompt is the run's system prompt, the same bytes on every step (turn-context.ts). The
-   * currentProvider it returns is the one FallbackChain selected (task-aware build happens
-   * INSIDE here).
+   * Rebuild strategy, phase-aware activePrompt (buildPhasePromptSection), pinned assignment,
+   * tool defs, role prompt, health-awareness. The currentProvider it returns is the one
+   * FallbackChain selected (task-aware build happens INSIDE here).
    */
   prepareIteration(params: PrepareIterationParams): PreparedIteration;
   /** Test seam: the run context this port closes over (undefined before setupRun). */
   debugRunContext?: () => unknown;
 
-  /** Session compaction (gauntlet #5). Puts back any mid-run recall it dropped (recall-ledger.ts). */
+  /** Session compaction (gauntlet #5). */
   maybeCompactSession(
     session: unknown,
     providerName: string,
@@ -386,7 +381,7 @@ export interface OrchestratorPort {
     toolChars?: number,
   ): void;
 
-  /** Context-window trim for non-interactive (gauntlet #4). Puts back any mid-run recall it dropped (recall-ledger.ts). */
+  /** Context-window trim for non-interactive (gauntlet #4). */
   trimContextWindow(session: { messages: unknown[] }, mode: "interactive" | "background"): void;
 
   // ════ Accounting / trace (gauntlet #8–#9) ══════════════════════════════════════════

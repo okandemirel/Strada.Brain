@@ -128,15 +128,12 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | `orchestrator-loop-shared.ts` | Shared loop functions: executeAndTrackTools, refreshMemoryIfNeeded, runConsensusIfAvailable, checkPendingBlocks |
 | `orchestrator-loop-utils.ts` | PAOR state transitions: handlePlanPhaseTransition, processReflectionPreamble, applyReflectionContinuation, handleReplanDecision |
 | `orchestrator-session-manager.ts` | SessionManager class — session state, transcript, persistence, plan review |
-| `session-memory-transcript.ts` | The text of a conversation as memory stores it (`[role] text` lines, a message preview) |
 | `orchestrator-autonomy-tracker.ts` | AutonomyBundle factory — creates ErrorRecovery, TaskPlanner, SelfVerification, ExecutionJournal per loop |
 | `orchestrator-consensus.ts` | Consensus verification orchestration |
 | `orchestrator-tool-execution.ts` | Tool execution + autonomy result tracking |
 | `orchestrator-supervisor-routing.ts` | Provider routing, supervisor assignment, multi-provider strategy |
 | `orchestrator-clarification.ts` | User boundary detection, clarification intervention logic |
 | `orchestrator-context-builder.ts` | System prompt construction, context layers, soul personality injection |
-| `turn-context.ts` | The per-call turn context (phase, plan, role, run state): sent after the last user turn, never stored, so the system prompt stays byte-stable for the prefix cache |
-| `recall-ledger.ts` | A run's mid-run memory recalls: put back after every trim and compaction that drops them (the hard-timeout retry included), and left out of what memory stores and of what the user last said |
 | `orchestrator-interaction-policy.ts` | Execution policy, shell review, autonomous mode |
 | `orchestrator-phase-telemetry.ts` | PAOR phase transition telemetry |
 | `orchestrator-runtime-utils.ts` | Reflection parsing, phase transitions, step result mapping |

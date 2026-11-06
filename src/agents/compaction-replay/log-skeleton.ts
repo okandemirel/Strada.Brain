@@ -15,7 +15,7 @@
  *
  * Calibration. Between two calls of a session whose message count grew, the
  * provider's input grew by exactly what was appended, plus any change in the
- * system prompt, tool schemas and turn context. That difference sizes what the log does not
+ * system prompt and tool schemas. That difference sizes what the log does not
  * record: results of tool calls that left no "Tool call" line, and any text
  * the loop appended after them. A transition where the count fell (the live
  * loop cut its history) cannot be calibrated: logged sizes are used, and a
@@ -24,7 +24,7 @@
 
 import type { ConversationMessage, MessageContent, ToolCall } from "../providers/provider-core.interface.js";
 import type { JsonObject } from "../../types/index.js";
-import { overheadTokens, readLogSessions, type SessionStats, type ToolLine, type TurnLine } from "./log-sessions.js";
+import { readLogSessions, type SessionStats, type ToolLine, type TurnLine } from "./log-sessions.js";
 import type { ReplaySession, ReplayTurn } from "./transcript.js";
 
 /** The shared estimator's rate for Latin text; placeholder content is ASCII. */
@@ -96,6 +96,9 @@ function resultText(seed: string, tool: string, chars: number, ok: boolean): str
   return head + filler(seed, Math.max(0, chars - head.length));
 }
 
+const headTokens = (t: TurnLine): number =>
+  Math.ceil(t.promptChars / CHARS_PER_TOKEN) + Math.ceil(t.toolChars / CHARS_PER_TOKEN);
+
 function median(values: readonly number[]): number | undefined {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((a, b) => a - b);
@@ -111,23 +114,16 @@ function buildSession(id: string, raw: readonly TurnLine[], stats: SkeletonStats
       : transition(`${id}/t${i}`, raw[i - 1]!, cur, fallbackResult, stats);
     const liveCut = i > 0 && cur.messages < raw[i - 1]!.messages;
     if (liveCut) stats.liveHistoryDrops++;
-    return {
-      promptChars: cur.promptChars,
-      toolChars: cur.toolChars,
-      ...(cur.turnContextChars > 0 ? { turnContextChars: cur.turnContextChars } : {}),
-      inputTokens: cur.inputTokens,
-      ...(liveCut ? { liveCut } : {}),
-      append,
-    };
+    return { promptChars: cur.promptChars, toolChars: cur.toolChars, inputTokens: cur.inputTokens, ...(liveCut ? { liveCut } : {}), append };
   });
   // The last response was never re-sent: nothing appends it, and its tool lines go unused.
   stats.toolLinesUnused += raw.at(-1)?.tools.length ?? 0;
   return { id, turns };
 }
 
-/** The opening user turn: everything the first call carried beyond the system prompt, tools and turn context. */
+/** The opening user turn: everything the first call carried beyond the system prompt and tools. */
 function taskMessage(id: string, first: TurnLine): ConversationMessage {
-  const chars = Math.max(MIN_CHARS, (first.inputTokens - overheadTokens(first)) * CHARS_PER_TOKEN);
+  const chars = Math.max(MIN_CHARS, (first.inputTokens - headTokens(first)) * CHARS_PER_TOKEN);
   return { role: "user", content: filler(`${id}/task`, chars) };
 }
 
@@ -149,7 +145,7 @@ function transition(seed: string, prev: TurnLine, cur: TurnLine, fallbackResult:
   }
   const tools = prev.tools.slice(0, prev.toolCalls);
   stats.toolLinesUnused += prev.tools.length - tools.length;
-  const growth = (cur.inputTokens - prev.inputTokens) - (overheadTokens(cur) - overheadTokens(prev));
+  const growth = (cur.inputTokens - prev.inputTokens) - (headTokens(cur) - headTokens(prev));
   const sizing = added > 0 && growth >= 0
     ? calibrated(prev, tools, growth * CHARS_PER_TOKEN, stats)
     : uncalibrated(prev, tools, fallbackResult, stats);

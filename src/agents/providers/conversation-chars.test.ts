@@ -8,7 +8,7 @@
  * expense could not be aimed at anything.
  */
 import { describe, expect, it } from "vitest";
-import { conversationChars, turnRequestFields } from "./provider-call-log.js";
+import { conversationChars } from "./provider-call-log.js";
 
 describe("conversationChars", () => {
   it("sums the history and names the largest single message", () => {
@@ -39,28 +39,5 @@ describe("conversationChars", () => {
     const circular: Record<string, unknown> = {};
     circular["self"] = circular;
     expect(conversationChars([{ content: circular }])).toEqual({ historyChars: 0, largestMessageChars: 0 });
-  });
-});
-
-describe("turnRequestFields", () => {
-  it("names the turn context apart from the system prompt and the stored history", () => {
-    // The context is sent after the history and never stored (src/agents/turn-context.ts): a
-    // replay that counted it as prompt or history would see churn or growth that is not there.
-    const fields = turnRequestFields({
-      systemPrompt: "p".repeat(100),
-      messages: [{ content: "h".repeat(40) }, { content: "i".repeat(60) }],
-      tools: [{ name: "file_read" }],
-      turnContext: "c".repeat(25),
-    });
-    expect(fields).toEqual({
-      promptChars: 100,
-      messages: 2,
-      tools: 1,
-      toolChars: JSON.stringify([{ name: "file_read" }]).length,
-      turnContextChars: 25,
-      historyChars: 100,
-      largestMessageChars: 60,
-    });
-    expect(turnRequestFields({ systemPrompt: undefined, messages: undefined, tools: undefined }).turnContextChars).toBe(0);
   });
 });
