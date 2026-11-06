@@ -15,6 +15,7 @@ is.
 | [file-size](file-size.md) | How long a source file under `src/` may grow | Adding code to a file near or over 1,000 lines; when the size ratchet names a file |
 | [governance](governance.md) | The files that enforce the rules: the commit checker, hooks, workflows, contracts | Before changing the checker, a hook, a workflow, a contract or src/contracts.test.ts; when the checker prints 'governed file changed' |
 | [clean-checkout](clean-checkout.md) | What a test run may leave in the checkout it runs from: no new `.strada…` runtime entry at its root | A test builds a config, store, vault or lock from defaults or a hand-made env; a test resolves a runtime path against `process.cwd()`; when the worker setup fails a file with 'left … in the checkout it runs from' |
+| [dist-readers](dist-readers.md) | Tests that read, run or import this repository's compiled `dist/`: each fails asking for `npm run build`, the phrase the gates' build step selects readers by | Writing a test that reads a file under the repository's `dist/`; changing `READS_BUILD` in `scripts/ci/dist-build.mjs`; when `src/tests/dist-readers.test.ts` names a file |
 
 ## Adding a contract
 
