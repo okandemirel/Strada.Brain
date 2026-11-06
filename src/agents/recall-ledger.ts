@@ -27,7 +27,9 @@
  * under a new content hash. And it is not what the user last said: the recall
  * rides on a tool-result turn, which the session manager's last-user-message
  * reads (the shell reviewer's task, the end-turn prompt) used to return as the
- * user's words (SessionManager.extractLastUserContent).
+ * user's words (SessionManager.extractLastUserContent). A user turn the ledger
+ * opened for a recall alone, after an assistant turn, is passed over for the
+ * user turn before it.
  */
 
 import { randomUUID } from "node:crypto";
