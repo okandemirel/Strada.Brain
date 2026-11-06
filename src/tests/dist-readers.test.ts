@@ -15,8 +15,9 @@
  * repository root, as vitest runs here. import.meta.url, import.meta.dirname
  * and __dirname are the test file's own place. path.join, path.resolve,
  * path.dirname, fileURLToPath, new URL(…), .pathname, template strings, `+`
- * and the const a name was declared with (in its own scope) are followed, and
- * an import of a relative specifier counts too. A test that builds a dist/ in
+ * and the const a name was declared with (in its own scope) are followed; an
+ * imported function is judged by its name in its module (`join as joinPath`
+ * is join), and an import of a relative specifier counts too. A test that builds a dist/ in
  * its own temp folder points somewhere else and is not a reader.
  *
  * The message is assembled below and never written out whole: this file names
@@ -106,31 +107,31 @@ function pathsIntoDist(file: string, source: string, root: string): Hit[] {
   const dist = path.join(root, "dist");
   const following = new Set<ts.Node>();
 
-  /** The module an imported name came from: "node:path" for `join` in `import { join } from "node:path"`. */
-  const importedFrom = (id: ts.Identifier): string | undefined => {
+  /**
+   * The module an imported name came from and the name it has there: "node:path"
+   * and `join` for `joinPath` in `import { join as joinPath } from "node:path"`.
+   */
+  const imported = (id: ts.Identifier): { from: string; name: string } | undefined => {
     const decl = checker.getSymbolAtLocation(id)?.declarations?.[0];
     if (!decl) return undefined;
-    const statement = ts.isImportSpecifier(decl)
-      ? decl.parent.parent.parent
+    const [statement, name] = ts.isImportSpecifier(decl)
+      ? [decl.parent.parent.parent, (decl.propertyName ?? decl.name).text]
       : ts.isNamespaceImport(decl)
-        ? decl.parent.parent
+        ? [decl.parent.parent, "*"]
         : ts.isImportClause(decl)
-          ? decl.parent
-          : undefined;
-    return statement && ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined;
+          ? [decl.parent, "default"]
+          : [undefined, ""];
+    return statement && ts.isStringLiteral(statement.moduleSpecifier) ? { from: statement.moduleSpecifier.text, name } : undefined;
   };
 
   /** `join` from "node:path" for `join(…)`, `path.join(…)` and `path.posix.join(…)`; `cwd` from "process" for process.cwd(). */
   const callee = (expr: ts.Expression): { from: string; name: string } | undefined => {
-    if (ts.isIdentifier(expr)) {
-      const from = importedFrom(expr);
-      return from === undefined ? undefined : { from, name: expr.text };
-    }
+    if (ts.isIdentifier(expr)) return imported(expr);
     if (!ts.isPropertyAccessExpression(expr)) return undefined;
     let owner = expr.expression;
     if (ts.isPropertyAccessExpression(owner) && owner.name.text === "posix") owner = owner.expression;
     if (!ts.isIdentifier(owner)) return undefined;
-    const from = importedFrom(owner);
+    const from = imported(owner)?.from;
     if (from !== undefined) return { from, name: expr.name.text };
     // A global such as `process`; a local that only shares the name is not the module.
     return checker.getSymbolAtLocation(owner) ? undefined : { from: owner.text, name: expr.name.text };
@@ -347,6 +348,12 @@ describe("what counts as a path into dist/", () => {
     ["a relative resolve(), from the working directory", "src/a.test.ts", 'path.resolve("dist", "index.js");', "dist/index.js"],
     ["a dynamic import of a relative specifier", "src/tests/unit/a.test.ts", 'await import("../../../dist/core/x.js");', "dist/core/x.js"],
     ["a static import of a relative specifier", "src/a.test.ts", 'import { x } from "../dist/core/x.js";', "dist/core/x.js"],
+    [
+      "a path function imported under another name",
+      "src/a.test.ts",
+      'import { join as joinPath } from "node:path";\njoinPath(process.cwd(), "dist", "core", "x.js");',
+      "dist/core/x.js",
+    ],
   ])("%s", (_label, rel, body, target) => {
     expect(targets(rel, body)).toContain(target);
   });
@@ -366,6 +373,11 @@ describe("what counts as a path into dist/", () => {
       'const root = process.cwd();\nfunction fixture() {\n  const root = mkdtempSync("x-");\n  return join(root, "dist");\n}',
     ],
     ["a resolve() imported from another module", "src/a.test.ts", 'import { resolve } from "./routes.js";\nresolve(process.cwd(), "dist");'],
+    [
+      "another path function imported under the name resolve",
+      "src/a.test.ts",
+      'import { relative as resolve } from "node:path";\nresolve(process.cwd(), "dist");',
+    ],
     ["a local that is only named path", "src/a.test.ts", 'function f(path: { join(...p: string[]): string }) {\n  return path.join(process.cwd(), "dist");\n}'],
     ["a dist/ path in a command string", "src/a.test.ts", 'const command = "node dist/index.js start --channel web";'],
   ])("not %s", (_label, rel, body) => {
