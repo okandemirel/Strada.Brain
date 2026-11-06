@@ -11,7 +11,7 @@
 // make a dead owner look alive) and two writers cannot both be inside the
 // protected mutation (#7, there is no lock to displace and no whole-document
 // snapshot to lose an update). The pre-round-9 JSON is imported once.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -114,6 +114,28 @@ function deadPid(): number {
 
 /** The pre-round-9 lock file line: `<pid> <token> <iso>`. */
 const lockLine = (pid: number, token = `${pid}-deadbeef`): string => `${pid} ${token} ${new Date().toISOString()}\n`;
+
+/**
+ * What `work` waited on, read from what it did rather than from a clock: the
+ * timers it scheduled (a sleep, a backoff, a deadline) and the pids it asked
+ * whether they are alive. The pre-round-9 lock waited with both, so a lock
+ * whose pid was reused by a live process held every caller up (#8). A wall-clock
+ * bound measured the runner instead: one Windows CI run took 4775 ms over this
+ * approval, and its re-run of the same commit took 455 ms over the whole test.
+ */
+async function waitsOf(work: () => Promise<unknown>): Promise<{ timers: number; pidChecks: number }> {
+  const timeouts = vi.spyOn(globalThis, "setTimeout");
+  const intervals = vi.spyOn(globalThis, "setInterval");
+  const pidChecks = vi.spyOn(process, "kill");
+  try {
+    await work();
+    return { timers: timeouts.mock.calls.length + intervals.mock.calls.length, pidChecks: pidChecks.mock.calls.length };
+  } finally {
+    timeouts.mockRestore();
+    intervals.mockRestore();
+    pidChecks.mockRestore();
+  }
+}
 
 describe("trustedSkillsDbPath", () => {
   it("lives under the app home, resolved at call time — never inside the project", () => {
@@ -480,10 +502,16 @@ describe("trust records in SQLite (round 9 #7/#8)", () => {
       .run(projectId, "skills/dying", "ddd", 1, "now");
     dying.close();
 
+    // "At once" without a clock: the next writer may not wait at all, and it
+    // is not refused, so no claim of the dead transaction is left to wait for.
+    const next = openSkillTrustStore({ busyTimeoutMs: 0 });
+    try {
+      expect(() => next.approve(projectId, "skills/next", rec("nnn"))).not.toThrow();
+    } finally {
+      next.close();
+    }
     const dir = await writeSkill("after", { "index.js": "export const tools = [];" });
-    const started = Date.now();
     await approveWorkspaceSkill(projectRoot, dir);
-    expect(Date.now() - started).toBeLessThan(2_000);
     expect(readRecord(projectId, "skills/dying")).toBeUndefined();
     expect((await assessWorkspaceSkillTrust(projectRoot, dir, "after")).trusted).toBe(true);
   });
@@ -523,10 +551,11 @@ describe("trust records in SQLite (round 9 #7/#8)", () => {
 
     // The writer is gone with the write lock it held and the row it never
     // committed. Its pid may be handed to any process; nothing consults one.
+    // A claim that outlived it would refuse this approval once the store's
+    // busy timeout ran out. How soon the OS frees a killed process's file locks
+    // is not ours to bound (Windows promises no time), so no clock is read here.
     const dir = await writeSkill("next", { "index.js": "export const tools = [];" });
-    const started = Date.now();
     await approveWorkspaceSkill(projectRoot, dir);
-    expect(Date.now() - started).toBeLessThan(2_000);
     expect(readRecord(projectId, "skills/killed")).toBeUndefined();
     expect((await assessWorkspaceSkillTrust(projectRoot, dir, "next")).trusted).toBe(true);
   }, 25_000);
@@ -542,9 +571,8 @@ describe("trust records in SQLite (round 9 #7/#8)", () => {
     await utimes(lock, past, past);
     const dir = await writeSkill("reused-pid", { "index.js": "export const tools = [];" });
 
-    const started = Date.now();
-    await approveWorkspaceSkill(projectRoot, dir);
-    expect(Date.now() - started).toBeLessThan(2_000);
+    // Nothing asks the live pid anything and nothing waits for it.
+    expect(await waitsOf(() => approveWorkspaceSkill(projectRoot, dir))).toEqual({ timers: 0, pidChecks: 0 });
     expect((await assessWorkspaceSkillTrust(projectRoot, dir, "reused-pid")).trusted).toBe(true);
     // A dead owner's lock is equally irrelevant.
     await writeFile(lock, lockLine(deadPid()), "utf-8");
