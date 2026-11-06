@@ -24,7 +24,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 vi.mock("../../agents/providers/provider-registry.js", async (original) =>
@@ -46,6 +46,7 @@ import {
 import {
   GOLDEN_RUN_TIMEOUT_MS,
   GOLDEN_WORKING_DIR,
+  isolationDisabled,
   runGolden,
   settledWhenAnswered,
 } from "../helpers/golden-run-harness.js";
@@ -323,6 +324,8 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     const run = await runGolden({ name: "short", request: SHORT_REQUEST, script: SHORT_SCRIPT, settled: settledWhenAnswered });
 
     expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(isolationDisabled(run), "the run had no workspace leases").toEqual([]);
+    expect(readdirSync(run.leaseRoot), "a lease was never released").toEqual([]);
     expect(run.violations).toEqual([]);
     expect(run.served).toEqual(SHORT_SCRIPT.map((s) => s.step));
     expect(readFileSync(join(run.project, "notes", "gamma.txt"), "utf8")).toBe("GAMMA\n");
@@ -351,6 +354,8 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
 
     expect(supervisorCalls, "the supervisor was never asked").toBe(1);
     expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(isolationDisabled(run), "the run had no workspace leases").toEqual([]);
+    expect(readdirSync(run.leaseRoot), "a lease was never released").toEqual([]);
     expect(run.violations).toEqual([]);
     expect(run.served).toEqual(FALLBACK_SCRIPT.map((s) => s.step));
     expect(readFileSync(join(run.project, "notes", "delta.txt"), "utf8")).toBe("DELTA\n");
@@ -386,6 +391,8 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     });
 
     expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(isolationDisabled(run), "the run had no workspace leases").toEqual([]);
+    expect(readdirSync(run.leaseRoot), "a lease was never released").toEqual([]);
     expect(run.violations).toEqual([]);
     expect(run.served).toEqual(RECOVERY_SCRIPT.map((s) => s.step));
 
@@ -398,6 +405,8 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     ]);
     expect(run.toolResults[0]?.content).toMatch(/^Error: Path resolves outside the project directory/);
     expect(existsSync(join(run.project, "..", "outside"))).toBe(false);
+    // The worker writes in a lease, so an escape that got through would land beside it.
+    expect(existsSync(join(run.leaseRoot, "outside"))).toBe(false);
 
     // The work reached the project.
     expect(readFileSync(join(run.project, "notes", "alpha.txt"), "utf8")).toBe("ALPHA\n");

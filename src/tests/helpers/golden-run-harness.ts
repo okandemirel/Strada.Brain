@@ -25,11 +25,16 @@
  *   framework-vault-targets offers no target. A run that leaves a `.strada*`
  *   entry in the working directory names it in `strayEntries`.
  *
- * Left out: workspace leases. Under vitest a WorkspaceLeaseManager refuses
- * the default lease root, which is shared with a live daemon, and bootstrap
- * gives it no other: the background executor runs without isolation ("Workspace
- * isolation disabled" in the log). Workers write the project directly, so no
- * golden run measures how a lease is taken, merged or published.
+ * Kept, with its root moved: workspace leases. Under vitest a
+ * WorkspaceLeaseManager refuses the default lease root, which a live daemon
+ * shares, so each run gives bootstrap a root in its own folder
+ * (WORKSPACE_LEASE_ROOT, read in bootstrap-stages/workspace-lease-setup.ts).
+ * A worker writes into its lease, and its files reach the project only when
+ * the lease is published. Before this, the background executor ran with no
+ * lease ("Workspace isolation disabled" in the log): workers wrote the
+ * project directly, and no golden run measured how a lease is taken, merged
+ * or published. `logged` holds the run's log lines, so a test can say which
+ * of the two happened.
  */
 
 import { vi, afterAll } from "vitest";
@@ -38,11 +43,12 @@ import net from "node:net";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 import winston from "winston";
+import TransportStream from "winston-transport";
 import { loadConfig, type Config } from "../../config/config.js";
 import { ProviderHealthRegistry } from "../../agents/providers/provider-health.js";
 import { TaskStorage } from "../../tasks/task-storage.js";
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
-import { createLogger, getLogRingBuffer } from "../../utils/logger.js";
+import { createLogger, getLogger, getLogRingBuffer } from "../../utils/logger.js";
 import { newRuntimeEntries, runtimeEntriesIn } from "./checkout-runtime-entries.js";
 import { edges, loadScript, resetEdges, type Delivered, type ProviderCall, type ScriptedRun, type Step } from "./golden-run-edges.js";
 import type { CapturedToolResult } from "./mock-provider.js";
@@ -109,6 +115,33 @@ function quietInfoLogger(folder: string): void {
   for (const transport of logger.transports.filter((t) => t instanceof winston.transports.Console)) {
     logger.remove(transport);
   }
+}
+
+/** A line the run logged. */
+export interface LoggedLine {
+  readonly level: string;
+  readonly message: string;
+  readonly meta: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Every line one run logs, from boot to shutdown, and no other run's. The
+ * ring buffer is the process's: it mixes in the earlier runs of the same file
+ * and keeps only the last 500 lines.
+ */
+class RunLog extends TransportStream {
+  readonly lines: LoggedLine[] = [];
+
+  override log(info: { level: string; message: unknown }, callback: () => void): void {
+    const { level, message, timestamp: _timestamp, service: _service, ...meta } = info as Record<string, unknown>;
+    this.lines.push({ level: String(level), message: String(message), meta });
+    callback();
+  }
+}
+
+/** The run's warnings that its lease managers could not be built, so it ran without leases. */
+export function isolationDisabled(run: GoldenOutcome): string[] {
+  return run.logged.map((line) => line.message).filter((message) => message.startsWith("Workspace isolation disabled"));
 }
 
 // ─── Where a stalled run stopped ─────────────────────────────────────────────
@@ -233,6 +266,10 @@ export interface GoldenOutcome {
   /** What each tool reported back to the worker, in order. */
   readonly toolResults: readonly CapturedToolResult[];
   readonly project: string;
+  /** Where the run's workspace leases were made: a folder beside the project. */
+  readonly leaseRoot: string;
+  /** Every line the run logged, from boot to shutdown, in order. */
+  readonly logged: readonly LoggedLine[];
   /** `.strada*` entries the run left in the working directory. */
   readonly strayEntries: readonly string[];
 }
@@ -253,8 +290,13 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
   const folder = join(sandbox(), request.name);
   const project = join(folder, "project");
   const memoryDir = join(folder, "memory");
+  const leaseRoot = join(folder, "leases");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "README.md"), "# A tiny project with no Unity in it\n");
+  // Read when bootstrap builds its lease managers; undone with the file's other stubs.
+  vi.stubEnv("WORKSPACE_LEASE_ROOT", leaseRoot);
+  const runLog = new RunLog();
+  getLogger().add(runLog);
   const entriesBefore = runtimeEntriesIn(workingDir);
   // Provider health is a process singleton: a failure one run recorded must
   // not cool the provider down for the next run in the same file.
@@ -269,6 +311,7 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
   const app = await clock.within("bootstrap", clock.bootAndRunLeft(), booting).catch((error: unknown) => {
     // A boot that finishes after its limit is still shut down.
     void booting.then((late) => late.shutdown()).catch(() => undefined);
+    getLogger().remove(runLog);
     throw error;
   });
   let tasks: Task[] = [];
@@ -301,7 +344,11 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
       store.close();
     }
   } finally {
-    await clock.within("shutdown", BUDGET_MS.shutdown, app.shutdown());
+    try {
+      await clock.within("shutdown", BUDGET_MS.shutdown, app.shutdown());
+    } finally {
+      getLogger().remove(runLog);
+    }
   }
 
   return {
@@ -313,6 +360,8 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
     violations: run.violations,
     toolResults: run.provider.getToolResults(),
     project,
+    leaseRoot,
+    logged: runLog.lines,
     strayEntries: newRuntimeEntries(workingDir, entriesBefore),
   };
 }
