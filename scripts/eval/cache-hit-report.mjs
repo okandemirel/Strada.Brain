@@ -15,12 +15,15 @@
  * - Hit rate = cached input tokens / input tokens, over the calls whose line
  *   reported input tokens. Failed calls carry no usage and are not read.
  * - A line without `cachedInputTokens` counts as zero cached, and is counted
- *   on its own. Since 2026-11-06 the OpenAI-compatible parsers write a miss
- *   the provider reports as `cachedInputTokens: 0`, with `cacheField` naming
- *   the provider's field, so a group of misses rates 0%. A group where no line
- *   carries the field has no rate ("not measured"): its provider sent no cache
- *   field, or its lines predate that change, when a miss also left no field
- *   (and lines written before 75167cd2 never carry it).
+ *   on its own. Since 2026-11-06 the OpenAI-compatible chat parsers, Claude's
+ *   and the ChatGPT Responses stream write a miss the provider reports as
+ *   `cachedInputTokens: 0` (the OpenAI-compatible ones add `cacheField`, the
+ *   provider's field name), so a group of misses rates 0%. A group where no
+ *   line carries the field has no rate ("not measured"), for one of three
+ *   causes: its provider sent no cache field; its parser reads none (as of
+ *   2026-11-06 Gemini's, and Kimi's and MiniMax's outside streaming); or its
+ *   lines predate 2026-11-06, when a miss left no field either (and lines
+ *   written before 75167cd2 never carry it).
  * - The agent loop's "turn" line and the fallback chain's "streaming"/"chat"
  *   line can describe the same call, so no total is summed across labels.
  *
@@ -142,7 +145,7 @@ export function cacheHitReport(calls) {
 
 const NOTES = [
   "hit rate = cached / input tokens over the calls that reported usage; a call without the cache field counts as 0 cached.",
-  "not measured = no call in the group carried cachedInputTokens: the provider sent no cache field, or the lines predate 2026-11-06, when a miss left none either.",
+  "not measured = no call in the group carried cachedInputTokens: the provider sent no cache field, its parser reads none (as of 2026-11-06: gemini, and kimi/minimax outside streaming), or the lines predate 2026-11-06, when a miss left none either.",
   "cache field = the provider's own field name(s) the cached share came in; - when no line named one.",
   '"turn" and the fallback chain\'s "streaming"/"chat" lines can describe the same call: do not add rows across labels.',
 ];

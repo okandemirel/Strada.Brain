@@ -707,12 +707,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         if (eventName === "response.incomplete") {
           incompleteReason = data.response.incomplete_details?.reason ?? "unknown";
         }
-        const cached = data.response.usage?.input_tokens_details?.cached_tokens ?? 0;
+        const cached = data.response.usage?.input_tokens_details?.cached_tokens;
         usage = {
           inputTokens: data.response.usage?.input_tokens ?? 0,
           outputTokens: data.response.usage?.output_tokens ?? 0,
           totalTokens: data.response.usage?.total_tokens ?? 0,
-          ...(cached > 0 ? { cacheReadInputTokens: cached } : {}),
+          ...(typeof cached === "number" ? { cacheReadInputTokens: cached } : {}),
         };
 
         if (!text) {

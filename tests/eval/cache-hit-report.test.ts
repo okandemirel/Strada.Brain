@@ -38,7 +38,7 @@ describe("cache-hit-report", () => {
       log,
       [
         line({ timestamp: "2026-11-05 10:00:00", label: "turn", provider: "opencode", inputTokens: 2000, cachedInputTokens: 1500 }),
-        // The OpenAI-compatible parsers drop the field when nothing was cached.
+        // Before 2026-11-06 a miss left no field on the line.
         line({ timestamp: "2026-11-05 10:01:00", label: "turn", provider: "opencode", inputTokens: 1000 }),
         line({ timestamp: "2026-11-05 10:02:00", label: "streaming", provider: "opencode", inputTokens: 4000 }),
         line({ timestamp: "2026-11-05 10:03:00", label: "turn", provider: "claude", inputTokens: 500, cachedInputTokens: 0 }),
@@ -66,8 +66,9 @@ describe("cache-hit-report", () => {
     expect(text).toContain("do not add rows across labels");
   });
 
-  // Since the OpenAI-compatible parsers keep a reported 0, a run of misses is
-  // 0%, and only a provider that sends no cache field is "not measured".
+  // Since the parsers keep a reported 0, a run of misses is 0%. "Not measured"
+  // still has more causes than a silent provider, and the note must name every
+  // one: a note listing too few blamed Claude's dropped misses on the provider.
   it("rates a group of reported misses 0%, names the cache fields each group's lines came in, and keeps a group with no field unmeasured", () => {
     writeFileSync(
       log,
@@ -91,6 +92,9 @@ describe("cache-hit-report", () => {
     expect(text).toMatch(/turn\s+opencode\s+2\s+2\s+2\s+4,000\s+0\s+0\.0%\s+prompt_cache_hit_tokens\n/);
     expect(text).toMatch(/turn\s+relay\s+.*12\.5%\s+prompt_cache_hit_tokens, prompt_tokens_details\.cached_tokens\n/);
     expect(text).toMatch(/turn\s+silent\s+.*not measured\s+-\n/);
+    expect(text).toContain(
+      "not measured = no call in the group carried cachedInputTokens: the provider sent no cache field, its parser reads none (as of 2026-11-06: gemini, and kimi/minimax outside streaming), or the lines predate 2026-11-06, when a miss left none either.",
+    );
   });
 
   it("--since keeps only the calls logged at or after it", () => {
