@@ -10,7 +10,6 @@ import type { MetricsCollector } from "../../dashboard/metrics.js";
 import type { RateLimiter } from "../../security/rate-limiter.js";
 import type { IEventBus, LearningEventMap } from "../event-bus.js";
 import { IdentityStateManager } from "../../identity/identity-state.js";
-import { InstinctRetriever } from "../../agents/instinct-retriever.js";
 import { GoalDecomposer } from "../../goals/index.js";
 import { ToolRegistry } from "../tool-registry.js";
 import { SoulLoader } from "../../agents/soul/index.js";
@@ -65,7 +64,6 @@ export async function initializeMultiAgentDelegationStage(
     metrics: MetricsCollector;
     ragPipeline?: IRAGPipeline;
     rateLimiter?: RateLimiter;
-    instinctRetriever?: InstinctRetriever;
     metricsRecorder?: MetricsRecorder;
     goalDecomposer?: GoalDecomposer;
     identityManager?: IdentityStateManager;
@@ -131,7 +129,6 @@ export async function initializeMultiAgentDelegationStage(
     streamingEnabled: params.config.streamingEnabled,
     stradaDeps: params.stradaDeps,
     stradaConfig: params.config.strada,
-    instinctRetriever: params.instinctRetriever,
     metricsRecorder: params.metricsRecorder,
     goalDecomposer: params.goalDecomposer,
     getIdentityState: params.identityManager ? () => params.identityManager!.getState() : undefined,

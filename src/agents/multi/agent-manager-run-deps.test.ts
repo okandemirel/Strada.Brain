@@ -107,6 +107,9 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
   /** The shared deps object bootstrap builds; markers so identity can be checked. */
   function sharedDeps(overrides: Partial<SharedOrchestratorDeps> = {}): SharedOrchestratorDeps {
     return {
+      // Not the manager's own eventBus: the run's learning bus comes from here.
+      eventEmitter: { tag: "learning-bus", emit: vi.fn() } as never,
+      instinctRetriever: { tag: "instinct-retriever" } as never,
       trajectoryReplayRetriever: { tag: "trajectory-replay" } as never,
       learningPipeline: { tag: "learning-pipeline" } as never,
       errorLearningHooks: { tag: "error-learning-hooks" } as never,
@@ -179,7 +182,6 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       requireConfirmation: true,
       stradaDeps: { coreInstalled: true } as never,
       memoryConfig: { dimensions: 8, dbBasePath: tmpDir },
-      instinctRetriever: { tag: "instinct-retriever" } as never,
       sharedOrchestratorDeps: shared,
     } satisfies AgentManagerOptions;
     return new AgentManager(options);
@@ -268,6 +270,8 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
     const held = orchestrator as unknown as Record<string, unknown>;
 
     for (const key of [
+      "eventEmitter",
+      "instinctRetriever",
       "learningPipeline",
       "errorLearningHooks",
       "interventionEngine",
