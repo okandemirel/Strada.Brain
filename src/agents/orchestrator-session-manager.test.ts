@@ -484,6 +484,65 @@ describe("SessionManager", () => {
         expect(session.visibleMessages ?? []).not.toContain(m);
       }
     });
+
+    /** Every removed message leaves the visible transcript; every kept visible one stays. */
+    function assertVisibleFollowsTrim(
+      session: { messages: ConversationMessage[]; visibleMessages?: ConversationMessage[] },
+      visibleBefore: ConversationMessage[],
+      removed: ConversationMessage[],
+    ) {
+      expect(removed.length, "the fixture trims messages that were visible").toBeGreaterThan(0);
+      for (const m of removed) {
+        expect(visibleBefore, "a removed message was in the visible transcript").toContain(m);
+        expect(session.visibleMessages ?? []).not.toContain(m);
+      }
+      const keptVisible = visibleBefore.filter((m) => session.messages.includes(m));
+      expect(keptVisible.length).toBeGreaterThan(0);
+      expect(session.visibleMessages).toEqual(keptVisible);
+    }
+
+    it("a hard-cap trim drops the removed messages, before and after the task turn, from the visible transcript", () => {
+      // The fixture above only has the task turn visible, and the hard cap now keeps it, so
+      // that case can no longer fail. Here every message is visible, including an orphaned
+      // tool_result ahead of the task turn, so both removed spans are in the transcript.
+      const sm = new SessionManager(createMockDeps());
+      const session = sm.getOrCreateSession("chat-trim-visible");
+      const visible: ConversationMessage[] = [];
+      const add = (m: ConversationMessage) => { session.messages.push(m); visible.push(m); };
+      add({ role: "user", content: [{ type: "tool_result", tool_use_id: "call-old", content: "stale" }] } as ConversationMessage);
+      add({ role: "user", content: "kick off" });
+      for (let i = 0; i < 12; i++) {
+        add({
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: `call-${i}`, type: "function", function: { name: "t", arguments: "{}" } }],
+        } as ConversationMessage);
+        add({ role: "user", content: [{ type: "tool_result", tool_use_id: `call-${i}`, content: "ok" }] } as ConversationMessage);
+      }
+      session.visibleMessages = [...visible];
+
+      const removed = sm.trimSession(session, 4); // 26 messages, hard cap 8
+
+      expect(session.messages[0]?.content).toBe("kick off");
+      expect(removed).toContain(visible[0]); // the span before the task turn
+      expect(removed).toContain(visible[2]); // the span after it
+      assertVisibleFollowsTrim(session, visible, removed);
+    });
+
+    it("a safe-boundary trim drops the removed messages from the visible transcript", () => {
+      const sm = new SessionManager(createMockDeps());
+      const session = sm.getOrCreateSession("chat-trim-soft");
+      for (let i = 0; i < 6; i++) {
+        sm.appendVisibleUserMessage(session, `user-${i}`);
+        sm.appendVisibleAssistantMessage(session, `assistant-${i}`);
+      }
+      const visibleBefore = [...(session.visibleMessages ?? [])];
+      expect(visibleBefore).toEqual(session.messages);
+
+      const removed = sm.trimSession(session, 4); // under the hard cap: the safe-boundary path
+
+      assertVisibleFollowsTrim(session, visibleBefore, removed);
+    });
   });
 
   it("getPendingPlanReviewVisibleText returns null when no gate", () => {
