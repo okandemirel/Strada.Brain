@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { resumeRejectionDetail } from "./resume-rejection-detail.js";
 import { completedPlanOnResume, dependentClosure, effectiveLeafDependencies, invalidationTargets, stopAfterDeadline } from "./supervisor-brain.js";
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 
@@ -229,5 +230,17 @@ describe("a rejected node takes its dependents with it on the ORDINARY path too 
 
     expect(closure).toEqual(expect.arrayContaining(["b", "c"]));
     expect(closure).not.toContain("d");
+  });
+});
+
+describe("the message of a resume whose re-verification failed", () => {
+  it("names each step by its task text and carries no goal id", () => {
+    const text = resumeRejectionDetail(
+      [{ nodeId: "goal_1793abc" as GoalNodeId, status: "failed", output: "output did not match" } as never],
+      [{ id: "goal_1793abc", task: "Write the level loader" }],
+    );
+    expect(text).not.toContain("goal_");
+    expect(text).toContain("Write the level loader");
+    expect(text).toContain("output did not match");
   });
 });
