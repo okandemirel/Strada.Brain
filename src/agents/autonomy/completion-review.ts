@@ -169,6 +169,7 @@ export function collectCompletionReviewEvidence(params: {
     mutationStepCount,
     recentLogIssues: params.logEntries
       .filter((entry) => isRelevantLogIssue(entry, params.chatId, reviewCutoff))
+      .filter((entry) => !providerDropAnswered(entry, params.state.stepResults))
       .slice(-8),
     verificationState: params.verificationState,
   };
@@ -247,8 +248,43 @@ export function buildAutonomyDeflectionGate(
 
 
 
+/**
+ * When a log line was logged. The cutoff is a millisecond instant and the
+ * string a floored second: read as a time, a line logged in the cutoff's
+ * second fell before it and the same line a second later after it, so the
+ * verdict moved with the clock (measured 2026-11-11: a golden run with 1.2 s
+ * per provider call was asked for a targeted repro on every run). The string
+ * is read only for an entry that carries no millisecond stamp.
+ */
+function logEntryMs(entry: LogEntry): number {
+  return entry.timestampMs ?? Date.parse(entry.timestamp);
+}
+
+/**
+ * What the orchestrator logs when a provider call drops (orchestrator.ts: the
+ * turn's stream, then its non-streaming fallback). A drop is the provider's
+ * failure, not the work's: there is no failing path in the project to re-run.
+ */
+const PROVIDER_DROP_MESSAGES: ReadonlySet<string> = new Set([
+  "Silent stream error",
+  "Silent stream fallback chat failed",
+]);
+
+/**
+ * A provider drop that a later call has answered: a step succeeded after it,
+ * so the provider answered again and the work went on. The run's failure
+ * ledger already gives the next turn its notice of the drop. A drop nothing
+ * succeeded after still counts: the answer under review may rest on a turn
+ * that never came back. Same shape as refusalRetriedOk for tool steps.
+ */
+function providerDropAnswered(entry: LogEntry, steps: readonly StepResult[]): boolean {
+  if (!PROVIDER_DROP_MESSAGES.has(entry.message)) return false;
+  const droppedAt = logEntryMs(entry);
+  return steps.some((step) => step.success && step.timestamp > droppedAt);
+}
+
 function isRelevantLogIssue(entry: LogEntry, chatId: string, cutoffMs: number): boolean {
-  const timestampMs = Date.parse(entry.timestamp);
+  const timestampMs = logEntryMs(entry);
   if (!Number.isFinite(timestampMs) || timestampMs < cutoffMs) {
     return false;
   }
