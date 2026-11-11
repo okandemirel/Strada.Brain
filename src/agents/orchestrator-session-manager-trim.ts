@@ -28,6 +28,15 @@ function isValidHead(msg: ConversationMessage): boolean {
     && msg.content.some((b) => (b as { type?: string })?.type === "tool_result"));
 }
 
+/** Removed messages leave the visible transcript too. */
+function dropFromVisible(session: TrimmableSession, removed: ConversationMessage[]): ConversationMessage[] {
+  if (removed.length > 0 && session.visibleMessages?.length) {
+    const removedSet = new Set(removed);
+    session.visibleMessages = session.visibleMessages.filter((message) => !removedSet.has(message));
+  }
+  return removed;
+}
+
 /**
  * Trim session history to keep context manageable.
  * Trims at safe boundaries to avoid orphaning tool_use/tool_result pairs.
@@ -48,16 +57,7 @@ export function trimSessionMessages(session: TrimmableSession, maxMessages: numb
     while (session.messages.length > 0 && !isValidHead(session.messages[0]!)) {
       allRemoved.push(session.messages.shift()!);
     }
-    if (allRemoved.length === 0) {
-      return allRemoved;
-    }
-    if (session.visibleMessages?.length) {
-      const removedSet = new Set(allRemoved);
-      session.visibleMessages = session.visibleMessages.filter(
-        (message) => !removedSet.has(message),
-      );
-    }
-    return allRemoved;
+    return dropFromVisible(session, allRemoved);
   };
 
   // Find a safe trim boundary that does NOT orphan tool_call/tool_result pairs.
@@ -97,16 +97,25 @@ export function trimSessionMessages(session: TrimmableSession, maxMessages: numb
       size: session.messages.length,
       hardCap,
     });
-    // Find the first complete pair boundary (user message after a tool_result)
-    for (let i = 1; i < overflow; i++) {
-      const msg = session.messages[i]!;
-      const prev = session.messages[i - 1]!;
-      if (msg.role === "user" && prev.role === "user") {
-        return trimMessages(i);
+    // Keep the task turn — the first message a history may start on — and drop the
+    // oldest whole turns after it, cutting just before an assistant turn so every
+    // kept tool_result still follows its tool_use. Cutting at the overflow index
+    // instead left a tool_result head that the repair shifted off, then the
+    // assistant turn, and so on until a pure tool loop had no history at all
+    // (board #30): the next call carried neither the task nor the tool results.
+    const anchor = session.messages.findIndex(isValidHead);
+    if (anchor >= 0) {
+      const firstKept = Math.max(session.messages.length - (maxMessages - 1), anchor + 1);
+      for (let cut = firstKept; cut < session.messages.length; cut++) {
+        if (session.messages[cut]!.role !== "assistant") continue;
+        // In place, like trimMessages: callers hold this array, not the session.
+        const between = session.messages.splice(anchor + 1, cut - anchor - 1);
+        const before = session.messages.splice(0, anchor);
+        return dropFromVisible(session, [...before, ...between]);
       }
     }
-    // Last resort: trim at overflow. trimMessages repairs the head, so this
-    // no longer orphans a tool_result or leaves an assistant turn leading.
+    // Last resort (no task turn, or no assistant turn to cut before): trim at
+    // overflow. trimMessages repairs the head, so this never orphans a tool_result.
     return trimMessages(overflow);
   }
 
