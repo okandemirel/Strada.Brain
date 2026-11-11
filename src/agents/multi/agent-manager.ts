@@ -28,7 +28,6 @@ import type { MetricsCollector } from "../../dashboard/metrics.js";
 import type { IRAGPipeline } from "../../rag/rag.interface.js";
 import type { RateLimiter } from "../../security/rate-limiter.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
-import type { InstinctRetriever } from "../../agents/instinct-retriever.js";
 import type { MetricsRecorder } from "../../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../../goals/goal-decomposer.js";
 import type { IdentityState } from "../../identity/identity-state.js";
@@ -80,10 +79,14 @@ interface ToolRegistryLike {
 /**
  * Root-orchestrator dependencies that are the same for every orchestrator
  * that runs a chat turn. Every key is required, so bootstrap cannot build the
- * object without deciding each one; a dependency added here reaches the root
- * and every per-agent orchestrator at once.
+ * object without deciding each one; a dependency added here reaches the root,
+ * every per-agent orchestrator and every delegated one at once. The learning
+ * bus and the instinct retriever were passed beside it, so a delegated run
+ * emitted no tool result to learning and retrieved no instinct.
  */
 type SharedOrchestratorDepKey =
+  | "eventEmitter"
+  | "instinctRetriever"
   | "trajectoryReplayRetriever"
   | "learningPipeline"
   | "errorLearningHooks"
@@ -181,7 +184,6 @@ export interface AgentManagerOptions {
   readonly streamingEnabled?: boolean;
   readonly stradaDeps: StradaDepsStatus;
   readonly stradaConfig?: Partial<StradaDependencyConfig>;
-  readonly instinctRetriever?: InstinctRetriever;
   readonly metricsRecorder?: MetricsRecorder;
   readonly goalDecomposer?: GoalDecomposer;
   readonly getIdentityState?: () => IdentityState;
@@ -857,8 +859,6 @@ export class AgentManager {
       streamingEnabled: this.opts.streamingEnabled,
       stradaDeps: this.opts.stradaDeps,
       stradaConfig: this.opts.stradaConfig,
-      instinctRetriever: this.opts.instinctRetriever,
-      eventEmitter: this.eventBus,
       metricsRecorder: this.opts.metricsRecorder,
       goalDecomposer: this.opts.goalDecomposer,
       getIdentityState: this.opts.getIdentityState,
