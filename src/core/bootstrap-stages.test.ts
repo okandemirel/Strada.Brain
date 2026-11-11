@@ -1167,7 +1167,6 @@ describe("bootstrap-stages", () => {
       metrics: { _tag: "metrics" } as any,
       ragPipeline: { _tag: "rag" } as any,
       rateLimiter: { _tag: "rate-limiter" } as any,
-      instinctRetriever: { _tag: "instincts" } as any,
       metricsRecorder: { _tag: "metrics-recorder" } as any,
       goalDecomposer: { _tag: "goal-decomposer" } as any,
       identityManager: {
