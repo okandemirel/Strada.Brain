@@ -561,7 +561,9 @@ export async function portHandlePlanPhase(
     if (phase === AgentPhase.PLANNING && taskManager) {
       const goalBlock = parseGoalBlock(params.responseText ?? "");
       if (goalBlock && goalBlock.isGoal) {
-        const lastUserContent = deps.sessionManager.extractLastUserContent(runCtx.session);
+        // The person's content, as lastUserMessage is their text: after a tool turn the raw last
+        // user turn is the tool-result turn, whose tool_result read as rich input (no goal tree).
+        const lastUserContent = deps.sessionManager.extractLastUserContent(runCtx.session, true);
         const lastUserHasRichInput =
           (runCtx.attachments?.length ?? 0) > 0 ||
           (Array.isArray(lastUserContent) && lastUserContent.some((b) => b.type !== "text"));
