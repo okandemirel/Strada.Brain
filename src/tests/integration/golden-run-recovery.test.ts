@@ -13,6 +13,8 @@
  * 2. The supervisor throws. The orchestrator catches it and one worker runs
  *    the request. What the user is told about it is pinned.
  * 3. Everything fails once. The planner answers in prose and is asked again;
+ *    a node names four writes while planning, which the phase gate refuses
+ *    and its verifier is not shown as tool errors;
  *    a node's write is refused for its target, and the node writes the right
  *    path and finishes; the provider drops two calls of the next node, which
  *    is asked again at once without streaming and then on its next turn.
@@ -55,6 +57,8 @@ import {
 } from "../helpers/golden-run-harness.js";
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
 import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
+import { AgentPhase } from "../../agents/agent-state.js";
+import { phaseWriteRefusal } from "../../agent-core/engine/phase-write-access.js";
 
 // ─── Script pieces ───────────────────────────────────────────────────────────
 
@@ -172,6 +176,28 @@ function verifyStep(node: string, done: string): Step {
   };
 }
 
+/**
+ * The node verifier is shown the node's tool errors, at most four of them. A write the phase
+ * gate refused ran nothing and is not one; a write the tool itself refused is.
+ * Measured 2026-11-11 (QA): four writes refused while planning took all four places, and a
+ * real failure after them was not shown.
+ */
+function verifyShowsToolErrors(node: string, done: string, shows: string, hides: string): Step {
+  const base = verifyStep(node, done);
+  return {
+    ...base,
+    check: (call) => {
+      const prompt = textOf(call.messages.at(-1));
+      const errors = prompt.split("Tool errors:\n")[1] ?? "";
+      return requires([
+        base.check(call),
+        !errors.includes(shows) && `the verifier's tool errors do not show "${shows}"`,
+        prompt.includes(hides) && `the verifier is shown "${hides.slice(0, 60)}…"`,
+      ]);
+    },
+  };
+}
+
 // ─── Run 1: a short request ──────────────────────────────────────────────────
 
 /** Under 60 characters: the classifier rates it simple, so no supervisor is asked and no plan is decomposed. */
@@ -227,6 +253,10 @@ const BETA_DONE = "Wrote notes/beta.txt.";
 const RECOVERY_ANSWER = `${ALPHA_DONE}\n\n${BETA_DONE}`;
 /** Outside the project: file_write refuses it, and the worker must read the refusal and write again. */
 const ESCAPING_PATH = "../outside/alpha.txt";
+/** Writes alpha's planner names while planning: each is refused, and none runs. */
+const ALPHA_PLANNED_WRITES = [1, 2, 3, 4].map((n) => writeCall(`call_alpha_plan_${n}`, "notes/alpha.txt", "ALPHA\n"));
+/** What the phase gate answers a write called while planning. */
+const PLANNING_REFUSAL = phaseWriteRefusal(AgentPhase.PLANNING);
 /** The provider drops two of beta's calls in a row, the way a busy upstream does. */
 const PROVIDER_DROP = "503 Service Unavailable: the upstream is overloaded";
 /** What the session is told when a turn's every attempt dropped. */
@@ -239,9 +269,15 @@ const RECOVERY_SCRIPT: readonly Step[] = [
     "I would split this in two: first write alpha, then write beta."),
   decomposeStep("decompose again, told why the first answer was refused", RECOVERY_REQUEST,
     twoNodes(NODE_ALPHA, NODE_BETA), true),
-  planStep("alpha: plan", NODE_ALPHA),
+  // The planner names four writes in its planning turn. The phase gate refuses each one, and
+  // nothing runs: the refusals are answered and leave no failure behind (see alpha: verify).
+  {
+    ...planStep("alpha: plan, naming four writes", NODE_ALPHA),
+    reply: { text: "Plan: write notes/alpha.txt with file_write, then report.", toolCalls: ALPHA_PLANNED_WRITES, stopReason: "tool_use" },
+  },
   actStep("alpha: act, on a path outside the project", NODE_ALPHA,
-    [writeCall("call_alpha_escape", ESCAPING_PATH, "ALPHA\n")]),
+    [writeCall("call_alpha_escape", ESCAPING_PATH, "ALPHA\n")],
+    (call) => ALPHA_PLANNED_WRITES.map((w) => carriesResult(call, w.id)).find(Boolean) ?? false),
   actStep("alpha: act again, after reading the refusal", NODE_ALPHA,
     [writeCall("call_alpha_fixed", "notes/alpha.txt", "ALPHA\n")],
     (call) => carriesResult(call, "call_alpha_escape")),
@@ -266,7 +302,7 @@ const RECOVERY_SCRIPT: readonly Step[] = [
   reportStep("beta: report", NODE_BETA, ["call_beta"], BETA_DONE),
   // Cheapest node first (ResultAggregator): beta answered in three calls, alpha in four.
   verifyStep("beta", BETA_DONE),
-  verifyStep("alpha", ALPHA_DONE),
+  verifyShowsToolErrors("alpha", ALPHA_DONE, "- Error: Path resolves outside the project directory", PLANNING_REFUSAL),
 ];
 
 // ─── Run 4: a write fails at run time ────────────────────────────────────────
@@ -440,13 +476,20 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(run.violations).toEqual([]);
     expect(run.served).toEqual(RECOVERY_SCRIPT.map((s) => s.step));
 
-    // What each tool reported back: the refusal first, then every write.
+    // What each call was answered: the planning turn's four writes refused by the phase gate,
+    // then the tool's own refusal of the escaping path, then every write.
     expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
+      ...ALPHA_PLANNED_WRITES.map((w) => ({ id: w.id, isError: true })),
       { id: "call_alpha_escape", isError: true },
       { id: "call_alpha_fixed", isError: false },
       { id: "call_beta", isError: false },
     ]);
-    expect(run.toolResults[0]?.content).toMatch(/^Error: Path resolves outside the project directory/);
+    for (const w of ALPHA_PLANNED_WRITES) {
+      expect(run.toolResults.find((r) => r.toolCallId === w.id)?.content).toBe(PLANNING_REFUSAL);
+    }
+    expect(run.toolResults.find((r) => r.toolCallId === "call_alpha_escape")?.content).toMatch(
+      /^Error: Path resolves outside the project directory/,
+    );
     expect(existsSync(join(run.project, "..", "outside"))).toBe(false);
     // The worker writes in a lease, so an escape that got through would land beside it.
     expect(existsSync(join(run.leaseRoot, "outside"))).toBe(false);

@@ -123,6 +123,9 @@ export interface AgentCoreToolTurnResult {
     success: boolean;
     errorCategory?: string;
     touchedFiles?: readonly string[];
+    resultText?: string;
+    /** A write the phase gate refused: nothing ran, so it is no tool of the run (./phase-write-access.ts). */
+    refused?: boolean;
   }>;
   readonly advancedState: AgentState;
   readonly progressSignal?: TaskProgressSignal;
@@ -439,6 +442,7 @@ export async function portExecuteToolTurn(
         // mechanical red/green gate — read empty evidence on EVERY run
         // (audited 2026-09-02: tasks.verification_json was never written).
         resultText: typeof tr?.content === "string" ? tr.content.slice(0, 4000) : "",
+        ...(isPhaseWriteRefusal(tr) ? { refused: true } : {}),
       };
     });
 

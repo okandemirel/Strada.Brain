@@ -22,7 +22,8 @@ export function createLearningBridgeSink(sessionId: string, learning: IEventEmit
   return {
     id: "learning-bridge",
     deliver(e) {
-      if (e.type === "tool.finished") {
+      // A write the phase gate refused ran nothing: no result to learn from.
+      if (e.type === "tool.finished" && e.refused !== true) {
         learning.emit("tool:result", {
           sessionId,
           toolName: e.toolName,

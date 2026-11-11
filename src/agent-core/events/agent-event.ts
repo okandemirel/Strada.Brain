@@ -124,6 +124,8 @@ export interface ToolFinishedEvent extends AgentEventBase {
   readonly success: boolean;
   readonly errorCategory?: string;
   readonly touchedFiles?: readonly string[];
+  /** The phase gate refused this write: it ran nothing (agent-core/engine/phase-write-access.ts). */
+  readonly refused?: boolean;
 }
 
 // ── Control ──────────────────────────────────────────────────────────────────
