@@ -1,8 +1,10 @@
 /**
  * The one call from the end-turn and reflection handlers into loop recovery.
  *
- * Both handlers hand loop recovery the same run state from their contexts; the
- * background call differs only in daemon mode, which the caller states.
+ * Both handlers hand loop recovery the same run state from their contexts,
+ * the calling run's scope among it, so a delegate loop recovery starts runs
+ * inside that run. The background call differs only in daemon mode, which the
+ * caller states.
  */
 
 import {
@@ -31,6 +33,8 @@ export interface InteractiveLoopRecoveryCaller {
   readonly progressAssessmentEnabled?: boolean;
   readonly taskStartedAtMs: number;
   readonly interventionDeps: InterventionDeps;
+  /** The calling run's scope, lent to a loop-recovery delegate (see ParentRunScope). */
+  readonly parentRun?: RecoveryParams["parentRun"];
 }
 
 /** What a background handler context carries for loop recovery. */
@@ -73,6 +77,7 @@ export async function runBgLoopRecovery(
     session: ctx.session,
     workerCollector: ctx.workerCollector,
     workspaceLease: ctx.workspaceLease,
+    parentRun: ctx.parentRun,
     daemonMode,
     progressAssessmentEnabled: ctx.progressAssessmentEnabled,
     taskStartedAtMs: ctx.taskStartedAtMs,
@@ -108,6 +113,7 @@ export async function runInteractiveLoopRecovery(
     usageHandler: ctx.usageHandler,
     onProgress: () => {},
     session: ctx.session,
+    parentRun: ctx.parentRun,
     progressAssessmentEnabled: ctx.progressAssessmentEnabled,
     taskStartedAtMs: ctx.taskStartedAtMs,
   }, ctx.interventionDeps);

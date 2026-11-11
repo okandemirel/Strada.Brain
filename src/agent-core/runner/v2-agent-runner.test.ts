@@ -665,6 +665,49 @@ describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing
     );
   });
 
+  it("hands the reflection dispatch the same run scope its tool turns get (loop recovery's delegate runs inside the run)", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "plan", stopReason: "end_turn" }),
+        mkResponse({ text: "", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "edit_file", input: {} }] }),
+        mkResponse({ text: "DONE", stopReason: "end_turn" }),
+      ]),
+    );
+    const port = mkPort(provider, {
+      planTransitionTo: AgentPhase.EXECUTING,
+      toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true }],
+      reflectionDecision: { decision: "DONE", wasOverride: false },
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    const toolTurnScope = port.spies.executeToolCalls.mock.calls[0]![4];
+    expect(toolTurnScope).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(port.spies.dispatchReflection.mock.calls[0]![0].runScope).toBe(toolTurnScope);
+  });
+
+  it("hands the end-turn dispatch the run's scope", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "plan", stopReason: "end_turn" }),
+        mkResponse({ text: "All done.", stopReason: "end_turn" }),
+      ]),
+    );
+    const port = mkPort(provider, { planTransitionTo: AgentPhase.EXECUTING });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(port.spies.dispatchEndTurn).toHaveBeenCalled();
+    const scope = port.spies.dispatchEndTurn.mock.calls[0]![0].runScope;
+    expect(scope).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal), budget: expect.anything() }));
+  });
+
   /**
    * Audit 01.1 (2026-09-13), plan 0-A.1: the reflection dispatch's blocked
    * branch reports reason "blocked" (NOT DELIVERED / loop-detected stop) but

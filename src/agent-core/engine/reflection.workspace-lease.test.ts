@@ -109,3 +109,32 @@ describe("V2 loop recovery runs in the run's own workspace", () => {
     expect(bgEndTurn.mock.calls[0]![1].workspaceLease).toBeUndefined();
   });
 });
+
+describe("V2 loop recovery runs inside the calling run", () => {
+  const runScope = { signal: new AbortController().signal } as never;
+
+  beforeEach(() => {
+    bgEndTurn.mockReset();
+    bgReflectionDone.mockReset();
+    bgReflectionContinue.mockReset();
+  });
+
+  it("the end-turn context carries the run's scope", async () => {
+    bgEndTurn.mockResolvedValue({ flow: "done", newState: createInitialState("x"), visibleText: "ok" } as never);
+
+    await portDispatchEndTurn(deps(), params({ runScope }), runCtx(lease));
+
+    expect(bgEndTurn.mock.calls[0]![1].parentRun).toBe(runScope);
+  });
+
+  it("the reflection context carries the run's scope, on DONE and on CONTINUE", async () => {
+    bgReflectionDone.mockResolvedValue({ flow: "done", newState: createInitialState("x"), visibleText: "ok" } as never);
+    bgReflectionContinue.mockResolvedValue({ flow: "continue", newState: createInitialState("x") } as never);
+
+    await portDispatchReflection(deps(), params({ decision: "DONE", runScope }), runCtx(lease));
+    await portDispatchReflection(deps(), params({ decision: "CONTINUE", runScope }), runCtx(lease));
+
+    expect(bgReflectionDone.mock.calls[0]![1].parentRun).toBe(runScope);
+    expect(bgReflectionContinue.mock.calls[0]![1].parentRun).toBe(runScope);
+  });
+});

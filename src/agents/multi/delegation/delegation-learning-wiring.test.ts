@@ -346,14 +346,18 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
       const rows = storage.getTaskMetrics({});
       const parent = rows.filter((row) => row.sessionId === "parent-chat");
       expect(parent).toEqual([expect.objectContaining({ taskType: "background", parentTaskId: undefined })]);
-      // The run's loop recovery also delegates a review, through executeToolCalls with no run
-      // scope: no parent id, so it records nothing rather than a 'background' row.
+      // The run's loop recovery also delegates a review, inside the same run: its row is a
+      // subtask of the same parent too.
       const delegated = rows.filter((row) => row.sessionId.startsWith("delegation-"));
-      expect(delegated).toEqual([expect.objectContaining({ taskType: "subtask", parentTaskId: parent[0]!.id })]);
-      expect(rows).toHaveLength(2);
-      // The parent task is counted once; its subtask is counted apart.
+      expect(delegated).toEqual([
+        expect.objectContaining({ taskType: "subtask", parentTaskId: parent[0]!.id }),
+        expect.objectContaining({ taskType: "subtask", parentTaskId: parent[0]!.id }),
+      ]);
+      expect(delegated.filter((row) => row.taskDescription.includes("Task: Check the north anemometer reading"))).toHaveLength(1);
+      expect(rows).toHaveLength(3);
+      // The parent task is counted once; its subtasks are counted apart.
       expect(storage.getAggregation({}).totalTasks).toBe(1);
-      expect(storage.getAggregation({ taskType: "subtask" }).totalTasks).toBe(1);
+      expect(storage.getAggregation({ taskType: "subtask" }).totalTasks).toBe(2);
     } finally {
       storage.close();
     }

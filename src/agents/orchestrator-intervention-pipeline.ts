@@ -15,6 +15,7 @@
  *   resolveDraftClarificationIntervention, resolveVisibleDraftDecision
  */
 
+import type { ParentRunScope } from "../agent-core/runner/agent-runner.js";
 import type { AgentState } from "./agent-state.js";
 import type {
   ToolCall,
@@ -126,6 +127,8 @@ export interface ToolExecutionOptions {
   projectPathOverride?: string;
   workingDirectoryOverride?: string;
   workspaceLease?: WorkspaceLease;
+  signal?: AbortSignal;
+  parentRun?: ParentRunScope;
 }
 
 // ─── InterventionDeps ─────────────────────────────────────────────────────────
@@ -440,6 +443,9 @@ async function executeLoopRecoveryDelegation(
     session: Session;
     workerCollector?: WorkerRunCollector;
     workspaceLease?: WorkspaceLease;
+    /** The calling run's scope: the delegate is cancelled with it, carved from its budget, bounded
+     *  by its clock and recorded as its subtask. */
+    parentRun?: ParentRunScope;
   },
   deps: InterventionDeps,
   options: {
@@ -497,6 +503,8 @@ async function executeLoopRecoveryDelegation(
     agentState: params.state,
     touchedFiles: options.touchedFiles,
     workspaceLease: params.workspaceLease,
+    signal: params.parentRun?.signal,
+    parentRun: params.parentRun,
   });
   const toolResult = toolResults[0];
   const delegatedWorkerResult = toolResult?.metadata?.["workerResult"] as WorkerRunResult | undefined;
@@ -683,6 +691,7 @@ async function decideBackgroundLoopRecovery(
     session: Session;
     workerCollector?: WorkerRunCollector;
     workspaceLease?: WorkspaceLease;
+    parentRun?: ParentRunScope;
     daemonMode?: boolean;
     maxRecoveryEpisodes?: number;
     progressAssessmentEnabled?: boolean;

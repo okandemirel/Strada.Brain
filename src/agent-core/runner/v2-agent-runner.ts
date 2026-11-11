@@ -790,6 +790,7 @@ export class V2AgentRunner implements AgentRunner {
               responseText,
               chatId: request.chatId,
               session: setup.session,
+              runScope,
             });
             state = refl.agentState;
             // step5-parity: the dispatched handler runs the verifier/visibility interventions and
@@ -882,6 +883,7 @@ export class V2AgentRunner implements AgentRunner {
             responseText,
             chatId: request.chatId,
             session: setup.session,
+            runScope,
           });
           const prevEndPhase = state.phase;
           state = end.agentState;

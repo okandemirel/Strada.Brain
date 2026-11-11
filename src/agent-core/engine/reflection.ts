@@ -14,6 +14,7 @@
 import { AgentPhase, transitionPhase, type AgentState } from "../../agents/agent-state.js";
 import type { ProviderResponse, ConversationMessage } from "../../agents/providers/provider-core.interface.js";
 import type { Session } from "../../agents/orchestrator-session-manager.js";
+import type { ParentRunScope } from "../runner/agent-runner.js";
 import type { DMPolicy } from "../../security/dm-policy.js";
 import type { TaskUsageEvent, TaskProgressSignal } from "../../tasks/types.js";
 import type { ProgressLanguage } from "../../tasks/progress-signals.js";
@@ -121,6 +122,7 @@ export function buildReflectionCoreContext(
   responseText: string | undefined,
   responseUsage: ProviderResponse["usage"] | undefined,
   toolCallCount: number,
+  parentRun?: ParentRunScope,
 ): ReflectionCoreContext {
   return {
     chatId: runCtx.chatId,
@@ -143,6 +145,7 @@ export function buildReflectionCoreContext(
     recordPhaseOutcome: (p) => recordPhaseOutcome(deps, p),
     buildPhaseOutcomeTelemetry: (p) => buildPhaseOutcomeTelemetryModel(p),
     usageHandler: runCtx.onUsage,
+    parentRun,
   };
 }
 
@@ -204,6 +207,7 @@ export function buildBgEndTurnContext(
     interventionDeps: core.interventionDeps,
     session: core.session,
     usageHandler: core.usageHandler,
+    parentRun: core.parentRun,
     recordPhaseOutcome: core.recordPhaseOutcome,
     buildPhaseOutcomeTelemetry: core.buildPhaseOutcomeTelemetry,
     progressAssessmentEnabled: deps.progressAssessmentEnabled,
@@ -324,7 +328,7 @@ export async function portDispatchReflection(
     await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, writeRejectionText, transcriptLengthBefore);
     return { agentState: params.agentState, terminal: true, reason: "self-managed-write-rejected" };
   }
-  const core = buildReflectionCoreContext(deps, runCtx, params.responseText, undefined, 0);
+  const core = buildReflectionCoreContext(deps, runCtx, params.responseText, undefined, 0, params.runScope);
   let action: ReflectionLoopAction;
 
   if (params.mode === "interactive") {
@@ -484,7 +488,7 @@ export async function portDispatchEndTurn(
       ...blockedTerminal(params.mode),
     };
   }
-  const core = buildReflectionCoreContext(deps, runCtx, params.responseText, undefined, 0);
+  const core = buildReflectionCoreContext(deps, runCtx, params.responseText, undefined, 0, params.runScope);
   const action: EndTurnLoopAction =
     params.mode === "interactive"
       ? await handleInteractiveEndTurn(

@@ -251,6 +251,57 @@ describe("handleBgReflectionDone", () => {
   });
 });
 
+describe("loop recovery from a reflection runs inside the calling run", () => {
+  const parentRun = { signal: new AbortController().signal } as unknown as NonNullable<BgReflectionContext["parentRun"]>;
+
+  it("the background handler hands the run's scope to loop recovery", async () => {
+    const state = makeReflectingState();
+    const ctx = buildMockBgCtx({ responseText: "Still internal.", parentRun });
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    vi.spyOn(originalModule, "resolveDraftClarificationIntervention").mockResolvedValueOnce({
+      kind: "continue",
+      gate: "Continue internally.",
+    } as any);
+    const recoverySpy = vi.spyOn(originalModule, "handleBackgroundLoopRecovery").mockResolvedValueOnce({
+      action: "blocked",
+      message: "Stopped.",
+    } as any);
+
+    await handleBgReflectionDone(state, ctx);
+
+    expect(recoverySpy.mock.calls[0]![0].parentRun).toBe(parentRun);
+    vi.restoreAllMocks();
+  });
+
+  it("the interactive handler hands the run's scope to loop recovery", async () => {
+    const state = makeReflectingState();
+    const ctx = buildMockInteractiveCtx({
+      responseText: "Let me keep going.",
+      progressAssessmentEnabled: false,
+      parentRun,
+      controlLoopTracker: {
+        getConsecutiveTextOnlyGates: vi.fn().mockReturnValue(1),
+        recordGate: vi.fn().mockReturnValue(null),
+        markRecoveryAttempt: vi.fn().mockReturnValue(1),
+        hardCapReplan: 5,
+        hardCapBlock: 8,
+      } as unknown as InteractiveReflectionContext["controlLoopTracker"],
+    });
+    const response = buildMockProviderResponse({ toolCalls: [], stopReason: "end_turn", text: "Let me keep going." });
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    const recoverySpy = vi.spyOn(originalModule, "handleBackgroundLoopRecovery").mockResolvedValueOnce({
+      action: "replan",
+      gate: "[LOOP RECOVERY] Use tools now.",
+      summary: "Reflection continue loop detected.",
+    } as any);
+
+    await handleInteractiveReflectionContinue(state, ctx, response);
+
+    expect(recoverySpy.mock.calls[0]![0].parentRun).toBe(parentRun);
+    vi.restoreAllMocks();
+  });
+});
+
 // ─── handleBgReflectionContinue ──────────────────────────────────────────────────
 
 describe("handleBgReflectionContinue", () => {
