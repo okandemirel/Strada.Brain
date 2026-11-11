@@ -273,32 +273,34 @@ function reclaim(path: string, expected: LockOwner | null, why: string, routine 
   }
 }
 
-function breakIfStale(path: string, staleMs: number): void {
+/** Breaks the lock when its holder is gone or it is stale; true when the path was vacated. */
+function breakIfStale(path: string, staleMs: number): boolean {
   try {
     const owner = readOwner(path);
     const alive = holderIsAlive(owner);
     if (alive === false) {
       // THE HOLDER IS GONE. Waiting out the stale window for a process that
       // no longer exists is what wrote into the project unlocked.
-      reclaim(path, owner, "Breaking project write lock — its holder is gone");
-      return;
+      return reclaim(path, owner, "Breaking project write lock — its holder is gone") === "settled";
     }
-    if (alive === true) return; // a live holder keeps its lock, however long the work takes
+    if (alive === true) return false; // a live holder keeps its lock, however long the work takes
     const age = Date.now() - statSync(join(path, "owner")).mtimeMs;
     if (age > staleMs) {
-      reclaim(path, owner, "Breaking stale project write lock");
+      return reclaim(path, owner, "Breaking stale project write lock") === "settled";
     }
+    return false;
   } catch {
     // No owner file (an older holder, or a failed write): fall back to the
     // directory's own age.
     try {
       const age = Date.now() - statSync(path).mtimeMs;
       if (age > staleMs) {
-        reclaim(path, null, "Breaking stale project write lock (no owner file)");
+        return reclaim(path, null, "Breaking stale project write lock (no owner file)") === "settled";
       }
     } catch {
       // Vanished between the failed take and the stat — that's a release.
     }
+    return false;
   }
 }
 
@@ -322,6 +324,7 @@ export async function acquireProjectWriteLock(
 
   const deadline = Date.now() + timeoutMs;
   const token = randomUUID();
+  let lastChanceTaken = false;
   for (;;) {
     if (tryTakeLock(path, token)) {
       processState().held.add(token);
@@ -372,8 +375,16 @@ export async function acquireProjectWriteLock(
         },
       };
     }
-    breakIfStale(path, staleMs);
+    const vacated = breakIfStale(path, staleMs);
     if (Date.now() >= deadline) {
+      // THE WRITER THAT BROKE THE LOCK TAKES IT. A reclaim that vacated the
+      // path as the time ran out used to fall straight through to "proceed
+      // unlocked", leaving the lock free for another writer to take beside
+      // this one. One more take, never more, so the loop still ends.
+      if (vacated && !lastChanceTaken) {
+        lastChanceTaken = true;
+        continue;
+      }
       getLoggerSafe().warn(
         "Project write lock not acquired within timeout — proceeding UNLOCKED",
         { path, timeoutMs },
