@@ -16,6 +16,7 @@ is.
 | [governance](governance.md) | The files that enforce the rules: the commit checker, hooks, workflows, contracts | Before changing the checker, a hook, a workflow, a contract or src/contracts.test.ts; when the checker prints 'governed file changed' |
 | [clean-checkout](clean-checkout.md) | What a test run may leave in the checkout it runs from: no new `.strada…` runtime entry at its root | A test builds a config, store, vault or lock from defaults or a hand-made env; a test resolves a runtime path against `process.cwd()`; when the worker setup fails a file with 'left … in the checkout it runs from' |
 | [dist-readers](dist-readers.md) | Tests that read, run or import this repository's compiled `dist/`: each fails asking for `npm run build`, the phrase the gates' build step selects readers by | Writing a test that reads a file under the repository's `dist/`; changing `READS_BUILD` in `scripts/ci/dist-build.mjs`; when `src/tests/dist-readers.test.ts` names a file |
+| [wall-clock-assertions](wall-clock-assertions.md) | Tests that assert an upper bound on wall-clock time they measured (pinned per file, only goes down), and gates detectors that walk the repository inside a test (each carries its own limit) | Writing `expect(Date.now() - t).toBeLessThan(…)` or any assertion on how long something took; adding a detector to `DETECTORS` in `scripts/ci/gates.mjs`; when `src/tests/wall-clock-assertions.test.ts` names a file; a test fails with 'Test timed out' on a loaded machine |
 
 ## Adding a contract
 
