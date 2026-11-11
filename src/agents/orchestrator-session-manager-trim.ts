@@ -6,6 +6,7 @@
 import type { ConversationMessage } from "./providers/provider.interface.js";
 import type { AssistantMessage } from "./providers/provider-core.interface.js";
 import { getLogger } from "../utils/logger.js";
+import { lastTaskTurnIndex } from "./orchestrator-session-manager-task-turn.js";
 
 /** The part of a Session that trimming reads and rewrites. */
 export interface TrimmableSession {
@@ -38,8 +39,35 @@ function dropFromVisible(session: TrimmableSession, removed: ConversationMessage
 }
 
 /**
+ * A user turn the soft trim may cut at: plain text (not a tool_result array), and not
+ * right after an assistant turn with tool_calls — cutting there could orphan them.
+ */
+function isSafeBoundary(messages: readonly ConversationMessage[], i: number): boolean {
+  const msg = messages[i]!;
+  if (msg.role !== "user" || typeof msg.content !== "string") return false;
+  const prev = i > 0 ? messages[i - 1]! : undefined;
+  return !(prev?.role === "assistant" && (prev as AssistantMessage).tool_calls?.length);
+}
+
+function firstSafeBoundary(messages: readonly ConversationMessage[], from: number, to: number): number {
+  for (let i = from; i <= to; i++) if (isSafeBoundary(messages, i)) return i;
+  return -1;
+}
+
+/**
+ * Keep `messages[anchor]` as the head and drop everything before it and the whole
+ * turns between it and `cut`. In place: callers hold this array, not the session.
+ */
+function keepAnchorAndCut(session: TrimmableSession, anchor: number, cut: number): ConversationMessage[] {
+  const between = session.messages.splice(anchor + 1, cut - anchor - 1);
+  const before = session.messages.splice(0, anchor);
+  return dropFromVisible(session, [...before, ...between]);
+}
+
+/**
  * Trim session history to keep context manageable.
- * Trims at safe boundaries to avoid orphaning tool_use/tool_result pairs.
+ * Trims at safe boundaries to avoid orphaning tool_use/tool_result pairs, and keeps
+ * the run's task turn (the newest TaskTurn) in the history.
  * Returns the trimmed (removed) messages for persistence.
  */
 export function trimSessionMessages(session: TrimmableSession, maxMessages: number): ConversationMessage[] {
@@ -60,33 +88,20 @@ export function trimSessionMessages(session: TrimmableSession, maxMessages: numb
     return dropFromVisible(session, allRemoved);
   };
 
-  // Find a safe trim boundary that does NOT orphan tool_call/tool_result pairs.
-  // A safe boundary is a user message with plain string content (not a tool_result array)
-  // that is NOT immediately preceded by an assistant message with tool_calls.
-  let trimTo = 0;
-  for (let i = overflow; i < session.messages.length; i++) {
-    const msg = session.messages[i]!;
-
-    // Must be a plain user message (string content, not tool_result array)
-    if (msg.role !== "user") continue;
-    if (typeof msg.content !== "string") continue;
-
-    // Check the previous message — if it's an assistant with tool_calls,
-    // this user message might be a tool_result response (content mismatch
-    // but we need to be safe). Only trim if the previous is NOT a tool_call.
-    if (i > 0) {
-      const prev = session.messages[i - 1]!;
-      if (prev.role === "assistant" && (prev as AssistantMessage).tool_calls?.length) {
-        continue; // Skip — trimming here would orphan the tool_calls
-      }
-    }
-
-    trimTo = i;
-    break;
+  // The trim cut by position alone: a plain-text gate after the task became the head, or,
+  // when the task was multimodal (never a safe boundary) or the cap shrank, an older chat
+  // turn did, and the task was dropped (board #58). The task turn is always a valid head.
+  const task = lastTaskTurnIndex(session.messages);
+  if (task >= overflow) {
+    const boundary = firstSafeBoundary(session.messages, overflow, task);
+    return trimMessages(boundary >= 0 ? boundary : task);
   }
 
+  // Find a safe trim boundary that does NOT orphan tool_call/tool_result pairs. When the
+  // task turn is kept in front, it takes one slot, so the kept tail starts one later.
+  const trimTo = firstSafeBoundary(session.messages, task >= 0 ? overflow + 1 : overflow, session.messages.length - 1);
   if (trimTo > 0) {
-    return trimMessages(trimTo);
+    return task >= 0 ? keepAnchorAndCut(session, task, trimTo) : trimMessages(trimTo);
   }
 
   // Fallback: if no safe boundary found and session exceeds hard cap (2x max),
@@ -97,21 +112,18 @@ export function trimSessionMessages(session: TrimmableSession, maxMessages: numb
       size: session.messages.length,
       hardCap,
     });
-    // Keep the task turn — the first message a history may start on — and drop the
-    // oldest whole turns after it, cutting just before an assistant turn so every
+    // Keep the task turn — the run's task, else the first message a history may start on —
+    // and drop the oldest whole turns after it, cutting just before an assistant turn so every
     // kept tool_result still follows its tool_use. Cutting at the overflow index
     // instead left a tool_result head that the repair shifted off, then the
     // assistant turn, and so on until a pure tool loop had no history at all
     // (board #30): the next call carried neither the task nor the tool results.
-    const anchor = session.messages.findIndex(isValidHead);
+    const anchor = task >= 0 ? task : session.messages.findIndex(isValidHead);
     if (anchor >= 0) {
       const firstKept = Math.max(session.messages.length - (maxMessages - 1), anchor + 1);
       for (let cut = firstKept; cut < session.messages.length; cut++) {
         if (session.messages[cut]!.role !== "assistant") continue;
-        // In place, like trimMessages: callers hold this array, not the session.
-        const between = session.messages.splice(anchor + 1, cut - anchor - 1);
-        const before = session.messages.splice(0, anchor);
-        return dropFromVisible(session, [...before, ...between]);
+        return keepAnchorAndCut(session, anchor, cut);
       }
     }
     // Last resort (no task turn, or no assistant turn to cut before): trim at

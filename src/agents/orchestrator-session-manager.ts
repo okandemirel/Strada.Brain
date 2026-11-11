@@ -38,6 +38,7 @@ import { withoutRecalledMemory } from "./recall-ledger.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
 import { getLogger } from "../utils/logger.js";
 import { trimSessionMessages } from "./orchestrator-session-manager-trim.js";
+import { taskTurn } from "./orchestrator-session-manager-task-turn.js";
 import { writeFileAtomic } from "../common/atomic-file.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1066,8 +1067,7 @@ export class SessionManager {
   }
 
   /**
-   * Trim session history to keep context manageable.
-   * Trims at safe boundaries to avoid orphaning tool_use/tool_result pairs.
+   * Trim at safe boundaries, keeping the run's task turn (orchestrator-session-manager-trim.ts).
    * Returns the trimmed (removed) messages for persistence.
    */
   trimSession(session: Session, maxMessages: number): ConversationMessage[] {
@@ -1088,7 +1088,7 @@ export class SessionManager {
   }
 
   appendVisibleUserMessage(session: Session, content: string | MessageContent[]): void {
-    const message: ConversationMessage = { role: "user", content };
+    const message = taskTurn(content);
     session.messages.push(message);
     this.ensureVisibleMessages(session).push(message);
   }
