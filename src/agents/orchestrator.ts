@@ -3205,6 +3205,7 @@ export class Orchestrator {
       synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
       runVisibilityReview: (p) => this.runVisibilityReview(p),
       executeToolCalls: (chatId, toolCalls, opts) => this.executeToolCalls(chatId, toolCalls, opts),
+      phaseRefuses: (toolName, phase) => this.phaseRefuses(toolName, phase),
       getLogRingBuffer: () => typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
       buildStructuredProgressSignal: (prompt, title, signal, lang) => this.buildStructuredProgressSignal(prompt, title, signal, lang),
       isAutonomousActive: (chatId, userId) => this.dmPolicy?.isAutonomousActive(chatId, userId) ?? false,

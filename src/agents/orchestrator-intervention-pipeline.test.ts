@@ -58,6 +58,7 @@ function makeDeps(executeToolCalls = vi.fn(async () => [])): InterventionDeps {
     runCompletionReviewStages: vi.fn(),
     runVisibilityReview: vi.fn(async () => ({ decision: { decision: "allow", reason: "safe to surface" } })),
     executeToolCalls,
+    phaseRefuses: vi.fn(() => false),
     getLogRingBuffer: vi.fn(() => []),
     buildStructuredProgressSignal: vi.fn((_prompt, _title, signal) => signal),
   } as unknown as InterventionDeps;
