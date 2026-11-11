@@ -1,8 +1,9 @@
 /**
  * What each root dependency would change in a delegated run, measured.
  *
- * DelegationManager builds a delegate's Orchestrator without eleven options the
- * root gets (DELEGATE_EXEMPT in agent-manager-run-deps.test.ts). This file
+ * DelegationManager built a delegate's Orchestrator without eleven options the
+ * root gets (DELEGATE_EXEMPT in agent-manager-run-deps.test.ts); the rate
+ * limiter is now a shared dependency, the other ten are still exempt. This file
  * drives the real DelegationManager -> real Orchestrator -> real V2 runner with
  * a scripted provider, once with the delegated construction as it is and once
  * per option with that option added, and pins what the run does with it:
@@ -224,6 +225,8 @@ describe("root dependencies in a delegated run (measured)", () => {
       eventEmitter: bus,
       instinctRetriever: undefined,
       metrics: undefined,
+      // RATE_LIMIT_ENABLED=false (the default): bootstrap builds no limiter.
+      rateLimiter: undefined,
       trajectoryReplayRetriever: undefined,
       learningPipeline: undefined,
       errorLearningHooks: undefined,
