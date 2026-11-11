@@ -251,6 +251,7 @@ import {
 } from "../supervisor/supervisor-feedback.js";
 import { announceSupervisorFallback } from "./orchestrator-supervisor-fallback.js";
 import { SessionManager, replaceProviderFailureNotice, type Session } from "./orchestrator-session-manager.js";
+import { taskTurn } from "./orchestrator-session-manager-task-turn.js";
 import {
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
   resolveAskUserClarificationIntervention as resolveAskUserClarificationInterventionHelper,
@@ -6642,7 +6643,7 @@ export class Orchestrator {
         request.attachments ? [...request.attachments] : undefined, // readonly → mutable for buildUserContent
         supportsVision,
       );
-    const initialUserMessage: ConversationMessage = { role: "user", content: userContent };
+    const initialUserMessage = taskTurn(userContent);
     return {
       messages: [initialUserMessage],
       visibleMessages: [initialUserMessage],
