@@ -113,6 +113,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       instinctRetriever: { tag: "instinct-retriever" } as never,
       metrics: { tag: "dashboard-metrics" } as never,
       rateLimiter: { tag: "rate-limiter" } as never,
+      metricsRecorder: { tag: "task-metrics-recorder" } as never,
       trajectoryReplayRetriever: { tag: "trajectory-replay" } as never,
       learningPipeline: { tag: "learning-pipeline" } as never,
       errorLearningHooks: { tag: "error-learning-hooks" } as never,
@@ -277,6 +278,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       "instinctRetriever",
       "metrics",
       "rateLimiter",
+      "metricsRecorder",
       "learningPipeline",
       "errorLearningHooks",
       "interventionEngine",
@@ -446,9 +448,6 @@ const DELEGATE_EXEMPT: Record<string, string> = {
     "measured: beside the delegate's instinct retriever it re-asks that retriever once five iterations in, and the " +
     "insights it gets are already in the prompt (0 tokens, 0 provider calls, same answer); its memory and RAG " +
     "refreshes need options a delegate does not have",
-  metricsRecorder:
-    "task-metric rows: a delegated run carries no parentMetricId, so every delegation would be recorded as a " +
-    "'background' task and skew the learning stats; needs the parent metric id first; separate work",
   goalDecomposer:
     "measured: one extra LLM call per delegation (+2,562 tokens on a ~13,900-token run), of which the delegation's " +
     "budget is charged 158 because the decomposer reports no usage; the answer is the same",

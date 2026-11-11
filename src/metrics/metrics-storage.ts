@@ -416,12 +416,15 @@ export class MetricsStorage {
    * Get aggregated metrics matching the filter: the retained raw rows plus the
    * rollup of the pruned ones, so "all time" still means all time (FND-23).
    * A window reaching past the retention period counts rolled-up days whole.
+   * With no taskType the totals are top-level tasks: a delegated sub-agent's
+   * 'subtask' row is part of its parent's task, which is counted already, so
+   * subtasks are counted only when asked for by taskType.
    */
   getAggregation(filter: MetricsFilter): MetricsAggregation {
     this.ensureConnection();
 
-    const raw = this.buildWhereClause(filter);
-    const rolled = this.buildWhereClause(filter, "day_start");
+    const raw = this.buildWhereClause(filter, "completed_at", true);
+    const rolled = this.buildWhereClause(filter, "day_start", true);
 
     const rawSums = this.db!.prepare(`SELECT
       COUNT(*) as total,
@@ -503,9 +506,14 @@ export class MetricsStorage {
   private buildWhereClause(
     filter: MetricsFilter,
     timeColumn: "completed_at" | "day_start" = "completed_at",
+    topLevelUnlessTyped = false,
   ): { sql: string; params: (string | number)[] } {
     const conditions: string[] = [];
     const params: (string | number)[] = [];
+
+    if (topLevelUnlessTyped && !filter.taskType) {
+      conditions.push("task_type != 'subtask'");
+    }
 
     if (filter.sessionId) {
       conditions.push("session_id = ?");
