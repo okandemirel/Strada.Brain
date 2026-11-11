@@ -14,6 +14,7 @@ import {
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import { RecallLedger } from "./recall-ledger.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
+import type { AssistantMessage } from "./providers/provider-core.interface.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
   return {
@@ -409,6 +410,45 @@ describe("SessionManager", () => {
       const session = buildToolOnlySession(sm, 20);
       sm.trimSession(session, 3);
       assertValidHead(session);
+    });
+
+    it("a hard-cap trim of a pure tool loop keeps the task turn and the newest tool pairs", () => {
+      // Board #30: a worker loop is task + N tool pairs with no plain user turn after the
+      // overflow point. The hard-cap fallback cut at the overflow index and the head repair
+      // then shifted off every tool_result and assistant turn, leaving an EMPTY history: the
+      // model's next call carried neither the task nor the latest tool results.
+      const sm = new SessionManager(createMockDeps());
+      const session = buildToolOnlySession(sm, 60); // 121 messages, hard cap of 40 is 80
+      const history = session.messages;
+
+      const trimmed = sm.trimSession(session, 40);
+
+      expect(session.messages, "trimmed in place: the run loop holds this array").toBe(history);
+      expect(session.visibleMessages?.map((m) => m.content)).toContain("kick off");
+
+      expect(trimmed.length).toBeGreaterThan(0);
+      expect(session.messages.length).toBeLessThanOrEqual(40);
+      expect(session.messages[0]?.content, "the task turn leads the trimmed history").toBe("kick off");
+      assertValidHead(session);
+      // The newest pairs survive, each tool_result right after the tool_use it answers.
+      const tail = session.messages.slice(-4);
+      expect(tail.map((m) => m.role)).toEqual(["assistant", "user", "assistant", "user"]);
+      expect((tail[2] as AssistantMessage).tool_calls?.[0]?.id).toBe("call-59");
+      expect(JSON.stringify(tail[3]!.content)).toContain("call-59");
+      for (let i = 1; i < session.messages.length; i++) {
+        const msg = session.messages[i]!;
+        if (!Array.isArray(msg.content)) continue;
+        for (const block of msg.content) {
+          if ((block as { type?: string }).type !== "tool_result") continue;
+          const prev = session.messages[i - 1] as AssistantMessage;
+          const ids = prev.tool_calls?.map((c) => c.id) ?? [];
+          expect(ids, `tool_result at ${i} answers a tool_use right before it`)
+            .toContain((block as { tool_use_id: string }).tool_use_id);
+        }
+      }
+      // What was removed is exactly what is gone: nothing kept is also reported trimmed.
+      expect(trimmed.length + session.messages.length).toBe(121);
+      expect(trimmed.some((m) => m.content === "kick off")).toBe(false);
     });
 
     it("keeps a legitimate multimodal user turn as a valid head", () => {
