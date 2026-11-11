@@ -8,7 +8,6 @@ import { clampMemoryEntry, selectSkillKnowledge } from "./skill-knowledge-select
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { GoalTree } from "../goals/types.js";
 import type { TaskClassification } from "../agent-core/routing/routing-types.js";
-import { AgentPhase } from "./agent-state.js";
 import { isOk, isSome } from "../types/index.js";
 import { getLogger } from "../utils/logger.js";
 import {
@@ -93,11 +92,8 @@ export interface ContextBuilderDeps {
     string,
     { activeGuidanceIds: string[]; shadowIds: string[]; exposedIds: string[] }
   >;
-  readonly buildWorkerToolDefinitions?: (
-    task: TaskClassification,
-    phase: AgentPhase,
-    role: string,
-  ) => Array<{ name: string }>;
+  /** The run's tool list: the same in every phase and role (agent-core/engine/phase-write-access.ts). */
+  readonly buildWorkerToolDefinitions?: (task: TaskClassification) => Array<{ name: string }>;
   /** Active skill entries with optional knowledge body from SKILL.md. */
   readonly skillEntries?: ReadonlyArray<Pick<SkillEntry, "manifest" | "status" | "body">>;
 }
@@ -349,7 +345,7 @@ export async function buildContextLayers(
   const taskContext = ctx.getTaskExecutionContext?.();
 
   const runtimeArtifactToolNames = ctx.buildWorkerToolDefinitions
-    ? ctx.buildWorkerToolDefinitions(classifiedTask, AgentPhase.EXECUTING, "executor").map((d) => d.name)
+    ? ctx.buildWorkerToolDefinitions(classifiedTask).map((d) => d.name)
     : ctx.toolDefinitions
         .filter((d) => {
           const m = ctx.toolMetadataByName.get(d.name);

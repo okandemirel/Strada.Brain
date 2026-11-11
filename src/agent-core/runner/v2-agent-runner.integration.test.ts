@@ -400,6 +400,40 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(workerCalls[1]!.last).toContain(phaseWriteRefusal(AgentPhase.PLANNING));
   });
 
+  it("B5: a write refused while planning and written while executing leaves nothing to verify, and no extra reflection", async () => {
+    // The refusal ran nothing. Recorded as a failed write step, it was an open failing path
+    // the verifier asked to re-run ("[TARGETED VERIFICATION REQUIRED]") in a project with no
+    // build and no tests, and three of them kept forcing a reflection after every batch
+    // (QA 2026-11-11). It is the model's answer, not a step the run took.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(
+        resp({
+          text: "Plan: 1. write notes/a.txt, notes/b.txt and notes/c.txt",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-p1", "notes/a.txt"), writeCall("tc-p2", "notes/b.txt"), writeCall("tc-p3", "notes/c.txt")],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "", stopReason: "tool_use", toolCalls: [writeCall("tc-1", "notes/a.txt")] }))
+      .mockResolvedValue(resp({ text: "Wrote notes/a.txt.", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["notes/a.txt"])];
+    const h = buildHarness(provider, tools);
+
+    const result = await drive(h.clock, h.runner.run(mkRequest({ prompt: "Write notes/a.txt" }), mkIO("worker")));
+
+    expect(tools[1]!.execute).toHaveBeenCalledTimes(1);
+    const workerCalls = workerCallsOf(provider);
+    // plan (refused writes), act (the write), report: no reflection turn between them.
+    expect(workerCalls.map((c) => phaseOf(c.last))).toEqual(["planning", "executing", "executing"]);
+    for (const c of workerCalls) {
+      expect(c.last).not.toContain("[TARGETED VERIFICATION REQUIRED]");
+      expect(c.last).not.toContain("[UNVERIFIED FAILURE]");
+    }
+    expect(result.status).toBe("completed");
+    // The planning turn's refusals are not steps the run took.
+    expect(result.terminalState!.stepResults.map((s) => s.toolName)).toEqual(["file_write"]);
+  });
+
   it("C: interactive renders to the channel (real divergence)", async () => {
     const provider = mkScriptedProvider();
     provider.chat
