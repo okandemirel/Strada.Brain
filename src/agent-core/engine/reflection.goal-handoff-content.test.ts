@@ -16,6 +16,7 @@ import { AgentPhase, createInitialState } from "../../agents/agent-state.js";
 import { SessionManager } from "../../agents/orchestrator-session-manager.js";
 import type { PlanPhaseParams } from "../runner/orchestrator-port.js";
 import type { MessageContent } from "../../agents/providers/provider-core.interface.js";
+import { normalizeConversation } from "../../agents/conversation-normalizer.js";
 
 const SAID = "build the dawn watering reminder";
 
@@ -42,20 +43,25 @@ const goalBlock =
   }) +
   "\n```";
 
-async function handoffAfterToolTurn(said: string | MessageContent[]) {
+const toolTurn = [
+  { role: "assistant", content: "", tool_calls: [{ id: "t1", name: "file_read", input: {} }] },
+  {
+    role: "user",
+    content: [
+      { type: "tool_result", tool_use_id: "t1", content: "ok" },
+      { type: "text", text: "## Plan State\n- step 1 pending" },
+    ],
+  },
+] as never[];
+
+/** `said` is the person's turn; `before` what the session held ahead of it. */
+async function handoff(said: string | MessageContent[], before: never[] = [], after: never[] = toolTurn) {
   const sm = sessionManager();
   const session = sm.getOrCreateSession("chat-1");
+  session.messages.push(...before);
   sm.appendVisibleUserMessage(session, said);
-  session.messages.push(
-    { role: "assistant", content: "", tool_calls: [{ id: "t1", name: "file_read", input: {} }] } as never,
-    {
-      role: "user",
-      content: [
-        { type: "tool_result", tool_use_id: "t1", content: "ok" },
-        { type: "text", text: "## Plan State\n- step 1 pending" },
-      ],
-    } as never,
-  );
+  session.messages.push(...after);
+  session.messages = normalizeConversation(session.messages);
   const submit = vi.fn();
   const deps = {
     sessionManager: sm,
@@ -81,7 +87,7 @@ async function handoffAfterToolTurn(said: string | MessageContent[]) {
 
 describe("the interactive goal handoff after a tool turn", () => {
   it("submits the person's content and builds the goal tree", async () => {
-    const { prompt, options } = await handoffAfterToolTurn(SAID);
+    const { prompt, options } = await handoff(SAID);
     expect(prompt).toBe(SAID);
     expect(options["userContent"]).toBe(SAID);
     expect(options["forceSharedPlanning"]).toBeUndefined();
@@ -89,12 +95,25 @@ describe("the interactive goal handoff after a tool turn", () => {
     expect(JSON.stringify(options)).not.toContain("Plan State");
   });
 
+  it("after a call that never answered: the person's words folded into its answer, and a goal tree", async () => {
+    // The normalizer answers the dangling call and folds the person's message into that answer.
+    const dangling = [
+      { role: "user", content: "an earlier request" },
+      { role: "assistant", content: "", tool_calls: [{ id: "t0", name: "file_read", input: {} }] },
+    ] as never[];
+    const { prompt, options } = await handoff(SAID, dangling, []);
+    expect(prompt).toBe(SAID);
+    expect(options["userContent"]).toEqual([{ type: "text", text: SAID }]);
+    expect(options["forceSharedPlanning"]).toBeUndefined();
+    expect(options["goalTree"]).toBeDefined();
+  });
+
   it("the person's own image is still rich input: shared planning, their content, no goal tree", async () => {
     const said: MessageContent[] = [
       { type: "text", text: SAID },
       { type: "image", source: { type: "url", url: "https://example.com/greenhouse.png" } } as MessageContent,
     ];
-    const { prompt, options } = await handoffAfterToolTurn(said);
+    const { prompt, options } = await handoff(said);
     expect(prompt).toBe(SAID);
     expect(options["userContent"]).toEqual(said);
     expect(options["forceSharedPlanning"]).toBe(true);
