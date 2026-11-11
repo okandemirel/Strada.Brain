@@ -11,7 +11,7 @@ import type { AssistantMessage } from "./provider-core.interface.js";
 import { OpenAIProvider, OPENAI_STOP_REASON_MAP, MAX_SSE_BUFFER_BYTES } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 import { getLogger } from "../../utils/logger.js";
-import { convertToolDefinitions } from "./openai-compat.js";
+import { convertToolDefinitions, promptCacheUsage, type OpenAICompatCacheUsage } from "./openai-compat.js";
 import { releaseStreamReader } from "../../common/stream-reader.js";
 
 /** SSE chunk with extra_content support for thought_signature */
@@ -28,7 +28,7 @@ interface GeminiStreamChunk {
     };
     finish_reason?: string;
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number } & OpenAICompatCacheUsage;
 }
 
 const GEMINI_SKIP_THOUGHT_SIGNATURE = {
@@ -115,6 +115,7 @@ export class GeminiProvider extends OpenAIProvider {
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
         totalTokens: (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0),
+        ...promptCacheUsage(data.usage),
       },
     };
   }
@@ -160,6 +161,7 @@ export class GeminiProvider extends OpenAIProvider {
     let finishReason = "stop";
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheShare: ReturnType<typeof promptCacheUsage> = {};
 
     if (!response.body) throw new Error(`${this.name} streaming response has no body`);
     const reader = response.body.getReader();
@@ -218,6 +220,7 @@ export class GeminiProvider extends OpenAIProvider {
             if (chunk.usage) {
               inputTokens = chunk.usage.prompt_tokens ?? 0;
               outputTokens = chunk.usage.completion_tokens ?? 0;
+              cacheShare = promptCacheUsage(chunk.usage);
             }
           } catch {
             // Ignore malformed SSE chunks
@@ -247,7 +250,7 @@ export class GeminiProvider extends OpenAIProvider {
       text,
       toolCalls,
       stopReason: OPENAI_STOP_REASON_MAP[finishReason] ?? "end_turn",
-      usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+      usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, ...cacheShare },
     };
   }
 

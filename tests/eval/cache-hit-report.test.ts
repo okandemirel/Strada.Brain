@@ -93,7 +93,7 @@ describe("cache-hit-report", () => {
     expect(text).toMatch(/turn\s+relay\s+.*12\.5%\s+prompt_cache_hit_tokens, prompt_tokens_details\.cached_tokens\n/);
     expect(text).toMatch(/turn\s+silent\s+.*not measured\s+-\n/);
     expect(text).toContain(
-      "not measured = no call in the group carried cachedInputTokens: the provider sent no cache field, its parser reads none (as of 2026-11-06: gemini, and kimi/minimax outside streaming), or the lines predate 2026-11-06, when a miss left none either.",
+      "not measured = no call in the group carried cachedInputTokens: the provider sent no cache field, or the lines predate 2026-11-06, when a miss left none either.",
     );
   });
 

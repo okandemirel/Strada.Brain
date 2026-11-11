@@ -148,4 +148,36 @@ describe("GeminiProvider", () => {
       });
     });
   });
+
+  describe("parseResponse - prompt cache share", () => {
+    it("keeps the provider's cache share, 0 included, and none when absent", () => {
+      const base = { choices: [{ message: { content: "x" }, finish_reason: "stop" }] };
+      const p = (u: Record<string, unknown>) => ((provider as unknown as { parseResponse: (d: unknown) => unknown }).parseResponse({ ...base, usage: u })) as { usage: Record<string, unknown> };
+      expect(p({ prompt_tokens: 10, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 6 } }).usage)
+        .toMatchObject({ cacheReadInputTokens: 6, cacheReadField: "prompt_tokens_details.cached_tokens" });
+      expect(p({ prompt_tokens: 10, completion_tokens: 1, prompt_cache_hit_tokens: 0 }).usage)
+        .toMatchObject({ cacheReadInputTokens: 0, cacheReadField: "prompt_cache_hit_tokens" });
+      expect(p({ prompt_tokens: 10, completion_tokens: 1 }).usage).not.toHaveProperty("cacheReadInputTokens");
+    });
+  });
+
+  describe("chatStream - prompt cache share", () => {
+    it("reads the cache share off the final usage chunk, 0 included", async () => {
+      const sse = (usage: Record<string, unknown>) =>
+        [
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage })}\n\n`,
+          "data: [DONE]\n\n",
+        ].join("");
+      for (const [usage, expected] of [
+        [{ prompt_tokens: 20, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 0 } }, { cacheReadInputTokens: 0, cacheReadField: "prompt_tokens_details.cached_tokens" }],
+        [{ prompt_tokens: 20, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 12 } }, { cacheReadInputTokens: 12, cacheReadField: "prompt_tokens_details.cached_tokens" }],
+      ] as const) {
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(sse(usage), { status: 200, headers: { "content-type": "text/event-stream" } })));
+        const res = await provider.chatStream("sys", [{ role: "user", content: "hello" }], [], () => {});
+        expect(res.usage).toMatchObject({ inputTokens: 20, ...expected });
+      }
+      vi.unstubAllGlobals();
+    });
+  });
 });

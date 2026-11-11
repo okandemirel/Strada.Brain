@@ -4,6 +4,7 @@ import type {
   ProviderCapabilities,
 } from "./provider.interface.js";
 import type { AssistantMessage, ConversationMessage } from "./provider-core.interface.js";
+import { promptCacheUsage, type OpenAICompatCacheUsage } from "./openai-compat.js";
 import { OpenAIProvider, OPENAI_STOP_REASON_MAP } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 
@@ -29,7 +30,7 @@ interface KimiResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens?: number;
-  };
+  } & OpenAICompatCacheUsage;
 }
 
 /**
@@ -115,6 +116,7 @@ export class KimiProvider extends OpenAIProvider {
         inputTokens: usage?.prompt_tokens ?? 0,
         outputTokens: usage?.completion_tokens ?? 0,
         totalTokens: usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0),
+        ...promptCacheUsage(usage),
       },
     };
   }
