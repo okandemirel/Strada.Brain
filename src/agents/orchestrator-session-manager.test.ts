@@ -354,6 +354,32 @@ describe("SessionManager", () => {
     expect(sm.extractLastUserMessage(session)).toBe("new request");
   });
 
+  it("known limit: a user message folded in front of a recorded result is passed over (board proposal #69)", () => {
+    // normalizeConversation folds every follower of an unanswered call up to the last one that
+    // carries its result into one answer (conversation-normalizer.ts answerFor). The person's
+    // words and the gate text then sit in one turn behind a recorded result, where nothing tells
+    // them apart, and the read counts the turn as the system's. No live path is known to leave
+    // this shape (reviewed 2026-11-11); #69 proposes keeping the earlier follower separate. When
+    // that lands, this read is "new request" and this test changes with it.
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "old request");
+    sm.appendVisibleAssistantMessage(session, "done");
+    session.messages.push(
+      { role: "assistant", content: "", tool_calls: [{ id: "a", name: "file_read", input: {} }] } as never,
+      { role: "user", content: "new request" },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: "ok" }, { type: "text", text: "[VERIFY] gate" }] },
+    );
+    session.messages = normalizeConversation(session.messages);
+    expect(session.messages.at(-1)?.content).toEqual([
+      { type: "tool_result", tool_use_id: "a", content: "ok" },
+      { type: "text", text: "new request" },
+      { type: "text", text: "[VERIFY] gate" },
+    ]);
+
+    expect(sm.extractLastUserMessage(session)).toBe("old request");
+  });
+
   it("a user turn that holds only a recall is passed over for the user's words before it (recall-ledger.ts)", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");

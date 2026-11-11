@@ -10,6 +10,10 @@
  * normalizeConversation, which folds the user message after it into the answer behind
  * INTERRUPTED_TOOL_RESULT placeholders (conversation-normalizer.ts answerFor). Every result of
  * such a turn is a placeholder, and its text is what the user said next.
+ *
+ * Known limit (board proposal #69): when the follower that carries the result comes after the
+ * user's message, the normalizer folds both into one turn behind that recorded result, and the
+ * user's words there read as the system's.
  */
 
 import { INTERRUPTED_TOOL_RESULT } from "./conversation-normalizer.js";
