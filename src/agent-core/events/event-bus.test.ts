@@ -392,6 +392,18 @@ describe("learning bridge", () => {
       errorDetails: { category: "unknown", message: "unknown error" },
     });
   });
+
+  it("a write the phase gate refused ran nothing, so it is no tool:result", () => {
+    // phase-write-access.ts: the refused call's tool.started still gets a tool.finished, marked.
+    const emitted: Array<{ event: string; payload: unknown }> = [];
+    const sink = createLearningBridgeSink("session-9", { emit: (event, payload) => void emitted.push({ event, payload }) });
+    const finished = { type: "tool.finished", toolName: "file_write", toolCallId: "tc-1", success: false, seq: 1, ts: 0, runId: "r" } as const;
+
+    sink.deliver({ ...finished, refused: true });
+    expect(emitted).toEqual([]);
+    sink.deliver(finished);
+    expect(emitted.map((e) => e.event)).toEqual(["tool:result"]);
+  });
 });
 
 describe("isVisibleContent predicate", () => {

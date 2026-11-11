@@ -262,6 +262,19 @@ const PHASE_TRACE_MAP: Record<string, RecordExecutionTraceParams["phase"]> = {
   [AgentPhase.REPLANNING]: "replanning",
 };
 
+/** One tool call of a turn, as the port reports it. */
+interface ToolTraceRow {
+  toolName: string;
+  toolCallId: string;
+  success: boolean;
+  errorCategory?: string;
+  touchedFiles?: readonly string[];
+  /** The tool's result text (truncated) — the evidence the test verdict reads. */
+  resultText?: string;
+  /** A write the phase gate refused: nothing ran (agent-core/engine/phase-write-access.ts). */
+  refused?: boolean;
+}
+
 export class V2AgentRunner implements AgentRunner {
   constructor(private readonly deps: V2RunnerDeps) {}
 
@@ -735,18 +748,7 @@ export class V2AgentRunner implements AgentRunner {
               const planned = await this.executeTools(setup, outcome.response, madeIn, runScope, () =>
                 emit({ type: "heartbeat", source: "tool-running" }),
               );
-              for (const tr of planned.trace) {
-                toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
-                for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
-                emit({
-                  type: "tool.finished",
-                  toolName: tr.toolName,
-                  toolCallId: tr.toolCallId,
-                  success: tr.success,
-                  errorCategory: tr.errorCategory,
-                  touchedFiles: tr.touchedFiles,
-                });
-              }
+              this.finishTools(planned.trace, toolTrace, touchedFiles, emit);
               if (planned.progressSignal) emit({ type: "narrative", signal: planned.progressSignal });
               if (planned.advancedState) {
                 state = { ...planned.advancedState, phase: state.phase };
@@ -854,19 +856,7 @@ export class V2AgentRunner implements AgentRunner {
             const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state, runScope, () =>
               emit({ type: "heartbeat", source: "tool-running" }),
             );
-            for (const tr of trace) {
-              toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
-              for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
-              // The learning-bridge sink mirrors tool.finished → "tool:result" (wired on the bus).
-              emit({
-                type: "tool.finished",
-                toolName: tr.toolName,
-                toolCallId: tr.toolCallId,
-                success: tr.success,
-                errorCategory: tr.errorCategory,
-                touchedFiles: tr.touchedFiles,
-              });
-            }
+            this.finishTools(trace, toolTrace, touchedFiles, emit);
             // v1 parity (bg loop :4687): the port's localized per-tool-batch progress signal rides
             // the bus as a `narrative` event; the background io adapter unwraps it back into the
             // v1 TaskProgressUpdate stream (Kanban/progress detail: kind + toolNames + files).
@@ -1308,15 +1298,7 @@ export class V2AgentRunner implements AgentRunner {
     runScope: ParentRunScope,
     keepalive?: () => void,
   ): Promise<{
-    trace: {
-      toolName: string;
-      toolCallId: string;
-      success: boolean;
-      errorCategory?: string;
-      touchedFiles?: readonly string[];
-      /** The tool's result text (truncated) — the evidence the test verdict reads. */
-      resultText?: string;
-    }[];
+    trace: ToolTraceRow[];
     advancedState?: AgentState;
     /** v1 parity: the port's localized per-tool-batch progress signal (emitted as `narrative`). */
     progressSignal?: TaskProgressSignal;
@@ -1331,21 +1313,9 @@ export class V2AgentRunner implements AgentRunner {
       port.executeToolCalls(response.toolCalls, setup.session, state, response.text, runScope),
       keepalive,
     )) as
+      | ToolTraceRow[]
       | {
-          toolName: string;
-          toolCallId: string;
-          success: boolean;
-          errorCategory?: string;
-          touchedFiles?: readonly string[];
-        }[]
-      | {
-          trace: {
-            toolName: string;
-            toolCallId: string;
-            success: boolean;
-            errorCategory?: string;
-            touchedFiles?: readonly string[];
-          }[];
+          trace: ToolTraceRow[];
           advancedState?: AgentState;
           progressSignal?: TaskProgressSignal;
         }
@@ -1356,6 +1326,38 @@ export class V2AgentRunner implements AgentRunner {
       return { trace: raw.trace ?? [], advancedState: raw.advancedState, progressSignal: raw.progressSignal };
     }
     return { trace: [] };
+  }
+
+  /**
+   * Each row of a tool turn into the run's executed-tool sequence and its `tool.finished`.
+   *
+   * A write the phase gate refused ran nothing (agent-core/engine/phase-write-access.ts): its
+   * `tool.started` still gets a `tool.finished`, marked refused, and it stays out of the
+   * sequence. In the sequence it reached the supervisor's node verifier as a tool error, and
+   * four refusals while planning took every "Tool errors" place ahead of a real failure
+   * (QA, 2026-11-11). The learning-bridge sink mirrors tool.finished → "tool:result".
+   */
+  private finishTools(
+    trace: readonly ToolTraceRow[],
+    toolTrace: { toolName: string; toolCallId: string; success: boolean; resultText?: string }[],
+    touchedFiles: Set<string>,
+    emit: (e: Parameters<AgentRunEventBus["emit"]>[0]) => number,
+  ): void {
+    for (const tr of trace) {
+      if (!tr.refused) {
+        toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
+      }
+      for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
+      emit({
+        type: "tool.finished",
+        toolName: tr.toolName,
+        toolCallId: tr.toolCallId,
+        success: tr.success,
+        errorCategory: tr.errorCategory,
+        touchedFiles: tr.touchedFiles,
+        ...(tr.refused ? { refused: true } : {}),
+      });
+    }
   }
 
   /**
