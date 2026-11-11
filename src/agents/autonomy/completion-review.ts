@@ -8,6 +8,12 @@ import { isPathTargetRefusal } from "../../security/path-guard.js";
 export interface CompletionReviewEvidence {
   readonly touchedFiles: readonly string[];
   readonly recentFailures: readonly string[];
+  /**
+   * Every open failure (not only the last five) was followed by a successful
+   * call of the same tool: the step was re-run and the re-run worked, so what
+   * is missing is a verification, not a repair. False when nothing failed.
+   */
+  readonly recentFailuresRetriedOk?: boolean;
   readonly recentLogIssues: readonly LogEntry[];
   readonly recentSteps: readonly string[];
   readonly totalStepCount: number;
@@ -145,10 +151,13 @@ export function collectCompletionReviewEvidence(params: {
     params.taskStartedAtMs,
     params.verificationState.lastVerificationAt ?? params.taskStartedAtMs,
   );
-  const recentFailures = params.state.stepResults
-    .filter((step, i, steps) => !step.success && step.timestamp >= reviewCutoff && !refusalRetriedOk(step, steps.slice(i + 1)))
-    .slice(-5)
-    .map((step) => `${step.toolName}: ${step.summary}`);
+  const openFailures = params.state.stepResults.flatMap((step, i, steps) =>
+    !step.success && step.timestamp >= reviewCutoff && !refusalRetriedOk(step, steps.slice(i + 1))
+      ? [{ step, later: steps.slice(i + 1) }]
+      : []);
+  const recentFailures = openFailures.slice(-5).map(({ step }) => `${step.toolName}: ${step.summary}`);
+  const recentFailuresRetriedOk =
+    openFailures.length > 0 && openFailures.every(({ step, later }) => sameToolLaterSucceeded(step, later));
   const recentSteps = params.state.stepResults
     .slice(-8)
     .map((step) => `[${step.success ? "OK" : "FAIL"}] ${step.toolName}: ${step.summary}`);
@@ -162,6 +171,7 @@ export function collectCompletionReviewEvidence(params: {
   return {
     touchedFiles,
     recentFailures,
+    recentFailuresRetriedOk,
     recentSteps,
     totalStepCount: params.state.stepResults.length,
     inspectionStepCount,
@@ -185,7 +195,11 @@ export function collectCompletionReviewEvidence(params: {
  * and failed has a failing path to re-run.
  */
 function refusalRetriedOk(step: StepResult, later: readonly StepResult[]): boolean {
-  return isPathTargetRefusal(step.summary) && later.some((next) => next.success && next.toolName === step.toolName);
+  return isPathTargetRefusal(step.summary) && sameToolLaterSucceeded(step, later);
+}
+
+function sameToolLaterSucceeded(step: StepResult, later: readonly StepResult[]): boolean {
+  return later.some((next) => next.success && next.toolName === step.toolName);
 }
 
 export function shouldRunCompletionReview(
