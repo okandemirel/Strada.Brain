@@ -1911,3 +1911,83 @@ describe("run teardown — the ended run stops publishing its build state", () =
     }
   });
 });
+
+describe("goal decomposition bills the run that asked for the plan (task #67)", () => {
+  // Measured before the fix: the REAL GoalDecomposer's plan call billed 1,800 in / 600 out and the
+  // run's usage record, the rate limiter and the metrics took 0 of it — on the root run and on a
+  // delegated run alike, because nothing between the port and the decomposer carried a usage hook.
+  const PLAN = JSON.stringify({
+    nodes: [
+      { id: "a", task: "Write the parser for the recipe file format", dependsOn: [] },
+      { id: "b", task: "Add a test that loads three sample recipe files", dependsOn: ["a"] },
+    ],
+  });
+
+  async function runWithRealDecomposer(request: Partial<AgentRunRequest>) {
+    const { GoalDecomposer } = await import("../../goals/goal-decomposer.js");
+    const planner = mkScriptedProvider();
+    planner.name = "planner";
+    planner.chat.mockResolvedValue(
+      resp({ text: PLAN, usage: { inputTokens: 1800, outputTokens: 600, totalTokens: 2400 } }),
+    );
+    const provider = mkScriptedProvider();
+    scriptTwoBatchRun(provider);
+    const rateLimiter = { recordTokenUsage: vi.fn(), checkMessageRate: vi.fn(() => ({ allowed: true })) };
+    const metrics = { recordTokenUsage: vi.fn() };
+    const clock = new FakeClock(0);
+    const orch = new Orchestrator({
+      providerManager: {
+        getProvider: vi.fn(() => provider),
+        getActiveInfo: () => ({ providerName: "mock", model: "mock-model", isDefault: true }),
+        shutdown: vi.fn(),
+      },
+      tools: [mkTool("file_read"), mkTool("edit_file", true, ["a.cs"])],
+      channel: mkChannel(),
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      agentCoreClock: clock,
+      rateLimiter,
+      metrics,
+      goalDecomposer: new GoalDecomposer(planner as never, 1, [0]),
+    } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
+    const { port, gateway, seed, createHealthCore } = orch.createAgentCorePort();
+    const controlPlane = createControlPlane({ clock, seed, createHealthCore });
+    const runner = new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock } as V2RunnerDeps);
+    const onUsage = vi.fn();
+    const prompt = "Import recipes from three file formats, validate them, and show the import report";
+    // `drive` drains microtasks only; the real decomposer's lazy imports are real I/O, so this pump
+    // also yields a macrotask turn per step (else a cold first module load outlasts the pump).
+    let settled = false;
+    const run = runner.run(mkRequest({ prompt, onUsage, ...request }), mkIO("worker")).finally(() => {
+      settled = true;
+    });
+    for (let i = 0; i < 5000 && !settled; i++) {
+      await new Promise<void>((r) => setImmediate(r));
+      clock.advance(5000);
+    }
+    await run;
+    return { planner, onUsage, rateLimiter, metrics };
+  }
+
+  for (const [label, request] of [
+    ["a delegated run (the request DelegationManager opens)", { mode: "supervisor-node", taskRunId: "sub-1" }],
+    ["the root run", {}],
+  ] as const) {
+    it(`${label}: the plan call's billed tokens reach its usage record, the rate limiter and the metrics`, async () => {
+      const { planner, onUsage, rateLimiter, metrics } = await runWithRealDecomposer(request);
+      expect(planner.chat).toHaveBeenCalledTimes(1); // the plan parsed: exactly one decomposition call
+
+      const planEvents = onUsage.mock.calls.map(([u]) => u).filter((u) => u.provider === "planner");
+      expect(planEvents).toEqual([
+        expect.objectContaining({ provider: "planner", inputTokens: 1800, outputTokens: 600 }),
+      ]);
+      expect(rateLimiter.recordTokenUsage.mock.calls.filter((c) => c[2] === "planner")).toEqual([
+        [1800, 600, "planner", undefined, {}],
+      ]);
+      expect(metrics.recordTokenUsage.mock.calls.filter((c) => c[2] === "planner")).toEqual([
+        [1800, 600, "planner"],
+      ]);
+    });
+  }
+});

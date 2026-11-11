@@ -282,6 +282,7 @@ import {
 import {
   runProactiveGoalDecomposition as runProactiveGoalDecompositionHelper,
   runReactiveGoalDecomposition as runReactiveGoalDecompositionHelper,
+  decompositionUsageSink,
   type GoalDecompositionDeps,
 } from "./orchestrator-goal-decomposition.js";
 // Agent Core v2 — the strangler seam. The Orchestrator IMPLEMENTS OrchestratorPort by binding
@@ -1916,6 +1917,8 @@ export class Orchestrator {
         taskRunId: params.taskRunId,
         attachments: params.attachments,
         onUsage: params.onUsage,
+        // The planning call bills through the hook the nodes' model turns use (task #67).
+        onPlanningUsage: decompositionUsageSink((p, u, h, m) => this.recordProviderUsage(p, u, h, m), params.onUsage),
         workspaceLease: params.workspaceLease,
         ...(params.workspacePolicy ? { workspacePolicy: params.workspacePolicy } : {}),
         ...(params.nodeWorkspaces ? { nodeWorkspaces: params.nodeWorkspaces } : {}),
@@ -6540,17 +6543,13 @@ export class Orchestrator {
       eventEmitter: this.eventEmitter,
       workspaceBus: this.workspaceBus,
       goalStorage: this.goalStorage,
+      recordProviderUsage: (providerName, usage, onUsage, modelId) => this.recordProviderUsage(providerName, usage, onUsage, modelId),
     };
   }
 
-  private async runProactiveGoalDecomposition(opts: {
-    conversationScope: string;
-    userMessage: string;
-    chatId: string;
-    session: Session;
-    agentState: AgentState;
-    signal?: AbortSignal;
-  }): Promise<AgentState> {
+  private async runProactiveGoalDecomposition(
+    opts: Omit<Parameters<typeof runProactiveGoalDecompositionHelper>[1], "language">,
+  ): Promise<AgentState> {
     // Thread the resolved user language so a provider-outage notice surfaced from the
     // helper (all-providers-failed during decomposition) is localized, not hardcoded EN.
     return runProactiveGoalDecompositionHelper(this.goalDecompositionDeps, {
@@ -6559,12 +6558,9 @@ export class Orchestrator {
     });
   }
 
-  private async runReactiveGoalDecomposition(opts: {
-    conversationScope: string;
-    chatId: string;
-    session: Session;
-    responseText: string;
-  }): Promise<void> {
+  private async runReactiveGoalDecomposition(
+    opts: Parameters<typeof runReactiveGoalDecompositionHelper>[1],
+  ): Promise<void> {
     return runReactiveGoalDecompositionHelper(this.goalDecompositionDeps, opts);
   }
 

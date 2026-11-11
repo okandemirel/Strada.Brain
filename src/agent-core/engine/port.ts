@@ -375,6 +375,8 @@ export function createAgentCorePort(
           session: c.session,
           agentState: params.agentState,
           signal: params.signal,
+          // The plan's calls are this run's spend, billed like its model turns (task #67).
+          onUsage: c.onUsage,
         });
       },
 

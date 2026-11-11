@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll } from "vitest";
-import { runProactiveGoalDecomposition } from "./orchestrator-goal-decomposition.js";
+import { runProactiveGoalDecomposition, runReactiveGoalDecomposition } from "./orchestrator-goal-decomposition.js";
 import type { GoalDecompositionDeps } from "./orchestrator-goal-decomposition.js";
 import { GoalDecompositionProviderError } from "../goals/goal-decomposer.js";
 import { createInitialState } from "./agent-state.js";
@@ -182,6 +182,74 @@ describe("runProactiveGoalDecomposition — cancellation (TSK-16)", () => {
 
     const decomposeProactive = deps.goalDecomposer!.decomposeProactive as unknown as ReturnType<typeof vi.fn>;
     expect(decomposeProactive).toHaveBeenCalledTimes(1);
-    expect(decomposeProactive.mock.calls[0]?.[2]).toEqual({ signal: controller.signal });
+    // The options also carry the run's usage sink (task #67), pinned below.
+    expect(decomposeProactive.mock.calls[0]?.[2]).toEqual({ signal: controller.signal, onUsage: expect.any(Function) });
+  });
+});
+
+describe("goal decomposition bills through the shell's usage hook (task #67)", () => {
+  const PLAN = JSON.stringify({
+    nodes: [
+      { id: "a", task: "Write the parser for the recipe file format", dependsOn: [] },
+      { id: "b", task: "Add a test that loads three sample recipe files", dependsOn: ["a"] },
+    ],
+  });
+  function planner(inputTokens: number, outputTokens: number) {
+    return {
+      name: "planner",
+      capabilities: { maxTokens: 8192, streaming: false, toolCalling: false, vision: false, systemPrompt: true },
+      chat: vi.fn(async () => ({
+        text: PLAN,
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+      })),
+    };
+  }
+
+  it("a proactive plan's reply goes to recordProviderUsage with the run's onUsage", async () => {
+    const { GoalDecomposer } = await import("../goals/goal-decomposer.js");
+    const { deps } = buildDeps({ decomposeProactive: async () => undefined });
+    const recordProviderUsage = vi.fn();
+    const onUsage = vi.fn();
+    await runProactiveGoalDecomposition(
+      { ...deps, goalDecomposer: new GoalDecomposer(planner(1800, 600) as never, 1, [0]), recordProviderUsage },
+      {
+        conversationScope: "scope-1",
+        userMessage: "Import recipes from three file formats, validate them, and show the import report",
+        chatId: "chat-1",
+        session: buildSession(),
+        agentState: createInitialState("Import recipes"),
+        onUsage,
+      },
+    );
+    expect(recordProviderUsage.mock.calls).toEqual([
+      ["planner", { inputTokens: 1800, outputTokens: 600, totalTokens: 2400 }, onUsage, undefined],
+    ]);
+  });
+
+  it("a reactive re-plan's reply goes to recordProviderUsage with the run's onUsage", async () => {
+    const { GoalDecomposer } = await import("../goals/goal-decomposer.js");
+    const { deps } = buildDeps({ decomposeProactive: async () => undefined });
+    const recordProviderUsage = vi.fn();
+    const onUsage = vi.fn();
+    const tree = {
+      rootId: "root",
+      sessionId: "scope-1",
+      taskDescription: "Import recipes",
+      createdAt: 0,
+      nodes: new Map([
+        ["root", { id: "root", parentId: null, task: "Import recipes", dependsOn: [], depth: 0, status: "pending", createdAt: 0, updatedAt: 0 }],
+        ["n1", { id: "n1", parentId: "root", task: "Parse the files", dependsOn: [], depth: 1, status: "executing", createdAt: 0, updatedAt: 0 }],
+      ]),
+    };
+    const activeGoalTrees = new Map([["scope-1", tree]]) as unknown as GoalDecompositionDeps["activeGoalTrees"];
+    await runReactiveGoalDecomposition(
+      { ...deps, activeGoalTrees, goalDecomposer: new GoalDecomposer(planner(1100, 250) as never, 3, [0]), recordProviderUsage },
+      { conversationScope: "scope-1", chatId: "chat-1", session: buildSession(), responseText: "the parser threw", onUsage },
+    );
+    expect(recordProviderUsage.mock.calls).toEqual([
+      ["planner", { inputTokens: 1100, outputTokens: 250, totalTokens: 1350 }, onUsage, undefined],
+    ]);
   });
 });

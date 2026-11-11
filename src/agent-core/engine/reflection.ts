@@ -106,12 +106,14 @@ export interface ReflectionDeps extends ReviewDeps, RenderDeps {
     session: Session;
     agentState: AgentState;
     signal?: AbortSignal;
+    onUsage?: (usage: TaskUsageEvent) => void;
   }) => Promise<AgentState>;
   readonly runReactiveGoalDecomposition: (opts: {
     conversationScope: string;
     chatId: string;
     session: Session;
     responseText: string;
+    onUsage?: (usage: TaskUsageEvent) => void;
   }) => Promise<void>;
 }
 
@@ -351,6 +353,7 @@ export async function portDispatchReflection(
           chatId,
           session: runCtx.session,
           responseText: params.responseText ?? "",
+          onUsage: runCtx.onUsage,
         });
         let replanState = transitionPhase(action.newState, AgentPhase.REPLANNING);
         if (params.responseText) {
@@ -611,6 +614,7 @@ export async function portHandlePlanPhase(
           chatId,
           session: runCtx.session,
           agentState,
+          onUsage: runCtx.onUsage,
         });
       }
       deps.interactionPolicy.requirePlanReview(

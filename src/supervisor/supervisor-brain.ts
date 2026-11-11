@@ -44,7 +44,7 @@ import {
 /** Minimal interface for the GoalDecomposer dependency */
 export interface SupervisorDecomposer {
   shouldDecompose(prompt: string): boolean;
-  decomposeProactive(sessionId: string, taskDescription: string, opts?: { signal?: AbortSignal }): Promise<GoalTree>;
+  decomposeProactive(sessionId: string, taskDescription: string, opts?: import("../goals/goal-decomposer.js").DecomposeOptions): Promise<GoalTree>;
 }
 
 // =============================================================================
@@ -404,7 +404,7 @@ export class SupervisorBrain {
       const planningSignal = externalSignal ? AbortSignal.any([externalSignal, internalSignal]) : internalSignal;
       const decomposedGoalTree = context.goalTree ?? await withLivenessHeartbeat(
         context.chatId,
-        () => this.decomposer.decomposeProactive(context.chatId, planningTask, { signal: planningSignal }),
+        () => this.decomposer.decomposeProactive(context.chatId, planningTask, { signal: planningSignal, onUsage: context.onPlanningUsage }),
         context.onLiveness,
       );
       const visibleGoalTree = this.buildVisibleGoalTree(decomposedGoalTree, task);

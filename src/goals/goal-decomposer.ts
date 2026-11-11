@@ -11,6 +11,7 @@
 
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { streamOrChatText } from "../agents/providers/provider.interface.js";
+import { reportDecompositionUsage, reportFailedAttemptUsage, type DecompositionUsageSink } from "./decomposition-usage.js";
 import type {
   GoalNode,
   GoalTree,
@@ -220,6 +221,13 @@ function abortableDelay(ms: number, signal: AbortSignal | undefined): Promise<vo
 // GOAL DECOMPOSER CLASS
 // =============================================================================
 
+/** Per-call options: the run's cancel signal and the sink its plan calls bill to. */
+export interface DecomposeOptions {
+  readonly signal?: AbortSignal;
+  /** Receives each served reply once, plus what superseded or failed attempts spent (decomposition-usage.ts). */
+  readonly onUsage?: DecompositionUsageSink;
+}
+
 export class GoalDecomposer {
   constructor(
     private readonly provider: IAIProvider | undefined,
@@ -257,14 +265,14 @@ export class GoalDecomposer {
   async decomposeProactive(
     sessionId: string,
     taskDescription: string,
-    opts: { readonly signal?: AbortSignal } = {},
+    opts: DecomposeOptions = {},
   ): Promise<GoalTree> {
     // TSK-16: a cancelled task's planning stops here. The retry ladder (up to
     // four rounds with slow sleeps, a second attempt, depth-2 expansions) used
     // to keep calling the provider after /cancel. A cancelled plan returns the
     // single-node tree without another call; callers check their own signal
     // after planning and discard it.
-    const { signal } = opts;
+    const { signal, onUsage } = opts;
     // No provider -- return single-node tree
     if (!this.provider || signal?.aborted) {
       return this.buildSingleNodeTree(sessionId, taskDescription);
@@ -299,7 +307,7 @@ export class GoalDecomposer {
     let llmOutput = await this.callLLMForDecomposition(
       proactivePrompt,
       `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
-      { rejectExplorationOnly, signal },
+      { rejectExplorationOnly, signal, onUsage },
     );
     if (signal?.aborted) {
       return this.buildSingleNodeTree(sessionId, taskDescription);
@@ -320,7 +328,7 @@ export class GoalDecomposer {
         `${why}${carried}Please try again. Output the JSON object ONLY — ` +
           "start your reply with \"{\" and do not write a <reasoning> block or any prose before it.\n\n" +
           `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
-        { rejectExplorationOnly, signal },
+        { rejectExplorationOnly, signal, onUsage },
       );
     }
 
@@ -410,7 +418,7 @@ export class GoalDecomposer {
           subOutput = await this.callLLMForDecomposition(
             subPrompt,
             `Further decompose this sub-goal (max ${remainingSlots} sub-goals):\n\n<task>${flagged.task}</task>`,
-            { signal },
+            { signal, onUsage },
           );
         } catch (err) {
           if (err instanceof GoalDecompositionProviderError) break;
@@ -466,6 +474,7 @@ export class GoalDecomposer {
     tree: GoalTree,
     failingNodeId: GoalNodeId,
     reflectionContext: string,
+    opts: Pick<DecomposeOptions, "onUsage"> = {},
   ): Promise<GoalTree | null> {
     const failingNode = tree.nodes.get(failingNodeId);
     if (!failingNode) return null;
@@ -486,6 +495,7 @@ export class GoalDecomposer {
     const llmOutput = await this.callLLMForDecomposition(
       REACTIVE_PROMPT,
       userMessage,
+      { onUsage: opts.onUsage },
     );
 
     if (!llmOutput) return null;
@@ -528,7 +538,7 @@ export class GoalDecomposer {
   private async callLLMForDecomposition(
     systemPrompt: string,
     userMessage: string,
-    opts: { readonly rejectExplorationOnly?: boolean; readonly signal?: AbortSignal } = {},
+    opts: DecomposeOptions & { readonly rejectExplorationOnly?: boolean } = {},
   ): Promise<LLMDecompositionOutput | null> {
     if (!this.provider) return null;
     const { signal } = opts;
@@ -569,6 +579,9 @@ export class GoalDecomposer {
           });
           break;
         } catch (err) {
+          // What the failed call had already spent (the chain hangs it on the error) is billed
+          // first, whatever the ladder does next — a cancel or a quota stop spent it too.
+          const lostBilled = reportFailedAttemptUsage(opts.onUsage, err, this.provider.name);
           // The cancel aborted the call in flight: that is not a provider failure.
           if (signal?.aborted) return null;
           const msg = err instanceof Error ? err.message : String(err);
@@ -602,13 +615,22 @@ export class GoalDecomposer {
           getLoggerSafe().warn(
             `Goal decomposition attempt ${round + 1}/${rounds} failed` +
               (transient && round < rounds - 1 ? "; retrying on the slow clock" : ""),
-            { error: msg.slice(0, 200) },
+            {
+              error: msg.slice(0, 200),
+              usage: lostBilled ? "billed from the chain's record of the lost attempts" : "not measured — the call threw before a reply",
+            },
           );
           if (!transient || round === rounds - 1) throw err;
         }
       }
       if (!response) {
         return null;
+      }
+      // Billed before the parse: a reply the parse refuses still cost its tokens.
+      const unmeasured = reportDecompositionUsage(opts.onUsage, response, this.provider.name);
+      if (unmeasured) {
+        const { getLoggerSafe } = await import("../utils/logger.js");
+        getLoggerSafe().warn("Goal decomposition usage not measured — nothing billed for this call", unmeasured);
       }
 
       let parsed = parseLLMOutput(response.text);
