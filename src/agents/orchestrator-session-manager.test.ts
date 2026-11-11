@@ -297,15 +297,40 @@ describe("SessionManager", () => {
     expect(JSON.stringify(session.messages)).toContain(recall);
     expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
 
-    // On a tool-result turn that holds nothing else: no user text, as without the recall.
+    // On a tool-result turn: the user's words before it, as without the recall.
     session.messages.push(
       { role: "assistant", content: "", tool_calls: [{ id: "tc-1", name: "file_read", input: {} }] } as never,
       { role: "user", content: [{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }] } as never,
     );
     ledger.add(session.messages, recall);
     expect(JSON.stringify(session.messages.at(-1))).toContain(recall);
-    expect(sm.extractLastUserMessage(session)).toBe("");
+    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
     expect(sm.extractLastUserContent(session)).toEqual([{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }]);
+  });
+
+  it("the system's text on a tool-result turn is not what the user said (buildToolResultContentBlocks)", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    const toolTurn = (id: string) => [
+      { role: "assistant", content: "", tool_calls: [{ id, name: "file_read", input: {} }] },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: id, content: "ok" },
+          { type: "text", text: "[VERIFY] 2 files modified without build check" },
+          { type: "text", text: "## Plan State\n- step 1 done" },
+        ],
+      },
+    ] as never[];
+
+    // A worker's session holds no user turn: nothing, so the readers fall back to the task.
+    session.messages.push(...toolTurn("tc-1"));
+    expect(sm.extractLastUserMessage(session)).toBe("");
+
+    // An interactive one: the person's last words, however many tool turns follow them.
+    sm.appendVisibleUserMessage(session, "rename the spawner");
+    session.messages.push(...toolTurn("tc-2"), ...toolTurn("tc-3"));
+    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
   });
 
   it("a user turn that holds only a recall is passed over for the user's words before it (recall-ledger.ts)", () => {

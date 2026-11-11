@@ -103,9 +103,9 @@ describe("the consensus step reads the run's request", () => {
     const state = transitionPhase(createInitialState(TASK), AgentPhase.EXECUTING);
 
     await portExecuteToolTurn(deps, [write(1), undefined, state, "Writing the first part"], runCtx);
-    // What the session's last user-role message says now: not the request.
+    // What the session's last user-role message holds now: not the request.
     expect(session.messages.length).toBeGreaterThan(1);
-    expect(sm.extractLastUserMessage(session as never)).not.toBe(TASK);
+    expect(sm.extractLastUserContent(session as never)).not.toBe(TASK);
 
     await portExecuteToolTurn(deps, [write(2), undefined, state, "Writing the second part"], runCtx);
     expect(consensusPrompts).toEqual([TASK, TASK]);
