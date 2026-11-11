@@ -311,6 +311,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     handlePlanPhase: spies.handlePlanPhase,
     decomposeGoalsIfPlanning: async (p) => p.agentState,
     executeToolCalls: spies.executeToolCalls,
+    phaseRefuses: () => false,
     getInteractiveIterationLimit: () => opts.iterationLimit ?? 10,
     getBackgroundEpochIterationLimit: () => opts.bgEpochLimit ?? opts.iterationLimit ?? 10,
     canAutoContinueBackgroundEpoch: () => opts.canContinueEpoch ?? false,
@@ -769,14 +770,16 @@ describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing
 
     await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
 
-    // D2: executeToolCalls receives (toolCalls, session, agentState, response.text, runScope) — the
-    // 4th arg is the assistant's pre-tool text the port pushes onto the session before the tool results.
+    // D2: executeToolCalls receives (toolCalls, session, agentState, response.text, runScope, split) —
+    // the 4th arg is the assistant's pre-tool text the port pushes onto the session before the tool
+    // results; the 6th is the turn's calls split by phase (agent-core/engine/phase-write-access.ts).
     expect(port.spies.executeToolCalls).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ name: "edit_file" })]),
       expect.anything(), // session
       expect.anything(), // agentState
       "thinking before the tools", // ← response.text (D2 — was dropped before the fix)
       expect.objectContaining({ signal: expect.any(AbortSignal) }), // the run's scope for its tools
+      expect.objectContaining({ runnable: [expect.objectContaining({ id: "tc-1" })], refusals: new Map() }),
     );
   });
 });

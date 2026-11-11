@@ -13,8 +13,8 @@ import { describe, it, expect, vi } from "vitest";
 import { ControlLoopTracker } from "../../agents/autonomy/control-loop-tracker.js";
 import { portExecuteToolTurn, isPlainLoop, summarizePlainLoopBatch, type ToolTurnDeps } from "./tool-turn.js";
 import type { EngineRunContext } from "./engine-deps.js";
-import { AgentPhase, createInitialState } from "../../agents/agent-state.js";
-import { phaseWriteRefusalResult } from "./phase-write-access.js";
+import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
+import { phaseWriteRefusalResult, splitCallsByPhase, type PhaseRefuses } from "./phase-write-access.js";
 import { createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.js";
 import { IterationHealthTracker } from "../../agents/iteration-health-tracker.js";
 import type { ToolCall, ToolResult } from "../../agents/providers/provider.interface.js";
@@ -375,11 +375,19 @@ describe("portExecuteToolTurn — a check polled with the same answer is a stall
 });
 
 /**
- * A write the phase gate refused ran nothing (phase-write-access.ts). Marked as an execution it
+ * A write the phase refused ran nothing (phase-write-access.ts). Marked as an execution it
  * counted as progress: a write ends a read-only streak and says the run changed something, and a
- * batch of nothing but refusals told the monitor the step before it had failed.
+ * batch of nothing but refusals told the monitor the step before it had failed. The turn gets its
+ * calls split as the spine splits them; a refused write that reached the executor would be
+ * answered with the refusal, and counted.
  */
 describe("portExecuteToolTurn — a write refused while planning is not an execution", () => {
+  const refuses: PhaseRefuses = (name, phase) => name === "file_write" && phase !== AgentPhase.EXECUTING;
+  /** The tool turn's args as the spine passes them: the turn's calls, split by its phase. */
+  const turnArgs = (made: ToolCall[], state: AgentState): unknown[] => {
+    const split = splitCallsByPhase(made, state.phase, refuses);
+    return [split.runnable, undefined, state, "", undefined, split];
+  };
   const reads = (n: number) =>
     Array.from({ length: n }, (_, i) => ({ id: `tc-r${i}`, name: "file_read", input: { path: `f${i}.txt` } })) as unknown as ToolCall[];
   const write = { id: "tc-w", name: "file_write", input: { path: "notes/a.txt", content: "A" } } as unknown as ToolCall;
@@ -392,7 +400,7 @@ describe("portExecuteToolTurn — a write refused while planning is not an execu
   it("a refused write neither ends the read-only streak nor counts as a change", async () => {
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
     const deps = makeDeps(answering((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING)));
-    await portExecuteToolTurn(deps, [[...reads(2), write], undefined, planning, ""], makeRunCtx({ controlLoopTracker: tracker }));
+    await portExecuteToolTurn(deps, turnArgs([...reads(2), write], planning), makeRunCtx({ controlLoopTracker: tracker }));
 
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(2);
     expect(tracker.hadMutationsSinceLastReset()).toBe(false);
@@ -401,7 +409,7 @@ describe("portExecuteToolTurn — a write refused while planning is not an execu
   it("a write that ran still does both", async () => {
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
     const deps = makeDeps(answering((tc) => ({ toolCallId: tc.id, content: "File written: notes/a.txt", isError: false })));
-    await portExecuteToolTurn(deps, [[...reads(2), write], undefined, planning, ""], makeRunCtx({ controlLoopTracker: tracker }));
+    await portExecuteToolTurn(deps, turnArgs([...reads(2), write], { ...planning, phase: AgentPhase.EXECUTING }), makeRunCtx({ controlLoopTracker: tracker }));
 
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
     expect(tracker.hadMutationsSinceLastReset()).toBe(true);
@@ -410,12 +418,12 @@ describe("portExecuteToolTurn — a write refused while planning is not an execu
   it("the progress line names the calls that ran, and a batch in which nothing ran reports none", async () => {
     const refuse = answering((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING));
     const refusedOnly = makeDeps({ ...refuse, buildToolBatchProgressSignal: vi.fn(() => ({ kind: "analysis" })) as never });
-    const onlyRefused = await portExecuteToolTurn(refusedOnly, [[write], undefined, planning, ""], makeRunCtx());
+    const onlyRefused = await portExecuteToolTurn(refusedOnly, turnArgs([write], planning), makeRunCtx());
     expect(refusedOnly.buildToolBatchProgressSignal).not.toHaveBeenCalled();
     expect((onlyRefused as { progressSignal?: unknown }).progressSignal).toBeUndefined();
 
     const mixed = makeDeps({ ...refuse, buildToolBatchProgressSignal: vi.fn(() => ({ kind: "analysis" })) as never });
-    await portExecuteToolTurn(mixed, [[...reads(1), write], undefined, planning, ""], makeRunCtx());
+    await portExecuteToolTurn(mixed, turnArgs([...reads(1), write], planning), makeRunCtx());
     expect(mixed.buildToolBatchProgressSignal).toHaveBeenCalledWith(expect.objectContaining({ toolCalls: reads(1) }));
   });
 
@@ -432,21 +440,55 @@ describe("portExecuteToolTurn — a write refused while planning is not an execu
       return { deps, classify };
     };
     const refused = consensus((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING));
-    await portExecuteToolTurn(refused.deps, [[write], undefined, planning, ""], makeRunCtx());
+    await portExecuteToolTurn(refused.deps, turnArgs([write], planning), makeRunCtx());
     expect(refused.classify).not.toHaveBeenCalled();
 
     const ran = consensus((tc) => ({ toolCallId: tc.id, content: "File written: notes/a.txt", isError: false }));
-    await portExecuteToolTurn(ran.deps, [[write], undefined, { ...planning, phase: AgentPhase.EXECUTING }, ""], makeRunCtx());
+    await portExecuteToolTurn(ran.deps, turnArgs([write], { ...planning, phase: AgentPhase.EXECUTING }), makeRunCtx());
     expect(ran.classify).toHaveBeenCalled();
+  });
+
+  it("the session keeps every call the model made and answers each in its order, a refused one with its refusal", async () => {
+    const executed: string[] = [];
+    const deps = makeDeps({
+      executeToolCalls: async (_chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> => {
+        executed.push(...toolCalls.map((tc) => tc.id));
+        return toolCalls.map((tc) => ({ toolCallId: tc.id, content: `read ${tc.id}`, isError: false }) as ToolResult);
+      },
+    } as Partial<ToolTurnDeps>);
+    const runCtx = makeRunCtx();
+    const [first, second] = reads(2);
+    const turn = await portExecuteToolTurn(deps, turnArgs([first!, write, second!], planning), runCtx);
+
+    expect(executed).toEqual(["tc-r0", "tc-r1"]);
+    expect(turn.trace.map((t) => t.toolCallId)).toEqual(["tc-r0", "tc-r1"]);
+    expect(turn.advancedState.stepResults.map((s) => s.toolName)).toEqual(["file_read", "file_read"]);
+    const messages = (runCtx.session as { messages: { role: string; content: unknown; tool_calls?: ToolCall[] }[] }).messages;
+    expect(messages[0]!.tool_calls!.map((tc) => tc.id)).toEqual(["tc-r0", "tc-w", "tc-r1"]);
+    const answers = (messages[1]!.content as { type: string; tool_use_id?: string; content?: string; is_error?: boolean }[])
+      .filter((b) => b.type === "tool_result");
+    expect(answers.map((b) => [b.tool_use_id, b.is_error === true])).toEqual([["tc-r0", false], ["tc-w", true], ["tc-r1", false]]);
+    expect(answers[1]!.content).toBe(phaseWriteRefusalResult("tc-w", AgentPhase.PLANNING).content);
+  });
+
+  it("a turn in which nothing ran takes no step and runs nothing", async () => {
+    const executeToolCalls = vi.fn(async () => [] as ToolResult[]);
+    const deps = makeDeps({ executeToolCalls } as Partial<ToolTurnDeps>);
+    const turn = await portExecuteToolTurn(deps, turnArgs([write], planning), makeRunCtx());
+
+    expect(executeToolCalls).not.toHaveBeenCalled();
+    expect(turn.trace).toEqual([]);
+    expect(turn.advancedState.stepResults).toEqual([]);
+    expect(turn.advancedState.iteration).toBe(planning.iteration);
   });
 
   it("a batch of nothing but refusals does not mark the step before it failed; a write that ran and failed does", async () => {
     const refusedOnly = makeDeps(answering((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING)));
-    await portExecuteToolTurn(refusedOnly, [[write], undefined, planning, ""], makeRunCtx());
+    await portExecuteToolTurn(refusedOnly, turnArgs([write], planning), makeRunCtx());
     expect(refusedOnly.emitPlainLoopStep).toHaveBeenCalledWith(expect.objectContaining({ priorBatchFailed: false }));
 
     const failed = makeDeps(answering((tc) => ({ toolCallId: tc.id, content: "Error: could not write file (EISDIR)", isError: true })));
-    await portExecuteToolTurn(failed, [[write], undefined, { ...planning, phase: AgentPhase.EXECUTING }, ""], makeRunCtx());
+    await portExecuteToolTurn(failed, turnArgs([write], { ...planning, phase: AgentPhase.EXECUTING }), makeRunCtx());
     expect(failed.emitPlainLoopStep).toHaveBeenCalledWith(expect.objectContaining({ priorBatchFailed: true }));
   });
 });

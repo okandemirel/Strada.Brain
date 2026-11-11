@@ -25,6 +25,7 @@ import type { ConfidenceEstimator } from "../agent-core/routing/confidence-estim
 import type { MemoryRefresher } from "./memory-refresher.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import type { PhaseCallSplit } from "../agent-core/engine/phase-write-access.js";
 
 /**
  * The first clause of a prompt — the ≤2s intent-ack fallback shared by the v1 port's
@@ -49,7 +50,15 @@ export function firstClause(prompt: string): string {
 export interface ExecuteAndTrackToolsParams {
   chatId: string;
   responseText: string;
+  /** The calls that run. Only these are executed and tracked. */
   toolCalls: ToolCall[];
+  /**
+   * The model turn's calls as the spine split them by phase, when it did
+   * (agent-core/engine/phase-write-access.ts): the assistant turn carries every call the model
+   * made (`asMade`), and a refused one is answered in the session by its refusal and reaches no
+   * tracker. Absent, the turn's calls are `toolCalls`.
+   */
+  split?: PhaseCallSplit;
   session: { messages: ConversationMessage[] };
   executeToolCalls: (chatId: string, toolCalls: ToolCall[], opts: Record<string, unknown>) => Promise<ToolResult[]>;
   executeOptions: Record<string, unknown>;
@@ -75,37 +84,42 @@ export async function executeAndTrackTools(
     chatId,
     responseText,
     toolCalls,
+    split,
     session,
     executeToolCalls,
     executeOptions,
     trackingParams,
   } = params;
+  const asMade = split?.asMade ?? toolCalls;
 
-  // Push the assistant message with tool_calls into the session
+  // Push the assistant message with tool_calls into the session: every call the model made.
   session.messages.push({
     role: "assistant",
     content: responseText,
-    tool_calls: toolCalls,
+    tool_calls: [...asMade],
   });
 
   let toolResults: ToolResult[] | undefined;
   try {
-    // Execute all tool calls
-    toolResults = await executeToolCalls(chatId, toolCalls, executeOptions);
+    // Execute the calls that run; a turn whose every call was refused runs and tracks nothing.
+    toolResults = toolCalls.length > 0 ? await executeToolCalls(chatId, toolCalls, executeOptions) : [];
 
     // Autonomy tracking
-    trackAndRecordToolResults({
-      chatId,
-      toolCalls,
-      toolResults,
-      ...trackingParams,
-    });
+    if (toolCalls.length > 0) {
+      trackAndRecordToolResults({
+        chatId,
+        toolCalls,
+        toolResults,
+        ...trackingParams,
+      });
+    }
   } catch (error) {
     // The tool_use turn is already in the session, and sessions persist: left
     // without its tool_result, every later request on the chat is rejected.
-    // Answer every call id — with the real result where one exists — then let
-    // the caller see the failure.
-    session.messages.push({ role: "user", content: toolResultsOrFailure(toolCalls, toolResults, error) });
+    // Answer every call id — with the real result or the refusal where one
+    // exists — then let the caller see the failure.
+    const answered = [...(toolResults ?? []), ...(split?.refusals.values() ?? [])];
+    session.messages.push({ role: "user", content: toolResultsOrFailure(asMade, answered, error) });
     throw error;
   }
 

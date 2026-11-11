@@ -34,7 +34,6 @@ import {
   transitionToVerifierReplan,
 } from "./orchestrator-phase-telemetry.js";
 import { getLogger } from "../utils/logger.js";
-import { isPhaseWriteRefusal } from "../agent-core/engine/phase-write-access.js";
 import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 
 /** Shared parameter shape for functions that operate on a single PAOR loop step. */
@@ -276,22 +275,15 @@ export interface RecordStepResultsResult {
 export function recordStepResultsAndCheckReflection(
   params: RecordStepResultsParams,
 ): RecordStepResultsResult {
-  const { reflectInterval } = params;
+  const { toolCalls, toolResults, reflectInterval } = params;
   let { agentState } = params;
-
-  // A write the phase gate refused ran nothing: it is the model's answer, not a step the run
-  // took (src/agent-core/engine/phase-write-access.ts). Recorded as a failed write it stayed an
-  // open failing path for the verifier, forced reflections and overrode a DONE.
-  const ran = params.toolCalls.flatMap((tc, i) =>
-    isPhaseWriteRefusal(params.toolResults[i]) ? [] : [{ tc, tr: params.toolResults[i]! }],
-  );
-  if (ran.length === 0 && params.toolCalls.length > 0) return { agentState, shouldReflect: false };
-  const toolCalls = ran.map((pair) => pair.tc);
 
   // Batch new steps to avoid O(n²) array spreading inside the loop
   const newSteps: StepResult[] = [];
   let consecutiveErrors = agentState.consecutiveErrors;
-  for (const { tc, tr } of ran) {
+  for (let i = 0; i < toolCalls.length; i++) {
+    const tc = toolCalls[i]!;
+    const tr = toolResults[i]!;
     const isError = tr.isError ?? false;
     const summary = tr.content.slice(0, 200);
     newSteps.push({
