@@ -24,7 +24,6 @@ import type { TaskManager } from "../../tasks/task-manager.js";
 import type { TaskCheckpointStore } from "../../tasks/task-checkpoint-store.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
-import type { MetricsCollector } from "../../dashboard/metrics.js";
 import type { IRAGPipeline } from "../../rag/rag.interface.js";
 import type { RateLimiter } from "../../security/rate-limiter.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -81,11 +80,13 @@ interface ToolRegistryLike {
  * that runs a chat turn. Every key is required, so bootstrap cannot build the
  * object without deciding each one; a dependency added here reaches the root,
  * every per-agent orchestrator and every delegated one at once. The learning
- * bus and the instinct retriever were passed beside it, so a delegated run
- * emitted no tool result to learning and retrieved no instinct.
+ * bus, the instinct retriever and the dashboard counters were passed beside
+ * it, so a delegated run emitted no tool result to learning, retrieved no
+ * instinct, and counted no tool call or token where /api/metrics reads.
  */
 type SharedOrchestratorDepKey =
   | "eventEmitter"
+  | "metrics"
   | "instinctRetriever"
   | "trajectoryReplayRetriever"
   | "learningPipeline"
@@ -174,7 +175,6 @@ export interface AgentManagerOptions {
   readonly projectPath: string;
   readonly readOnly: boolean;
   readonly requireConfirmation: boolean;
-  readonly metrics?: MetricsCollector;
   readonly ragPipeline?: IRAGPipeline;
   readonly rateLimiter?: RateLimiter;
   readonly defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
@@ -850,7 +850,6 @@ export class AgentManager {
       readOnly: this.opts.readOnly,
       requireConfirmation: this.opts.requireConfirmation,
       memoryManager: adapter,
-      metrics: this.opts.metrics,
       ragPipeline: this.opts.ragPipeline,
       rateLimiter: this.opts.rateLimiter,
       defaultLanguage: this.opts.defaultLanguage,

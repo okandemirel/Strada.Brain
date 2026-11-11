@@ -12,9 +12,10 @@
  *
  * These tests drive the real AgentManager → real Orchestrator construction and
  * read the per-agent orchestrator through the surfaces a run uses. The last
- * block is a textual tripwire over the two construction sites: bootstrap's root
+ * blocks are textual tripwires over the construction sites: bootstrap's root
  * orchestrator cannot be run in a unit test, so a dependency added there is
- * caught by comparing the two option lists instead.
+ * caught by comparing the root's option list with the per-agent one and with
+ * DelegationManager's delegated one.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,6 +111,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       // Not the manager's own eventBus: the run's learning bus comes from here.
       eventEmitter: { tag: "learning-bus", emit: vi.fn() } as never,
       instinctRetriever: { tag: "instinct-retriever" } as never,
+      metrics: { tag: "dashboard-metrics" } as never,
       trajectoryReplayRetriever: { tag: "trajectory-replay" } as never,
       learningPipeline: { tag: "learning-pipeline" } as never,
       errorLearningHooks: { tag: "error-learning-hooks" } as never,
@@ -272,6 +274,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
     for (const key of [
       "eventEmitter",
       "instinctRetriever",
+      "metrics",
       "learningPipeline",
       "errorLearningHooks",
       "interventionEngine",
@@ -398,5 +401,75 @@ describe("per-agent Orchestrator construction (tripwire over the construction si
     const bootstrap = read("../../core/bootstrap.ts");
     const call = bootstrap.slice(bootstrap.indexOf("await initializeMultiAgentDelegationStage({"));
     expect(call.slice(0, call.indexOf("});"))).toMatch(/\bsharedOrchestratorDeps\b/);
+  });
+});
+
+// =============================================================================
+// Tripwire: a root dependency cannot be dropped at the delegated site unnoticed
+// =============================================================================
+
+/**
+ * Root-orchestrator options a delegated sub-agent's orchestrator deliberately
+ * does not take, and why. A delegate is a sub-task run: its prompt is the
+ * parent model's brief, its user id is "sub-agent", its channel only captures,
+ * and its spend is bounded by the delegation budget. Options marked "separate
+ * work" would change what a delegated run costs or what the user sees; each is
+ * its own proposal, not a silent drop. Anything the root gets that is neither
+ * here nor at the delegated site fails the test below.
+ */
+const DELEGATE_EXEMPT: Record<string, string> = {
+  // Root-only, as for per-agent orchestrators (ROOT_ONLY above).
+  taskExecutionStore: "the root memory's execution store; a sub-task's turns are not the user's execution history",
+  sessionSummarizer: "summarizes into the root memory's execution store, which a delegate does not write",
+  memoryDbPath: "the root's session files; a delegate's session lives and ends with its run",
+  interruptedGoalTrees: "the last process's goal trees resume once, on the root, not once per delegation",
+  crashRecoveryContext: "crash recovery is reported once, by the root, to the user",
+  // Separate work: each changes what a delegated run costs or what the user sees.
+  memoryManager:
+    "the user's memory: storeConversation would file sub-agent turns as the user's conversation, and recall " +
+    "would add the user's history to every sub-task prompt (tokens); separate work",
+  ragPipeline: "code retrieval adds RAG context and embedding calls to every delegated prompt (cost); separate work",
+  embeddingProvider:
+    "embeds the task at run setup for memory recall and re-retrieval, which a delegate does not run (no " +
+    "memoryManager): an embedding call per delegation for nothing; separate work",
+  reRetrievalConfig: "drives the in-run MemoryRefresher, which re-queries memory and RAG; inert without them; separate work",
+  rateLimiter:
+    "the user's message rate and daily token quota: delegated tokens would count against the user and could refuse " +
+    "their next message; delegated spend is bounded by the delegation budget instead; separate work",
+  metricsRecorder:
+    "task-metric rows: a delegated run carries no parentMetricId, so every delegation would be recorded as a " +
+    "'background' task and skew the learning stats; needs the parent metric id first; separate work",
+  goalDecomposer: "decomposition spends extra LLM calls and nests goal trees inside a sub-task bounded by maxIterations (cost); separate work",
+  supervisorBrain: "the supervisor would fan a delegated sub-task out to further workers (cost, depth beyond maxDepth); separate work",
+  dmPolicy:
+    "the user's per-chat autonomy and approval state; a delegate runs with requireConfirmation false on a capture " +
+    "channel, and sharing it would let a sub-agent read or set the user's approvals; separate work",
+  userProfileStore:
+    "the user's profiles: a delegate's user id is 'sub-agent', so touchLastSeen and the prompt-derived profile " +
+    "update would create a phantom user; separate work",
+  soulLoader: "persona text is chosen by the user's profile, which a delegate does not have; a persona changes what a sub-task returns; separate work",
+  getIdentityState: "the daemon's identity section (name, boot count, uptime) in the prompt the user talks to; a sub-task brief does not need it (tokens); separate work",
+};
+
+describe("delegated Orchestrator construction (tripwire over the construction sites)", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const anchor = "const orchestrator = new Orchestrator({";
+  const root = orchestratorOptionKeys(read("../../core/bootstrap.ts"), anchor);
+  const delegated = orchestratorOptionKeys(read("./delegation/delegation-manager.ts"), anchor);
+
+  it("spreads the one shared deps object at the delegated site", () => {
+    expect(delegated.spreads).toContain("this.opts.sharedOrchestratorDeps");
+  });
+
+  it("gives the delegated orchestrator every option the root gets, or names why not", () => {
+    const dropped = [...root.keys].filter((key) => !delegated.keys.has(key) && !(key in DELEGATE_EXEMPT));
+    expect(dropped, "root options a delegated run would run without: pass them or list them in DELEGATE_EXEMPT").toEqual([]);
+  });
+
+  it("lists in DELEGATE_EXEMPT only options the root really has and the delegate really lacks", () => {
+    for (const key of Object.keys(DELEGATE_EXEMPT)) {
+      expect(root.keys.has(key), `${key} is a root option`).toBe(true);
+      expect(delegated.keys.has(key), `${key} is not passed to a delegate`).toBe(false);
+    }
   });
 });
