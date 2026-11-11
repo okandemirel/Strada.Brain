@@ -412,10 +412,14 @@ describe("per-agent Orchestrator construction (tripwire over the construction si
  * Root-orchestrator options a delegated sub-agent's orchestrator deliberately
  * does not take, and why. A delegate is a sub-task run: its prompt is the
  * parent model's brief, its user id is "sub-agent", its channel only captures,
- * and its spend is bounded by the delegation budget. Options marked "separate
- * work" would change what a delegated run costs or what the user sees; each is
- * its own proposal, not a silent drop. Anything the root gets that is neither
- * here nor at the delegated site fails the test below.
+ * and its spend is bounded by the delegation budget. Anything the root gets
+ * that is neither here nor at the delegated site fails the test below.
+ *
+ * Each "measured" reason is what delegation/delegation-root-deps-measure.test.ts
+ * saw when the option was handed to a real delegated run (2 provider calls,
+ * ~13,800 input tokens, a 24,775-char system prompt without it). That file
+ * cannot see whether a real model answers better with the option, only what
+ * the run sends, calls and writes.
  */
 const DELEGATE_EXEMPT: Record<string, string> = {
   // Root-only, as for per-agent orchestrators (ROOT_ONLY above).
@@ -424,31 +428,48 @@ const DELEGATE_EXEMPT: Record<string, string> = {
   memoryDbPath: "the root's session files; a delegate's session lives and ends with its run",
   interruptedGoalTrees: "the last process's goal trees resume once, on the root, not once per delegation",
   crashRecoveryContext: "crash recovery is reported once, by the root, to the user",
-  // Separate work: each changes what a delegated run costs or what the user sees.
+  // Measured: each costs a delegated run something, or changes what the user sees, for no gain the run shows.
   memoryManager:
-    "the user's memory: storeConversation would file sub-agent turns as the user's conversation, and recall " +
-    "would add the user's history to every sub-task prompt (tokens); separate work",
-  ragPipeline: "code retrieval adds RAG context and embedding calls to every delegated prompt (cost); separate work",
+    "measured: recall is scoped to the person, so a delegate ('sub-agent') finds none of the user's memory and its " +
+    "prompt is unchanged; what it does instead is file its brief and answer in the user's memory DB, twice per run " +
+    "(two conversation entries under its delegation chat, three embedding calls), where nothing reads them",
+  ragPipeline:
+    "measured: one search per run, which embeds the query itself, and the code context rides on every worker call " +
+    "(+5,392 chars, ~1,350 tokens per call for six ~890-char chunks; RAG_CONTEXT_MAX_TOKENS caps it at 4,000 tokens " +
+    "per call). The delegate reads code with its tools; whether the context is worth that is the owner's cost call",
   embeddingProvider:
-    "embeds the task at run setup for memory recall and re-retrieval, which a delegate does not run (no " +
-    "memoryManager): an embedding call per delegation for nothing; separate work",
-  reRetrievalConfig: "drives the in-run MemoryRefresher, which re-queries memory and RAG; inert without them; separate work",
+    "measured: one embedding of the whole brief per run, read by nothing a delegate has (no memoryManager, no " +
+    "ragPipeline); the prompt and the provider calls are unchanged",
+  reRetrievalConfig:
+    "measured: beside the delegate's instinct retriever it re-asks that retriever once five iterations in, and the " +
+    "insights it gets are already in the prompt (0 tokens, 0 provider calls, same answer); its memory and RAG " +
+    "refreshes need options a delegate does not have",
   rateLimiter:
     "the user's message rate and daily token quota: delegated tokens would count against the user and could refuse " +
     "their next message; delegated spend is bounded by the delegation budget instead; separate work",
   metricsRecorder:
     "task-metric rows: a delegated run carries no parentMetricId, so every delegation would be recorded as a " +
     "'background' task and skew the learning stats; needs the parent metric id first; separate work",
-  goalDecomposer: "decomposition spends extra LLM calls and nests goal trees inside a sub-task bounded by maxIterations (cost); separate work",
-  supervisorBrain: "the supervisor would fan a delegated sub-task out to further workers (cost, depth beyond maxDepth); separate work",
+  goalDecomposer:
+    "measured: one extra LLM call per delegation (+2,562 tokens on a ~13,900-token run), of which the delegation's " +
+    "budget is charged 158 because the decomposer reports no usage; the answer is the same",
+  supervisorBrain:
+    "measured: a delegated run never asks it (0 calls, with the complexity threshold at 'simple'): only the background " +
+    "executor admits work to the supervisor, so passing it changes nothing today and would fan a sub-task out the day a " +
+    "delegate is admitted",
   dmPolicy:
-    "the user's per-chat autonomy and approval state; a delegate runs with requireConfirmation false on a capture " +
-    "channel, and sharing it would let a sub-agent read or set the user's approvals; separate work",
+    "measured: a delegate builds its own; the root's, passed alone, is asked twice and changes nothing (approvals are " +
+    "self-managed, requireConfirmation is false); beside the user profiles it keeps one never-expiring entry per " +
+    "delegation. The user's per-chat state is keyed by their id and chat and is not reachable either way",
   userProfileStore:
-    "the user's profiles: a delegate's user id is 'sub-agent', so touchLastSeen and the prompt-derived profile " +
-    "update would create a phantom user; separate work",
-  soulLoader: "persona text is chosen by the user's profile, which a delegate does not have; a persona changes what a sub-task returns; separate work",
-  getIdentityState: "the daemon's identity section (name, boot count, uptime) in the prompt the user talks to; a sub-task brief does not need it (tokens); separate work",
+    "measured: the brief's text created a profile row for the user id 'sub-agent', which every later delegate reads " +
+    "(+169 chars per call); no real user's row is read or written",
+  soulLoader:
+    "measured: the persona file rides on every worker call (+3,823 chars, ~956 tokens per call), with rules written " +
+    "for the user's chat: use their name, suggest next steps, ask one question",
+  getIdentityState:
+    "measured: the daemon's identity section (name, boot count, uptime) rides on every worker call (+235 chars, " +
+    "~59 tokens per call); a sub-task brief does not use it",
 };
 
 describe("delegated Orchestrator construction (tripwire over the construction sites)", () => {
