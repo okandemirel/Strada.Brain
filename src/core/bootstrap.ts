@@ -1530,6 +1530,9 @@ async function bootstrapImpl(
   // this one, and (multi-agent on) the per-agent ones that run every chat.
   // Those were built from a separate list and got none of these.
   const sharedOrchestratorDeps: SharedOrchestratorDeps = {
+    // No bus: no tool result reaches learning. No retriever: no instinct is used.
+    eventEmitter: learningResult.eventBus,
+    instinctRetriever,
     trajectoryReplayRetriever,
     // THE PIPELINE THE RUN TALKS TO. Without these two the orchestrator holds
     // nulls: guidance exposure ("this rule was in the prompt"), run credit
@@ -1585,8 +1588,6 @@ async function bootstrapImpl(
     streamingEnabled: config.streamingEnabled,
     stradaDeps,
     stradaConfig: config.strada,
-    instinctRetriever,
-    eventEmitter: learningResult.eventBus,
     metricsRecorder,
     goalDecomposer,
     interruptedGoalTrees,
@@ -2034,7 +2035,6 @@ async function bootstrapImpl(
         metrics,
         ragPipeline,
         rateLimiter,
-        instinctRetriever,
         metricsRecorder,
         goalDecomposer,
         identityManager,
