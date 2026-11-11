@@ -90,5 +90,6 @@ describe.skipIf(process.platform === "win32")("scripts started through a symlink
       }
     }
     expect(offenders).toEqual([]);
-  });
+    // Walks scripts/ and src/: its own limit, not vitest's 30 s default (docs/contracts/wall-clock-assertions.md).
+  }, 120_000);
 });
