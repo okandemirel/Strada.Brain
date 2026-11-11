@@ -96,10 +96,20 @@ describe("mock-kimi-hook PAOR recovery script", () => {
       ...afterTwoFailures.slice(1),
       { role: "user", content: "Please create a new plan." },
     ]);
-    expect(replan.tools).toEqual([{ name: "file_write", input: { path: "Assets/paor-proof.txt", content: "paor ok\n" } }]);
+    // A write called in the replanning turn is refused (src/agent-core/engine/phase-write-access.ts):
+    // the replan is the plan alone, and the executing turn after it writes.
+    expect(replan.tools).toEqual([]);
+    expect(replan.text).toContain("Create Assets/paor-proof.txt directly");
+
+    const executing = await complete([
+      ...afterTwoFailures,
+      { role: "user", content: `Please create a new plan.\n\n${TURN_CONTEXT_HEADER}\n\n## Current Plan\n\n${replan.text}` },
+    ]);
+    expect(executing.tools).toEqual([{ name: "file_write", input: { path: "Assets/paor-proof.txt", content: "paor ok\n" } }]);
 
     const afterWrite = [
       ...afterTwoFailures,
+      { role: "user", content: "Please create a new plan." },
       ...toolTurn("w1", "file_write", { path: "Assets/paor-proof.txt", content: "paor ok\n" }, "File written: Assets/paor-proof.txt (2 lines, 8 bytes) (+.meta)"),
     ];
     const verify = await complete(afterWrite);
@@ -169,7 +179,37 @@ describe("mock-kimi-hook reads past the turn context", () => {
       ...failed("r2"),
       { role: "user", content: `Please create a new plan.\n\n${turnContext("## Replanning Phase\n\n### Failed Approaches")}` },
     ]);
-    expect(replan.tools).toEqual([{ name: "file_write", input: { path: "Assets/paor-proof.txt", content: "paor ok\n" } }]);
+    // Read as executing, this turn would write the proof; read as replanning, it is the plan alone.
+    expect(replan.tools).toEqual([]);
+    expect(replan.text).toContain("Create Assets/paor-proof.txt directly");
+  });
+
+  it("reads the planning phase from the turn context: the autonomy scenario plans before it writes", async () => {
+    const task = "Use file_write to create Assets/autonomy-proof.txt with exact content 'autonomy ok'.";
+    const planning = await complete([
+      { role: "system", content: "You are Strada." },
+      { role: "user", content: `${task}\n\n${turnContext("## PLAN Phase\n\nCreate a detailed numbered plan")}` },
+    ]);
+    expect(planning.tools).toEqual([]);
+    const executing = await complete([
+      { role: "system", content: "You are Strada." },
+      { role: "user", content: `${task}\n\n${turnContext(`## Current Plan\n\n${planning.text}`)}` },
+    ]);
+    expect(executing.tools).toEqual([{ name: "file_write", input: { path: "Assets/autonomy-proof.txt", content: "autonomy ok\n" } }]);
+  });
+
+  it("reads the planning phase from the turn context: the delegation scenario plans before it delegates", async () => {
+    const task = "Delegate a brief release-risk analysis to a sub-agent and return the delegated conclusion.";
+    const planning = await complete([
+      { role: "system", content: "You are Strada." },
+      { role: "user", content: `${task}\n\n${turnContext("## PLAN Phase\n\nCreate a detailed numbered plan")}` },
+    ]);
+    expect(planning.tools).toEqual([]);
+    const executing = await complete([
+      { role: "system", content: "You are Strada." },
+      { role: "user", content: `${task}\n\n${turnContext(`## Current Plan\n\n${planning.text}`)}` },
+    ]);
+    expect(executing.tools.map((t) => t.name)).toEqual(["delegate_analysis"]);
   });
 });
 

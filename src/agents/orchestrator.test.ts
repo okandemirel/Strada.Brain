@@ -20,7 +20,8 @@ import { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import { buildGoalTreeFromBlock } from "../goals/types.js";
 import { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import type { SessionId, TimestampMs, ToolName } from "../types/index.js";
-import { createInitialState } from "./agent-state.js";
+import { AgentPhase, createInitialState } from "./agent-state.js";
+import { phaseWriteRefusal } from "../agent-core/engine/phase-write-access.js";
 import { DEFAULT_TASK_CONFIG } from "../config/config.js";
 import { createWorkspaceBus } from "../dashboard/workspace-bus.js";
 import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
@@ -530,8 +531,9 @@ describe("Orchestrator", () => {
       requireConfirmation: true,
     });
 
+    const delegateTool = createMockTool("delegate_specialist");
     planningOrch.addTool({
-      ...createMockTool("delegate_specialist"),
+      ...delegateTool,
       metadata: {
         name: "delegate_specialist",
         description: "Delegates a subtask",
@@ -541,6 +543,16 @@ describe("Orchestrator", () => {
         requiresConfirmation: false,
       },
     } as any);
+
+    // The planning turn calls it. Its metadata says it writes (isReadOnly: false), so the phase
+    // gate refuses it there. The tool list itself is the same in every phase since 2026-11-11
+    // (src/agent-core/engine/phase-write-access.ts), so the derived metadata shows at the gate.
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Plan: delegate the analysis.",
+      toolCalls: [{ id: "tc-delegate", name: "delegate_specialist", input: {} }],
+      stopReason: "tool_use",
+      usage: { inputTokens: 10, outputTokens: 10 },
+    });
 
     const promise = planningOrch.handleMessage({
       channelType: "cli",
@@ -555,7 +567,11 @@ describe("Orchestrator", () => {
     const toolNames = (
       (mockProvider.chat.mock.calls[0]?.[2] as Array<{ name: string }> | undefined) ?? []
     ).map((tool) => tool.name);
-    expect(toolNames).not.toContain("delegate_specialist");
+    expect(toolNames).toContain("delegate_specialist");
+    expect(delegateTool.execute, "a tool whose metadata says it writes ran while planning").not.toHaveBeenCalled();
+    expect(getToolResultContents(mockProvider.chat.mock.calls[1]).join("\n")).toContain(
+      phaseWriteRefusal(AgentPhase.PLANNING),
+    );
   });
 
   it("persists only the visible transcript to conversation memory", async () => {

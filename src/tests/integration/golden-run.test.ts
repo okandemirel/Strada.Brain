@@ -80,7 +80,12 @@ function workerSteps(node: "alpha" | "beta", task: string, done: string, carries
     {
       step: `${node}: plan`,
       check: (call) =>
-        requires([isThisNode(call), offers(call, "file_write") && "a planning turn offers file_write"]),
+        requires([
+          isThisNode(call),
+          !offers(call, "file_write") && "the planning turn does not offer file_write",
+          !textOf(call.messages.at(-1)).includes("## Writes in this phase") &&
+            "the planning turn's context does not say that a write is refused",
+        ]),
       reply: say(`Plan: write notes/${node}.txt with file_write, then report.`),
     },
     {
@@ -195,16 +200,19 @@ describe("golden run: a two-node task through the real bootstrap", () => {
     ]);
     expect(readdirSync(run.leaseRoot), "a lease was never released").toEqual([]);
 
-    // A node's worker sends one system prompt, byte for byte, on every call, and the same tool
-    // list on its two EXECUTING calls. What a step rebuilds (the plan, the iteration, the role)
-    // rides at the end of the call's last user turn (src/agents/turn-context.ts): a system
-    // prompt that changed between calls made the provider's prefix cache miss the history.
+    // A node's worker sends one system prompt and one tool list, byte for byte, on every call.
+    // What a step rebuilds (the plan, the iteration, the role, the phase's write rule) rides at
+    // the end of the call's last user turn (src/agents/turn-context.ts): a system prompt or a
+    // tool list that changed between calls made the provider's prefix cache miss the history.
+    // Until 2026-11-11 the planning call's list had no write tools (phase-write-access.ts).
     for (const node of ["alpha", "beta"] as const) {
       const callFor = (step: string): ProviderCall => run.calls[run.served.indexOf(`${node}: ${step}`)]!;
       const [plan, act, report] = [callFor("plan"), callFor("act"), callFor("report")];
       expect(act.systemPrompt, `${node}: the system prompt changed between plan and act`).toBe(plan.systemPrompt);
       expect(report.systemPrompt, `${node}: the system prompt changed between act and report`).toBe(act.systemPrompt);
+      expect(JSON.stringify(act.tools), `${node}: the tool list changed between plan and act`).toBe(JSON.stringify(plan.tools));
       expect(JSON.stringify(report.tools), `${node}: the tool list changed within EXECUTING`).toBe(JSON.stringify(act.tools));
+      expect(textOf(act.messages.at(-1))).not.toContain("## Writes in this phase");
       expect(plan.systemPrompt).not.toContain("Current iteration");
       expect(textOf(act.messages.at(-1))).toContain(TURN_CONTEXT_HEADER);
       expect(textOf(report.messages.at(-1))).toMatch(/Current iteration: \d+/);

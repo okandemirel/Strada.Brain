@@ -717,6 +717,12 @@ export class V2AgentRunner implements AgentRunner {
             // named here is refused there, rather than executed in the phase that
             // exists to prevent it.
             //
+            // The calls run in the phase they were made in. The plan transition
+            // above has already moved `state` to EXECUTING, and the gate reads
+            // the phase from the state it is handed: given that one, a write
+            // named in the planning turn ran. It mattered once the tool list
+            // stopped hiding writes while planning (phase-write-access.ts).
+            //
             // The phase the plan transition just produced is kept:
             // recordStepResultsAndCheckReflection can hand back a REFLECTING
             // state, and letting that overwrite the move to EXECUTING would
@@ -725,7 +731,8 @@ export class V2AgentRunner implements AgentRunner {
               for (const tc of outcome.response.toolCalls) {
                 emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
               }
-              const planned = await this.executeTools(setup, outcome.response, state, runScope, () =>
+              const madeIn = { ...state, phase: prevPhase };
+              const planned = await this.executeTools(setup, outcome.response, madeIn, runScope, () =>
                 emit({ type: "heartbeat", source: "tool-running" }),
               );
               for (const tr of planned.trace) {
