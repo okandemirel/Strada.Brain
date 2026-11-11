@@ -66,6 +66,14 @@ const CSPROJ = `<Project Sdk="Microsoft.NET.Sdk">
   </PropertyGroup>
 </Project>`;
 
+/**
+ * The run's first turn is its planning turn, and a write called there is refused: the tool list
+ * is the same in every phase, and the phase's rule is enforced where the call runs
+ * (src/agent-core/engine/phase-write-access.ts). Until 2026-11-11 the runner ran a planning
+ * turn's calls after the plan transition, as if executing, and these scripts wrote in it.
+ */
+const PLAN_TURN = { text: "Plan: 1. make the change 2. report it", toolCalls: [], stopReason: "end_turn" as const };
+
 interface Harness {
   tempDir: string;
   tools: ITool[];
@@ -125,6 +133,7 @@ describe("File Write → Build Flow Integration", { timeout: 30_000 }, () => {
   describe("What the run actually produced", () => {
     it("writes the file the run asked for, and reports the tool's own result", async () => {
       mockProvider.queueResponses([
+        PLAN_TURN,
         {
           text: "I'll create the PlayerController script for you...",
           toolCalls: [
@@ -173,6 +182,7 @@ public class PlayerController : MonoBehaviour
       // as "called", because the mock was asked for it. Only the RESULT can
       // tell a write that happened from a write that was refused.
       mockProvider.queueResponses([
+        PLAN_TURN,
         {
           text: "I'll create the file...",
           toolCalls: [
@@ -212,6 +222,7 @@ public class PlayerController : MonoBehaviour
       );
 
       mockProvider.queueResponses([
+        PLAN_TURN,
         {
           text: "I'll update the GameManager with a new method...",
           toolCalls: [
@@ -251,6 +262,7 @@ public class PlayerController : MonoBehaviour
       manualChannel.onMessage((msg) => orchestrator.handleMessage(msg));
 
       mockProvider.queueResponses([
+        PLAN_TURN,
         {
           text: "I'll create the file...",
           toolCalls: [
@@ -280,6 +292,7 @@ public class PlayerController : MonoBehaviour
       declineChannel.onMessage((msg) => orchestrator.handleMessage(msg));
 
       mockProvider.queueResponses([
+        PLAN_TURN,
         {
           text: "I'll create the file...",
           toolCalls: [
@@ -346,6 +359,7 @@ public class PlayerController : MonoBehaviour
         mockProvider.clear();
 
         mockProvider.queueResponses([
+          PLAN_TURN,
           { text: `Testing ${testCase.name}...`, toolCalls: [testCase.toolCall], stopReason: "tool_use" },
           { text: "Done", toolCalls: [], stopReason: "end_turn" },
         ]);
@@ -373,6 +387,7 @@ public class PlayerController : MonoBehaviour
       roChannel.onMessage((msg) => orchestrator.handleMessage(msg));
 
       mockProvider.queueResponses([
+        PLAN_TURN,
         {
           text: "I'll try to create the file...",
           toolCalls: [
@@ -475,6 +490,7 @@ public class PlayerController : MonoBehaviour
       await writeBuildableProject();
 
       mockProvider.queueResponses([
+        PLAN_TURN,
         {
           text: "Creating Player...",
           toolCalls: [

@@ -9,6 +9,8 @@
  * The system prompt is passed through unchanged: what this step rebuilds goes into the turn
  * context, which rides at the end of the call's last user turn (src/agents/turn-context.ts). A
  * per-step section inside the system prompt broke the provider's prefix cache on almost every call.
+ * The tool list is built without the phase or the role, so it is the same on every call of a run;
+ * the phase's write rule rides in the turn context instead (./phase-write-access.ts).
  *
  * Import rule (cycle safety): orchestrator-FREE leaves only — the supervisor-routing helpers and
  * buildPhasePromptSection are all orchestrator-free; buildWorkerToolDefinitions is shell-stateful
@@ -17,7 +19,6 @@
 
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import type { AgentState } from "../../agents/agent-state.js";
-import type { AgentPhase } from "../../agents/agent-state.js";
 import type { ExecutionJournal } from "../../agents/autonomy/execution-journal.js";
 import type { IterationHealthTracker } from "../../agents/iteration-health-tracker.js";
 import type { TaskClassification } from "../routing/routing-types.js";
@@ -32,6 +33,7 @@ import {
 } from "../../agents/orchestrator-supervisor-routing.js";
 import { buildPhasePromptSection } from "../../agents/orchestrator-loop-utils.js";
 import { composeTurnContext } from "../../agents/turn-context.js";
+import { buildPhaseWriteNotice } from "./phase-write-access.js";
 
 /**
  * The "Provider Health Awareness" turn-context section, present only after a failure.
@@ -60,12 +62,11 @@ export interface WorkerToolDefinition {
 export interface PrepareIterationDeps {
   /** Shell callback — the supervisor routing context (shared with the accounting cluster). */
   readonly getSupervisorRoutingContext: () => SupervisorRoutingContext;
-  /** Shell callback — the tool registry is shell state (toolDefinitions + toolMetadataByName). */
-  readonly buildWorkerToolDefinitions: (
-    task: TaskClassification,
-    phase: AgentPhase,
-    role: SupervisorAssignment["role"],
-  ) => WorkerToolDefinition[];
+  /**
+   * Shell callback — the tool registry is shell state (toolDefinitions + toolMetadataByName).
+   * It is not given the phase or the role: the run's tool list is one list, byte for byte.
+   */
+  readonly buildWorkerToolDefinitions: (task: TaskClassification) => WorkerToolDefinition[];
 }
 
 export interface PrepareIterationParams {
@@ -89,8 +90,9 @@ export interface PreparedIteration {
   activePrompt: string;
   /**
    * What this step rebuilds: the phase section (plan, iteration, last reflection, execution
-   * journal), the worker-role section and the provider-health note, under TURN_CONTEXT_HEADER.
-   * Sent at the end of the call's last user turn and never stored; "" when there is none.
+   * journal), the phase's write notice, the worker-role section and the provider-health note,
+   * under TURN_CONTEXT_HEADER. Sent at the end of the call's last user turn and never stored;
+   * "" when there is none.
    */
   turnContext: string;
   currentAssignment: SupervisorAssignment;
@@ -123,11 +125,7 @@ export function prepareIteration(
     params.toolTurnAffinity,
   );
   const currentProvider = currentAssignment.provider;
-  const currentToolDefinitions = deps.buildWorkerToolDefinitions(
-    executionStrategy.task,
-    params.agentState.phase,
-    currentAssignment.role,
-  );
+  const currentToolDefinitions = deps.buildWorkerToolDefinitions(executionStrategy.task);
   const currentToolNames = currentToolDefinitions.map((d) => d.name);
   const roleSection = buildSupervisorRolePromptHelper(deps.getSupervisorRoutingContext(), executionStrategy, currentAssignment);
   // Present only after a failure during this task.
@@ -136,7 +134,12 @@ export function prepareIteration(
   return {
     executionStrategy,
     activePrompt: params.systemPrompt,
-    turnContext: composeTurnContext([phaseSection, roleSection, healthAwareness]),
+    turnContext: composeTurnContext([
+      phaseSection,
+      buildPhaseWriteNotice(params.agentState.phase),
+      roleSection,
+      healthAwareness,
+    ]),
     currentAssignment,
     currentProvider,
     currentToolDefinitions,
