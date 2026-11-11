@@ -384,12 +384,11 @@ export async function portExecuteToolTurn(
     const mem = await refreshMemoryIfNeeded({
       memoryRefresher: runCtx.memoryRefresher,
       iteration: step.agentState.iteration,
-      // v1 parity per route (trio catch): interactive re-scans the session (a fresh extract —
-      // the tool-result block was pushed above); background/delegated pins the STABLE task
-      // prompt (v1 @ a3de7d1 :4756) so drift detection never runs against planner boilerplate.
-      queryContext: isInteractiveTurn
-        ? deps.sessionManager.extractLastUserMessage(session)
-        : agentState.taskDescription || requestText,
+      // Interactive asks about the request pinned at setup. It used to re-scan the session, but
+      // the tool-result turn was pushed just above, so the query was "" or a gate note on every
+      // tool turn (measured: tool-turn.memory-refresh-query.test.ts). Background/delegated pins the
+      // STABLE task prompt (v1 @ a3de7d1 :4756) so drift detection never runs against planner boilerplate.
+      queryContext: isInteractiveTurn ? requestText : agentState.taskDescription || requestText,
       chatId,
       agentState: step.agentState,
       // v1 interactive parity (trio catch, a3de7d1 :6444-6452): surface refreshed instinct IDs —
