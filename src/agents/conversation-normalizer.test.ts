@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { ConversationMessage, MessageContent, ToolCall } from "./providers/provider-core.interface.js";
 import { normalizeConversation, INTERRUPTED_TOOL_RESULT } from "./conversation-normalizer.js";
+import { isTaskTurn, taskTurn } from "./orchestrator-session-manager-task-turn.js";
 
 type Msg = ConversationMessage;
 type Blocks = MessageContent[];
@@ -95,6 +96,49 @@ describe("normalizeConversation — the cases the review measured", () => {
   });
 });
 
+// #69: the person's words and the gate text are told apart by the task-turn mark, never by text.
+describe("normalizeConversation — a person's turn is never folded into a tool answer", () => {
+  it("a task turn in front of the follower that carries the result follows the answer as its own turn", () => {
+    const person = taskTurn("new request");
+    const out = normalizeConversation([
+      taskTurn("old request"),
+      { role: "assistant", content: "done" },
+      call("a"),
+      person,
+      { role: "user", content: [result("a", "ok"), text("[VERIFY] gate")] },
+    ]);
+    assertContract(out);
+    // The gate note stays on the result turn; the person's turn comes after it, unchanged.
+    expect(out[3]!.content).toEqual([result("a", "ok"), text("[VERIFY] gate")]);
+    expect(out[4]).toBe(person);
+    expect(out).toHaveLength(5);
+    expect(normalizeConversation(out)).toBe(out);
+  });
+
+  it("a task turn after a call that never answered is not folded into the interrupted answer", () => {
+    const person = taskTurn("new request");
+    const out = normalizeConversation([taskTurn("old request"), call("a"), person]);
+    assertContract(out);
+    expect(out[2]!.content).toEqual([{ type: "tool_result", tool_use_id: "a", content: INTERRUPTED_TOOL_RESULT, is_error: true }]);
+    expect(out[3]).toBe(person);
+    expect(isTaskTurn(out[3]!)).toBe(true);
+  });
+
+  it("an unmarked turn (a gate, or one saved before the mark) is folded as ORC-5 pins", () => {
+    const out = normalizeConversation([taskTurn("go"), call("a"), { role: "user", content: "new request" }, { role: "user", content: [result("a")] }]);
+    assertContract(out);
+    expect(out).toHaveLength(3);
+    expect(out[2]!.content).toEqual([result("a"), text("new request")]);
+  });
+
+  it("a task turn that holds the call's result still answers the call (the provider contract wins)", () => {
+    const out = normalizeConversation([taskTurn("go"), call("a"), taskTurn([text("see this"), result("a")])]);
+    assertContract(out);
+    expect(out).toHaveLength(3);
+    expect(out[2]!.content).toEqual([result("a"), text("see this")]);
+  });
+});
+
 // Property-style: random valid conversations, randomly broken the ways the loop, compaction and
 // persistence break them, must always come out valid, idempotent, and without losing content.
 describe("normalizeConversation — property: any mutation of a valid session comes out valid", () => {
@@ -179,6 +223,26 @@ describe("normalizeConversation — property: any mutation of a valid session co
         expect(normalizeConversation(out)).toBe(out); // idempotent: a second pass changes nothing
         const seen = JSON.stringify(out);
         for (const p of payloads(broken)) expect(seen).toContain(p);
+      } catch (err) {
+        throw new Error(`seed ${seed}: ${JSON.stringify(broken)}\n${(err as Error).message}`);
+      }
+    }
+  });
+
+  it("holds for 2 000 seeded random sessions with person turns anywhere, and keeps each one as it was", () => {
+    for (let seed = 1; seed <= 2_000; seed++) {
+      const rand = prng(seed);
+      const broken = mutate(build(rand), rand);
+      const people = Array.from({ length: 1 + Math.floor(rand() * 3) }, (_, k) => taskTurn(`person-${seed}-${k}`));
+      for (const person of people) broken.splice(Math.floor(rand() * (broken.length + 1)), 0, person);
+      const out = normalizeConversation(broken);
+      try {
+        assertContract(out);
+        expect(normalizeConversation(out)).toBe(out);
+        const seen = JSON.stringify(out);
+        for (const p of payloads(broken)) expect(seen).toContain(p);
+        // Each person turn is its own turn, the same object, mark included.
+        for (const person of people) expect(out).toContain(person);
       } catch (err) {
         throw new Error(`seed ${seed}: ${JSON.stringify(broken)}\n${(err as Error).message}`);
       }

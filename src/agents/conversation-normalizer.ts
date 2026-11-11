@@ -10,7 +10,9 @@
  *
  *  1. every assistant tool call is answered by the next user message, whose LEADING blocks are
  *     the tool_result blocks in call order — a result that sits later (behind gate text, in a
- *     following user message) is moved up; a result that never arrived is recorded as such;
+ *     following user message) is moved up; a result that never arrived is recorded as such. A
+ *     person's turn among those followers (a task turn) is not folded in: it follows the answer
+ *     as its own turn, so its words are never read as the system's;
  *  2. a tool_result with no matching call right before it becomes plain text (nothing it said is
  *     lost, and the shape is legal);
  *  3. an assistant turn with no text and no tool calls, and an empty user turn, are dropped
@@ -21,6 +23,7 @@
  */
 
 import type { ConversationMessage, MessageContent, ToolCall } from "./providers/provider-core.interface.js";
+import { isTaskTurn } from "./orchestrator-session-manager-task-turn.js";
 
 type ToolResultBlock = Extract<MessageContent, { type: "tool_result" }>;
 
@@ -71,9 +74,16 @@ function withoutOrphans(msg: ConversationMessage): ConversationMessage {
  * Build the answer to `calls` from the user messages that follow the assistant turn. Every
  * follower up to the last one holding one of these results is folded in (at least the first,
  * when there is one); later followers stay separate messages.
+ *
+ * A task turn (what the person wrote, orchestrator-session-manager-task-turn.ts) holding none of
+ * these results is not folded: in one turn behind a recorded result the person's words and the
+ * gate text could no longer be told apart, and the last-user read passed over both. It comes
+ * back in `kept`, to follow the answer unchanged, marker and all. An unmarked follower (a gate,
+ * or a turn saved before the mark existed) is folded as before.
  */
 function answerFor(calls: readonly ToolCall[], followers: readonly ConversationMessage[]): {
   answer: ConversationMessage;
+  kept: ConversationMessage[];
   consumed: number;
 } {
   const ids = new Set(calls.map((c) => c.id));
@@ -86,8 +96,14 @@ function answerFor(calls: readonly ToolCall[], followers: readonly ConversationM
   const consumed = Math.max(lastWithResult + 1, followers.length > 0 ? 1 : 0);
   const found = new Map<string, ToolResultBlock>();
   const rest: MessageContent[] = [];
+  const kept: ConversationMessage[] = [];
   for (const f of followers.slice(0, consumed)) {
-    for (const block of blocksOf(f.content)) {
+    const blocks = blocksOf(f.content);
+    if (isTaskTurn(f) && !blocks.some((b) => b.type === "tool_result" && ids.has(b.tool_use_id))) {
+      kept.push(f);
+      continue;
+    }
+    for (const block of blocks) {
       if (block.type !== "tool_result") rest.push(block);
       else if (ids.has(block.tool_use_id) && !found.has(block.tool_use_id)) found.set(block.tool_use_id, block);
       else rest.push(orphanAsText(block));
@@ -96,7 +112,16 @@ function answerFor(calls: readonly ToolCall[], followers: readonly ConversationM
   const results: MessageContent[] = [...ids].map(
     (id) => found.get(id) ?? { type: "tool_result", tool_use_id: id, content: INTERRUPTED_TOOL_RESULT, is_error: true },
   );
-  return { answer: { role: "user", content: [...results, ...rest] }, consumed };
+  return { answer: { role: "user", content: [...results, ...rest] }, kept, consumed };
+}
+
+/** Push a user turn outside a tool exchange; false when it was dropped or rewritten. */
+function pushUserTurn(out: ConversationMessage[], msg: ConversationMessage): boolean {
+  // Nothing to send: providers reject an empty turn.
+  if (blocksOf(msg.content).length === 0) return false;
+  const clean = withoutOrphans(msg);
+  out.push(clean);
+  return clean === msg;
 }
 
 export function normalizeConversation(messages: ConversationMessage[]): ConversationMessage[] {
@@ -106,15 +131,7 @@ export function normalizeConversation(messages: ConversationMessage[]): Conversa
   while (i < messages.length) {
     const msg = messages[i]!;
     if (msg.role === "user") {
-      if (blocksOf(msg.content).length === 0) {
-        // Nothing to send: providers reject an empty turn.
-        changed = true;
-        i++;
-        continue;
-      }
-      const clean = withoutOrphans(msg);
-      if (clean !== msg) changed = true;
-      out.push(clean);
+      if (!pushUserTurn(out, msg)) changed = true;
       i++;
       continue;
     }
@@ -134,8 +151,9 @@ export function normalizeConversation(messages: ConversationMessage[]): Conversa
     }
     let end = i;
     while (end < messages.length && messages[end]!.role === "user") end++;
-    const { answer, consumed } = answerFor(calls, messages.slice(i, end));
+    const { answer, kept, consumed } = answerFor(calls, messages.slice(i, end));
     out.push(answer);
+    for (const turn of kept) pushUserTurn(out, turn);
     changed = true;
     i += consumed;
   }

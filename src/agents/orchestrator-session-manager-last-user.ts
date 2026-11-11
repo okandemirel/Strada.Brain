@@ -7,13 +7,14 @@
  * last-user-message read passes over it (SessionManager.extractLastUserMessage).
  *
  * One tool-result turn is not the system's: a call that never answered is answered by
- * normalizeConversation, which folds the user message after it into the answer behind
+ * normalizeConversation, which folds an unmarked user message after it into the answer behind
  * INTERRUPTED_TOOL_RESULT placeholders (conversation-normalizer.ts answerFor). Every result of
- * such a turn is a placeholder, and its text is what the user said next.
+ * such a turn is a placeholder, and its text is what the user said next. A task turn (what the
+ * person wrote, marked by appendVisibleUserMessage) is never folded: it stays its own turn.
  *
- * Known limit (board proposal #69): when the follower that carries the result comes after the
- * user's message, the normalizer folds both into one turn behind that recorded result, and the
- * user's words there read as the system's.
+ * Known limit: an unmarked user message (a session saved before the task-turn mark) in front of
+ * the follower that carries the result is folded with it into one turn behind that recorded
+ * result, and its words there read as the system's. A turn saved already folded stays folded.
  */
 
 import { INTERRUPTED_TOOL_RESULT } from "./conversation-normalizer.js";
