@@ -75,7 +75,71 @@ describe("completion-review", () => {
     expect(shouldRunCompletionReview(evidence)).toBe(true);
   });
 
+  it("judges a log line against the cutoff by its millisecond stamp, never by its floored second", () => {
+    // The ring buffer's string is the file format, second resolution. Read as
+    // a time, both lines below fell before the cutoff (the second floors to
+    // .000), so a warning logged after the cutoff in the same second was lost,
+    // and the same warning a second later counted: the verdict moved with the
+    // clock. Both directions are pinned, 1 ms either side of the cutoff.
+    const second = "2026-03-18 10:00:10";
+    const cutoff = Date.parse(second) + 500;
+    const line = (message: string, timestampMs: number) => ({
+      timestamp: second, timestampMs, level: "warn", message, meta: { chatId: "chat-123" },
+    });
+    const evidence = collectCompletionReviewEvidence({
+      state: createState(),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: cutoff,
+      },
+      chatId: "chat-123",
+      taskStartedAtMs: cutoff - 5_000,
+      logEntries: [line("1 ms before the cutoff", cutoff - 1), line("1 ms after the cutoff", cutoff + 1)],
+    });
 
+    expect(evidence.recentLogIssues.map((entry) => entry.message)).toEqual(["1 ms after the cutoff"]);
+  });
+
+  it("drops a provider failure a later step answered, and keeps one nothing succeeded after", () => {
+    // Measured 2026-11-11 (golden run, recovery): two dropped provider calls,
+    // then the next turn wrote the file. The drops are the provider's failure,
+    // not the work's, and a later step proves the provider answered again; a
+    // drop with no success after it may be what the answer rests on.
+    const dropAt = Date.parse("2026-03-18T10:00:20.000Z");
+    const drop = (message: string) => ({
+      timestamp: "2026-03-18 10:00:20", timestampMs: dropAt, level: "error", message,
+      meta: { chatId: "chat-123", error: "503 Service Unavailable" },
+    });
+    const logEntries = [
+      drop("Silent stream error"),
+      drop("Silent stream fallback chat failed"),
+      drop("Tool handler crashed"),
+    ];
+    const collect = (stepAt: number, success: boolean) => collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [{ toolName: "file_write", success, summary: "Wrote notes/b.txt", timestamp: stepAt }],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["notes/b.txt"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+      },
+      chatId: "chat-123",
+      taskStartedAtMs: dropAt - 5_000,
+      logEntries,
+    }).recentLogIssues.map((entry) => entry.message);
+
+    // Answered: a step succeeded after the drop. Any other error still counts.
+    expect(collect(dropAt + 1, true)).toEqual(["Tool handler crashed"]);
+    // Not answered: the only success came before the drop, or the step after it failed.
+    const unanswered = ["Silent stream error", "Silent stream fallback chat failed", "Tool handler crashed"];
+    expect(collect(dropAt - 1, true)).toEqual(unanswered);
+    expect(collect(dropAt + 1, false)).toEqual(unanswered);
+  });
 
   it("forces review when the draft makes a broad completion claim after tool activity", () => {
     const evidence = collectCompletionReviewEvidence({

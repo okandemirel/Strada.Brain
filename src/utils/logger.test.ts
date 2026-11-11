@@ -36,6 +36,38 @@ describe("logger", () => {
     expect(onDisk).toMatch(/REDACTED/i);
   });
 
+  it("stamps each ring-buffer entry with its epoch millisecond and leaves the file line's format alone", async () => {
+    // The string timestamp is the file format, second resolution. Completion
+    // review compared it with a millisecond cutoff, so its verdict moved with
+    // the clock. The millisecond rides in the ring buffer only: scripts/eval
+    // parse the file lines by their 'YYYY-MM-DD HH:mm:ss' date.
+    const { mkdtempSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const logFile = join(mkdtempSync(join(tmpdir(), "strada-logms-")), "ms.log");
+    const { createLogger, getLogRingBuffer } = await import("./logger.js");
+    const logger = createLogger("info", logFile);
+
+    const loggedAt = Date.parse("2026-03-18T10:00:10.000Z") + 789;
+    const now = vi.spyOn(Date, "now").mockReturnValue(loggedAt);
+    try {
+      logger.warn("ms-stamped", { chatId: "chat-1" });
+    } finally {
+      now.mockRestore();
+    }
+    await new Promise((r) => setTimeout(r, 600));
+
+    const entry = getLogRingBuffer().find((e) => e.message === "ms-stamped");
+    expect(entry?.timestampMs).toBe(loggedAt);
+    expect(entry?.timestamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(entry?.meta).toEqual({ chatId: "chat-1" });
+
+    const line = readFileSync(logFile, "utf8").split("\n").find((l) => l.includes("ms-stamped"));
+    const written = JSON.parse(line ?? "{}") as Record<string, unknown>;
+    expect(Object.keys(written).sort()).toEqual(["chatId", "level", "message", "service", "timestamp"]);
+    expect(written["timestamp"]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  });
+
   it("writes a relative log file into the config root, not wherever the process happens to stand", async () => {
     // The runtime chdirs to its config root before it logs, so a relative
     // LOG_FILE always meant "<config root>/<file>". Anything that never chdirs
