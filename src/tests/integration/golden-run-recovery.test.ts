@@ -20,6 +20,10 @@
  *    failure waits for a verification the project has none of, and the node
  *    is blocked; the blocked goal is resumed without waiting for a person
  *    and the node runs again.
+ * 5. The worker is slow. With the progress heartbeat off, as every run
+ *    starts, the chat reads only the answer however long the worker takes;
+ *    with it on, the real heartbeat path sends the user a progress message
+ *    before the answer.
  *
  * When a deliberate change alters the calls a run makes, the failure names
  * the step it expected and the call it got. Update that run's script in the
@@ -351,6 +355,17 @@ function settledAfterResume(): (tasks: readonly Task[], delivered: readonly stri
 
 // ─── The runs ────────────────────────────────────────────────────────────────
 
+/**
+ * The short request with a worker that answers its action turn well after
+ * the heartbeat's timer (HEARTBEAT_AFTER_MS) has run: slower than any
+ * heartbeat setting this file uses, so the heartbeat's presence is decided by
+ * configuration and not by how long the machine happens to take.
+ */
+const HEARTBEAT_AFTER_MS = 300;
+const SLOW_WORKER_MS = 1_800;
+const slowShortScript = (): Step[] =>
+  SHORT_SCRIPT.map((step, index) => (index === 1 ? { ...step, delayMs: SLOW_WORKER_MS } : step));
+
 /** What bootstrap tells every chat when it starts: not part of any run. */
 const SYSTEM_STATUS = expect.stringMatching(/^\*System Status\*\n/);
 
@@ -376,6 +391,38 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(run.task?.result).toBe(GAMMA_DONE);
     expect(texts(run)).toEqual([SYSTEM_STATUS, GAMMA_DONE]);
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("a slow worker does not change what the chat reads: the progress heartbeat is off unless a run asks for it", async () => {
+    const run = await runGolden({
+      name: "slow-heartbeat-off",
+      request: SHORT_REQUEST,
+      script: slowShortScript(),
+      settled: settledWhenAnswered,
+    });
+
+    expect(run.violations).toEqual([]);
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, GAMMA_DONE]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("the progress heartbeat still reaches the chat when a run turns it on and the worker is slow", async () => {
+    const run = await runGolden({
+      name: "slow-heartbeat-on",
+      request: SHORT_REQUEST,
+      script: slowShortScript(),
+      heartbeatAfterMs: HEARTBEAT_AFTER_MS,
+      settled: settledWhenAnswered,
+    });
+
+    expect(run.violations).toEqual([]);
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    const read = texts(run);
+    expect(read[0]).toEqual(SYSTEM_STATUS);
+    expect(read.at(-1), "the answer is the last thing the chat reads").toBe(GAMMA_DONE);
+    const heartbeats = read.slice(1, -1);
+    expect(heartbeats.length, `the chat read only: ${JSON.stringify(read)}`).toBeGreaterThanOrEqual(1);
+    for (const message of heartbeats) expect(message).toMatch(/^Stage: .+\. Last action: .+\. Next: .+\.$/);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("a supervisor that throws hands the request to one worker", async () => {
