@@ -21,11 +21,11 @@ The verifier pipeline's targeted-repro and unverified-failure checks treat every
 - its text is the path guard refusing the target the call named (`isPathTargetRefusal` in `src/security/path-guard.ts`, anchored at the start of the text);
 - a later call of the same tool succeeded.
 
-Every other failure stays open until a verification runs. `src/agents/autonomy/refused-target-retried.test.ts` pins both directions. Golden run 4 (a write that the filesystem failed) keeps the block-and-resume path pinned.
+Every other failure stays open until a verification runs. `src/agents/autonomy/refused-target-retried.test.ts` pins both directions. Golden run 5 (a write that the filesystem failed, in a run with a check tool) keeps the block-and-resume path pinned.
 
 ## Rejected alternatives
 - **Any failure closes when the same tool later succeeds.** This lets a failed test run close because a later `shell_exec ls` succeeded. A tool that ran and failed has a path to re-run; a refused call does not.
-- **Close the gate when the project has no verification tools and the draft says so.** That judges the run by its prose, and every project without tests would skip the check, including after a real runtime failure.
+- **Close the gate when the project has no verification tools and the draft says so.** That judges the run by its prose, and every project without tests would skip the check, including after a real runtime failure. (Narrowed on 2026-11-11: when the tool offer, not the prose, holds no check tool and the failed tool was re-run successfully, see `2026-11-11-unverifiable-failure-closes-on-an-honest-report.md`.)
 - **Require a retry on the same path.** A refused target cannot be written by definition, so the correct retry always names a different path.
 
 ## Consequences
