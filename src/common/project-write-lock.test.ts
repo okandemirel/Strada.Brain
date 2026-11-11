@@ -113,11 +113,27 @@ describe("the project write lock", () => {
       JSON.stringify({ pid: process.pid, host: hostname(), token: "dead", at: new Date().toISOString(), incarnation: "an-earlier-process" }),
     );
 
-    const started = Date.now();
-    const taken = await acquireProjectWriteLock(root, { timeoutMs: 1_000, staleMs: 10 * 60_000 });
+    // "At once" is judged by how many times the acquire had to wait, never by
+    // the wall clock (a slow Windows runner stretched 'a few ms' to 673 ms).
+    // Breaking the dead lock costs at most the one poll that follows it; a lock
+    // judged alive would wait again and again until the (generous) timeout, so
+    // the second wait fails the test on the spot instead of after minutes.
+    let waits = 0;
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      waits += 1;
+      if (waits > 1) throw new Error("the acquire waited more than once: the earlier process's lock was not broken");
+      return realSetTimeout(fn, ms, ...rest);
+    }) as typeof setTimeout);
+    let taken: Awaited<ReturnType<typeof acquireProjectWriteLock>>;
+    try {
+      taken = await acquireProjectWriteLock(root, { timeoutMs: 60_000, staleMs: 10 * 60_000 });
+    } finally {
+      spy.mockRestore();
+    }
 
     expect(taken.acquired).toBe(true);
-    expect(Date.now() - started).toBeLessThan(900);
+    expect(waits).toBeLessThanOrEqual(1);
     taken.release();
   });
 
