@@ -40,6 +40,7 @@ import type { EngineRunContext } from "./engine-deps.js";
 import type { ParentRunScope } from "../runner/agent-runner.js";
 import type { SetupDeps } from "./setup.js";
 import { instinctScopeKey } from "./instinct-scope.js";
+import { isPhaseWriteRefusal } from "./phase-write-access.js";
 
 /** v1 parity: the PAOR reflection cadence on the agent-core route (orchestrator const copy). */
 const REFLECT_INTERVAL_AGENT_CORE = 3;
@@ -106,6 +107,12 @@ export function summarizePlainLoopBatch(toolCalls: readonly ToolCall[]): string 
   if (names.length === 0) return "Working…";
   const shown = names.slice(0, 3).join(", ");
   return names.length > 3 ? `${shown} +${names.length - 3}` : shown;
+}
+
+/** Whether every call of the batch that ran failed; a batch in which nothing ran did not fail. */
+function ranBatchFailed(toolResults: readonly ToolResult[]): boolean {
+  const ran = toolResults.filter((r) => !isPhaseWriteRefusal(r));
+  return ran.length > 0 && ran.every((r) => r.isError === true);
 }
 
 /** What the port's bound tool turn returns: the trace rows + the PAOR-advanced state. */
@@ -253,6 +260,8 @@ export async function portExecuteToolTurn(
         // rides along so a check polled with the same answer every time is
         // seen as the stall it is.
         const result = resultsById.get(tc.id);
+        // A write the phase gate refused was not executed (./phase-write-access.ts).
+        if (isPhaseWriteRefusal(result)) continue;
         runCtx.controlLoopTracker.markToolExecution(
           tc.name,
           `${tc.name}:${JSON.stringify(tc.input ?? {}).slice(0, 300)}`,
@@ -354,7 +363,8 @@ export async function portExecuteToolTurn(
           // previous node `completed` whatever its tools did, so a failed
           // build read as a finished step (Codex 2026-09-13 AG#16). A batch
           // in which every call failed did not succeed.
-          priorBatchFailed: toolResults.length > 0 && toolResults.every((r) => r.isError === true),
+          // A write the phase gate refused did not run, so it neither failed nor succeeded.
+          priorBatchFailed: ranBatchFailed(toolResults),
         });
       } catch {
         /* non-fatal — monitor is best-effort */

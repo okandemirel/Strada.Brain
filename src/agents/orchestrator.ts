@@ -290,7 +290,7 @@ import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import { estimateTextTokens } from "../common/token-estimator.js";
 import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
 import { resolveUnreservedCostCapUsd } from "../agent-core/engine/budget.js";
-import { phaseAllowsWrites, phaseWriteRefusal } from "../agent-core/engine/phase-write-access.js";
+import { phaseAllowsWrites, phaseWriteRefusalResult } from "../agent-core/engine/phase-write-access.js";
 import { createBudget } from "../agent-core/control/budget.js";
 import {
   isUnityEditorExclusiveTool,
@@ -5445,7 +5445,7 @@ export class Orchestrator {
     ) {
       // Counted in the daemon log: a planning turn that names a write costs a turn now.
       ctx.logger.info("Phase write refused", { chatId: ctx.chatId, tool: tc.name, phase });
-      return { toolCallId: tc.id, content: phaseWriteRefusal(phase), isError: true };
+      return phaseWriteRefusalResult(tc.id, phase);
     }
 
     let activeToolCall = tc;

@@ -107,7 +107,8 @@ function planStep(step: string, seat: string, task: string): Step {
       requires([
         isWorkerOn(task)(call),
         call.messages.length !== 1 && `the run is not fresh: ${call.messages.length} message(s)`,
-        offers(call, "file_write") && "a planning turn offers file_write",
+        // One tool list in every phase (phase-write-access.ts): a write called now is refused.
+        !offers(call, "file_write") && "the planning turn does not offer file_write",
       ]),
     reply: say("Plan: write the file with file_write, then report."),
   };

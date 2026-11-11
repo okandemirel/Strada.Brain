@@ -13,7 +13,8 @@ import { describe, it, expect, vi } from "vitest";
 import { ControlLoopTracker } from "../../agents/autonomy/control-loop-tracker.js";
 import { portExecuteToolTurn, isPlainLoop, summarizePlainLoopBatch, type ToolTurnDeps } from "./tool-turn.js";
 import type { EngineRunContext } from "./engine-deps.js";
-import { createInitialState } from "../../agents/agent-state.js";
+import { AgentPhase, createInitialState } from "../../agents/agent-state.js";
+import { phaseWriteRefusalResult } from "./phase-write-access.js";
 import { createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.js";
 import { IterationHealthTracker } from "../../agents/iteration-health-tracker.js";
 import type { ToolCall, ToolResult } from "../../agents/providers/provider.interface.js";
@@ -370,5 +371,49 @@ describe("portExecuteToolTurn — a check polled with the same answer is a stall
       await portExecuteToolTurn(deps, [poll, undefined, createInitialState("wait for compile"), ""], runCtx);
     }
     expect(gateOf(runCtx)).toBeUndefined();
+  });
+});
+
+/**
+ * A write the phase gate refused ran nothing (phase-write-access.ts). Marked as an execution it
+ * counted as progress: a write ends a read-only streak and says the run changed something, and a
+ * batch of nothing but refusals told the monitor the step before it had failed.
+ */
+describe("portExecuteToolTurn — a write refused while planning is not an execution", () => {
+  const reads = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `tc-r${i}`, name: "file_read", input: { path: `f${i}.txt` } })) as unknown as ToolCall[];
+  const write = { id: "tc-w", name: "file_write", input: { path: "notes/a.txt", content: "A" } } as unknown as ToolCall;
+  const answering = (writeResult: (tc: ToolCall) => ToolResult): Partial<ToolTurnDeps> => ({
+    executeToolCalls: async (_chatId: string, toolCalls: ToolCall[]): Promise<ToolResult[]> =>
+      toolCalls.map((tc) => (tc.name === "file_write" ? writeResult(tc) : ({ toolCallId: tc.id, content: "read", isError: false } as ToolResult))),
+  } as Partial<ToolTurnDeps>);
+  const planning = { ...createInitialState("write a note"), phase: AgentPhase.PLANNING };
+
+  it("a refused write neither ends the read-only streak nor counts as a change", async () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const deps = makeDeps(answering((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING)));
+    await portExecuteToolTurn(deps, [[...reads(2), write], undefined, planning, ""], makeRunCtx({ controlLoopTracker: tracker }));
+
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(2);
+    expect(tracker.hadMutationsSinceLastReset()).toBe(false);
+  });
+
+  it("a write that ran still does both", async () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const deps = makeDeps(answering((tc) => ({ toolCallId: tc.id, content: "File written: notes/a.txt", isError: false })));
+    await portExecuteToolTurn(deps, [[...reads(2), write], undefined, planning, ""], makeRunCtx({ controlLoopTracker: tracker }));
+
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+    expect(tracker.hadMutationsSinceLastReset()).toBe(true);
+  });
+
+  it("a batch of nothing but refusals does not mark the step before it failed; a write that ran and failed does", async () => {
+    const refusedOnly = makeDeps(answering((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING)));
+    await portExecuteToolTurn(refusedOnly, [[write], undefined, planning, ""], makeRunCtx());
+    expect(refusedOnly.emitPlainLoopStep).toHaveBeenCalledWith(expect.objectContaining({ priorBatchFailed: false }));
+
+    const failed = makeDeps(answering((tc) => ({ toolCallId: tc.id, content: "Error: could not write file (EISDIR)", isError: true })));
+    await portExecuteToolTurn(failed, [[write], undefined, { ...planning, phase: AgentPhase.EXECUTING }, ""], makeRunCtx());
+    expect(failed.emitPlainLoopStep).toHaveBeenCalledWith(expect.objectContaining({ priorBatchFailed: true }));
   });
 });

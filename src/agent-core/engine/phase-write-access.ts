@@ -16,6 +16,7 @@
  */
 
 import { AgentPhase } from "../../agents/agent-state.js";
+import type { ToolResult } from "../../agents/providers/provider-core.interface.js";
 
 /** The phases in which a write may run. Planning, replanning and reflecting do not write. */
 export const PHASES_ALLOWING_WRITES: ReadonlySet<AgentPhase> = new Set([
@@ -28,12 +29,34 @@ export function phaseAllowsWrites(phase: AgentPhase): boolean {
   return PHASES_ALLOWING_WRITES.has(phase);
 }
 
-/** The tool result a write called in `phase` gets in place of running. */
+/** The text a write called in `phase` gets in place of running. */
 export function phaseWriteRefusal(phase: AgentPhase): string {
   return (
     `Write operations are not available while the agent is ${phase}. ` +
     `Finish planning or reflecting first; writes run in the executing phase.`
   );
+}
+
+/** The metadata key that marks a result as this refusal; its value is the phase. */
+const REFUSED_IN_PHASE = "refusedInPhase";
+
+/**
+ * The tool result the gate returns for a write called in `phase`: an error the model reads, and
+ * a mark that says the tool never ran.
+ *
+ * The mark is what the run's records read ({@link isPhaseWriteRefusal}). Recorded as a failed
+ * write, the refusal was an open failing path the verifier asked to re-run in a project with
+ * nothing to verify with, three of them forced a reflection after every later batch, and one
+ * turned the model's DONE into CONTINUE (QA, 2026-11-11). Nothing ran, so nothing is recorded:
+ * the refusal is the model's answer, not a step the run took.
+ */
+export function phaseWriteRefusalResult(toolCallId: string, phase: AgentPhase): ToolResult {
+  return { toolCallId, content: phaseWriteRefusal(phase), isError: true, metadata: { [REFUSED_IN_PHASE]: phase } };
+}
+
+/** Whether `result` is the gate's refusal of a write in a phase that does not write. */
+export function isPhaseWriteRefusal(result: Pick<ToolResult, "isError" | "metadata"> | undefined): boolean {
+  return result?.isError === true && typeof result.metadata?.[REFUSED_IN_PHASE] === "string";
 }
 
 /**
