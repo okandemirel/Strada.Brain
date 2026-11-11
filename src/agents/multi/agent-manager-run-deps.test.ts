@@ -112,6 +112,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       eventEmitter: { tag: "learning-bus", emit: vi.fn() } as never,
       instinctRetriever: { tag: "instinct-retriever" } as never,
       metrics: { tag: "dashboard-metrics" } as never,
+      rateLimiter: { tag: "rate-limiter" } as never,
       trajectoryReplayRetriever: { tag: "trajectory-replay" } as never,
       learningPipeline: { tag: "learning-pipeline" } as never,
       errorLearningHooks: { tag: "error-learning-hooks" } as never,
@@ -275,6 +276,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       "eventEmitter",
       "instinctRetriever",
       "metrics",
+      "rateLimiter",
       "learningPipeline",
       "errorLearningHooks",
       "interventionEngine",
@@ -444,9 +446,6 @@ const DELEGATE_EXEMPT: Record<string, string> = {
     "measured: beside the delegate's instinct retriever it re-asks that retriever once five iterations in, and the " +
     "insights it gets are already in the prompt (0 tokens, 0 provider calls, same answer); its memory and RAG " +
     "refreshes need options a delegate does not have",
-  rateLimiter:
-    "the user's message rate and daily token quota: delegated tokens would count against the user and could refuse " +
-    "their next message; delegated spend is bounded by the delegation budget instead; separate work",
   metricsRecorder:
     "task-metric rows: a delegated run carries no parentMetricId, so every delegation would be recorded as a " +
     "'background' task and skew the learning stats; needs the parent metric id first; separate work",

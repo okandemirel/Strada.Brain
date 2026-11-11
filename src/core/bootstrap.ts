@@ -1535,6 +1535,8 @@ async function bootstrapImpl(
     instinctRetriever,
     // The dashboard's counters: without them a run's tool calls and tokens never reach /api/metrics.
     metrics,
+    // The daily token quota and budget caps: without it a delegate's spend never counted toward them.
+    rateLimiter,
     trajectoryReplayRetriever,
     // THE PIPELINE THE RUN TALKS TO. Without these two the orchestrator holds
     // nulls: guidance exposure ("this rule was in the prompt"), run credit
@@ -1582,7 +1584,6 @@ async function bootstrapImpl(
     requireConfirmation: config.security.requireEditConfirmation,
     memoryManager,
     ragPipeline,
-    rateLimiter,
     defaultLanguage: config.language,
     streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
     streamStallTimeoutMs: config.llmStreamStallTimeoutMs,
@@ -2034,7 +2035,6 @@ async function bootstrapImpl(
         toolRegistry,
         channel,
         ragPipeline,
-        rateLimiter,
         metricsRecorder,
         goalDecomposer,
         identityManager,
