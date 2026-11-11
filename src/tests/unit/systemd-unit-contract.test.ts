@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { complaintsAboutUnit } from "./systemd-unit-contract.helpers.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const unitPath = path.join(repoRoot, "strada-brain.service");
@@ -117,11 +118,7 @@ describe("strada-brain.service sandbox (OPS-15)", () => {
   const analyze = spawnSync("systemd-analyze", ["--version"], { encoding: "utf8" });
   it.skipIf(analyze.error !== undefined || analyze.status !== 0)("passes systemd-analyze verify", () => {
     const result = spawnSync("systemd-analyze", ["verify", unitPath], { encoding: "utf8", timeout: 30_000 });
-    const complaints = `${result.stdout}${result.stderr}`
-      .split("\n")
-      .filter(Boolean)
-      // The runner may not have Node at /usr/bin/node; that is the host, not the unit.
-      .filter((line) => !/Command \/usr\/bin\/node is not executable/.test(line));
+    const complaints = complaintsAboutUnit(`${result.stdout}${result.stderr}`, unitPath);
     expect(complaints).toEqual([]);
   });
 });
