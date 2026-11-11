@@ -1067,7 +1067,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         const isSingleProvider = this.providers.length === 1;
         // A refused key is benched before the redundancy check below reads the
         // chain: classified generically first, it counted twice and never warned.
-        if (isCredentialRejection(error)) health.recordCredentialRejected(provider.name, errorMsg);
+        if (isCredentialRejection(error)) health.recordCredentialRejected(provider.name, errorMsg, this.providers.find((p) => p !== provider && health.isAvailable(p.name))?.name);
         else this.recordClassifiedFailure(health, provider, error, errorMsg);
 
         // Reset thinking success counter on any failure
