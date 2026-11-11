@@ -1173,6 +1173,24 @@ describe("LearningPipeline", () => {
       }
     });
 
+    it("runs one evolution pass on start(), then again on each interval tick", () => {
+      pipeline.stop();
+      vi.useFakeTimers();
+      try {
+        const spy = vi.spyOn(
+          pipeline as unknown as { runEvolution: () => unknown },
+          "runEvolution",
+        );
+        pipeline.start();
+        expect(spy).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(5000);
+        expect(spy).toHaveBeenCalledTimes(2);
+      } finally {
+        pipeline.stop();
+        vi.useRealTimers();
+      }
+    });
+
     it("should still clear evolutionTimer and shut down embeddingQueue on stop()", () => {
       // Just verify stop() doesn't throw
       pipeline.start();
