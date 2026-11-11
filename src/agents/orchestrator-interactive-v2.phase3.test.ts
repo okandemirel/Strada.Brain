@@ -495,6 +495,51 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     expect(sm.getPendingPlanReviewVisibleText("v2-plan-1")).toBeFalsy();
   });
 
+  it("flag ON (v2): 3.5 — a write named beside the plan the user asked to review does not skip the review, and runs nothing", async () => {
+    // The tool list is the same in every phase (agent-core/engine/phase-write-access.ts), so the
+    // planning turn offers file_write. The review gate opened only for a planning turn with no
+    // tool calls, and the count included a write the phase gate refuses: the review was skipped,
+    // the run moved on, and the model's next turn wrote before the user saw the plan (QA,
+    // 2026-11-11). A call the phase refuses is not one that runs, so the plan is reviewed.
+    const write = createMockTool("file_write");
+    const chat = vi.fn(async (): Promise<ProviderResponse> => ({
+      text: "## Plan\n1. First, read the files\n2. Then apply the change",
+      toolCalls: [{ id: "tc-plan-write", name: "file_write", input: { path: "notes/a.txt", content: "A" } }],
+      stopReason: "tool_use" as const,
+      usage: { inputTokens: 10, outputTokens: 20 },
+    }));
+    const channel = createMockChannel();
+    const orch = makeOrchestrator({
+      provider: { name: "mock-plan-write", capabilities: CAP, chat },
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+      tools: [write],
+    });
+    const sm = (
+      orch as unknown as {
+        sessionManager: { getPendingPlanReviewVisibleText(id: string): string | undefined };
+      }
+    ).sessionManager;
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-plan-write",
+      userId: "u1",
+      text: "show me your plan before you proceed",
+      timestamp: new Date(),
+    });
+
+    const offered = (chat.mock.calls[0] as unknown[] | undefined)?.[2] as Array<{ name: string }> | undefined;
+    expect(offered?.map((t) => t.name)).toContain("file_write");
+    const rendered = channel.sendMarkdown.mock.calls
+      .filter((c: unknown[]) => c[0] === "v2-plan-write")
+      .map((c: unknown[]) => c[1] as string);
+    expect(rendered.some((m) => m.includes("## Plan"))).toBe(true);
+    expect(sm.getPendingPlanReviewVisibleText("v2-plan-write")).toBeTruthy();
+    expect(write.execute, "a write ran before the user reviewed the plan").not.toHaveBeenCalled();
+    expect(chat, "the run went on past the plan the user asked to review").toHaveBeenCalledTimes(1);
+  });
+
   it("flag ON (v2): 3.5 — in a shared chat, another member's approval does not clear someone else's plan review (AUT-9)", async () => {
     const channel = createMockChannel();
     const orch = makeOrchestrator({

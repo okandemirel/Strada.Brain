@@ -248,6 +248,8 @@ export async function portExecuteToolTurn(
         workerCollector: runCtx.workerCollector ?? undefined,
       },
     });
+    // The calls that ran: a write the phase gate refused did not (./phase-write-access.ts).
+    const ranCalls = toolCalls.filter((_tc, i) => !isPhaseWriteRefusal(toolResults[i]));
 
     // Gate text raised by this turn. It rides in the SAME user message as the tool results,
     // after them: a separate user message between tool_use and tool_result broke the pairing
@@ -299,8 +301,10 @@ export async function portExecuteToolTurn(
       }
     }
 
-    // STEP D — consensus (non-fatal; gated on the managers existing).
-    if (deps.consensusManager && deps.confidenceEstimator && deps.providerRouter) {
+    // STEP D — consensus (non-fatal; gated on the managers existing). It reviews a step that ran:
+    // a turn whose every call the phase gate refused did nothing to review, and an empty call
+    // list would have made it review any task, not only a critical one.
+    if (deps.consensusManager && deps.confidenceEstimator && deps.providerRouter && ranCalls.length > 0) {
       const consensusVerdict = await runConsensusIfAvailable({
         consensusManager: deps.consensusManager,
         confidenceEstimator: deps.confidenceEstimator,
@@ -450,12 +454,14 @@ export async function portExecuteToolTurn(
     // + files, localized). v1 emitProgress'd it inline; the port RETURNS it so the spine emits it
     // as a `narrative` bus event — the background io adapter unwraps it back into the v1
     // TaskProgressUpdate stream. Non-fatal: a classification error must never fail the tool turn.
+    // It names what the batch did, so a call the phase gate refused is not in it, and a batch in
+    // which nothing ran reports no progress.
     let progressSignal: TaskProgressSignal | undefined;
     try {
-      progressSignal = deps.buildToolBatchProgressSignal({
+      progressSignal = ranCalls.length === 0 ? undefined : deps.buildToolBatchProgressSignal({
         prompt: agentState.taskDescription || requestText,
         title: runCtx.progressTitle,
-        toolCalls,
+        toolCalls: ranCalls,
         language: runCtx.progressLanguage,
       });
     } catch {
