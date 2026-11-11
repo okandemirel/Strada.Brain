@@ -9,6 +9,8 @@ import type { Config } from "../../config/config.js";
 import type { IMemoryManager } from "../../memory/memory.interface.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
+import { ProviderHealthRegistry } from "../../agents/providers/provider-health.js";
+import { announceCredentialBench } from "../../tasks/provider-bench-notice.js";
 import { MetricsStorage } from "../../metrics/metrics-storage.js";
 import { MetricsRecorder } from "../../metrics/metrics-recorder.js";
 import { IdentityStateManager } from "../../identity/identity-state.js";
@@ -313,6 +315,7 @@ export async function initializeTaskRuntimeStage(
   backgroundExecutor.setTaskManager(taskManager);
   params.orchestrator.setTaskManager(taskManager);
   taskManager.recoverOnStartup();
+  ProviderHealthRegistry.getInstance().onCredentialBench((event) => void announceCredentialBench(params.channel, taskManager, event));
   if (params.identityManager) {
     taskManager.on("task:created", () => {
       params.identityManager!.incrementTasks();

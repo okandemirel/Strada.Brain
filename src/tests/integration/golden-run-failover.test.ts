@@ -24,10 +24,15 @@
  *
  * 1. Its key is refused on the first call, the plan. The chain benches it for
  *    the session and hands kimi the same call. No later call is offered to
- *    deepseek: kimi takes every role, so no answer is written separately.
+ *    deepseek: kimi takes every role, so no answer is written separately. The
+ *    user reads one sentence that the seat is set aside and who carries on,
+ *    and the task record holds the same fact with the refusal (measured
+ *    2026-11-06, before the notice: the user read only the answer, and the
+ *    bench showed in the daemon log alone).
  * 2. It is overloaded at the review, after the work is done. The chain cools
  *    it down for minutes, not hours, and hands kimi the same call; the answer,
- *    which was deepseek's to write, is written by kimi.
+ *    which was deepseek's to write, is written by kimi. A cooldown that heals
+ *    on its own is not announced.
  *
  * When a deliberate change alters the calls a run makes, the failure names
  * the step it expected and the call it got, and the seat that took it.
@@ -83,6 +88,10 @@ const OVERLOAD_COOLDOWN_MS = 5 * 60 * 1000;
 
 /** The 401 an OpenAI-compatible seat throws once its retries are spent ("<name> API error <status>: <body>"). */
 const KEY_REFUSED = `${DEEPSEEK} API error 401: {"error":{"message":"invalid api key","type":"authentication_error"}}`;
+/** What the user reads once, and what the task record keeps with the refusal, when the key is refused. */
+const BENCH_SENTENCE = `${DEEPSEEK}'s key was refused, so it is set aside for this session (8 h); the work continues on ${KIMI}.`;
+const BENCH_NOTE = `Provider ${DEEPSEEK} benched for 8 h after its key was refused; the work continues on ${KIMI}. Error: ${KEY_REFUSED}`;
+
 /** The 503 it throws once fetch-with-retry has retried the overload and given up. */
 const OVERLOADED = `${DEEPSEEK} API error 503: {"error":{"message":"the upstream is overloaded"}}`;
 
@@ -210,6 +219,8 @@ const OVERLOAD_SCRIPT: readonly Step[] = [
 const SYSTEM_STATUS = expect.stringMatching(/^\*System Status\*\n/);
 
 const texts = (run: GoldenOutcome): string[] => run.delivered.map((m) => m.text);
+/** Every progress note the run's task records hold, oldest task first. */
+const progressOf = (run: GoldenOutcome): string[] => run.tasks.flatMap((t) => t.progress.map((p) => p.message));
 
 /** Every provider health record the next boot would restore, by the name it is kept under. */
 function healthOnDisk(run: GoldenOutcome): Record<string, ProviderHealthEntry> {
@@ -301,8 +312,11 @@ describe("golden run: the provider chain fails over to its second seat, through 
     expect(run.task?.result).toBe(LAMP_DONE);
     expect(run.task?.error).toBeUndefined();
 
-    // What the user read: the answer, and nothing about the seat that failed.
-    expect(texts(run)).toEqual([SYSTEM_STATUS, LAMP_DONE]);
+    // What the user read: one sentence that the seat is set aside and who
+    // carries on, then the answer. The same fact is in the task record.
+    expect(texts(run)).toEqual([SYSTEM_STATUS, BENCH_SENTENCE, LAMP_DONE]);
+    expect(texts(run).filter((t) => t === BENCH_SENTENCE), "the user is told once").toHaveLength(1);
+    expect(progressOf(run).filter((m) => m === BENCH_NOTE), "the task record holds the note once").toHaveLength(1);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("an overloaded first seat hands its review to the second, is cooled down for minutes, and the second writes the answer", async () => {
@@ -346,6 +360,8 @@ describe("golden run: the provider chain fails over to its second seat, through 
     // The answer kimi wrote in deepseek's place is what the task recorded and the user read.
     expect(run.task?.result).toBe(KITE_ANSWER);
     expect(run.task?.error).toBeUndefined();
+    // A cooldown of minutes heals on its own: nothing is said, nothing recorded.
     expect(texts(run)).toEqual([SYSTEM_STATUS, KITE_ANSWER]);
+    expect(progressOf(run).filter((m) => m.startsWith("Provider ")), "no bench note").toEqual([]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 });
