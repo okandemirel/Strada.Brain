@@ -94,6 +94,7 @@ import { NotificationRouter } from "../daemon/reporting/notification-router.js";
 import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { DaemonStorage } from "../daemon/daemon-storage.js";
+import { wireSpendCounters } from "./bootstrap-spend-counters.js";
 import { createProjectHistoryRecorder } from "../history/project-history-recorder.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
@@ -1865,19 +1866,14 @@ async function bootstrapImpl(
     dashboard.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   }
 
-  // Rate limits the dashboard saved are policy, not a stored note: apply them
-  // to the limiter this boot constructed from config, and hand the dashboard
-  // the live limiter so a later POST changes what is enforced immediately
-  // (item 2.7 — the stored override was written, read back by the GET, and
-  // never enforced by anything).
-  if (rateLimiter) {
-    const { applyStoredRateLimitOverrides } = await import("../security/rate-limiter.js");
-    applyStoredRateLimitOverrides(rateLimiter, sharedDaemonStorage, logger);
-    // The spend caps count from the durable ledger, not from zero, so a
-    // restart does not hand out a fresh day's budget (SEC-21).
-    rateLimiter.seedSpend(sharedUnifiedBudgetManager);
-    dashboard?.setRateLimiter(rateLimiter);
-  }
+  // The rate limiter's saved policy, its caps seeded from the ledger, the live limiter on the dashboard.
+  wireSpendCounters({
+    rateLimiter,
+    overrides: sharedDaemonStorage,
+    ledger: sharedUnifiedBudgetManager,
+    dashboard,
+    logger,
+  });
 
   // Initialize daemon heartbeat loop (if daemon mode enabled)
   if (options.daemonMode) {
