@@ -36,8 +36,12 @@ const changed = git(["diff", "--name-only", "--diff-filter=ACMR", `${base}...HEA
   .filter(Boolean);
 const changedSrc = [...new Set(changed)].filter((f) => /^src\/.*\.ts$/.test(f));
 
-/** The contracts' detectors: docs/contracts/README.md lists what each one holds. */
-const DETECTORS = [
+/**
+ * The contracts' detectors: docs/contracts/README.md lists what each one holds.
+ * A test here that walks the repository carries its own limit
+ * (docs/contracts/wall-clock-assertions.md, read by AST, so keep this an array of string literals).
+ */
+export const DETECTORS = [
   "src/contracts.test.ts",
   "src/test-integrity.test.ts",
   "src/file-size-ratchet.test.ts",
@@ -49,6 +53,7 @@ const DETECTORS = [
   "src/governance.test.ts",
   "src/tests/clean-checkout.test.ts",
   "src/tests/dist-readers.test.ts",
+  "src/tests/wall-clock-assertions.test.ts",
   // Scans every script and src file, so `vitest related` never selects it.
   "src/tests/integration/entry-guard-symlink.test.ts",
 ];

@@ -39,5 +39,6 @@ describe("no bare require() in ESM source", () => {
       });
     }
     expect(offenders).toEqual([]);
-  });
+    // Walks src/: its own limit, not vitest's 30 s default (docs/contracts/wall-clock-assertions.md).
+  }, 120_000);
 });
