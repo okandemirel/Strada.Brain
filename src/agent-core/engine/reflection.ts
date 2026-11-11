@@ -89,6 +89,8 @@ export interface ReflectionDeps extends ReviewDeps, RenderDeps {
     language?: ProgressLanguage,
   ) => TaskProgressSignal;
   readonly getClarificationContext: () => ClarificationContext;
+  /** Whether the phase gate refuses this tool in this phase (the orchestrator's own predicate). */
+  readonly phaseRefuses: (toolName: string, phase: AgentPhase) => boolean;
   readonly synthesizeUserFacingResponse: (params: {
     chatId: string;
     identityKey: string;
@@ -591,7 +593,10 @@ export async function portHandlePlanPhase(
     // presents the plan; the user approves on the next message (cleared upstream by
     // interactionPolicy.noteUserMessage in processMessage, so this gate won't re-trigger).
     if (
-      params.toolCallCount === 0 && // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only
+      // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only. A write the phase
+      // gate refuses is not a call that runs: counted, it skipped the review the user asked for,
+      // and the model's next turn wrote before the plan was seen (QA, 2026-11-11).
+      params.toolNames.filter((name) => !deps.phaseRefuses(name, phase)).length === 0 &&
       userExplicitlyAskedForPlan(lastUserMessage) &&
       draftLooksLikeInternalPlanArtifact(params.responseText ?? "", { toolNames: runCtx.lastToolNames }) &&
       !deps.dmPolicy?.isAutonomousActive(chatId, runCtx.userId)

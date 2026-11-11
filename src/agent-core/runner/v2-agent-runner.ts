@@ -691,7 +691,7 @@ export class V2AgentRunner implements AgentRunner {
               providerName: prepared.currentAssignment.providerName,
               modelId: prepared.currentAssignment.modelId,
               chatId: request.chatId,
-              toolCallCount: outcome.response.toolCalls.length,
+              toolNames: outcome.response.toolCalls.map((tc) => tc.name),
             });
             state = plan.agentState;
             if (plan.yield) {

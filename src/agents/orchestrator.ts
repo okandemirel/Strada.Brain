@@ -80,7 +80,7 @@ import { archiveToolFailure } from "./tool-failure-archive.js";
 import { unknownToolMessage } from "./unknown-tool-hint.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
-import type { AgentState, StepResult } from "./agent-state.js";
+import type { AgentPhase, AgentState, StepResult } from "./agent-state.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
@@ -1387,6 +1387,7 @@ export class Orchestrator {
       buildStructuredProgressSignal: (prompt, title, signal, language) =>
         this.buildStructuredProgressSignal(prompt, title, signal, language),
       getClarificationContext: () => this.getClarificationContext(),
+      phaseRefuses: (toolName, phase) => this.phaseRefuses(toolName, phase),
       synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
       runProactiveGoalDecomposition: (opts) => this.runProactiveGoalDecomposition(opts),
       runReactiveGoalDecomposition: (opts) => this.runReactiveGoalDecomposition(opts),
@@ -5437,12 +5438,7 @@ export class Orchestrator {
     // state keep their behaviour; this tightens a known case rather than
     // guessing at unknown ones.
     const phase = options.agentState?.phase;
-    if (
-      phase !== undefined &&
-      !phaseAllowsWrites(phase) &&
-      this.isWriteOperation(tc.name) &&
-      !SELF_IMPROVEMENT_TOOLS.has(tc.name)
-    ) {
+    if (phase !== undefined && this.phaseRefuses(tc.name, phase)) {
       // Counted in the daemon log: a planning turn that names a write costs a turn now.
       ctx.logger.info("Phase write refused", { chatId: ctx.chatId, tool: tc.name, phase });
       return phaseWriteRefusalResult(tc.id, phase);
@@ -5992,6 +5988,15 @@ export class Orchestrator {
    * costs are lopsided — an unnecessary confirmation is a prompt, an unguarded
    * write is a corrupted project, and in read-only mode it is a broken promise.
    */
+  /**
+   * Whether the phase gate refuses `toolName` in `phase`: a write, in a phase that does not
+   * write. One answer for the gate and for the plan-review check, which counts only the calls
+   * that will run (agent-core/engine/phase-write-access.ts).
+   */
+  private phaseRefuses(toolName: string, phase: AgentPhase): boolean {
+    return !phaseAllowsWrites(phase) && this.isWriteOperation(toolName) && !SELF_IMPROVEMENT_TOOLS.has(toolName);
+  }
+
   private isWriteOperation(toolName: string): boolean {
     if (WRITE_OPERATIONS.has(toolName)) return true;
     // audited 2026-09-02: a batch dispatch tool is a write by construction —

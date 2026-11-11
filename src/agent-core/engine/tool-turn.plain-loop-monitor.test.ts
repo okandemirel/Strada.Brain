@@ -407,6 +407,39 @@ describe("portExecuteToolTurn — a write refused while planning is not an execu
     expect(tracker.hadMutationsSinceLastReset()).toBe(true);
   });
 
+  it("the progress line names the calls that ran, and a batch in which nothing ran reports none", async () => {
+    const refuse = answering((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING));
+    const refusedOnly = makeDeps({ ...refuse, buildToolBatchProgressSignal: vi.fn(() => ({ kind: "analysis" })) as never });
+    const onlyRefused = await portExecuteToolTurn(refusedOnly, [[write], undefined, planning, ""], makeRunCtx());
+    expect(refusedOnly.buildToolBatchProgressSignal).not.toHaveBeenCalled();
+    expect((onlyRefused as { progressSignal?: unknown }).progressSignal).toBeUndefined();
+
+    const mixed = makeDeps({ ...refuse, buildToolBatchProgressSignal: vi.fn(() => ({ kind: "analysis" })) as never });
+    await portExecuteToolTurn(mixed, [[...reads(1), write], undefined, planning, ""], makeRunCtx());
+    expect(mixed.buildToolBatchProgressSignal).toHaveBeenCalledWith(expect.objectContaining({ toolCalls: reads(1) }));
+  });
+
+  it("the consensus review is not consulted for a batch in which nothing ran; it is for one in which a call ran", async () => {
+    const consensus = (writeResult: (tc: ToolCall) => ToolResult) => {
+      const classify = vi.fn(() => ({ type: "implementation", complexity: "simple", criticality: "critical" }));
+      const deps = makeDeps({
+        ...answering(writeResult),
+        consensusManager: { shouldConsult: vi.fn(() => "skip") },
+        confidenceEstimator: { estimate: vi.fn(() => 0.1) },
+        providerRouter: {},
+        taskClassifier: { classify },
+      } as never);
+      return { deps, classify };
+    };
+    const refused = consensus((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING));
+    await portExecuteToolTurn(refused.deps, [[write], undefined, planning, ""], makeRunCtx());
+    expect(refused.classify).not.toHaveBeenCalled();
+
+    const ran = consensus((tc) => ({ toolCallId: tc.id, content: "File written: notes/a.txt", isError: false }));
+    await portExecuteToolTurn(ran.deps, [[write], undefined, { ...planning, phase: AgentPhase.EXECUTING }, ""], makeRunCtx());
+    expect(ran.classify).toHaveBeenCalled();
+  });
+
   it("a batch of nothing but refusals does not mark the step before it failed; a write that ran and failed does", async () => {
     const refusedOnly = makeDeps(answering((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING)));
     await portExecuteToolTurn(refusedOnly, [[write], undefined, planning, ""], makeRunCtx());

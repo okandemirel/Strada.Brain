@@ -275,10 +275,10 @@ export interface PlanPhaseParams {
   readonly providerName: string;
   readonly modelId?: string;
   readonly chatId: string;
-  /** Tool-call count on the response. v1's plan-review gate fired only on a text-only PLANNING
-   *  response (`response.toolCalls.length === 0`, orchestrator.ts ~5812); the port needs the count
-   *  to replicate that guard (PlanPhaseParams otherwise carries only `responseText`). */
-  readonly toolCallCount: number;
+  /** The names of the response's tool calls. v1's plan-review gate fired only on a text-only
+   *  PLANNING response (`response.toolCalls.length === 0`, orchestrator.ts ~5812); the port reads
+   *  the names so that a write the phase gate refuses, which runs nothing, does not count. */
+  readonly toolNames: readonly string[];
 }
 
 /**
