@@ -60,6 +60,18 @@ export interface Step {
   readonly check: (call: ProviderCall) => string | undefined;
   /** The provider's answer, or the error the provider fails the call with. */
   readonly reply: Partial<MockResponse> | Error;
+  /** How long the provider takes to answer this call, on top of any GOLDEN_RUN_PROVIDER_DELAY_MS. */
+  readonly delayMs?: number;
+}
+
+/**
+ * A pause before every provider answer, from the environment: the way to run
+ * a golden file on a loaded machine without waiting for one. A run's result
+ * must not depend on it (docs/memory: the progress heartbeat is a timer).
+ */
+function providerDelayFromEnv(): number {
+  const parsed = Number(process.env["GOLDEN_RUN_PROVIDER_DELAY_MS"]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 export function textOf(message: ConversationMessage | undefined): string {
@@ -119,6 +131,17 @@ export function loadScript(script: readonly Step[], chain: readonly string[] = [
   const served: string[] = [];
   const calls: ProviderCall[] = [];
   const violations: string[] = [];
+  // The pause the answer being built owes; the provider awaits it after the handler returns.
+  let owedDelayMs = 0;
+  const owedPause = async (): Promise<never> => {
+    const wait = owedDelayMs;
+    owedDelayMs = 0;
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    // The mock returns its own response: the spy's value is not read.
+    return undefined as never;
+  };
+  provider.chatSpy.mockImplementation(owedPause);
+  provider.chatStreamSpy.mockImplementation(owedPause);
   // Set by a seat just before it hands the call on. The handler runs
   // synchronously at the start of the call, so it reads its own seat.
   let takenBy: string | undefined;
@@ -138,6 +161,7 @@ export function loadScript(script: readonly Step[], chain: readonly string[] = [
     if (step && !problem) {
       served.push(step.step);
       calls.push(call);
+      owedDelayMs = providerDelayFromEnv() + (step.delayMs ?? 0);
       if (step.reply instanceof Error) throw step.reply;
       return {
         text: "",
