@@ -3,12 +3,13 @@
  * model can actually receive. It used to tell the model to watch for "[Provider Health Report]"
  * messages whose only producer had no callers since the v1 engine was deleted.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildProviderHealthAwareness, prepareIteration, type PrepareIterationDeps, type PrepareIterationParams } from "./prepare-iteration.js";
 import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
 import { ExecutionJournal } from "../../agents/autonomy/execution-journal.js";
 import { IterationHealthTracker } from "../../agents/iteration-health-tracker.js";
 import { TURN_CONTEXT_HEADER } from "../../agents/turn-context.js";
+import { phaseWriteRefusal } from "./phase-write-access.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import type { SupervisorAssignment, SupervisorExecutionStrategy, SupervisorRoutingContext } from "../../agents/orchestrator-supervisor-routing.js";
 
@@ -56,12 +57,17 @@ describe("prepareIteration: a byte-stable system prompt", () => {
     usesMultipleProviders: false,
     providerPinned: true,
   };
+  // A shell that still filtered by phase if it were handed one, as buildWorkerToolDefinitions did
+  // until 2026-11-11: the list it returns follows the phase only if prepareIteration passes it.
+  const buildWorkerToolDefinitions = vi.fn((...args: unknown[]) => [
+    { name: "file_read", description: "Read a file", input_schema: { type: "object" } },
+    ...(args[1] === undefined || args[1] === AgentPhase.EXECUTING
+      ? [{ name: "file_write", description: "Write a file", input_schema: { type: "object" } }]
+      : []),
+  ]);
   const deps: PrepareIterationDeps = {
     getSupervisorRoutingContext: () => ({ providerManager: {} }) as unknown as SupervisorRoutingContext,
-    buildWorkerToolDefinitions: (_task, phase) => [
-      { name: "file_read", description: "Read a file", input_schema: { type: "object" } },
-      ...(phase === AgentPhase.EXECUTING ? [{ name: "file_write", description: "Write a file", input_schema: { type: "object" } }] : []),
-    ],
+    buildWorkerToolDefinitions,
   };
   const journal = new ExecutionJournal("write two files");
   const health = new IterationHealthTracker();
@@ -105,14 +111,45 @@ describe("prepareIteration: a byte-stable system prompt", () => {
     expect(second.turnContext).toContain("## Provider Health Awareness");
   });
 
-  it("keeps the system prompt across a phase change: only the tools and the turn context follow the phase", () => {
-    const planning = prepareIteration(deps, params(createInitialState("write two files")));
-    const acting = prepareIteration(deps, params(executing));
+  it("keeps the system prompt and the tool list across every phase change: only the turn context follows the phase", () => {
+    // The tool schemas come before the history too. Hiding the write tools while planning,
+    // replanning or reflecting changed the list on 35–46% of consecutive calls in the replayed
+    // daemon logs, and every change missed the whole history in the provider's prefix cache.
+    const phases = [AgentPhase.PLANNING, AgentPhase.EXECUTING, AgentPhase.REFLECTING, AgentPhase.REPLANNING];
+    const prepared = phases.map((phase) =>
+      prepareIteration(deps, params({ ...executing, phase })),
+    );
+    const [planning, acting, reflecting, replanning] = prepared as [
+      (typeof prepared)[0], (typeof prepared)[0], (typeof prepared)[0], (typeof prepared)[0],
+    ];
 
-    expect(acting.activePrompt).toBe(planning.activePrompt);
-    expect(planning.currentToolNames).toEqual(["file_read"]);
+    for (const step of prepared) {
+      expect(step.activePrompt).toBe(planning.activePrompt);
+      expect(JSON.stringify(step.currentToolDefinitions)).toBe(JSON.stringify(acting.currentToolDefinitions));
+    }
     expect(acting.currentToolNames).toEqual(["file_read", "file_write"]);
+    // The shell is given the task alone: nothing it is handed names the phase or the role.
+    for (const call of buildWorkerToolDefinitions.mock.calls) {
+      expect(call).toEqual([strategy.task]);
+    }
     expect(planning.turnContext).toContain("Current worker role: planner");
     expect(acting.turnContext).toContain("Current worker role: executor");
+    expect(reflecting.turnContext).toContain("Current worker role: reviewer");
+    expect(replanning.turnContext).toContain("Current worker role: planner");
+  });
+
+  it("says in the turn context of a phase that does not write that a write is refused, and nowhere else", () => {
+    // The list no longer shows the phase, so the turn context says what the gate does
+    // (phaseWriteRefusal, the result a write called in such a phase gets).
+    const turnContextIn = (phase: AgentPhase): string => prepareIteration(deps, params({ ...executing, phase })).turnContext;
+    for (const phase of [AgentPhase.PLANNING, AgentPhase.REPLANNING, AgentPhase.REFLECTING]) {
+      const context = turnContextIn(phase);
+      expect(context, phase).toContain("## Writes in this phase");
+      expect(context, phase).toContain(`The agent is ${phase}.`);
+      expect(context, phase).toContain("a write tool called now is refused and changes nothing: writes run in the executing phase.");
+      expect(phaseWriteRefusal(phase)).toContain("writes run in the executing phase");
+    }
+    expect(turnContextIn(AgentPhase.REFLECTING)).toContain("A tool call made in it is not run.");
+    expect(turnContextIn(AgentPhase.EXECUTING)).not.toContain("## Writes in this phase");
   });
 });

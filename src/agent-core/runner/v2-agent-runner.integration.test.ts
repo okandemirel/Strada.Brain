@@ -33,6 +33,8 @@ import {
   type CapabilityAdapter,
 } from "../control/index.js";
 import { V2AgentRunner, type V2RunnerDeps } from "./v2-agent-runner.js";
+import { TURN_CONTEXT_HEADER } from "../../agents/turn-context.js";
+import { phaseWriteRefusal } from "../engine/phase-write-access.js";
 import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
 import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
 import type { WorkspaceLease } from "../../agents/supervisor/supervisor-types.js";
@@ -305,6 +307,97 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
 
     expect(readTool.execute, "the planning turn's tool call was discarded").toHaveBeenCalledTimes(1);
     expect(result.toolTrace.map((t) => t.toolName)).toContain("file_read");
+  });
+
+  /** A write of `path` the scripted model calls. */
+  const writeCall = (id: string, path: string) => ({ id, name: "file_write", input: { path, content: "x" } });
+  /** A message's text: its string, or each block's text and tool-result content, in order. */
+  const textOfMessage = (m: { content: unknown } | undefined): string =>
+    typeof m?.content === "string"
+      ? m.content
+      : ((m?.content ?? []) as { text?: string; content?: unknown }[])
+          .map((block) => block.text ?? (typeof block.content === "string" ? block.content : ""))
+          .join("\n");
+  /** The worker's calls, which carry the turn context (review and verifier calls do not). */
+  const workerCallsOf = (provider: ReturnType<typeof mkScriptedProvider>) =>
+    provider.chat.mock.calls
+      .map(([, messages, toolDefs]) => ({ last: textOfMessage((messages as { content: unknown }[]).at(-1)), tools: toolDefs as unknown }))
+      .filter((c) => c.last.includes(TURN_CONTEXT_HEADER));
+  /** The phase a worker call was made in, read from the turn context's write notice. */
+  const phaseOf = (last: string): string => /## Writes in this phase\nThe agent is (\w+)\./.exec(last)?.[1] ?? "executing";
+
+  it("B3: every worker call of a run sends one tool list, through planning, executing, reflecting and replanning", async () => {
+    // Write tools used to be taken out of the list while planning, replanning and reflecting.
+    // The list comes before the history in a request, so every phase change missed the whole
+    // history in the provider's prefix cache, the reflection call's included: 35–46% of
+    // consecutive calls in the replayed daemon logs. The list is now the run's list in every
+    // phase; the phase's rule is the gate's refusal and a sentence in the turn context
+    // (src/agent-core/engine/phase-write-access.ts).
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "Plan: 1. write a.cs, b.cs and c.cs", stopReason: "end_turn" }))
+      // EXECUTING: three writes make three consequential steps, the reflection interval.
+      .mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-1", "a.cs"), writeCall("tc-2", "b.cs"), writeCall("tc-3", "c.cs")],
+        }),
+      )
+      // REFLECTING: asks for a new plan, and names a write on the way.
+      .mockResolvedValueOnce(
+        resp({
+          text: "The files are written but the approach is wrong.\n\n**REPLAN**",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-reflect-write", "reflected.cs")],
+        }),
+      )
+      // REPLANNING, then EXECUTING to the end.
+      .mockResolvedValueOnce(resp({ text: "New plan: 1. rewrite a.cs", stopReason: "end_turn" }))
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["a.cs"])];
+    const h = buildHarness(provider, tools);
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    const workerCalls = workerCallsOf(provider);
+    expect(workerCalls.map((c) => phaseOf(c.last)).slice(0, 5)).toEqual([
+      "planning", "executing", "reflecting", "replanning", "executing",
+    ]);
+    const first = JSON.stringify(workerCalls[0]!.tools);
+    expect(first).toContain('"file_write"');
+    for (const [i, c] of workerCalls.entries()) {
+      expect(JSON.stringify(c.tools), `worker call ${i + 1} (${phaseOf(c.last)}) sent another tool list`).toBe(first);
+    }
+    // The reflecting turn's write was offered and did not run.
+    const written = tools[1]!.execute.mock.calls.map(([input]) => (input as { path: string }).path);
+    expect(written).toEqual(["a.cs", "b.cs", "c.cs"]);
+  });
+
+  it("B4: a write called in the planning turn is refused by the gate, and the read beside it runs", async () => {
+    // The plan transition moves the state to EXECUTING before the planning turn's calls run,
+    // and the gate reads the phase from the state it is handed: with that state the write ran.
+    // Hidden from the planning turn's list, it was rarely named; listed now, it is refused.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(
+        resp({
+          text: "Plan: 1. read a.cs 2. write it",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-plan-write", "planned.cs"), { id: "tc-plan-read", name: "file_read", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["planned.cs"])];
+    const h = buildHarness(provider, tools);
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    expect(tools[1]!.execute, "the planning turn's write ran").not.toHaveBeenCalled();
+    expect(tools[0]!.execute, "the planning turn's read was discarded").toHaveBeenCalledTimes(1);
+    const workerCalls = workerCallsOf(provider);
+    expect(phaseOf(workerCalls[0]!.last)).toBe("planning");
+    expect(workerCalls[1]!.last).toContain(phaseWriteRefusal(AgentPhase.PLANNING));
   });
 
   it("C: interactive renders to the channel (real divergence)", async () => {

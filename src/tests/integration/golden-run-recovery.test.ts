@@ -80,7 +80,12 @@ function planStep(step: string, task: string): Step {
   return {
     step,
     check: (call) =>
-      requires([isWorkerOn(task)(call), isFirstTurn(call), offers(call, "file_write") && "a planning turn offers file_write"]),
+      requires([
+        isWorkerOn(task)(call),
+        isFirstTurn(call),
+        // One tool list in every phase (phase-write-access.ts): a write called now is refused.
+        !offers(call, "file_write") && "the planning turn does not offer file_write",
+      ]),
     reply: say("Plan: write the file with file_write, then report."),
   };
 }
