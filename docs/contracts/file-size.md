@@ -30,8 +30,55 @@ The numbers when this was written:
 
 `src/file-size-ratchet.test.ts` holds the limit (`LIMIT`, 1,000 lines) and
 the baseline of files already past it (`SIZE_BASELINE`). The commit layer,
-`scripts/ci/check-test-integrity.mjs`, treats a raised or added
-`SIZE_BASELINE` line as a loosened pin.
+`scripts/ci/check-test-integrity.mjs`, reads that baseline from the base
+commit. It treats a raised or added `SIZE_BASELINE` line as a loosened pin,
+and it holds the growth that the baseline cannot see.
+
+## What the detectors see
+
+- **The tree** (`src/file-size-ratchet.test.ts`, in `npm test` and the gates'
+  contract detectors) fails in three cases. The first is a file over 1,000
+  lines that is not in `SIZE_BASELINE`. The second is a baselined file longer
+  than its line. The third is a baselined file 100 lines (`SLACK`) or more
+  under its line.
+- **The range** (`check-test-integrity.mjs`, in the gates' "test integrity",
+  the pre-push hook and CI) fails on a file in the base's `SIZE_BASELINE`
+  that is longer at the head than at the base, even while it is still under
+  its line. The base is where the range left main
+  (`git merge-base <base> <head>`). The count is net over the range: an
+  extraction commit followed by a commit that adds back as many lines is not
+  growth. The growth passes only when a commit in the range that changes the
+  file carries a `Test-Weakened:` line. The same detector also judges a
+  raised or added `SIZE_BASELINE` line.
+
+## What they do not see
+
+- **Growth under the line, seen by the tree alone.** A line may sit up to
+  `SLACK` lines above its file. On 2026-11-11, 5 of the 64 files had 84 lines
+  of room between them. In #31, `orchestrator-session-manager.ts` went from
+  1631 to 1633 lines under its line of 1650, and the tree check stayed green.
+  Only the range check catches this. A run of the vitest file on its own
+  (`npm test`, `vitest related`) does not.
+- **A branch pushed in pieces.** The range is one push. If an extraction is
+  pushed first and the addition later, the second push is judged on its own
+  and fails. This makes the check stricter, not blind. Push the extraction
+  and the addition together.
+- **A renamed or moved baselined file.** It is missing at one end of the
+  range, so the range check does not compare it. The tree check sees it, as a
+  file over the limit that is not in the baseline.
+- **`workflow_dispatch` CI runs.** They skip the integrity step.
+- **Lines joined to cut the count.** No counter sees this (see Don't).
+
+## Why the range, not a lower baseline
+
+The other way was to lower every line to the file's current length and drop
+`SLACK`. Then every commit that shrinks a baselined file would also have to
+edit `SIZE_BASELINE`. In the 50 commits before 2026-11-11, 18 touched a
+baselined file: 6 shrank one and 6 grew one under its line. Parallel workers
+would all edit the same block of one file, which means conflicts and a shared
+scope lock. Measuring each file against itself across the range keeps that
+file untouched, at the cost of a change to the gate's code. The gate's code
+is governed, and it is judged from the base commit.
 
 ## Caller rules
 
