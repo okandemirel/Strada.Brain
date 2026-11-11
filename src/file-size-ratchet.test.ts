@@ -90,7 +90,6 @@ const SIZE_BASELINE: Readonly<Record<string, number>> = {
   "src/agents/autonomy/self-verification.ts": 1063,
   "src/agents/providers/provider-manager.ts": 1041,
   "src/agents/tools/unity/mesh-generate.ts": 1013,
-  "src/agents/orchestrator-end-turn-handler.ts": 1005,
 };
 
 function sourceFiles(dir: string, out: string[] = []): string[] {

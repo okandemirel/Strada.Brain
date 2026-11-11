@@ -28,13 +28,17 @@ import type {
   LoopRecoveryIntervention,
   WorkerRunCollector,
 } from "./orchestrator-intervention-pipeline.js";
+import {
+  runBgLoopRecovery as runBgLoopRecoveryWith,
+  runInteractiveLoopRecovery,
+  type LoopRecoveryKind,
+} from "./orchestrator-loop-recovery-call.js";
 import type { ClarificationContext } from "./orchestrator-clarification.js";
 import { isTerminalFailureReport } from "./autonomy/verifier-pipeline.js";
 import {
   decideUserVisibleBoundary as decideUserVisibleBoundaryHelper,
 } from "./orchestrator-clarification.js";
 import {
-  handleBackgroundLoopRecovery as handleBackgroundLoopRecoveryPipeline,
   resolveVerifierIntervention as resolveVerifierInterventionPipeline,
   resolveDraftClarificationIntervention as resolveDraftClarificationInterventionPipeline,
   resolveVisibleDraftDecision as resolveVisibleDraftDecisionPipeline,
@@ -251,75 +255,10 @@ function applyBgLoopRecoveryResult(
   return { flow: "continue", newState: agentState };
 }
 
-// ─── Background loop recovery pipeline call helper ─────────────────────────────
-
-async function runBgLoopRecovery(
-  ctx: BgEndTurnContext,
-  agentState: AgentState,
-  kind: Parameters<typeof handleBackgroundLoopRecoveryPipeline>[0]["kind"],
-  reason: string,
-  gate: string | undefined,
-): Promise<LoopRecoveryIntervention> {
-  return handleBackgroundLoopRecoveryPipeline({
-    chatId: ctx.chatId,
-    identityKey: ctx.identityKey,
-    prompt: ctx.prompt,
-    title: ctx.progressTitle,
-    language: ctx.progressLanguage,
-    state: agentState,
-    strategy: ctx.executionStrategy,
-    tracker: ctx.controlLoopTracker,
-    executionJournal: ctx.executionJournal,
-    kind,
-    reason,
-    gate,
-    iteration: ctx.iteration,
-    availableToolNames: ctx.currentToolNames,
-    selfVerification: ctx.selfVerification,
-    usageHandler: ctx.usageHandler,
-    onProgress: ctx.emitProgress,
-    session: ctx.session,
-    workerCollector: ctx.workerCollector,
-    workspaceLease: ctx.workspaceLease,
-    daemonMode: ctx.daemonMode ?? false,
-    progressAssessmentEnabled: ctx.progressAssessmentEnabled,
-    taskStartedAtMs: ctx.taskStartedAtMs,
-  }, ctx.interventionDeps);
-}
-
-async function runInteractiveLoopRecovery(
-  ctx: InteractiveEndTurnContext,
-  agentState: AgentState,
-  kind: Parameters<typeof handleBackgroundLoopRecoveryPipeline>[0]["kind"],
-  reason: string,
-  gate: string | undefined,
-): Promise<LoopRecoveryIntervention | null> {
-  if (!ctx.controlLoopTracker) {
-    return null;
-  }
-
-  return handleBackgroundLoopRecoveryPipeline({
-    chatId: ctx.chatId,
-    identityKey: ctx.identityKey,
-    prompt: ctx.prompt,
-    title: ctx.prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task",
-    state: agentState,
-    strategy: ctx.executionStrategy,
-    tracker: ctx.controlLoopTracker,
-    executionJournal: ctx.executionJournal,
-    kind,
-    reason,
-    gate,
-    iteration: agentState.iteration,
-    availableToolNames: ctx.currentToolNames,
-    selfVerification: ctx.selfVerification,
-    usageHandler: ctx.usageHandler,
-    onProgress: () => {},
-    session: ctx.session,
-    progressAssessmentEnabled: ctx.progressAssessmentEnabled,
-    taskStartedAtMs: ctx.taskStartedAtMs,
-  }, ctx.interventionDeps);
-}
+/** A loop-recovery call after its context: the state, the kind, the reason and the gate. */
+type LoopRecoveryCall = [agentState: AgentState, kind: LoopRecoveryKind, reason: string, gate: string | undefined];
+const runBgLoopRecovery = (ctx: BgEndTurnContext, ...call: LoopRecoveryCall) =>
+  runBgLoopRecoveryWith(ctx, ctx.daemonMode ?? false, ...call);
 
 // ─── Background end-turn handler ────────────────────────────────────────────────
 
