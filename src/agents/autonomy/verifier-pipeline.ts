@@ -16,6 +16,12 @@ import {
 } from "./completion-review.js";
 import { MAX_UNITY_ERROR_ATTEMPTS, type VerificationState } from "./self-verification.js";
 import { FAILED_TERMINAL_KEYS, systemStampsIn } from "./terminal-outcome.js";
+import {
+  measureVerificationTooling,
+  unverifiableFailureCheck,
+  unverifiableFailureOutcome,
+  type VerificationToolingRecord,
+} from "./verifier-pipeline-unverifiable.js";
 
 export type VerifierName =
   | "build"
@@ -24,7 +30,8 @@ export type VerifierName =
   | "logs"
   | "completion-review"
   | "unity-console"
-  | "same-error-repeat";
+  | "same-error-repeat"
+  | "unverifiable-failure";
 
 export type VerifierCheckStatus = "clean" | "issues" | "not_applicable";
 export type VerifierPipelineDecision = "approve" | "continue" | "replan";
@@ -44,6 +51,8 @@ export interface VerifierPipelineEvidence extends CompletionReviewEvidence {
   readonly conformanceRequired: boolean;
   readonly consecutiveSameErrors: number;
   readonly repeatedErrorSignature: string | null;
+  /** What the run's tool registry said about verification; null when it was not measured. */
+  readonly verificationTooling?: VerificationToolingRecord | null;
 }
 
 export interface VerifierPipelinePlan {
@@ -78,8 +87,11 @@ export function planVerifierPipeline(params: {
   chatId: string;
   taskStartedAtMs: number;
   buildToolsAvailable?: boolean;
+  /** The tools this run was offered: the record "nothing here can verify" is read from. */
+  availableToolNames?: readonly string[];
 }): VerifierPipelinePlan {
-  const evidence = collectVerifierPipelineEvidence({
+  const tooling = measureVerificationTooling(params.availableToolNames, params.state.taskDescription);
+  const collected = collectVerifierPipelineEvidence({
     state: params.state,
     task: params.task,
     verificationState: params.verificationState,
@@ -89,6 +101,11 @@ export function planVerifierPipeline(params: {
     draft: params.draft,
     conformanceGate: params.conformanceGate,
   });
+  const evidence: VerifierPipelineEvidence = { ...collected, verificationTooling: tooling };
+  // A failure re-run successfully in a run whose registry holds no check
+  // tool: the draft must say it is not verified, and then it stops gating
+  // (verifier-pipeline-unverifiable.ts says when, and why).
+  const unverifiable = unverifiableFailureOutcome(evidence, tooling, params.draft);
 
   const checks: VerifierCheck[] = [];
   // Exhausted debt takes the gating path whatever the tooling says: with the
@@ -106,9 +123,11 @@ export function planVerifierPipeline(params: {
   // completion over unreproduced failures precisely when nothing could have
   // verified it. Keep it active; the honest terminal failure report remains the
   // one accepted way out when the tooling truly cannot come back.
-  const targetedCheck = params.buildToolsAvailable === false && evidence.hasTerminalFailureReport
-    ? null
-    : buildTargetedReproVerifierCheck(evidence);
+  const targetedCheck = unverifiable && tooling
+    ? unverifiableFailureCheck(unverifiable, evidence, tooling)
+    : params.buildToolsAvailable === false && evidence.hasTerminalFailureReport
+      ? null
+      : buildTargetedReproVerifierCheck(evidence);
   if (targetedCheck) {
     checks.push(targetedCheck);
   }
@@ -130,7 +149,7 @@ export function planVerifierPipeline(params: {
     checks.push(sameErrorCheck);
   }
 
-  const unverifiedFailureCheck = buildUnverifiedFailureVerifierCheck(evidence);
+  const unverifiedFailureCheck = unverifiable ? null : buildUnverifiedFailureVerifierCheck(evidence);
   if (unverifiedFailureCheck) {
     checks.push(unverifiedFailureCheck);
   }
@@ -786,7 +805,9 @@ function buildVerifierPipelineGate(
     : "[VERIFIER PIPELINE] Internal verification is not clean yet.";
   const tail = decision === "replan"
     ? "Preserve the useful evidence, discard the failing approach, create a new plan, and continue only after the new path has a clean verifier result."
-    : "Continue internally. Resolve the failing verifier checks, rerun the relevant verification, and only then declare the task complete.";
+    : checks.every((check) => check.name === "unverifiable-failure")
+      ? "Nothing can be verified here: report now, and say the result is not verified."
+      : "Continue internally. Resolve the failing verifier checks, rerun the relevant verification, and only then declare the task complete.";
 
   return [
     header,

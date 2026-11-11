@@ -10,6 +10,7 @@ Scan the topic you are about to work in, and open only the entries that match. P
 - [spike] Mask old tool output deterministically, but as a rare cliff with byte-stable stubs, and only after the cache hit rate is measured — `entries/2026-11-04-compaction-must-respect-the-prefix-cache.md` · src/agents/session-compaction.ts, src/agents/providers/provider-call-log.ts, src/agents/compaction-replay/**, scripts/eval/compaction-replay.mjs
 - [decision] A path-guard target refusal leaves the verifier's open failures once a later call of the same tool succeeds; a tool that ran and failed still waits for a verification — `entries/2026-11-06-a-refused-target-closes-on-the-next-success.md` · src/agents/autonomy/completion-review.ts, src/agents/autonomy/verifier-pipeline.ts, src/security/path-guard.ts
 - [decision] The worker's system prompt is the run's prompt, byte for byte; per-step sections ride after the history as an unstored turn context, and mid-run memory recall is appended to the history once — `entries/2026-11-06-system-prompt-is-byte-stable.md` · src/agents/turn-context.ts, src/agents/recall-ledger.ts, src/agent-core/engine/prepare-iteration.ts, src/agent-core/engine/tool-turn.ts, src/agent-core/engine/port.ts, src/agents/orchestrator-loop-shared.ts, src/agents/orchestrator.ts, src/agents/orchestrator-session-manager.ts
+- [decision] A failed step re-run successfully stops gating when the turn's tool offer holds no check tool, no check ran, no log issue is open and the draft says the result is not verified; otherwise the targeted-repro gate stands — `entries/2026-11-11-unverifiable-failure-closes-on-an-honest-report.md` · src/agents/autonomy/verifier-pipeline-unverifiable.ts, src/agents/autonomy/verifier-pipeline.ts, src/agents/autonomy/completion-review.ts
 
 ## campaign
 
@@ -38,6 +39,7 @@ Scan the topic you are about to work in, and open only the entries that match. P
 - [guideline] (core) A fix is finished only when its test is shown to fail without it — `entries/2026-08-21-mutation-check-every-fix.md` · src/**, scripts/**
 - [guideline] Test both directions when tightening a gate: the false green it stops and the real failure it must still report — `entries/2026-09-12-tightening-a-gate-cuts-both-ways.md` · src/campaign/**, src/agents/autonomy/**
 - [decision] A path-guard target refusal leaves the verifier's open failures once a later call of the same tool succeeds; a tool that ran and failed still waits for a verification — `entries/2026-11-06-a-refused-target-closes-on-the-next-success.md` · src/agents/autonomy/completion-review.ts, src/agents/autonomy/verifier-pipeline.ts, src/security/path-guard.ts
+- [decision] A failed step re-run successfully stops gating when the turn's tool offer holds no check tool, no check ran, no log issue is open and the draft says the result is not verified; otherwise the targeted-repro gate stands — `entries/2026-11-11-unverifiable-failure-closes-on-an-honest-report.md` · src/agents/autonomy/verifier-pipeline-unverifiable.ts, src/agents/autonomy/verifier-pipeline.ts, src/agents/autonomy/completion-review.ts
 
 ## process
 

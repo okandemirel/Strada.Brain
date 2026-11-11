@@ -16,10 +16,13 @@
  *    a node's write is refused for its target, and the node writes the right
  *    path and finishes; the provider drops two calls of the next node, which
  *    is asked again at once without streaming and then on its next turn.
- * 4. A node's write fails at run time. Its next write succeeds, but the
- *    failure waits for a verification the project has none of, and the node
- *    is blocked; the blocked goal is resumed without waiting for a person
- *    and the node runs again.
+ * 4. A node's write fails at run time and its next write succeeds. No tool
+ *    this run has can verify that, so the node is asked once to say the
+ *    result is not verified, says so, and finishes: no block, no re-run.
+ * 5. The same failure in a run whose registry holds a tool that runs a check.
+ *    The failure waits for that verification whatever the draft says, the
+ *    node is blocked, and the blocked goal is resumed without waiting for a
+ *    person and the node runs again.
  *
  * When a deliberate change alters the calls a run makes, the failure names
  * the step it expected and the call it got. Update that run's script in the
@@ -54,6 +57,7 @@ import {
   settledWhenAnswered,
 } from "../helpers/golden-run-harness.js";
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
+import { ToolRegistry } from "../../core/tool-registry.js";
 import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 
 // ─── Script pieces ───────────────────────────────────────────────────────────
@@ -273,11 +277,50 @@ const NODE_KAPPA = "Create notes/kappa.txt containing the word KAPPA";
 const NODE_SIGMA = "Create notes/sigma.txt containing the word SIGMA";
 const KAPPA_DONE = "Wrote notes/kappa.txt.";
 const SIGMA_DONE = "Wrote notes/sigma.txt.";
-const RUNTIME_ANSWER = `${KAPPA_DONE}\n\n${SIGMA_DONE}`;
 /** Inside the project, under a FILE: the guard lets it through, and the filesystem fails the write. */
 const UNDER_A_FILE = "README.md/kappa.txt";
-/** What the worker answers a gate it cannot satisfy: the project has no build and no tests. */
-const CANNOT_VERIFY = "notes/kappa.txt is written. This project has no build and no tests to run.";
+/** What the worker reports when it is told nothing here can verify the failed write. */
+const KAPPA_UNVERIFIED = "Wrote notes/kappa.txt. Not verified: this project has no build and no tests to run.";
+const RUNTIME_ANSWER = `${KAPPA_UNVERIFIED}\n\n${SIGMA_DONE}`;
+/** The gate kappa meets once: the run's tool registry holds no tool that runs a check. */
+const NO_VERIFICATION_TOOL = "[NO VERIFICATION TOOL] Steps in this run failed, and the same tools then succeeded:";
+
+const RUNTIME_SCRIPT: readonly Step[] = [
+  decomposeStep("decompose", RUNTIME_REQUEST, twoNodes(NODE_KAPPA, NODE_SIGMA)),
+  planStep("kappa: plan", NODE_KAPPA),
+  actStep("kappa: act, on a path under a file", NODE_KAPPA,
+    [writeCall("call_kappa_fails", UNDER_A_FILE, "KAPPA\n")]),
+  actStep("kappa: act again, after reading the failure", NODE_KAPPA,
+    [writeCall("call_kappa_fixed", "notes/kappa.txt", "KAPPA\n")],
+    (call) => carriesResult(call, "call_kappa_fails")),
+  reportStep("kappa: report", NODE_KAPPA, ["call_kappa_fixed"], KAPPA_DONE),
+  // The failed write was re-run and worked, and none of the tools this run
+  // was offered runs a check, so the gate asks once for an honest report and
+  // closes on it. Measured 2026-11-06, before the fix: the failure waited for
+  // a verification nothing here could run; the worker was asked six times,
+  // loop detection blocked kappa, the goal ran again from the start, and the
+  // re-run completed with no verification at all.
+  {
+    step: "kappa: told nothing here can verify it, reports it not verified",
+    check: (call) => requires([isWorkerOn(NODE_KAPPA)(call), lastSays(call, NO_VERIFICATION_TOOL)]),
+    reply: say(KAPPA_UNVERIFIED),
+  },
+  planStep("sigma: plan", NODE_SIGMA),
+  actStep("sigma: act", NODE_SIGMA, [writeCall("call_sigma", "notes/sigma.txt", "SIGMA\n")]),
+  reportStep("sigma: report", NODE_SIGMA, ["call_sigma"], SIGMA_DONE),
+  // Cheapest node first (ResultAggregator): sigma answered in three calls, kappa in five.
+  verifyStep("sigma", SIGMA_DONE),
+  verifyStep("kappa", KAPPA_UNVERIFIED),
+];
+
+// ─── Run 5: the same failure, and the registry holds a check tool ───────────
+
+/**
+ * What the worker answers a gate it cannot satisfy. It says the result is not
+ * verified, the words that close the gate in run 4: here the registry holds a
+ * check tool, so the words close nothing.
+ */
+const CANNOT_VERIFY = "notes/kappa.txt is written. Not verified: this project has no build and no tests to run.";
 /**
  * What the user is told when kappa is blocked: each step by its task, why it
  * did not finish, and that the executor resumes the goal on its own.
@@ -290,9 +333,9 @@ const BLOCKED =
 
 /**
  * A step that failed at run time stays open until a verification runs after
- * it, and the project has none to run. The worker is told so after each
- * answer, told it is stalling, and blocked by loop detection after its third
- * text-only turn.
+ * it, and the registry holds a tool that could run one. The worker, which
+ * never calls it, is told so after each answer, told it is stalling, and
+ * blocked by loop detection after its third text-only turn.
  */
 function gateStep(n: number, marker: string): Step {
   return {
@@ -301,10 +344,10 @@ function gateStep(n: number, marker: string): Step {
     reply: say(CANNOT_VERIFY),
   };
 }
-const UNVERIFIED = "[VERIFIER PIPELINE] Internal verification is not clean yet.";
+const UNVERIFIED = "[VERIFIER PIPELINE] Internal verification is not clean yet.\n\nFailed verifier checks:\n- targeted-repro:";
 const STALLING = "[STALE ANALYSIS DETECTED]";
 
-const RUNTIME_SCRIPT: readonly Step[] = [
+const CHECKED_SCRIPT: readonly Step[] = [
   decomposeStep("decompose", RUNTIME_REQUEST, twoNodes(NODE_KAPPA, NODE_SIGMA)),
   planStep("kappa: plan", NODE_KAPPA),
   actStep("kappa: act, on a path under a file", NODE_KAPPA,
@@ -330,6 +373,29 @@ const RUNTIME_SCRIPT: readonly Step[] = [
   verifyStep("kappa", KAPPA_DONE),
   verifyStep("sigma", SIGMA_DONE),
 ];
+const CHECKED_ANSWER = `${KAPPA_DONE}\n\n${SIGMA_DONE}`;
+
+/**
+ * A tool that runs a check (its name says test, so runsVerificationCheck
+ * counts it), added to the real registry after bootstrap fills it. The worker
+ * never calls it: the run pins what the gate asks when one exists.
+ */
+const CHECK_TOOL = "project_test_run";
+function registerCheckTool(): { restore(): void } {
+  const initialize = ToolRegistry.prototype.initialize;
+  const spy = vi.spyOn(ToolRegistry.prototype, "initialize").mockImplementation(async function (this: ToolRegistry, ...args) {
+    await initialize.apply(this, args);
+    if (!this.has(CHECK_TOOL)) {
+      this.register({
+        name: CHECK_TOOL,
+        description: "Run the project's tests.",
+        inputSchema: { type: "object", properties: {} },
+        execute: async () => ({ content: "0 tests ran." }),
+      });
+    }
+  });
+  return { restore: () => spy.mockRestore() };
+}
 
 /**
  * The resumed task settles as usual (settledWhenAnswered). A blocked task
@@ -461,17 +527,55 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
-  it("a node whose write failed at run time waits for a verification: blocked, then resumed on its own", async () => {
+  it("a node whose write failed at run time, in a run with no check tool, finishes once and says it is not verified", async () => {
     const run = await runGolden({
-      name: "runtime-failure",
+      name: "runtime-failure-unverifiable",
       request: RUNTIME_REQUEST,
       script: RUNTIME_SCRIPT,
-      settled: settledAfterResume(),
+      settled: settledWhenAnswered,
     });
 
     expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
     expect(run.violations).toEqual([]);
     expect(run.served).toEqual(RUNTIME_SCRIPT.map((s) => s.step));
+
+    // What each tool reported back: the failed write, then the two writes.
+    expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
+      { id: "call_kappa_fails", isError: true },
+      { id: "call_kappa_fixed", isError: false },
+      { id: "call_sigma", isError: false },
+    ]);
+    // The guard let the path through: the write ran, and the filesystem failed it.
+    expect(run.toolResults[0]?.content).toMatch(/^Error: could not write file \(E[A-Z]+\)\n/);
+
+    // The work reached the project.
+    expect(readFileSync(join(run.project, "notes", "kappa.txt"), "utf8")).toBe("KAPPA\n");
+    expect(readFileSync(join(run.project, "notes", "sigma.txt"), "utf8")).toBe("SIGMA\n");
+
+    // One task, completed on its first attempt: nothing blocked, nothing resumed.
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(run.task?.result).toBe(RUNTIME_ANSWER);
+
+    // What the user read says the failed step is not verified; it does not
+    // read as a plain "done".
+    expect(texts(run)).toEqual([SYSTEM_STATUS, RUNTIME_ANSWER]);
+    expect(run.task?.result).toMatch(/^Wrote notes\/kappa\.txt\. Not verified: /);
+    expect(texts(run)).not.toContain(FALLBACK_NOTICE);
+    expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("the same failure in a run with a check tool waits for a verification: blocked, then resumed on its own", async () => {
+    const checkTool = registerCheckTool();
+    const run = await runGolden({
+      name: "runtime-failure",
+      request: RUNTIME_REQUEST,
+      script: CHECKED_SCRIPT,
+      settled: settledAfterResume(),
+    }).finally(() => checkTool.restore());
+
+    expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(run.violations).toEqual([]);
+    expect(run.served).toEqual(CHECKED_SCRIPT.map((s) => s.step));
 
     // What each tool reported back: the failed write first, then every write.
     expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
@@ -497,14 +601,14 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(blocked?.result).toBe(BLOCKED);
     expect(blocked?.result, "an internal goal id reached the user").not.toMatch(/goal_/);
     expect(resumed?.parentId).toBe(blocked?.id);
-    expect(resumed?.result).toBe(RUNTIME_ANSWER);
+    expect(resumed?.result).toBe(CHECKED_ANSWER);
 
     // What the user read, in order: which step stopped and why, which step
     // never started, and that the work is being retried on its own; then the
     // answer. Measured 2026-11-06, before the fix: "Blocked:\n[goal_…]
     // blocked\n\nSkipped:\n[goal_…] Skipped: dependency failed", internal ids
     // with no reason, and nothing said the work was being resumed.
-    expect(texts(run)).toEqual([SYSTEM_STATUS, BLOCKED, RUNTIME_ANSWER]);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, BLOCKED, CHECKED_ANSWER]);
     // The supervisor ran this request and did not fail: no fallback sentence,
     // and no fallback note in either task record.
     expect(texts(run)).not.toContain(FALLBACK_NOTICE);
