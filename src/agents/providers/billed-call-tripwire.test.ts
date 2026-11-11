@@ -1,5 +1,6 @@
 /**
  * Tripwire: a direct provider call that bypasses the billing path (task #71).
+ * Contract: docs/contracts/provider-call-billing.md, rule direct-provider-call-is-billed.
  *
  * The gap closed by billed-call.ts surfaced three times as "one more caller":
  * the goal decomposer (task #67), then ten call sites at once (task #71). Each
