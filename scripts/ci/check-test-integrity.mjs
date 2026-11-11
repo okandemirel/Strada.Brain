@@ -25,6 +25,12 @@
  *     Test-Weakened: <why, in a sentence>
  *
  * naming what the old assertion measured and why that was not the contract.
+ *
+ * Over the whole range it also holds docs/contracts/file-size.md: a file in
+ * the base's SIZE_BASELINE that is longer at the head than at the base grew,
+ * even under its line, and passes only when a commit in the range that
+ * changes it carries the same trailer.
+ *
  * The check runs in CI over the pushed range and as a pre-push hook; both call
  * this file. It is a gate the change under review cannot edit in the same
  * breath: the vitest suite keeps its limits beside itself, this compares them
@@ -200,6 +206,46 @@ export function judgeCommit({ message, files, sourceChanged, pins, changedPaths 
   return { findings, justification: m ? m[0] : null, governed: governedChanges(changedPaths), governanceReason: g ? g[0] : null };
 }
 
+/* ---- file size: a baselined file never grows ---------------------------- */
+
+/**
+ * docs/contracts/file-size.md, rule no-file-grows-past-the-limit. The vitest
+ * detector compares a baselined file with its SIZE_BASELINE line, and that
+ * line may sit up to SLACK lines above the file: growth into that room is
+ * invisible to it (#31 took orchestrator-session-manager.ts from 1631 to 1633
+ * lines under a 1650 line, and every gate stayed green). This layer compares
+ * the file with itself: a file in the base's SIZE_BASELINE that is longer at
+ * the head than at the base grew. Net over the range, so a commit that
+ * extracts and a later one that adds balance out.
+ */
+export const SIZE_PIN = PINS.find((p) => p.name === "SIZE_BASELINE");
+
+/** Lines as src/file-size-ratchet.test.ts counts them. */
+export function countLines(text) {
+  return text.split("\n").length - 1;
+}
+
+/**
+ * Baselined files that end the range longer than they began it. A file gone
+ * at either end is not compared: a renamed oversized file is the vitest
+ * layer's (a file over the limit outside the baseline).
+ *
+ * @param {Record<string, number> | null} baseline SIZE_BASELINE at the base
+ * @param {(file: string) => string | null} before a file's text at the base
+ * @param {(file: string) => string | null} after a file's text at the head
+ * @returns {Array<{ file: string; from: number; to: number }>}
+ */
+export function baselineGrowth(baseline, before, after) {
+  const grown = [];
+  for (const file of Object.keys(baseline ?? {})) {
+    const from = before(file);
+    const to = after(file);
+    if (from === null || to === null) continue;
+    if (countLines(to) > countLines(from)) grown.push({ file, from: countLines(from), to: countLines(to) });
+  }
+  return grown;
+}
+
 /* ---- git wiring --------------------------------------------------------- */
 
 const ZERO = /^0+$/;
@@ -293,10 +339,12 @@ if (isDirectExecution()) {
   let justified = 0;
   let ungoverned = 0;
   let governedCount = 0;
+  const judged = [];
   for (const sha of shas) {
     const input = commitInput(sha);
     if (!input) continue;
     const { findings, justification, governed, governanceReason } = judgeCommit(input);
+    judged.push({ changedPaths: input.changedPaths, justification });
     const subject = input.message.split("\n")[0];
     if (findings.length > 0) {
       const list = findings.map((f) => `    - ${f}`).join("\n");
@@ -318,10 +366,38 @@ if (isDirectExecution()) {
       }
     }
   }
+  // From where the range left main: a base ahead of the fork must not count
+  // main's own changes as this range's growth.
+  const sizeBase = tryGit(["merge-base", base, head])?.trim() || base;
+  const grown = baselineGrowth(
+    readPin(showAt(sizeBase, SIZE_PIN.file), SIZE_PIN),
+    (file) => showAt(sizeBase, file),
+    (file) => showAt(head, file),
+  );
+  let unsaidGrowth = 0;
+  for (const { file, from, to } of grown) {
+    const said = judged.find((c) => c.justification && c.changedPaths.includes(file));
+    if (said) console.log(`  baselined file grew: ${file} ${from} -> ${to}\n    justified: ${said.justification}`);
+    else {
+      unsaidGrowth++;
+      console.error(`  baselined file grew: ${file} ${from} -> ${to} (SIZE_BASELINE, docs/contracts/file-size.md)`);
+    }
+  }
   console.log(
     `check-test-integrity: ${shas.length} commit(s) checked, ${failed + justified} weakened (${justified} justified), ` +
-      `${governedCount} changed a governed file (${governedCount - ungoverned} explained)`,
+      `${governedCount} changed a governed file (${governedCount - ungoverned} explained), ` +
+      `${grown.length} baselined file(s) grew (${grown.length - unsaidGrowth} justified)`,
   );
+  if (unsaidGrowth > 0) {
+    console.error(
+      "A file in SIZE_BASELINE is longer at the head than at the base, even if it is still under its line.\n" +
+        "Move the new code into a module beside it, or take out as many lines as you add. When it truly\n" +
+        "cannot live elsewhere, a commit in the range that changes the file says why in a line\n" +
+        "  Test-Weakened: <why this code must sit in the big file>\n" +
+        "docs/contracts/file-size.md",
+    );
+    process.exitCode = 1;
+  }
   if (ungoverned > 0) {
     console.error(
       "A commit above changes a file that enforces the rules without saying why. Add a line\n" +
