@@ -40,7 +40,7 @@ import type { EngineRunContext } from "./engine-deps.js";
 import type { ParentRunScope } from "../runner/agent-runner.js";
 import type { SetupDeps } from "./setup.js";
 import { instinctScopeKey } from "./instinct-scope.js";
-import { isPhaseWriteRefusal } from "./phase-write-access.js";
+import { allCallsRun, type PhaseCallSplit } from "./phase-write-access.js";
 
 /** v1 parity: the PAOR reflection cadence on the agent-core route (orchestrator const copy). */
 const REFLECT_INTERVAL_AGENT_CORE = 3;
@@ -109,12 +109,6 @@ export function summarizePlainLoopBatch(toolCalls: readonly ToolCall[]): string 
   return names.length > 3 ? `${shown} +${names.length - 3}` : shown;
 }
 
-/** Whether every call of the batch that ran failed; a batch in which nothing ran did not fail. */
-function ranBatchFailed(toolResults: readonly ToolResult[]): boolean {
-  const ran = toolResults.filter((r) => !isPhaseWriteRefusal(r));
-  return ran.length > 0 && ran.every((r) => r.isError === true);
-}
-
 /** What the port's bound tool turn returns: the trace rows + the PAOR-advanced state. */
 export interface AgentCoreToolTurnResult {
   readonly trace: ReadonlyArray<{
@@ -124,8 +118,6 @@ export interface AgentCoreToolTurnResult {
     errorCategory?: string;
     touchedFiles?: readonly string[];
     resultText?: string;
-    /** A write the phase gate refused: nothing ran, so it is no tool of the run (./phase-write-access.ts). */
-    refused?: boolean;
   }>;
   readonly advancedState: AgentState;
   readonly progressSignal?: TaskProgressSignal;
@@ -177,7 +169,11 @@ export async function portExecuteToolTurn(
     args: unknown[],
     runCtx: EngineRunContext,
   ): Promise<AgentCoreToolTurnResult> {
-    const toolCalls = args[0] as ToolCall[];
+    // The turn's calls as the spine split them by phase (the 6th arg; ./phase-write-access.ts).
+    // `toolCalls` is the calls that run, and every step below reads only it and their results; a
+    // refused call is in the assistant turn the model made and answered there, and nowhere else.
+    const calls = (args[5] as PhaseCallSplit | undefined) ?? allCallsRun(args[0] as ToolCall[]);
+    const toolCalls = [...calls.runnable];
     const agentState = (args[2] as AgentState | undefined) ?? createInitialState("");
     const chatId = runCtx.chatId;
     const session = runCtx.session;
@@ -200,6 +196,7 @@ export async function portExecuteToolTurn(
       chatId,
       responseText,
       toolCalls,
+      split: calls,
       session: session as { messages: ConversationMessage[] },
       executeToolCalls: (c, tc, opts) => deps.executeToolCalls(c, tc, opts),
       executeOptions: {
@@ -248,8 +245,6 @@ export async function portExecuteToolTurn(
         workerCollector: runCtx.workerCollector ?? undefined,
       },
     });
-    // The calls that ran: a write the phase gate refused did not (./phase-write-access.ts).
-    const ranCalls = toolCalls.filter((_tc, i) => !isPhaseWriteRefusal(toolResults[i]));
 
     // Gate text raised by this turn. It rides in the SAME user message as the tool results,
     // after them: a separate user message between tool_use and tool_result broke the pairing
@@ -265,8 +260,6 @@ export async function portExecuteToolTurn(
         // rides along so a check polled with the same answer every time is
         // seen as the stall it is.
         const result = resultsById.get(tc.id);
-        // A write the phase gate refused was not executed (./phase-write-access.ts).
-        if (isPhaseWriteRefusal(result)) continue;
         runCtx.controlLoopTracker.markToolExecution(
           tc.name,
           `${tc.name}:${JSON.stringify(tc.input ?? {}).slice(0, 300)}`,
@@ -302,9 +295,9 @@ export async function portExecuteToolTurn(
     }
 
     // STEP D — consensus (non-fatal; gated on the managers existing). It reviews a step that ran:
-    // a turn whose every call the phase gate refused did nothing to review, and an empty call
-    // list would have made it review any task, not only a critical one.
-    if (deps.consensusManager && deps.confidenceEstimator && deps.providerRouter && ranCalls.length > 0) {
+    // a turn whose every call the phase refused did nothing to review, and an empty call list
+    // would have made it review any task, not only a critical one.
+    if (deps.consensusManager && deps.confidenceEstimator && deps.providerRouter && toolCalls.length > 0) {
       const consensusVerdict = await runConsensusIfAvailable({
         consensusManager: deps.consensusManager,
         confidenceEstimator: deps.confidenceEstimator,
@@ -342,12 +335,16 @@ export async function portExecuteToolTurn(
     }
 
     // STEP E — record step results + PAOR transition (the REAL transition; returns new state).
-    const step = recordStepResultsAndCheckReflection({
-      agentState,
-      toolCalls,
-      toolResults,
-      reflectInterval: REFLECT_INTERVAL_AGENT_CORE,
-    });
+    // A turn in which nothing ran took no step.
+    const step =
+      toolCalls.length > 0
+        ? recordStepResultsAndCheckReflection({
+            agentState,
+            toolCalls,
+            toolResults,
+            reflectInterval: REFLECT_INTERVAL_AGENT_CORE,
+          })
+        : { agentState, shouldReflect: false };
 
     // STEP E.5 — BUG#1 P2: live plain-loop step DAG. Model each tool batch as a node so the plain
     // interactive/background loop drives per-node monitor status (executing→completed) instead of
@@ -370,8 +367,7 @@ export async function portExecuteToolTurn(
           // previous node `completed` whatever its tools did, so a failed
           // build read as a finished step (Codex 2026-09-13 AG#16). A batch
           // in which every call failed did not succeed.
-          // A write the phase gate refused did not run, so it neither failed nor succeeded.
-          priorBatchFailed: ranBatchFailed(toolResults),
+          priorBatchFailed: toolResults.length > 0 && toolResults.every((r) => r.isError === true),
         });
       } catch {
         /* non-fatal — monitor is best-effort */
@@ -382,7 +378,14 @@ export async function portExecuteToolTurn(
     const stateCtx = runCtx.taskPlanner.getStateInjection();
     // Reuse the centralizing helper (single source for the user-facing health string + the guard).
     const providerHealthContext = runCtx.iterationHealth.buildHealthSummary();
-    const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, toolResults, {
+    // Every call the model made is answered, in its order: a refused one by its refusal, the
+    // others by their results, which come back in the order of the calls that ran.
+    let ranIndex = 0;
+    const answers = calls.asMade.flatMap((tc) => {
+      const answer = calls.refusals.get(tc.id) ?? toolResults[ranIndex++];
+      return answer ? [answer] : [];
+    });
+    const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, answers, {
       providerHealthContext,
       notes: turnNotes,
     });
@@ -446,7 +449,6 @@ export async function portExecuteToolTurn(
         // mechanical red/green gate — read empty evidence on EVERY run
         // (audited 2026-09-02: tasks.verification_json was never written).
         resultText: typeof tr?.content === "string" ? tr.content.slice(0, 4000) : "",
-        ...(isPhaseWriteRefusal(tr) ? { refused: true } : {}),
       };
     });
 
@@ -454,14 +456,13 @@ export async function portExecuteToolTurn(
     // + files, localized). v1 emitProgress'd it inline; the port RETURNS it so the spine emits it
     // as a `narrative` bus event — the background io adapter unwraps it back into the v1
     // TaskProgressUpdate stream. Non-fatal: a classification error must never fail the tool turn.
-    // It names what the batch did, so a call the phase gate refused is not in it, and a batch in
-    // which nothing ran reports no progress.
+    // It names what the batch did, so a batch in which nothing ran reports no progress.
     let progressSignal: TaskProgressSignal | undefined;
     try {
-      progressSignal = ranCalls.length === 0 ? undefined : deps.buildToolBatchProgressSignal({
+      progressSignal = toolCalls.length === 0 ? undefined : deps.buildToolBatchProgressSignal({
         prompt: agentState.taskDescription || requestText,
         title: runCtx.progressTitle,
-        toolCalls: ranCalls,
+        toolCalls,
         language: runCtx.progressLanguage,
       });
     } catch {

@@ -1387,7 +1387,6 @@ export class Orchestrator {
       buildStructuredProgressSignal: (prompt, title, signal, language) =>
         this.buildStructuredProgressSignal(prompt, title, signal, language),
       getClarificationContext: () => this.getClarificationContext(),
-      phaseRefuses: (toolName, phase) => this.phaseRefuses(toolName, phase),
       synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
       runProactiveGoalDecomposition: (opts) => this.runProactiveGoalDecomposition(opts),
       runReactiveGoalDecomposition: (opts) => this.runReactiveGoalDecomposition(opts),
@@ -1445,6 +1444,8 @@ export class Orchestrator {
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).
       executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
+      // The gate's phase rule as one predicate: the spine splits each model turn's calls with it.
+      phaseRefuses: (toolName, phase) => this.phaseRefuses(toolName, phase),
       emitToolResult: (chatId, tc, tr, sig) => this.emitToolResult(chatId, tc, tr, sig),
       buildToolBatchProgressSignal: (params) => this.buildToolBatchProgressSignal(params),
       // BUG#1 P2: route the plain-loop live step DAG through the shell's MonitorLifecycle (lazy —
@@ -5439,8 +5440,9 @@ export class Orchestrator {
     // guessing at unknown ones.
     const phase = options.agentState?.phase;
     if (phase !== undefined && this.phaseRefuses(tc.name, phase)) {
-      // Counted in the daemon log: a planning turn that names a write costs a turn now.
-      ctx.logger.info("Phase write refused", { chatId: ctx.chatId, tool: tc.name, phase });
+      // The spine refuses a model turn's writes before they reach this gate (splitCallsByPhase);
+      // what arrives here is another caller's call, made with a state in such a phase.
+      ctx.logger.info("Phase write refused", { chatId: ctx.chatId, tool: tc.name, phase, at: "gate" });
       return phaseWriteRefusalResult(tc.id, phase);
     }
 
@@ -5970,6 +5972,16 @@ export class Orchestrator {
   }
 
   /**
+   * The phase rule as one predicate: whether a call of `toolName` made in `phase` is refused, that
+   * is, a write in a phase that does not write. The spine splits each model turn's calls with it
+   * before anything reads them (agent-core/engine/phase-write-access.ts splitCallsByPhase), the
+   * loop recovery asks it before it delegates, and this gate applies it to every other caller.
+   */
+  private phaseRefuses(toolName: string, phase: AgentPhase): boolean {
+    return !phaseAllowsWrites(phase) && this.isWriteOperation(toolName) && !SELF_IMPROVEMENT_TOOLS.has(toolName);
+  }
+
+  /**
    * Whether a tool call can change the project.
    *
    * A fixed allowlist cannot answer this for tools that did not exist when the
@@ -5988,15 +6000,6 @@ export class Orchestrator {
    * costs are lopsided — an unnecessary confirmation is a prompt, an unguarded
    * write is a corrupted project, and in read-only mode it is a broken promise.
    */
-  /**
-   * Whether the phase gate refuses `toolName` in `phase`: a write, in a phase that does not
-   * write. One answer for the gate and for the plan-review check, which counts only the calls
-   * that will run (agent-core/engine/phase-write-access.ts).
-   */
-  private phaseRefuses(toolName: string, phase: AgentPhase): boolean {
-    return !phaseAllowsWrites(phase) && this.isWriteOperation(toolName) && !SELF_IMPROVEMENT_TOOLS.has(toolName);
-  }
-
   private isWriteOperation(toolName: string): boolean {
     if (WRITE_OPERATIONS.has(toolName)) return true;
     // audited 2026-09-02: a batch dispatch tool is a write by construction —

@@ -146,7 +146,9 @@ describe("prepareIteration: a byte-stable system prompt", () => {
       const context = turnContextIn(phase);
       expect(context, phase).toContain("## Writes in this phase");
       expect(context, phase).toContain(`The agent is ${phase}.`);
-      expect(context, phase).toContain("a write tool called now is refused and changes nothing: writes run in the executing phase.");
+      expect(context, phase).toContain(
+        "a write tool called now does not run: it is answered with a refusal, and writes run in the executing phase.",
+      );
       expect(phaseWriteRefusal(phase)).toContain("writes run in the executing phase");
     }
     expect(turnContextIn(AgentPhase.REFLECTING)).toContain("A tool call made in it is not run.");

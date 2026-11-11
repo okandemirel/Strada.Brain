@@ -435,12 +435,13 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     // run's tool sequence is what reaches the supervisor's node verifier as "Tool errors".
     expect(result.terminalState!.stepResults.map((s) => s.toolName)).toEqual(["file_write"]);
     expect(result.toolTrace.map((t) => [t.toolCallId, t.success])).toEqual([["tc-1", true]]);
-    // Every tool.started still has its tool.finished; the refused ones say so.
-    const events = io.onEvent.mock.calls.map((c) => c[0] as { type?: string; toolCallId?: string; refused?: boolean });
+    // The run's tool events are the calls that ran: a refused one has no tool.started and no
+    // tool.finished, and every tool.started has its tool.finished.
+    const events = io.onEvent.mock.calls.map((c) => c[0] as { type?: string; toolCallId?: string });
     const started = events.filter((e) => e.type === "tool.started").map((e) => e.toolCallId);
     const finished = events.filter((e) => e.type === "tool.finished");
     expect(finished.map((e) => e.toolCallId)).toEqual(started);
-    expect(finished.filter((e) => e.refused === true).map((e) => e.toolCallId)).toEqual(["tc-p1", "tc-p2", "tc-p3"]);
+    expect(started).toEqual(["tc-1"]);
   });
 
   it("C: interactive renders to the channel (real divergence)", async () => {

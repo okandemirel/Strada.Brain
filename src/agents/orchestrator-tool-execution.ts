@@ -5,7 +5,6 @@ import type { ToolCall, ToolResult } from "./providers/provider-core.interface.j
 import type { WorkerRunResult, WorkerToolTrace } from "./supervisor/supervisor-types.js";
 import { appendToSanitizedToolResult } from "./orchestrator-runtime-utils.js";
 import type { ErrorSignature } from "../learning/error-signature.js";
-import { isPhaseWriteRefusal } from "../agent-core/engine/phase-write-access.js";
 
 /** Minimal interface for TaskPlanner methods used by tracking. */
 interface TaskPlannerLike {
@@ -177,11 +176,6 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       ok: !tr.isError,
       bytes: typeof tr.content === "string" ? tr.content.length : undefined,
     });
-    // A write the phase gate refused ran nothing (src/agent-core/engine/phase-write-access.ts):
-    // its result is the model's answer and its line above records the call. No tracker, no
-    // error-recovery advice ("try an alternative approach" is wrong: it runs in the next phase),
-    // no learning signal and no journal entry; the gate logged "Phase write refused".
-    if (isPhaseWriteRefusal(tr)) continue;
     if (tr.isError) {
       // The one-line detail names the failure; the file the orchestrator
       // archived from the untruncated result answers "why" afterwards.
@@ -229,12 +223,10 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
     emitToolResult(chatId, tc, toolResults[i]!, analysis?.signature);
   }
 
-  const ran = toolCalls.flatMap((_tc, i) => (isPhaseWriteRefusal(toolResults[i]) ? [] : [i]));
-  if (ran.length === 0 && toolCalls.length > 0) return;
   executionJournal.recordToolBatch({
     phase: agentPhase,
-    toolCalls: ran.map((i) => toolCalls[i]!),
-    toolResults: ran.map((i) => toolResults[i]!),
+    toolCalls,
+    toolResults,
     providerName,
     modelId,
   });

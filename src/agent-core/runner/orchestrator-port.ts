@@ -43,7 +43,7 @@
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import type { MessageContent, ProviderResponse, ProviderServedBy } from "../../agents/providers/provider-core.interface.js";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
-import type { AgentState } from "../../agents/agent-state.js";
+import type { AgentPhase, AgentState } from "../../agents/agent-state.js";
 import type { ExecutionJournal } from "../../agents/autonomy/execution-journal.js";
 import type {
   SupervisorAssignment,
@@ -275,10 +275,12 @@ export interface PlanPhaseParams {
   readonly providerName: string;
   readonly modelId?: string;
   readonly chatId: string;
-  /** The names of the response's tool calls. v1's plan-review gate fired only on a text-only
-   *  PLANNING response (`response.toolCalls.length === 0`, orchestrator.ts ~5812); the port reads
-   *  the names so that a write the phase gate refuses, which runs nothing, does not count. */
-  readonly toolNames: readonly string[];
+  /** How many of the response's tool calls run. v1's plan-review gate fired only on a text-only
+   *  PLANNING response (`response.toolCalls.length === 0`, orchestrator.ts ~5812); the port needs the count
+   *  to replicate that guard (PlanPhaseParams otherwise carries only `responseText`). A write the
+   *  phase refuses runs nothing, so it is not counted: counted, it skipped the review the user
+   *  asked for (the spine's PhaseCallSplit.runnable, agent-core/engine/phase-write-access.ts). */
+  readonly toolCallCount: number;
 }
 
 /**
@@ -477,8 +479,18 @@ export interface OrchestratorPort {
   decomposeGoalsIfPlanning(params: GoalDecompositionParams): Promise<AgentState>;
 
   // ════ Tool execution (gauntlet #18) ════════════════════════════════════════════════
-  /** The bound executeToolCalls closure threaded into the free executeAndTrackTools helper. */
+  /**
+   * The bound executeToolCalls closure threaded into the free executeAndTrackTools helper. Its
+   * sixth positional argument is the spine's split of the turn's calls (PhaseCallSplit): only
+   * the runnable calls run, and a refused one is answered in the session and nowhere else.
+   */
   readonly executeToolCalls: ExecuteToolCallsFn;
+  /**
+   * The phase rule, as the orchestrator's tool-call gate applies it: whether a call of `toolName`
+   * made in `phase` is refused. The spine splits each model turn's calls with it, once, before
+   * anything reads them (agent-core/engine/phase-write-access.ts splitCallsByPhase).
+   */
+  phaseRefuses(toolName: string, phase: AgentPhase): boolean;
 
   // ════ Limits / config (read-only) ══════════════════════════════════════════════════
   getInteractiveIterationLimit(): number;

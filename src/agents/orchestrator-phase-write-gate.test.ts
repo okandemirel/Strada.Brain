@@ -27,12 +27,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Orchestrator } from "./orchestrator.js";
 import { AgentPhase, createInitialState, type AgentState } from "./agent-state.js";
-import type { ToolResult } from "./providers/provider-core.interface.js";
+import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 import { recordStepResultsAndCheckReflection } from "./orchestrator-loop-utils.js";
-import { trackAndRecordToolResults } from "./orchestrator-tool-execution.js";
+import { executeAndTrackTools } from "./orchestrator-loop-shared.js";
 import { validateReflectionDecision } from "./orchestrator-runtime-utils.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./autonomy/verifier-pipeline.js";
-import { isPhaseWriteRefusal, phaseWriteRefusal } from "../agent-core/engine/phase-write-access.js";
+import {
+  isPhaseWriteRefusal,
+  phaseWriteRefusal,
+  splitCallsByPhase,
+  type PhaseRefuses,
+} from "../agent-core/engine/phase-write-access.js";
+import { portExecuteToolTurn, type ToolTurnDeps } from "../agent-core/engine/tool-turn.js";
+import type { EngineRunContext } from "../agent-core/engine/engine-deps.js";
+import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
+import { IterationHealthTracker } from "./iteration-health-tracker.js";
 import { createMockProvider, createMockChannel } from "../test-helpers.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -119,34 +128,86 @@ describe("a write named while the agent is not executing", () => {
 
 // ─── A refusal is not a step the run took ───────────────────────────────────
 //
-// Since the tool list stopped hiding writes while planning (phase-write-access.ts), the gate's
-// refusal is reached routinely. Recorded as a failed write it was, measured by QA on
-// 2026-11-11: an open failing path the verifier asked to re-run in a project with nothing to
-// verify with (the shape of a-refused-target-closes-on-the-next-success), a forced reflection
-// after every later batch once three of them stood, and a DONE turned into CONTINUE. The
-// refusals here come from the real gate, the steps are recorded the way the loop records them,
-// and a write that ran and failed is pinned to still wait for a verification.
+// Since the tool list stopped hiding writes while planning (phase-write-access.ts), a write named
+// while planning is routine. Recorded as a failed write it was, measured by QA on 2026-11-11: an
+// open failing path the verifier asked to re-run in a project with nothing to verify with (the
+// shape of a-refused-target-closes-on-the-next-success), a forced reflection after every later
+// batch once three of them stood, and a DONE turned into CONTINUE. Each turn here goes through
+// the real tool turn, its calls split by the real gate's predicate as the spine splits them; a
+// refused call is handed the answer it would have got had it run, so a split that let it run
+// records that answer. A write that ran and failed is pinned to still wait for a verification.
 
 const sandbox = mkdtempSync(join(tmpdir(), "phase-refusal-"));
 afterAll(() => rmSync(sandbox, { recursive: true, force: true }));
 
-type Recorded = readonly [phase: AgentPhase, call: { id: string; name: string; input: Record<string, unknown> }, result: ToolResult];
+type Call = { id: string; name: string; input: Record<string, unknown> };
+type Recorded = readonly [phase: AgentPhase, call: Call, result: ToolResult];
 
-/** Each call recorded, in order, as recordStepResultsAndCheckReflection records it. */
-function record(calls: readonly Recorded[], start: AgentState = createInitialState("write a note")): AgentState {
+/** The orchestrator's own phase rule, the one the spine splits a model turn's calls with. */
+const phaseRefuses: PhaseRefuses = (name, phase) =>
+  (orch as unknown as { phaseRefuses: PhaseRefuses }).phaseRefuses(name, phase);
+
+/**
+ * A tool turn's run context: the autonomy trackers are real, nothing else is wired. Error recovery
+ * gives no advice, so a step's summary is the tool's own words, as the verifier reads them.
+ */
+function turnRunCtx(overrides: Partial<EngineRunContext> = {}): EngineRunContext {
+  const bundle = createAutonomyBundle({ prompt: "write a note", iterationBudget: 20 });
+  return {
+    iterationHealth: new IterationHealthTracker(Date.now()),
+    session: { messages: [] },
+    chatId: "chat1",
+    toolExecMode: "background",
+    executionJournal: bundle.executionJournal,
+    selfVerification: bundle.selfVerification,
+    stradaConformance: bundle.stradaConformance,
+    errorRecovery: { analyze: () => null },
+    taskPlanner: bundle.taskPlanner,
+    controlLoopTracker: undefined,
+    identityKey: "id-1",
+    lastAssignment: { providerName: "mock", modelId: "m" },
+    lastToolNames: [],
+    joinsParentEpisode: false,
+    conversationScope: undefined,
+    memoryRefresher: null,
+    plainLoopStepIndex: 0,
+    progressTitle: "Task",
+    requestText: "write a note",
+    ...overrides,
+  } as unknown as EngineRunContext;
+}
+
+/** One model turn through the real tool turn: a call that runs returns `answer(call)`. */
+async function turnThroughToolTurn(
+  agentState: AgentState,
+  phase: AgentPhase,
+  made: readonly Call[],
+  answer: (call: ToolCall) => ToolResult,
+): Promise<AgentState> {
+  const calls = splitCallsByPhase(made as ToolCall[], phase, phaseRefuses);
+  const deps = {
+    executeToolCalls: async (_chatId: string, ran: ToolCall[]) => ran.map(answer),
+    emitToolResult: vi.fn(),
+    buildToolBatchProgressSignal: () => undefined,
+    emitPlainLoopStep: vi.fn(),
+    sessionManager: { extractLastUserMessage: () => "write a note" },
+    currentSessionInstinctIds: new Map(),
+  } as unknown as ToolTurnDeps;
+  const turn = await portExecuteToolTurn(deps, [calls.runnable, undefined, { ...agentState, phase }, "", undefined, calls], turnRunCtx());
+  return turn.advancedState;
+}
+
+/** Each call made in its own turn, in order, through the tool turn. */
+async function record(calls: readonly Recorded[], start: AgentState = createInitialState("write a note")): Promise<AgentState> {
   let agentState = start;
   for (const [phase, call, result] of calls) {
-    ({ agentState } = recordStepResultsAndCheckReflection({
-      agentState: { ...agentState, phase },
-      toolCalls: [call],
-      toolResults: [result],
-      reflectInterval: 3,
-    }));
+    agentState = await turnThroughToolTurn(agentState, phase, [call], (tc) => ({ ...result, toolCallId: tc.id }));
   }
   return agentState;
 }
 
 const writeOf = (id: string) => ({ id, name: "file_write", input: { path: "notes/a.txt", content: "A" } });
+const readOf = (id: string) => ({ id, name: "file_read", input: { path: "notes/a.txt" } });
 const written = (id: string): ToolResult => ({ toolCallId: id, content: "File written: notes/a.txt (1 lines, 1 bytes)" });
 /** What a write that RAN and failed reports: the tool's own error, no refusal mark. */
 const failedAtRunTime = (id: string): ToolResult => ({ toolCallId: id, content: "Error: could not write file (EISDIR)", isError: true });
@@ -197,10 +258,14 @@ describe("a write refused while planning is not a step the run took", () => {
     expect(isPhaseWriteRefusal(refusal)).toBe(true);
     expect(isPhaseWriteRefusal(failedAtRunTime("x"))).toBe(false);
     expect(isPhaseWriteRefusal({ toolCallId: "y", content: phaseWriteRefusal(AgentPhase.PLANNING), isError: true })).toBe(false);
+    // The spine's split answers a refused call with the same result the gate gives.
+    const split = splitCallsByPhase([writeOf("p1"), readOf("r1")], AgentPhase.PLANNING, phaseRefuses);
+    expect(split.refusals.get("p1")).toEqual(refusal);
+    expect(split.runnable).toEqual([readOf("r1")]);
   });
 
   it("refused while planning, then written while executing: the verifier approves in a project with nothing to verify with", async () => {
-    const state = record([
+    const state = await record([
       [AgentPhase.PLANNING, writeOf("p1"), await refusedWhilePlanning("p1")],
       [AgentPhase.EXECUTING, writeOf("w1"), written("w1")],
     ]);
@@ -212,8 +277,8 @@ describe("a write refused while planning is not a step the run took", () => {
     expect(plan.initialDecision).toBe("approve");
   });
 
-  it("a write that ran and failed still waits for a verification, even when the next write succeeds", () => {
-    const state = record([
+  it("a write that ran and failed still waits for a verification, even when the next write succeeds", async () => {
+    const state = await record([
       [AgentPhase.EXECUTING, writeOf("f1"), failedAtRunTime("f1")],
       [AgentPhase.EXECUTING, writeOf("w1"), written("w1")],
     ]);
@@ -240,7 +305,7 @@ describe("a write refused while planning is not a step the run took", () => {
       }
       return reflected;
     };
-    const refused = record([
+    const refused = await record([
       [AgentPhase.PLANNING, writeOf("p1"), await refusedWhilePlanning("p1")],
       [AgentPhase.PLANNING, writeOf("p2"), await refusedWhilePlanning("p2")],
       [AgentPhase.PLANNING, writeOf("p3"), await refusedWhilePlanning("p3")],
@@ -252,13 +317,13 @@ describe("a write refused while planning is not a step the run took", () => {
   });
 
   it("a refusal does not turn the model's DONE into CONTINUE; a write that ran and failed still does", async () => {
-    const afterRefusal = record([
+    const afterRefusal = await record([
       [AgentPhase.PLANNING, writeOf("p1"), await refusedWhilePlanning("p1")],
       [AgentPhase.EXECUTING, writeOf("w1"), written("w1")],
     ]);
     expect(validateReflectionDecision("DONE", { ...afterRefusal, phase: AgentPhase.REFLECTING })).toEqual({ decision: "DONE" });
 
-    const afterRealFailure = record([
+    const afterRealFailure = await record([
       [AgentPhase.EXECUTING, writeOf("f1"), failedAtRunTime("f1")],
       [AgentPhase.EXECUTING, writeOf("w1"), written("w1")],
     ]);
@@ -272,28 +337,47 @@ describe("a write refused while planning reaches no tracker", () => {
       taskPlanner: { trackToolCall: vi.fn(), recordError: vi.fn() },
       selfVerification: { track: vi.fn(), ingestWorkerResult: vi.fn() },
       stradaConformance: { trackToolCall: vi.fn() },
-      errorRecovery: { analyze: vi.fn(() => ({ summary: "s", recoveryInjection: "\n[ERROR RECOVERY: file_write]\nFix: try an alternative approach." })) },
+      errorRecovery: { analyze: vi.fn(() => ({ summary: "s", recoveryInjection: "\n[ERROR RECOVERY: file_read]\nFix: try an alternative approach." })) },
       executionJournal: { recordToolBatch: vi.fn() },
       emitToolResult: vi.fn(),
       workerCollector: { childWorkerResults: [], toolTrace: [] as unknown[] },
     };
   }
-  const track = (t: ReturnType<typeof trackers>, calls: ReturnType<typeof writeOf>[], results: ToolResult[]) =>
-    trackAndRecordToolResults({
+  /**
+   * One planning turn through the tool execution and tracking the tool turn runs, its calls split
+   * by the real gate's predicate as the spine splits them. A call that runs returns `answer(call)`.
+   * The answers the session gets come back in the model's order.
+   */
+  const track = async (t: ReturnType<typeof trackers>, made: Call[], answer: (call: ToolCall) => ToolResult) => {
+    const calls = splitCallsByPhase(made as ToolCall[], AgentPhase.PLANNING, phaseRefuses);
+    const session = { messages: [] as { role: string; content: unknown }[] };
+    const { toolResults } = await executeAndTrackTools({
       chatId: "chat1",
-      toolCalls: calls,
-      toolResults: results,
-      ...t,
-      executionJournal: t.executionJournal as never,
-      workerCollector: t.workerCollector as never,
-      agentPhase: AgentPhase.PLANNING,
-      providerName: "mock",
+      responseText: "",
+      toolCalls: [...calls.runnable],
+      split: calls,
+      session: session as never,
+      executeToolCalls: async (_chatId, ran) => ran.map(answer),
+      executeOptions: {},
+      trackingParams: {
+        ...t,
+        taskPlanner: t.taskPlanner as never,
+        selfVerification: t.selfVerification as never,
+        stradaConformance: t.stradaConformance as never,
+        errorRecovery: t.errorRecovery as never,
+        executionJournal: t.executionJournal as never,
+        workerCollector: t.workerCollector as never,
+        agentPhase: AgentPhase.PLANNING,
+        providerName: "mock",
+      },
     });
+    let ran = 0;
+    return made.map((tc) => calls.refusals.get(tc.id) ?? toolResults[ran++]!);
+  };
 
   it("no planner, verification, conformance, worker trace, error-recovery advice, learning signal or journal entry", async () => {
     const t = trackers();
-    const results = [await refusedWhilePlanning("p1")];
-    track(t, [writeOf("p1")], results);
+    const results = await track(t, [writeOf("p1")], () => written("p1"));
 
     expect(t.taskPlanner.trackToolCall).not.toHaveBeenCalled();
     expect(t.taskPlanner.recordError).not.toHaveBeenCalled();
@@ -303,22 +387,22 @@ describe("a write refused while planning reaches no tracker", () => {
     expect(t.errorRecovery.analyze).not.toHaveBeenCalled();
     expect(t.emitToolResult).not.toHaveBeenCalled();
     expect(t.executionJournal.recordToolBatch).not.toHaveBeenCalled();
-    // The model reads the refusal as the gate wrote it.
+    // The model reads the refusal as the gate writes it.
     expect(results[0]!.content).toBe(phaseWriteRefusal(AgentPhase.PLANNING));
   });
 
-  it("a write that ran and failed beside it is tracked as before", async () => {
+  it("a read that ran and failed beside it is tracked as before", async () => {
+    // A write cannot run while planning, so the call that runs and fails beside the refusal is a read.
     const t = trackers();
-    const results = [await refusedWhilePlanning("p1"), failedAtRunTime("f1")];
-    track(t, [writeOf("p1"), writeOf("f1")], results);
+    const results = await track(t, [writeOf("p1"), readOf("f1")], (tc) => failedAtRunTime(tc.id));
 
     expect(t.taskPlanner.trackToolCall).toHaveBeenCalledTimes(1);
     expect(t.errorRecovery.analyze).toHaveBeenCalledTimes(1);
     expect(t.emitToolResult).toHaveBeenCalledTimes(1);
     expect(t.workerCollector.toolTrace).toHaveLength(1);
-    expect(results[1]!.content).toContain("[ERROR RECOVERY: file_write]");
+    expect(results[1]!.content).toContain("[ERROR RECOVERY: file_read]");
     expect(t.executionJournal.recordToolBatch).toHaveBeenCalledWith(
-      expect.objectContaining({ toolCalls: [writeOf("f1")], toolResults: [results[1]] }),
+      expect.objectContaining({ toolCalls: [readOf("f1")], toolResults: [results[1]] }),
     );
   });
 });

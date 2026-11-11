@@ -110,6 +110,8 @@ export interface PortDeps extends ToolTurnDeps {
   }): void;
   mapTerminalReasonToMessageKey(reason: string | undefined, status: TerminalStatus | undefined): MessageKey | undefined;
   createGateway(): ModelGateway;
+  /** The tool-call gate's phase rule (the orchestrator's phaseRefuses); the port hands it to the spine. */
+  phaseRefuses(toolName: string, phase: AgentPhase): boolean;
 }
 
 /**
@@ -381,6 +383,7 @@ export function createAgentCorePort(
       // ── F. tool execution (the bound FULL TOOL TURN; see portExecuteToolTurn) ────────────────
       executeToolCalls: (async (...args: unknown[]) =>
         engine.portExecuteToolTurn(args, ctx())) as ExecuteToolCallsFn,
+      phaseRefuses: (toolName, phase) => deps.phaseRefuses(toolName, phase),
 
       // ── G. limits / config (1:1) ─────────────────────────────────────────────────────────────
       getInteractiveIterationLimit: () => engine.getInteractiveIterationLimit(),
