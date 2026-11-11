@@ -31,6 +31,7 @@ import { mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
+import type { InstinctOwner } from "../agent-core/engine/instinct-scope.js";
 import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
@@ -1415,12 +1416,13 @@ export class SessionManager {
      * re-retrieval is automatic recall, so it must be scoped to the person and
      * the project, not to the chat alone.
      */
-    identity?: { readonly userId?: string; readonly projectId?: string },
+    identity?: { readonly userId?: string; readonly instinctOwner?: InstinctOwner; readonly projectId?: string },
   ): MemoryRefresher | null {
     if (!this.deps.reRetrievalConfig?.enabled) return null;
     const refresher = new MemoryRefresher(this.deps.reRetrievalConfig, {
       chatId,
       ...(identity?.userId ? { userId: identity.userId } : {}),
+      ...(identity?.instinctOwner ? { instinctOwner: identity.instinctOwner } : {}),
       ...(identity?.projectId ? { projectId: identity.projectId } : {}),
       memoryManager: this.deps.memoryManager,
       ragPipeline: this.deps.ragPipeline,

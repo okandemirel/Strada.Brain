@@ -29,17 +29,21 @@ import type {
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { RunClockView } from "../control/run-clock.js";
 import type { Budget, ChildBudget } from "../control/budget.js";
+import type { InstinctOwner } from "../engine/instinct-scope.js";
 
 /**
  * What a run lends the tools it calls, so a sub-agent a tool starts stays inside the run: the
  * run's cancel signal (its task token — a /cancel, the task ceiling or the run's own end aborts
  * it), its live Budget (a child is carved a slice of it and debits its spend back to it), and a
- * read-only view of its wall clock.
+ * read-only view of its wall clock. It also names whose user-scoped instincts the run retrieved
+ * (`instinctUserIdOf` of its request), so a sub-agent is given that person's learning and no
+ * one else's; absent, the sub-agent gets shared learning only.
  */
 export interface ParentRunScope {
   readonly signal: AbortSignal;
   readonly budget: Budget;
   readonly clockView: RunClockView;
+  readonly instinctUserId?: string;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -149,6 +153,8 @@ export interface AgentRunRequest {
   readonly channelType: ChannelType | string;
   readonly conversationId?: string;
   readonly userId?: string;
+  /** Whose user-scoped instincts the run retrieves when not `userId`'s (see InstinctOwner). */
+  readonly instinctOwner?: InstinctOwner;
 
   /** Per-run id for metrics/workspace correlation (`BackgroundTaskOptions.taskRunId`). */
   readonly taskRunId?: string;

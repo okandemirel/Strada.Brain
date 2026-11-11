@@ -903,11 +903,9 @@ export class DelegationManager {
 
       let workerResult: import("../../supervisor/supervisor-types.js").WorkerRunResult | undefined;
       if (typeof (orchestrator as Orchestrator & { createAgentCorePort?: unknown }).createAgentCorePort === "function") {
-        // Route the delegated sub-agent through the AgentRunner seam (the V2 spine — cutover
-        // Step 5 deleted the v1 engine; the probe now keys on the Agent Core wiring hook, NOT the
-        // deleted runWorkerTask). Mirrors background-executor.executeWorkerRun: supervisor-node ⇒
-        // the "delegated" worker mode; the never-returning waitForAbort still races the run for
-        // the delegation timeout; toWorkerRunResult projects AgentRunResult → WorkerRunResult.
+        // Route the delegated sub-agent through the AgentRunner seam (the probe keys on the Agent
+        // Core wiring hook). As background-executor.executeWorkerRun: supervisor-node ⇒ "delegated"
+        // tool mode; waitForAbort races the run for the timeout; toWorkerRunResult projects it.
         const mode = "supervisor-node" as const;
         const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
         const runPromise = runner.run(
@@ -917,6 +915,8 @@ export class DelegationManager {
               taskRunId: subAgentId,
               channelType: message.channelType,
               userId: message.userId,
+              // Only instinct retrieval is for the caller's person; no caller run ⇒ shared learning only.
+              instinctOwner: { userId: request.toolContext?.parentRun?.instinctUserId },
               workspaceLease,
               // The V2 runner reads its sink from the REQUEST, not the Orchestrator.
               onUsage,

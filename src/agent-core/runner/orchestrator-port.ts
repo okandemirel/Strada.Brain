@@ -64,6 +64,7 @@ import type { PolicySeed } from "../control/policy.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { GatewayToolDefinition } from "../model/model-gateway.js";
 import type { RunnerMode, TerminalStatus } from "./agent-runner.js";
+import type { InstinctOwner } from "../engine/instinct-scope.js";
 
 /** The runner-facing mode the port keys its mode-dependent dispatch on. */
 export type RunnerModeLike = RunnerMode;
@@ -136,6 +137,8 @@ export interface AgentRunSetupInput {
   /** User + conversation identity for resolveIdentityKey — multi-user / cross-channel keying of
    *  sessions, profiles, and provider selection. Absent ⇒ falls back to the conversation scope. */
   readonly userId?: string;
+  /** Whose user-scoped instincts setup retrieves when not `userId`'s (see AgentRunRequest). */
+  readonly instinctOwner?: InstinctOwner;
   readonly conversationId?: string;
   /** Multimodal inputs — gap #3 builds a FRESH per-run session from these for worker/background
    *  (v1 parity: pre-Step5 runBackgroundTask — v1 @ a3de7d1 orchestrator.ts:3278-3289), so parallel runs on one chatId never collide. */

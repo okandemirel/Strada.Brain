@@ -21,6 +21,7 @@ import { denseCosineSimilarity } from "../rag/vector-math.js";
 import type { ChatId } from "../types/index.js";
 import { isOk } from "../types/index.js";
 import { getLogger } from "../utils/logger.js";
+import { instinctUserIdOf, type InstinctOwner } from "../agent-core/engine/instinct-scope.js";
 
 // =============================================================================
 // TYPES
@@ -40,6 +41,8 @@ export interface MemoryRefresherDeps {
    * alone, a memory owned by another user still came back inside this run.
    */
   readonly userId?: string;
+  /** Whose instincts re-retrieval returns when not `userId`'s (a delegated run's caller). */
+  readonly instinctOwner?: InstinctOwner;
   readonly projectId?: string;
   readonly memoryManager?: IMemoryManager;
   readonly ragPipeline?: IRAGPipeline;
@@ -319,7 +322,7 @@ export class MemoryRefresher {
       this.deps.instinctRetriever
         // item 3.1: the run's user, so their own teaching is retrievable and
         // nobody else's is.
-        ? this.deps.instinctRetriever.getInsightsForTask(query, undefined, this.deps.userId)
+        ? this.deps.instinctRetriever.getInsightsForTask(query, undefined, instinctUserIdOf(this.deps))
         : Promise.resolve(null),
     ]);
 

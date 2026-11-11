@@ -21,3 +21,23 @@ export function instinctScopeKey(chatId: string, taskRunId?: string): string {
   const run = taskRunId?.trim();
   return run ? `${chatId}\u0000${run}` : chatId;
 }
+
+/**
+ * Whose user-scoped learned instincts a run is given, when that is not its own
+ * `userId`. A delegated run is started as "sub-agent", an id that owns nothing,
+ * so the delegation names the person who called it here. `userId` absent: the
+ * caller is not known, and the run gets shared (project and global) learning
+ * only. Only instinct retrieval reads this; profile, memory and DM policy stay
+ * keyed by the run's own `userId`.
+ */
+export interface InstinctOwner {
+  readonly userId?: string;
+}
+
+/** The one rule for whose instincts a run retrieves: its owner's, else its own user's. */
+export function instinctUserIdOf(run: {
+  readonly userId?: string;
+  readonly instinctOwner?: InstinctOwner;
+}): string | undefined {
+  return run.instinctOwner ? run.instinctOwner.userId : run.userId;
+}
