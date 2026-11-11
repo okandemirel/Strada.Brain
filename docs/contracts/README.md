@@ -16,6 +16,7 @@ is.
 | [governance](governance.md) | The files that enforce the rules: the commit checker, hooks, workflows, contracts | Before changing the checker, a hook, a workflow, a contract or src/contracts.test.ts; when the checker prints 'governed file changed' |
 | [clean-checkout](clean-checkout.md) | What a test run may leave in the checkout it runs from: no new `.strada…` runtime entry at its root | A test builds a config, store, vault or lock from defaults or a hand-made env; a test resolves a runtime path against `process.cwd()`; when the worker setup fails a file with 'left … in the checkout it runs from' |
 | [dist-readers](dist-readers.md) | Tests that read, run or import this repository's compiled `dist/`: each fails asking for `npm run build`, the phrase the gates' build step selects readers by | Writing a test that reads a file under the repository's `dist/`; changing `READS_BUILD` in `scripts/ci/dist-build.mjs`; when `src/tests/dist-readers.test.ts` names a file |
+| [provider-call-billing](provider-call-billing.md) | Every call from `src/` that reaches an LLM provider outside the engine's model turns: who pays, and the one path that bills it | Writing `provider.chat(`, `.chatStream(`, `streamOrChatText(` or `billedChat(`; when the billing tripwire names a file; a budget wall or /api/metrics reads lower than the provider's bill |
 
 ## Adding a contract
 
