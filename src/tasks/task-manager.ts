@@ -24,6 +24,7 @@ import type { GoalStorage } from "../goals/goal-storage.js";
 import { prepareTreeForResume, prepareTreeForRetry } from "../goals/goal-resume.js";
 import { stripVisibleProviderArtifacts } from "../agents/orchestrator-text-utils.js";
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
+import { BlockAnnouncementHold } from "./block-announcement.js";
 import type { PendingTaskCheckpoint, TaskCheckpointStore } from "./task-checkpoint-store.js";
 
 /** The three replay prefaces buildReplayPrompt writes; a prompt starting with one IS a replay. */
@@ -855,23 +856,21 @@ export class TaskManager extends EventEmitter {
     getLogger().error("Task failed", { taskId, error: sanitizedError });
   }
 
-  /**
-   * Mark a task as blocked with a checkpoint summary.
-   */
+  /** Mark a task as blocked with a checkpoint summary. */
   block(taskId: TaskId, result: string): void {
     const sanitizedResult = redactSecrets(stripVisibleProviderArtifacts(result));
     this.storage.updateBlocked(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
-    this.emit("task:blocked", taskId, sanitizedResult);
+    this.blockAnnouncements.announce(taskId, sanitizedResult, "block");
     getLogger().warn("Task blocked", { taskId, resultLength: sanitizedResult.length });
   }
+  private readonly blockAnnouncements = new BlockAnnouncementHold((id, text) => this.emit("task:blocked", id, text));
+
+  announceBlockedOnce<T>(taskId: TaskId, fn: () => T): T { return this.blockAnnouncements.once(taskId, fn); }
 
   /**
-   * Append a visibility notice to an already-blocked task and re-announce it.
-   *
-   * Used when automatic resume/replan budgets are exhausted: the decision used
-   * to live only in the log file while the person on the channel saw silence
-   * (measured 2026-08-23). The notice names what was tried and how to continue.
+   * Append a visibility notice to an already-blocked task and re-announce it
+   * (budgets exhausted: the decision used to live only in the log, 2026-08-23).
    */
   appendTaskNotice(taskId: TaskId, notice: string): void {
     const task = this.storage.load(taskId);
@@ -879,13 +878,11 @@ export class TaskManager extends EventEmitter {
     const existing = task.result?.trim() ?? "";
     const combined = `${existing}${existing ? "\n\n" : ""}${sanitizeSecrets(notice)}`;
     this.storage.updateBlocked(taskId, combined);
-    this.emit("task:blocked", taskId, combined);
+    this.blockAnnouncements.announce(taskId, combined, "notice");
     getLogger().info("Task notice appended", { taskId, noticeLength: notice.length });
   }
 
-  /**
-   * Update task status.
-   */
+  /** Update task status. */
   updateStatus(taskId: TaskId, status: TaskStatus): void {
     const task = this.storage.load(taskId);
     if (task && TERMINAL_STATUSES.has(task.status)) {
