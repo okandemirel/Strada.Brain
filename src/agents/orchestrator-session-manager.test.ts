@@ -306,7 +306,7 @@ describe("SessionManager", () => {
     ledger.add(session.messages, recall);
     expect(JSON.stringify(session.messages.at(-1))).toContain(recall);
     expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
-    expect(sm.extractLastUserContent(session)).toEqual([{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }]);
+    expect(sm.extractLastUserContent(session)).toBe("rename the spawner");
   });
 
   it("the system's text on a tool-result turn is not what the user said (buildToolResultContentBlocks)", () => {
@@ -352,6 +352,26 @@ describe("SessionManager", () => {
     ]);
 
     expect(sm.extractLastUserMessage(session)).toBe("new request");
+    // The content is the same turn's: the person's block, without the placeholder result.
+    expect(sm.extractLastUserContent(session)).toEqual([{ type: "text", text: "new request" }]);
+  });
+
+  it("an interrupted answer with nothing folded into it is passed over for the user's words", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "rename the spawner");
+    // A throw left the call dangling (ORC-2); the normalizer answers it with a placeholder.
+    session.messages.push(
+      { role: "assistant", content: "", tool_calls: [{ id: "x", name: "file_read", input: {} }] } as never,
+      { role: "assistant", content: "error: message too long" },
+    );
+    session.messages = normalizeConversation(session.messages);
+    expect(session.messages[2]?.content).toEqual([
+      { type: "tool_result", tool_use_id: "x", content: INTERRUPTED_TOOL_RESULT, is_error: true },
+    ]);
+
+    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
+    expect(sm.extractLastUserContent(session)).toBe("rename the spawner");
   });
 
   it("known limit: a user message folded in front of a recorded result is passed over (board proposal #69)", () => {
