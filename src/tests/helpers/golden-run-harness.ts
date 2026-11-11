@@ -43,7 +43,7 @@ import { vi, afterAll } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { loadavg, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import winston from "winston";
 import TransportStream from "winston-transport";
 import { loadConfig, type Config } from "../../config/config.js";
@@ -254,6 +254,8 @@ export interface GoldenRequest {
    * run has left the script.
    */
   readonly settled: (tasks: readonly Task[], delivered: readonly string[]) => boolean;
+  /** Files the project holds beside its README before the run (relative path → content). */
+  readonly projectFiles?: Readonly<Record<string, string>>;
 }
 
 export interface GoldenOutcome {
@@ -299,6 +301,10 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
   const leaseRoot = join(folder, "leases");
   mkdirSync(project, { recursive: true });
   writeFileSync(join(project, "README.md"), "# A tiny project with no Unity in it\n");
+  for (const [rel, content] of Object.entries(request.projectFiles ?? {})) {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), content);
+  }
   // Read when bootstrap builds its lease managers; undone with the file's other stubs.
   vi.stubEnv("WORKSPACE_LEASE_ROOT", leaseRoot);
   const runLog = new RunLog();

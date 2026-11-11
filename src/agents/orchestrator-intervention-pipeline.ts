@@ -146,7 +146,7 @@ export interface InterventionDeps {
     assignment: SupervisorAssignment,
   ) => string;
   readonly systemPrompt: string;
-  readonly projectPath?: string;
+  readonly projectPath?: string; readonly sourceProjectPath?: string; // source root, never a lease: the verifier reads the project's commands there
 
   // Clarification context
   readonly clarificationContext: ClarificationContext;
@@ -1395,7 +1395,7 @@ export async function resolveVerifierIntervention(
     logEntries,
     chatId: params.chatId,
     taskStartedAtMs: params.taskStartedAtMs,
-    buildToolsAvailable, availableToolNames: params.availableToolNames,
+    buildToolsAvailable, availableToolNames: params.availableToolNames, projectRoot: deps.sourceProjectPath,
   });
   const boundaryDecision = decideInteractionBoundary({
     prompt: params.prompt,

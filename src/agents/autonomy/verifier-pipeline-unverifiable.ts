@@ -22,8 +22,11 @@
  * failure stops gating and the check records why, naming the registry.
  *
  * `shell_exec` is not a verification tool (constants.ts classifies it as
- * reading). A project whose only check is a shell command the worker never
- * ran is therefore treated as having none
+ * reading), yet a shell runs `npm test` or `pytest`, and the completion review
+ * counts that run as a verification. So when the offer holds a shell, the exit
+ * also needs the project to declare no build or test command, read from its
+ * manifests at its source root (verifier-pipeline-project-commands.ts). A
+ * project that declares one, or whose type is not recognised, keeps the gate
  * (docs/memory/entries/2026-11-11-unverifiable-failure-closes-on-an-honest-report.md).
  */
 
@@ -31,6 +34,10 @@ import { PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
 import { isNodeScopedTask, selectNodeTools } from "./node-tool-offer.js";
 import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import type { CompletionReviewEvidence } from "./completion-review.js";
+import type { ProjectCommandsRecord } from "./verifier-pipeline-project-commands.js";
+
+/** Tools that run a command line: through one, a project's own build or test command runs. */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(["shell_exec"]);
 
 /** What the run's tool registry says about verification, and that it was the registry that said it. */
 export interface VerificationToolingRecord {
@@ -39,6 +46,10 @@ export interface VerificationToolingRecord {
   readonly offered: number;
   /** Those that run a check: a build, tests, the game. */
   readonly checkTools: readonly string[];
+  /** The offer holds a shell, which runs whatever build or test command the project declares. */
+  readonly shellOffered: boolean;
+  /** What the project's manifests declare; read only when the offer holds a shell and the exit otherwise applies. */
+  readonly projectCommands?: ProjectCommandsRecord;
 }
 
 /**
@@ -66,6 +77,7 @@ export function measureVerificationTooling(
     source: "tool registry offered to this turn",
     offered: toolNames.length,
     checkTools: toolNames.filter(runsVerificationCheck),
+    shellOffered: toolNames.some((name) => SHELL_TOOLS.has(name)),
   };
 }
 
@@ -84,16 +96,29 @@ type Evidence = Pick<
   "recentFailures" | "recentFailuresRetriedOk" | "recentLogIssues" | "verificationStepCount"
 > & { readonly hasTerminalFailureReport: boolean };
 
+/**
+ * Everything the exit needs except the project's own commands: the planner
+ * reads the project's manifests only when this holds and the offer has a shell.
+ */
+export function unverifiableExitConditionsHold(
+  evidence: Evidence,
+  tooling: VerificationToolingRecord | null,
+): tooling is VerificationToolingRecord {
+  if (!tooling || tooling.checkTools.length > 0) return false;
+  if (evidence.hasTerminalFailureReport || evidence.verificationStepCount > 0) return false;
+  if (evidence.recentFailures.length === 0 || evidence.recentFailuresRetriedOk !== true) return false;
+  return evidence.recentLogIssues.length === 0;
+}
+
 /** Null: this exit does not apply and the ordinary checks decide. */
 export function unverifiableFailureOutcome(
   evidence: Evidence,
   tooling: VerificationToolingRecord | null,
   draft: string,
 ): UnverifiableFailureOutcome | null {
-  if (!tooling || tooling.checkTools.length > 0) return null;
-  if (evidence.hasTerminalFailureReport || evidence.verificationStepCount > 0) return null;
-  if (evidence.recentFailures.length === 0 || evidence.recentFailuresRetriedOk !== true) return null;
-  if (evidence.recentLogIssues.length > 0) return null;
+  if (!unverifiableExitConditionsHold(evidence, tooling)) return null;
+  // A shell runs what the project declares: unmeasured, declared or unknown keeps the gate.
+  if (tooling.shellOffered && tooling.projectCommands?.verdict !== "none") return null;
   return draftSaysNotVerified(draft) ? "closed" : "ask";
 }
 
@@ -110,8 +135,13 @@ export function unverifiableFailureCheck(
   tooling: VerificationToolingRecord,
 ): UnverifiableFailureCheck {
   const failures = evidence.recentFailures.slice(-3).map((f) => `- ${sanitizePromptInjection(f)}`);
+  const project = tooling.projectCommands;
   const measured =
-    `none of the ${tooling.offered} tools in the ${tooling.source} runs a build, a test or another check`;
+    `none of the ${tooling.offered} tools in the ${tooling.source} runs a build, a test or another check` +
+    (project
+      ? `, and ${project.rootSource} (${project.root}) declares no build or test command` +
+        (project.manifests.length > 0 ? ` (${project.manifests.join("; ")})` : " (no manifest)")
+      : "");
   if (outcome === "closed") {
     return {
       name: "unverifiable-failure",

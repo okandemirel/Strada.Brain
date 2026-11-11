@@ -93,6 +93,8 @@ async function verdictAfter(options: {
   tools: readonly string[] | undefined;
   task?: string;
   logEntries?: readonly LogEntry[];
+  /** The project's source root; the README-only project unless a test says otherwise. */
+  projectRoot?: string | null;
 }) {
   const task = options.task ?? TASK;
   const state = await stateAfter(options.calls ?? FAIL_THEN_FIX, task);
@@ -115,7 +117,19 @@ async function verdictAfter(options: {
     taskStartedAtMs: Date.now() - 60_000,
     buildToolsAvailable: true,
     availableToolNames: options.tools,
+    projectRoot: options.projectRoot === null ? undefined : options.projectRoot ?? project,
   });
+}
+
+/** A second project root holding these files, beside the README-only one. */
+let extraRoots = 0;
+function projectWith(files: Record<string, string>): string {
+  const root = join(sandbox, `project-${++extraRoots}`);
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(join(root, rel, ".."), { recursive: true });
+    writeFileSync(join(root, rel), content);
+  }
+  return root;
 }
 
 describe("a re-run failure in a run whose registry holds no check tool", () => {
@@ -141,6 +155,13 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
       source: "tool registry offered to this turn",
       offered: NO_CHECK_TOOLS.length,
       checkTools: [],
+      shellOffered: true,
+      projectCommands: {
+        verdict: "none",
+        root: project,
+        rootSource: "the project's source root, not a workspace lease",
+        manifests: [],
+      },
     });
     const check = plan.checks.find((c) => c.name === "unverifiable-failure");
     expect(check?.status).toBe("issues");
@@ -222,6 +243,66 @@ describe("what still waits for a verification, whatever the draft says", () => {
 
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+  });
+});
+
+describe("a shell in the offer: the project's manifests say whether it can verify", () => {
+  const TEST_SCRIPT = JSON.stringify({ name: "p", scripts: { test: "node --test" } });
+  const NPM_PLACEHOLDER = JSON.stringify({ name: "p", scripts: { test: 'echo "Error: no test specified" && exit 1' } });
+
+  it("a package.json test script keeps the gate: the shell can run it", async () => {
+    const root = projectWith({ "package.json": TEST_SCRIPT, "index.js": "" });
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectRoot: root });
+
+    expect(plan.evidence.verificationTooling?.projectCommands).toMatchObject({
+      verdict: "commands",
+      root,
+      manifests: ["package.json: scripts.test"],
+    });
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+  });
+
+  it("npm's placeholder test script is no test: the exit applies and the record names the file it read", async () => {
+    const root = projectWith({ "package.json": NPM_PLACEHOLDER, "index.js": "" });
+    const asked = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, projectRoot: root });
+    expect(asked.gate).toContain(NO_VERIFICATION_TOOL);
+    expect(asked.gate).toContain(
+      `the project's source root, not a workspace lease (${root}) declares no build or test command ` +
+      "(package.json: no build or test script (scripts.test is npm's placeholder))",
+    );
+
+    const closed = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectRoot: root });
+    expect(closed.gate).toBeUndefined();
+    expect(closed.initialDecision).toBe("approve");
+  });
+
+  it("a project type it does not recognise keeps the gate", async () => {
+    const root = projectWith({ "src/main.rs": "fn main() {}\n" });
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectRoot: root });
+
+    expect(plan.evidence.verificationTooling?.projectCommands?.verdict).toBe("unknown");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+  });
+
+  it("no project root to read keeps the gate", async () => {
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectRoot: null });
+
+    expect(plan.evidence.verificationTooling?.projectCommands?.verdict).toBe("unknown");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
+  it("with no shell in the offer nothing runs the script, and the project is not read", async () => {
+    const root = projectWith({ "package.json": TEST_SCRIPT });
+    const noShell = NO_CHECK_TOOLS.filter((name) => name !== "shell_exec");
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: noShell, projectRoot: root });
+
+    expect(plan.evidence.verificationTooling).toMatchObject({ shellOffered: false });
+    expect(plan.evidence.verificationTooling?.projectCommands).toBeUndefined();
+    expect(plan.gate).toBeUndefined();
+    expect(plan.initialDecision).toBe("approve");
   });
 });
 

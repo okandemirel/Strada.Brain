@@ -3219,6 +3219,7 @@ export class Orchestrator {
         return resolveSystemPrompt();
       },
       projectPath: this.projectPath,
+      sourceProjectPath: this.sourceProjectPath,
       clarificationContext: this.getClarificationContext(),
       stripInternalDecisionMarkers: (t) => stripInternalDecisionMarkersHelper(t),
       interactionPolicy: this.interactionPolicy,

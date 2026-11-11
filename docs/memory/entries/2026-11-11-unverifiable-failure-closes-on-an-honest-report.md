@@ -28,7 +28,7 @@ Then the gate asks once, under `[NO VERIFICATION TOOL]`, for a report that says 
 
 ## Rejected alternatives
 - **Decide "no verification tool" from the draft** ("this project has no build and no tests"). That judges the run by its prose. The draft is read here only for whether the user is told the result is unverified.
-- **Count shell_exec as a check tool.** It is on every run's offer, so the exit would never apply. constants.ts already classifies it as reading. The cost is that a project whose only check is a shell command the worker never ran is treated as having none.
+- **Count shell_exec as a check tool.** It is on every run's offer, so the exit would never apply. constants.ts already classifies it as reading. A shell in the offer instead makes the exit read the project's manifests (`shell-runs-what-the-project-declares`).
 - **Close without asking, and append "not verified" to the visible text deterministically.** The approve result reaches the user through four handler paths, and none of them carries a notice from the pipeline. One ask costs one call and keeps the change in the pipeline.
 - **Close any failure once the registry has no check tool.** A step that failed and was never re-run has not been repaired. It still waits.
 

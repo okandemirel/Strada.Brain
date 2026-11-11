@@ -614,4 +614,28 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(texts(run)).not.toContain(FALLBACK_NOTICE);
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
   }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("the same failure in a project whose package.json has a test script waits for a verification the shell can run", async () => {
+    // No check tool in the registry, but shell_exec is offered and the
+    // project's source root declares `npm test`: the gate is run 5's, not
+    // run 4's one honest ask.
+    const run = await runGolden({
+      name: "runtime-failure-test-script",
+      request: RUNTIME_REQUEST,
+      script: CHECKED_SCRIPT,
+      settled: settledAfterResume(),
+      projectFiles: { "package.json": JSON.stringify({ name: "notes", private: true, scripts: { test: "node --test" } }) },
+    });
+
+    expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(run.violations).toEqual([]);
+    expect(run.served).toEqual(CHECKED_SCRIPT.map((s) => s.step));
+    expect(run.calls.some((call) => offers(call, "shell_exec")), "the worker was offered the shell").toBe(true);
+    expect(run.calls.some((call) => offers(call, CHECK_TOOL)), "no check tool was registered").toBe(false);
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([
+      TaskStatus.blocked,
+      TaskStatus.completed,
+    ]);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, BLOCKED, CHECKED_ANSWER]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
 });

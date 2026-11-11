@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { AgentPhase, createInitialState, transitionPhase } from "./agent-state.js";
 import {
   handleBackgroundLoopRecovery,
@@ -382,6 +385,67 @@ describe("resolveVerifierIntervention", () => {
     expect(runVisibilityReview).toHaveBeenCalledOnce();
     expect(result.kind).toBe("continue");
     expect(result.gate).toContain("[VISIBILITY REVIEW REQUIRED]");
+  });
+});
+
+describe("resolveVerifierIntervention: the project's own commands are read from its source root", () => {
+  /**
+   * A write failed and was re-run successfully; the offer holds a shell and no
+   * check tool. The source root and the lease disagree about a test script,
+   * and the gate follows the source root: a lease is a worker's copy.
+   */
+  async function gateWith(roots: { source: string; lease: string }): Promise<string | undefined> {
+    const deps = { ...makeDeps(), projectPath: roots.lease, sourceProjectPath: roots.source } as InterventionDeps;
+    const state = transitionPhase(createInitialState("Create notes/a.txt"), AgentPhase.EXECUTING);
+    const now = Date.now();
+    state.stepResults.push(
+      { toolName: "file_write", success: false, summary: "Error: could not write file (ENOTDIR)", timestamp: now - 300 },
+      { toolName: "file_write", success: true, summary: "Wrote notes/a.txt", timestamp: now - 200 },
+    );
+    const result = await resolveVerifierIntervention({
+      chatId: "chat-project-commands",
+      identityKey: "identity-1",
+      executionMode: "background",
+      prompt: "Create notes/a.txt",
+      state,
+      draft: "Wrote notes/a.txt.",
+      selfVerification: new SelfVerification(),
+      stradaConformance: { getPrompt: () => null } as any,
+      strategy: { ...makeStrategy(), task: { type: "implementation", complexity: "simple", criticality: "low" } } as any,
+      taskStartedAtMs: now - 1000,
+      availableToolNames: ["file_read", "file_write", "list_directory", "shell_exec"],
+      usageHandler: undefined,
+    }, deps);
+    return result.gate;
+  }
+  function root(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), "intervention-project-commands-"));
+    for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+    return dir;
+  }
+
+  it("a test script in the source root keeps the gate, though the lease has none", async () => {
+    const source = root({ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }) });
+    const lease = root({ "README.md": "# notes\n" });
+    try {
+      const gate = await gateWith({ source, lease });
+      expect(gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+      expect(gate).not.toContain("[NO VERIFICATION TOOL]");
+    } finally {
+      for (const dir of [source, lease]) rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a test script only the lease has does not: the source root declares none", async () => {
+    const source = root({ "README.md": "# notes\n" });
+    const lease = root({ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }) });
+    try {
+      const gate = await gateWith({ source, lease });
+      expect(gate).toContain("[NO VERIFICATION TOOL]");
+      expect(gate).toContain(`the project's source root, not a workspace lease (${source}) declares no build or test command`);
+    } finally {
+      for (const dir of [source, lease]) rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

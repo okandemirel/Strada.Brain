@@ -18,10 +18,12 @@ import { MAX_UNITY_ERROR_ATTEMPTS, type VerificationState } from "./self-verific
 import { FAILED_TERMINAL_KEYS, systemStampsIn } from "./terminal-outcome.js";
 import {
   measureVerificationTooling,
+  unverifiableExitConditionsHold,
   unverifiableFailureCheck,
   unverifiableFailureOutcome,
   type VerificationToolingRecord,
 } from "./verifier-pipeline-unverifiable.js";
+import { measureProjectCommands } from "./verifier-pipeline-project-commands.js";
 
 export type VerifierName =
   | "build"
@@ -89,8 +91,13 @@ export function planVerifierPipeline(params: {
   buildToolsAvailable?: boolean;
   /** The tools this run was offered: the record "nothing here can verify" is read from. */
   availableToolNames?: readonly string[];
+  /**
+   * The project's source root, never a workspace lease: where a shell's build
+   * or test command is read from. Unset, a shell in the offer keeps the gate.
+   */
+  projectRoot?: string;
 }): VerifierPipelinePlan {
-  const tooling = measureVerificationTooling(params.availableToolNames, params.state.taskDescription);
+  const offered = measureVerificationTooling(params.availableToolNames, params.state.taskDescription);
   const collected = collectVerifierPipelineEvidence({
     state: params.state,
     task: params.task,
@@ -101,6 +108,10 @@ export function planVerifierPipeline(params: {
     draft: params.draft,
     conformanceGate: params.conformanceGate,
   });
+  // With a shell in the offer, the project's manifests say whether it can verify.
+  const tooling = offered?.shellOffered && unverifiableExitConditionsHold(collected, offered)
+    ? { ...offered, projectCommands: measureProjectCommands(params.projectRoot) }
+    : offered;
   const evidence: VerifierPipelineEvidence = { ...collected, verificationTooling: tooling };
   // A failure re-run successfully in a run whose registry holds no check
   // tool: the draft must say it is not verified, and then it stops gating
