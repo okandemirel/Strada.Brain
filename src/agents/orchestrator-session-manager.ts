@@ -33,7 +33,8 @@ import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
 import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
-import { capRollingSummary, isToolResultMessage, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
+import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
+import { isSystemToolResultTurn } from "./orchestrator-session-manager-last-user.js";
 import { conversationTranscript, messageTextPreview } from "./session-memory-transcript.js";
 import { withoutRecalledMemory } from "./recall-ledger.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
@@ -1193,11 +1194,9 @@ export class SessionManager {
   extractLastUserContent(session: Session, skipToolResultTurns = false): string | MessageContent[] | null {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
-      // ORC-21: a provider-failure notice is not what the user last said (shell
-      // review and correction detection read this), nor is a recall (recall-ledger.ts).
-      if (msg.role === "user" && !isProviderFailureNotice(msg)) {
-        // A tool-result turn's text is the system's: gate notes, plan state, the reflection prompt.
-        if (skipToolResultTurns && isToolResultMessage(msg)) continue;
+      // ORC-21: not what the user last said: a provider-failure notice (shell review and correction
+      // detection read this), a recall (recall-ledger.ts), a tool turn's text (…-last-user.ts).
+      if (msg.role === "user" && !isProviderFailureNotice(msg) && !(skipToolResultTurns && isSystemToolResultTurn(msg))) {
         const content = withoutRecalledMemory([msg])[0]!.content as string | MessageContent[] | null;
         // A turn that held nothing but a recall is one the ledger opened after an
         // assistant turn (a decomposed task's visible plan): the user spoke before it.
@@ -1211,9 +1210,7 @@ export class SessionManager {
 
   extractLastUserMessage(session: Session): string {
     const content = this.extractLastUserContent(session, true);
-    if (typeof content === "string") {
-      return content;
-    }
+    if (typeof content === "string") return content;
     if (Array.isArray(content)) {
       const textParts = content
         .filter((b): b is { type: "text"; text: string } => b.type === "text")

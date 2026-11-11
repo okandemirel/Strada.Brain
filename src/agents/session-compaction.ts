@@ -197,7 +197,7 @@ function hasToolUse(msg: CompactableMessage): boolean {
 }
 
 /** A user turn that answers tool calls. It may carry gate or reflection text after the results. */
-export function isToolResultMessage(msg: CompactableMessage): boolean {
+function isToolResultMessage(msg: CompactableMessage): boolean {
   if (msg.role !== "user" || typeof msg.content === "string") return false;
   return (msg.content as readonly ContentBlock[]).some((b) => b.type === "tool_result");
 }

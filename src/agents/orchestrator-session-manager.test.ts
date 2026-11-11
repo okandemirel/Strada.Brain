@@ -13,6 +13,7 @@ import {
 } from "./orchestrator-session-manager.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import { RecallLedger } from "./recall-ledger.js";
+import { INTERRUPTED_TOOL_RESULT, normalizeConversation } from "./conversation-normalizer.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
@@ -323,7 +324,7 @@ describe("SessionManager", () => {
       },
     ] as never[];
 
-    // A worker's session holds no user turn: nothing, so the readers fall back to the task.
+    // A session that holds no user turn: nothing, so the readers fall back to the task.
     session.messages.push(...toolTurn("tc-1"));
     expect(sm.extractLastUserMessage(session)).toBe("");
 
@@ -331,6 +332,26 @@ describe("SessionManager", () => {
     sm.appendVisibleUserMessage(session, "rename the spawner");
     session.messages.push(...toolTurn("tc-2"), ...toolTurn("tc-3"));
     expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
+  });
+
+  it("a user message the normalizer folds into an interrupted call's answer is what the user said (conversation-normalizer.ts)", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "old request");
+    sm.appendVisibleAssistantMessage(session, "done");
+    // A call that never answered, then the person's next message.
+    session.messages.push(
+      { role: "assistant", content: "", tool_calls: [{ id: "tc-9", name: "file_read", input: {} }] } as never,
+      { role: "user", content: "new request" },
+    );
+    session.messages = normalizeConversation(session.messages);
+    // The normalizer answered the call and folded the message into that answer.
+    expect(session.messages.at(-1)?.content).toEqual([
+      { type: "tool_result", tool_use_id: "tc-9", content: INTERRUPTED_TOOL_RESULT, is_error: true },
+      { type: "text", text: "new request" },
+    ]);
+
+    expect(sm.extractLastUserMessage(session)).toBe("new request");
   });
 
   it("a user turn that holds only a recall is passed over for the user's words before it (recall-ledger.ts)", () => {
