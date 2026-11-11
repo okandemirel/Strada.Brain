@@ -71,6 +71,7 @@ import { resolveServedIdentity } from "../../agents/orchestrator-phase-telemetry
 import type { ProviderServedBy } from "../../agents/providers/provider-core.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { splitCallsByPhase, type PhaseCallSplit } from "../engine/phase-write-access.js";
+import { instinctUserIdOf } from "../engine/instinct-scope.js";
 // Free helpers imported directly by the spine (no `this`). The max_tokens continuation gate +
 // pusher are the v1 shared helpers; nothing here closes over the Orchestrator.
 import {
@@ -402,6 +403,7 @@ export class V2AgentRunner implements AgentRunner {
         budget,
         clockView: runClock.view,
         metricId: setup.metricId || undefined,
+        instinctUserId: instinctUserIdOf(request),
       };
 
       // The deriveCallLimits carve the spine hands enterCall (subtractive-min vs task remaining is
@@ -1190,6 +1192,7 @@ export class V2AgentRunner implements AgentRunner {
       chatId: request.chatId,
       channelType: String(request.channelType),
       userId: request.userId,
+      instinctOwner: request.instinctOwner,
       conversationId: request.conversationId,
       attachments: request.attachments,
       userContent: request.userContent,

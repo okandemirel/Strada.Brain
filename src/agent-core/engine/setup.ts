@@ -54,7 +54,7 @@ import type { SoulLoader } from "../../agents/soul/index.js";
 import type { MonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
 import type { VaultRegistry } from "../../vault/vault-registry.js";
 import type { SupervisorExecutionStrategy } from "../../agents/orchestrator-supervisor-routing.js";
-import { instinctScopeKey } from "./instinct-scope.js";
+import { instinctScopeKey, instinctUserIdOf } from "./instinct-scope.js";
 
 /**
  * The dependency slice the run-setup cluster reads. Extends {@link ReflectionDeps} + {@link BudgetDeps}
@@ -404,14 +404,16 @@ export async function setupAgentCoreRun(
     // (learning-pipeline.ts:333 is gated on appliedInstinctIds.length>0). Cleared on teardown in
     // persistTerminal (symmetric to v1's runAgentLoop finally :6232-6234).
     let matchedInstinctIds: string[] = [];
+    // item 3.1: retrieval happens for this user - user-scoped learning is theirs
+    // alone. A delegated run's user is "sub-agent"; its instinctOwner names the
+    // caller (InstinctOwner). Recall, profile and DM policy keep request.userId.
+    const instinctUserId = instinctUserIdOf(request);
     if (deps.instinctRetriever) {
       try {
-        // item 3.1: retrieval happens for this user - user-scoped learning is
-        // theirs alone.
         const insightResult = await deps.instinctRetriever.getInsightsForTask(
           queryText,
           undefined,
-          request.userId,
+          instinctUserId,
         );
         matchedInstinctIds = insightResult.matchedInstinctIds;
         if (insightResult.insights.length > 0) {
@@ -456,8 +458,8 @@ export async function setupAgentCoreRun(
               sessionId: chatId,
               resolveTaskRunId: () => deps.getTaskExecutionContext()?.taskRunId,
               // Recovery guidance is chosen for this run's user, never from
-              // another user's private rules.
-              userId: request.userId,
+              // another user's private rules (retrieval only: no write reads it).
+              userId: instinctUserId,
             },
           }),
       // Step 0 / gap #8 — v1 workers use the background-epoch iteration budget (runBackgroundTask
@@ -507,6 +509,7 @@ export async function setupAgentCoreRun(
     // project — it used to be built with no identity at all.
     const memoryRefresher = deps.sessionManager.createMemoryRefresher(initialContentHashes, chatId, {
       userId: request.userId,
+      instinctOwner: request.instinctOwner,
       projectId: deps.projectPath?.(),
     });
     // Step 0 / gap #7 — label the metric by the actual run mode (v1 parity: runBackgroundTask uses
