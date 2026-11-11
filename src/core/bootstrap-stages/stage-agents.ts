@@ -6,7 +6,6 @@ import type { IRAGPipeline } from "../../rag/rag.interface.js";
 import type { CachedEmbeddingProvider } from "../../rag/embeddings/embedding-cache.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
 import type { DashboardServer } from "../../dashboard/server.js";
-import type { MetricsCollector } from "../../dashboard/metrics.js";
 import type { RateLimiter } from "../../security/rate-limiter.js";
 import type { IEventBus, LearningEventMap } from "../event-bus.js";
 import { IdentityStateManager } from "../../identity/identity-state.js";
@@ -61,7 +60,6 @@ export async function initializeMultiAgentDelegationStage(
     providerManager: ProviderManager;
     toolRegistry: ToolRegistry;
     channel: IChannelAdapter;
-    metrics: MetricsCollector;
     ragPipeline?: IRAGPipeline;
     rateLimiter?: RateLimiter;
     metricsRecorder?: MetricsRecorder;
@@ -120,7 +118,6 @@ export async function initializeMultiAgentDelegationStage(
     projectPath: params.config.unityProjectPath,
     readOnly: params.config.security.readOnlyMode,
     requireConfirmation: params.config.security.requireEditConfirmation,
-    metrics: params.metrics,
     ragPipeline: params.ragPipeline,
     rateLimiter: params.rateLimiter,
     defaultLanguage: params.config.language,
