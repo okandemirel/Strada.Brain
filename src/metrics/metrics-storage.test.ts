@@ -205,6 +205,26 @@ describe("MetricsStorage", () => {
       expect(agg.totalTasks).toBe(3);
     });
 
+    it("counts a delegated subtask apart from the top-level tasks, not inside their totals", () => {
+      storage.recordTaskMetric(createMetric({
+        id: "s1", sessionId: "delegation-1", taskType: "subtask", parentTaskId: "a1",
+        completionStatus: "failure", paorIterations: 9, toolCallCount: 20,
+      }));
+      // The parent task a1 is counted once; its sub-agent's run is part of it.
+      const all = storage.getAggregation({});
+      expect(all.totalTasks).toBe(3);
+      expect(all.failureCount).toBe(1);
+      expect(all.avgToolCalls).toBe(8);
+      expect(storage.getAggregation({ sessionId: "delegation-1" }).totalTasks).toBe(0);
+      // Asked for by type, subtasks have their own success rate.
+      const subtasks = storage.getAggregation({ taskType: "subtask" });
+      expect(subtasks).toMatchObject({ totalTasks: 1, successCount: 0, failureCount: 1, completionRate: 0 });
+      // A row list is not a total: the subtask is listed with its parent link.
+      expect(storage.getTaskMetrics({ sessionId: "delegation-1" })).toEqual([
+        expect.objectContaining({ id: "s1", taskType: "subtask", parentTaskId: "a1" }),
+      ]);
+    });
+
     it("should return zeroes for empty result set", () => {
       const agg = storage.getAggregation({ sessionId: "nonexistent" });
       expect(agg.totalTasks).toBe(0);
@@ -316,6 +336,16 @@ describe("MetricsStorage", () => {
       expect(a.usageCount).toBe(3);
       expect(a.taskSuccessRate).toBeCloseTo(2 / 3, 10);
       expect(board.find((e) => e.instinctId === "inst_b")!.usageCount).toBe(1);
+    });
+
+    it("keeps a pruned subtask out of the top-level totals and counts it when asked", () => {
+      const old = Date.now() - 100 * DAY;
+      storage.recordTaskMetric(createMetric({ id: "sub_old", sessionId: "delegation-x", taskType: "subtask", parentTaskId: "old1", completionStatus: "failure", startedAt: old - 10, completedAt: old }));
+      const s = seedAndReopen();
+      expect(s.getTaskMetrics({}).map((m) => m.id)).toEqual(["new1"]);
+      expect(s.getAggregation({}).totalTasks).toBe(3);
+      expect(s.getAggregation({}).failureCount).toBe(1);
+      expect(s.getAggregation({ taskType: "subtask" })).toMatchObject({ totalTasks: 1, failureCount: 1 });
     });
 
     it("does not count a pruned row twice when retention runs again", () => {

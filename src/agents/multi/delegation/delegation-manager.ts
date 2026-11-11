@@ -816,6 +816,9 @@ export class DelegationManager {
     // project behind the caller's lease — whose own commit then found the
     // file changed since its seed and quarantined the caller's version.
     const callerTree = callerWorkTree(request.toolContext?.projectPath, this.opts.projectPath);
+    // A delegate's task metric is its calling run's subtask. With no parent id it would be
+    // recorded as one more 'background' task, so it is not recorded at all.
+    const parentMetricId = request.toolContext?.parentRun?.metricId;
 
     // Held outside the try so the finally can release it: an Orchestrator owns a
     // session-cleanup timer and a budget listener that otherwise outlive the run.
@@ -860,6 +863,7 @@ export class DelegationManager {
         providerRouter: this.opts.providerRouter,
         vaultRegistry: this.opts.vaultRegistry,
         vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
+        metricsRecorder: parentMetricId ? this.opts.sharedOrchestratorDeps.metricsRecorder : undefined,
         maxIterations: typeConfig.maxIterations,
         authorizedPathsStore: this.opts.authorizedPathsStore,
         onUsage,
@@ -921,6 +925,7 @@ export class DelegationManager {
               // Opened inside the calling run: bounded by its clock, gated on this
               // delegation's remaining slice, and debiting its spend back up.
               parentClockView: request.toolContext?.parentRun?.clockView,
+              parentMetricId,
               childBudget: runBudget
                 ? { slice: runBudget.carveChild(1, 1), parent: runBudget }
                 : undefined,

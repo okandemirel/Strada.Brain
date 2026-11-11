@@ -389,6 +389,7 @@ export class V2AgentRunner implements AgentRunner {
         signal: runClock.taskToken.signal,
         budget,
         clockView: runClock.view,
+        metricId: setup.metricId || undefined,
       };
 
       // The deriveCallLimits carve the spine hands enterCall (subtractive-min vs task remaining is

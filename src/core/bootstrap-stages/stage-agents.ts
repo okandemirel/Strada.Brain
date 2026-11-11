@@ -22,7 +22,6 @@ import { HeartbeatLoop } from "../../daemon/heartbeat-loop.js";
 import { DaemonStorage } from "../../daemon/daemon-storage.js";
 import { ApprovalQueue } from "../../daemon/security/approval-queue.js";
 import { TriggerRegistry } from "../../daemon/trigger-registry.js";
-import { MetricsRecorder } from "../../metrics/metrics-recorder.js";
 import type { AgentId } from "../../agents/multi/agent-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
@@ -62,7 +61,6 @@ export async function initializeMultiAgentDelegationStage(
     channel: IChannelAdapter;
     ragPipeline?: IRAGPipeline;
     rateLimiter?: RateLimiter;
-    metricsRecorder?: MetricsRecorder;
     goalDecomposer?: GoalDecomposer;
     identityManager?: IdentityStateManager;
     cachedEmbeddingProvider?: CachedEmbeddingProvider;
@@ -126,7 +124,6 @@ export async function initializeMultiAgentDelegationStage(
     streamingEnabled: params.config.streamingEnabled,
     stradaDeps: params.stradaDeps,
     stradaConfig: params.config.strada,
-    metricsRecorder: params.metricsRecorder,
     goalDecomposer: params.goalDecomposer,
     getIdentityState: params.identityManager ? () => params.identityManager!.getState() : undefined,
     reRetrievalConfig: params.config.reRetrieval,

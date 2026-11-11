@@ -112,6 +112,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       eventEmitter: { tag: "learning-bus", emit: vi.fn() } as never,
       instinctRetriever: { tag: "instinct-retriever" } as never,
       metrics: { tag: "dashboard-metrics" } as never,
+      metricsRecorder: { tag: "task-metrics-recorder" } as never,
       trajectoryReplayRetriever: { tag: "trajectory-replay" } as never,
       learningPipeline: { tag: "learning-pipeline" } as never,
       errorLearningHooks: { tag: "error-learning-hooks" } as never,
@@ -275,6 +276,7 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       "eventEmitter",
       "instinctRetriever",
       "metrics",
+      "metricsRecorder",
       "learningPipeline",
       "errorLearningHooks",
       "interventionEngine",
@@ -436,9 +438,6 @@ const DELEGATE_EXEMPT: Record<string, string> = {
   rateLimiter:
     "the user's message rate and daily token quota: delegated tokens would count against the user and could refuse " +
     "their next message; delegated spend is bounded by the delegation budget instead; separate work",
-  metricsRecorder:
-    "task-metric rows: a delegated run carries no parentMetricId, so every delegation would be recorded as a " +
-    "'background' task and skew the learning stats; needs the parent metric id first; separate work",
   goalDecomposer: "decomposition spends extra LLM calls and nests goal trees inside a sub-task bounded by maxIterations (cost); separate work",
   supervisorBrain: "the supervisor would fan a delegated sub-task out to further workers (cost, depth beyond maxDepth); separate work",
   dmPolicy:

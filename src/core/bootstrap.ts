@@ -1535,6 +1535,8 @@ async function bootstrapImpl(
     instinctRetriever,
     // The dashboard's counters: without them a run's tool calls and tokens never reach /api/metrics.
     metrics,
+    // Task-metric rows (learning_stats, the dashboard's task metrics); a delegate's only as a subtask.
+    metricsRecorder,
     trajectoryReplayRetriever,
     // THE PIPELINE THE RUN TALKS TO. Without these two the orchestrator holds
     // nulls: guidance exposure ("this rule was in the prompt"), run credit
@@ -1589,7 +1591,6 @@ async function bootstrapImpl(
     streamingEnabled: config.streamingEnabled,
     stradaDeps,
     stradaConfig: config.strada,
-    metricsRecorder,
     goalDecomposer,
     interruptedGoalTrees,
     getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
@@ -2035,7 +2036,6 @@ async function bootstrapImpl(
         channel,
         ragPipeline,
         rateLimiter,
-        metricsRecorder,
         goalDecomposer,
         identityManager,
         cachedEmbeddingProvider,
