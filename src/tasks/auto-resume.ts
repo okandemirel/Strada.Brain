@@ -114,6 +114,38 @@ export function withGoalResume(message: string, next: GoalResumeNext | undefined
   return message.trim() ? `${message}\n\n${sentence}` : sentence;
 }
 
+/**
+ * What the user reads when the retry the block message promised was not
+ * submitted. The block is written before the submission (a running task
+ * cannot be retried), so it already says "Retrying automatically now"; this
+ * is the correction when nothing was started.
+ */
+export const RESUME_NOT_STARTED_NOTICE =
+  "The automatic retry above could not be started, and this task is still blocked. " +
+  "Nothing is running for it. Send instructions or retry it yourself.";
+
+/**
+ * Submit the resume the block message promised, and say so when none started:
+ * a null result (the goal was not retryable) or a thrown error. Returns
+ * whether something was submitted. `explain` and `report` are best-effort.
+ */
+export function submitPromisedResume(
+  submit: () => unknown,
+  explain: (notice: string) => void,
+  report: (error: unknown) => void,
+): boolean {
+  let submitted = false;
+  try {
+    submitted = submit() != null;
+  } catch (error) {
+    try { report(error); } catch { /* logging is best-effort */ }
+  }
+  if (!submitted) {
+    try { explain(RESUME_NOT_STARTED_NOTICE); } catch { /* visibility is best-effort */ }
+  }
+  return submitted;
+}
+
 // ---------------------------------------------------------------------------
 // Mission keep-alive — the LAST stop is a report, not silence.
 // ---------------------------------------------------------------------------

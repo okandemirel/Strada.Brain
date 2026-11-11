@@ -85,7 +85,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
-import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery, withGoalResume, type GoalResumeNext } from "./auto-resume.js";
+import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery, withGoalResume, submitPromisedResume, type GoalResumeNext } from "./auto-resume.js";
 
 // Shared outage measurement (also used by goal auto-resume and campaign
 // self-revival); re-exported so existing importers keep their path.
@@ -3406,19 +3406,16 @@ export class BackgroundExecutor {
       },
     );
     block(next);
-    try {
-      if (replanning) {
-        this.taskManager.replanGoalRoot(rootId, nodeOutcomes);
-      } else {
-        this.taskManager.retryGoalRoot(rootId);
-      }
-    } catch (error) {
-      getLogger().error("Automatic resume failed to resubmit the goal", {
+    const taskManager = this.taskManager;
+    submitPromisedResume(
+      () => (replanning ? taskManager.replanGoalRoot(rootId, nodeOutcomes) : taskManager.retryGoalRoot(rootId)),
+      (notice) => taskManager.appendTaskNotice(task.id, notice),
+      (error) => getLogger().error("Automatic resume failed to resubmit the goal", {
         goalRootId: rootId,
         action: decision.action,
         error: error instanceof Error ? error.message : String(error),
-      });
-    }
+      }),
+    );
   }
 
 
