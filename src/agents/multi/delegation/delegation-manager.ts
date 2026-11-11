@@ -38,6 +38,7 @@ import type {
 } from "./delegation-types.js";
 import type { DelegationLog } from "./delegation-log.js";
 import { resolveDelegationBudget } from "./delegation-budget.js";
+import { delegationBrief } from "./delegation-brief.js";
 import type { TierRouter } from "./tier-router.js";
 import type { ProviderCredentialMap, ProviderConfig } from "../../providers/provider-registry.js";
 import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-registry.js";
@@ -644,10 +645,6 @@ export class DelegationManager {
     const providerManager = this.buildSubAgentProviderManager(provider, providerConfig.name);
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
-    const systemPrompt =
-      typeConfig.systemPrompt ??
-      `You are a specialized sub-agent for ${typeConfig.name.replace(/_/g, " ")} tasks. Complete the assigned task concisely and return the result. Do not delegate further.`;
-
     // Set up timeout with abort controller
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), typeConfig.timeoutMs);
@@ -895,9 +892,7 @@ export class DelegationManager {
         channelType: "cli",
         chatId: delegateChatId,
         userId: "sub-agent",
-        text: request.context
-          ? `${systemPrompt}\n\nTask: ${request.task}\n\nContext: ${request.context}`
-          : `${systemPrompt}\n\nTask: ${request.task}`,
+        text: delegationBrief(typeConfig, request.task, request.context),
         timestamp: new Date(),
       };
 
