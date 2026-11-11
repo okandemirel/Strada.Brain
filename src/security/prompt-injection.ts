@@ -46,9 +46,17 @@ const CJK_ROLE_HIJACK_RE =
  * The slash after the pipe may follow the same whitespace the opener allows there
  * (`<| /system |>`). It is written `\s*(?:\/\s*)?` rather than `\s*\/?\s*`: two
  * `\s*` with nothing between them backtrack quadratically on a long run of spaces.
+ *
+ * ChatML (`<|im_start|>system … <|im_end|>`) and Llama 3
+ * (`<|start_header_id|>system<|end_header_id|> … <|eot_id|>`) carry the role
+ * inside the envelope, so they get their own closed-envelope alternative ahead
+ * of the lone-token one. Measured 2026-11-06: with only the lone-token rule,
+ * `<|im_start|>system\nXPAY<|im_end|>` came out as
+ * `[filtered:envelope] system\nXPAY[filtered:envelope]` — tags gone, payload kept.
+ * The opener is a literal and the span is bounded, so the scan stays linear.
  */
 const ENVELOPE_RE =
-  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\s*(?:\/\s*)?(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*\/?\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|im_end|start_header_id|end_header_id|eot_id|begin_of_text)\|>/gi;
+  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\s*(?:\/\s*)?(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*\/?\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|start_header_id)\|>[\s\S]{0,2000}?<\|(?:im_end|eot_id)\|>|<\|(?:im_start|im_end|start_header_id|end_header_id|eot_id|begin_of_text)\|>/gi;
 
 /**
  * Unopened/open-only envelope tags (e.g. lone `[SYSTEM]:` prefix, `<|system|>` header).
