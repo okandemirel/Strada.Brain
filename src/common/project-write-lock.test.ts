@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const afterNextRename: { run?: () => void } = {};
 /** Makes the next rename fail with this errno code (a Windows handle holder). */
 const failNextRename: { code?: string } = {};
+/** Makes the next rename block for this many ms (a slow disk or a busy volume). */
+const slowNextRename: { ms?: number } = {};
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:fs")>();
   return {
@@ -20,6 +22,9 @@ vi.mock("node:fs", async (importOriginal) => {
       const failWith = failNextRename.code;
       failNextRename.code = undefined;
       if (failWith) throw Object.assign(new Error(`${failWith}: operation not permitted, rename`), { code: failWith });
+      const slowMs = slowNextRename.ms;
+      slowNextRename.ms = undefined;
+      if (slowMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, slowMs);
       const hook = afterNextRename.run;
       afterNextRename.run = undefined;
       const out = real.renameSync(from, to);
@@ -61,6 +66,21 @@ describe("the project write lock", () => {
     expect(taken.acquired).toBe(true);
     expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).pid).toBe(process.pid);
     taken.release();
+  });
+
+  it("a writer that breaks a dead holder's lock as its time runs out takes it, not writes unlocked", async () => {
+    mkdirSync(lockDir(), { recursive: true });
+    writeFileSync(join(lockDir(), "owner"), JSON.stringify({ pid: 2 ** 30, host: hostname(), token: "dead", at: new Date().toISOString() }));
+    // The reclaim's rename outlasts the whole timeout: the path is vacated
+    // only after the deadline has passed.
+    slowNextRename.ms = 300;
+
+    const taken = await acquireProjectWriteLock(root, { timeoutMs: 200, staleMs: 10 * 60_000 });
+
+    expect(taken.acquired).toBe(true);
+    expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).pid).toBe(process.pid);
+    taken.release();
+    expect(existsSync(lockDir())).toBe(false);
   });
 
   it("leaves a LIVE holder's lock alone however long it has been held", async () => {
