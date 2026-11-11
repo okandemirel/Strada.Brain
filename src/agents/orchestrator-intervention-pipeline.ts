@@ -6,8 +6,8 @@
  * intervention chain behind a shared InterventionDeps context interface.
  *
  * Pure helpers (no deps needed):
- *   selectLoopRecoveryDelegationTool, isNovelLoopRecoveryAction,
- *   buildLoopRecoveryGate, buildLoopRecoveryCheckpointMessage
+ *   isNovelLoopRecoveryAction, buildLoopRecoveryGate, buildLoopRecoveryCheckpointMessage
+ *   (the choice of a delegate is ./loop-recovery-delegation.ts)
  *
  * Complex intervention functions (use InterventionDeps):
  *   resolveLoopRecoveryReview, handleBackgroundLoopRecovery,
@@ -15,7 +15,7 @@
  *   resolveDraftClarificationIntervention, resolveVisibleDraftDecision
  */
 
-import type { AgentState } from "./agent-state.js";
+import type { AgentPhase, AgentState } from "./agent-state.js";
 import type {
   ToolCall,
   ToolResult,
@@ -92,6 +92,7 @@ import type { Session } from "./orchestrator-session-manager.js";
 import { getLogger, type LogEntry, getLoggerSafe } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { randomUUID } from "node:crypto";
+import { delegationCandidatesIn, selectLoopRecoveryDelegationTool } from "./loop-recovery-delegation.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -232,6 +233,11 @@ export interface InterventionDeps {
     toolCalls: ToolCall[],
     options?: ToolExecutionOptions,
   ) => Promise<ToolResult[]>;
+  /**
+   * The gate's phase rule (the orchestrator's phaseRefuses): whether `executeToolCalls` refuses a
+   * call of `toolName` handed a state in `phase`. The loop recovery asks it before it delegates.
+   */
+  readonly phaseRefuses: (toolName: string, phase: AgentPhase) => boolean;
   readonly getLogRingBuffer: () => LogEntry[];
 
   // Progress signaling (used by handleBackgroundLoopRecovery)
@@ -259,25 +265,6 @@ function toClarificationReviewStatus(
   if (decision === "ask_user" || decision === "blocked") return "blocked";
   if (decision === "internal_continue") return "continued";
   return "approved";
-}
-
-export function selectLoopRecoveryDelegationTool(
-  availableToolNames: readonly string[] | undefined,
-  touchedFiles: readonly string[],
-): "delegate_analysis" | "delegate_code_review" | null {
-  if (!availableToolNames || availableToolNames.length === 0) {
-    return null;
-  }
-  if (touchedFiles.length > 0 && availableToolNames.includes("delegate_code_review")) {
-    return "delegate_code_review";
-  }
-  if (availableToolNames.includes("delegate_analysis")) {
-    return "delegate_analysis";
-  }
-  if (availableToolNames.includes("delegate_code_review")) {
-    return "delegate_code_review";
-  }
-  return null;
 }
 
 export function isNovelLoopRecoveryAction(
@@ -633,7 +620,10 @@ export async function handleBackgroundLoopRecovery(
   params: Parameters<typeof decideBackgroundLoopRecovery>[0],
   deps: Parameters<typeof decideBackgroundLoopRecovery>[1],
 ): Promise<Awaited<ReturnType<typeof decideBackgroundLoopRecovery>>> {
-  const decision = await decideBackgroundLoopRecovery(params, deps);
+  // It delegates now, with `params.state`: only to a tool the gate runs in that phase
+  // (./loop-recovery-delegation.ts). Every choice and run of a delegate below reads this list.
+  const availableToolNames = delegationCandidatesIn(params.availableToolNames, params.state.phase, deps.phaseRefuses);
+  const decision = await decideBackgroundLoopRecovery({ ...params, availableToolNames }, deps);
   if (decision.action === "none") return decision;
   const since = params.tracker.lastInterventionAt();
   const progress = measuredProgressSince(params.state.stepResults, since);
