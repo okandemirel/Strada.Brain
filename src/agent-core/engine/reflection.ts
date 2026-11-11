@@ -14,6 +14,7 @@
 import { AgentPhase, transitionPhase, type AgentState } from "../../agents/agent-state.js";
 import type { ProviderResponse, ConversationMessage } from "../../agents/providers/provider-core.interface.js";
 import type { Session } from "../../agents/orchestrator-session-manager.js";
+import { pushSystemTurn } from "../../agents/orchestrator-session-manager-last-user.js";
 import type { DMPolicy } from "../../security/dm-policy.js";
 import type { TaskUsageEvent, TaskProgressSignal } from "../../tasks/types.js";
 import type { ProgressLanguage } from "../../tasks/progress-signals.js";
@@ -356,7 +357,7 @@ export async function portDispatchReflection(
         if (params.responseText) {
           runCtx.session.messages.push({ role: "assistant", content: params.responseText });
         }
-        runCtx.session.messages.push({ role: "user", content: "Please create a new plan." });
+        pushSystemTurn(runCtx.session.messages, "Please create a new plan.");
         return { agentState: replanState, terminal: false, extendRequested: true };
       }
     } else {

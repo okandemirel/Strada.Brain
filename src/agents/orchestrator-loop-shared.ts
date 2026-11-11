@@ -25,6 +25,7 @@ import type { ConfidenceEstimator } from "../agent-core/routing/confidence-estim
 import type { MemoryRefresher } from "./memory-refresher.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { pushSystemTurn } from "./orchestrator-session-manager-last-user.js";
 
 /**
  * The first clause of a prompt — the ≤2s intent-ack fallback shared by the v1 port's
@@ -358,7 +359,8 @@ export const MAX_TOKENS_CONTINUATION_GATE =
 
 /**
  * Appends the current assistant response (if any) and a user continuation gate
- * into the session message list.
+ * into the session message list. The gate is a system turn (pushSystemTurn):
+ * the model reads it, the reads of what the user last said pass over it.
  *
  * Shared between orchestrator-reflection-handler and orchestrator-end-turn-handler.
  */
@@ -369,5 +371,5 @@ export function pushContinuationMessages(
   if (ctx.responseText) {
     ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
   }
-  ctx.session.messages.push({ role: "user", content: gate });
+  pushSystemTurn(ctx.session.messages, gate);
 }
