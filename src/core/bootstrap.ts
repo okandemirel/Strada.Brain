@@ -1866,9 +1866,10 @@ async function bootstrapImpl(
     dashboard.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   }
 
-  // The rate limiter's saved policy, its caps seeded from the ledger, the live limiter on the dashboard.
+  // The rate limiter's saved policy and seeded caps, and the ledger every direct provider call bills.
   wireSpendCounters({
     rateLimiter,
+    metrics,
     overrides: sharedDaemonStorage,
     ledger: sharedUnifiedBudgetManager,
     dashboard,

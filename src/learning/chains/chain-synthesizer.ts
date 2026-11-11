@@ -17,6 +17,7 @@ import type { LearningStorage } from "../storage/learning-storage.js";
 import type { ToolRegistry } from "../../core/tool-registry.js";
 import type { IEventEmitter, LearningEventMap } from "../../core/event-bus.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
+import { billedChat, type OwnerlessBilling } from "../../agents/providers/billed-call.js";
 import type {
   CandidateChain,
   ToolChainConfig,
@@ -47,6 +48,9 @@ import { getLogger } from "../../utils/logger.js";
 // =============================================================================
 // LLM PROMPT
 // =============================================================================
+
+/** Background learning: no run awaits it, so it books under "daemon". */
+const CHAIN_SYNTHESIS_BILLING: OwnerlessBilling = { purpose: "chain-synthesis", ownerless: "daemon" };
 
 const SYNTHESIS_SYSTEM_PROMPT = `You are a tool chain synthesizer for an AI development assistant.
 
@@ -423,7 +427,9 @@ export class ChainSynthesizer {
     const userMessage = this.buildUserMessage(candidate);
 
     try {
-      const response = await this.provider.chat(
+      const response = await billedChat(
+        this.provider,
+        CHAIN_SYNTHESIS_BILLING,
         SYNTHESIS_SYSTEM_PROMPT,
         [{ role: "user" as const, content: userMessage }],
         [],

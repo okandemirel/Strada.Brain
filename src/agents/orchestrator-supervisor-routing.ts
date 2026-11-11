@@ -719,7 +719,7 @@ export function resolveConsensusReviewAssignment(
 }
 
 export function recordProviderUsage(
-  ctx: SupervisorRoutingContext,
+  ctx: Pick<SupervisorRoutingContext, "metrics" | "rateLimiter">,
   providerName: string,
   usage: ProviderResponse["usage"] | undefined,
   onUsage?: (usage: TaskUsageEvent) => void,

@@ -173,6 +173,10 @@ export interface StreamOrChatMode {
  * `mode.streaming: false` is STREAMING_ENABLED=false: the operator asked for no
  * provider streaming (a proxy that breaks SSE, say), so the call goes to `chat()`
  * even when the provider could stream — the same rule the model turns follow.
+ *
+ * It bills nothing. A caller that does not bill the reply itself (the engine's
+ * paths do) calls billedStreamOrChatText (billed-call.ts) instead — guarded by
+ * billed-call-tripwire.test.ts (task #71).
  */
 export async function streamOrChatText(
   provider: IAIProvider,

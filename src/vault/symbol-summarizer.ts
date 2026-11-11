@@ -1,4 +1,8 @@
 import type { IAIProvider } from '../agents/providers/provider.interface.js';
+import { billedChat, type OwnerlessBilling } from '../agents/providers/billed-call.js';
+
+/** A user asks for the summary from the dashboard (POST /api/vaults/:id/symbols/:symbolId/summarize), not the daemon. */
+const SYMBOL_SUMMARY_BILLING: OwnerlessBilling = { purpose: 'vault-symbol-summary', ownerless: 'chat' };
 
 export interface SummarizerDeps {
   provider: IAIProvider;
@@ -28,7 +32,9 @@ export async function summarizeSymbol(
     `Focus on its purpose and behavior. Be concise.\n\n${content}`;
 
   try {
-    const response = await deps.provider.chat(
+    const response = await billedChat(
+      deps.provider,
+      SYMBOL_SUMMARY_BILLING,
       '',
       [{ role: 'user', content: prompt }],
       [],

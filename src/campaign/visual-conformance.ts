@@ -26,8 +26,10 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { billedChat } from "../agents/providers/billed-call.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
+import { VISUAL_CONFORMANCE_BILLING } from "./campaign-billing.js";
 import { writtenBefore } from "./file-freshness.js";
 
 /** Headings whose body describes how the game should look. */
@@ -397,7 +399,9 @@ export async function judgeVisualConformance(params: {
   }
 
   try {
-    const response = await visionProvider.provider.chat(
+    const response = await billedChat(
+      visionProvider.provider,
+      VISUAL_CONFORMANCE_BILLING,
       VISION_SYSTEM,
       [
         {

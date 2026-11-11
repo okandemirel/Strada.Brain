@@ -561,7 +561,7 @@ export class SupervisorBrain {
       }
 
       // Step 5: Match capabilities
-      const taggedNodes = await this.capabilityMatcher.matchNodes(leafNodes);
+      const taggedNodes = await this.capabilityMatcher.matchNodes(leafNodes, { onUsage: context.onUsage });
 
       // Check abort after matching
       if (externalSignal?.aborted || internalSignal.aborted) {

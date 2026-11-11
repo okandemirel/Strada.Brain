@@ -15,6 +15,7 @@ import type {
   MessageContent,
 } from "../../agents/providers/provider-core.interface.js";
 import type { TaskExecutionStore } from "./task-execution-store.js";
+import { billedChat, type OwnerlessBilling } from "../../agents/providers/billed-call.js";
 
 import { getLogger } from "../../utils/logger.js";
 
@@ -44,6 +45,9 @@ export interface SessionSummary {
 // =============================================================================
 // CONSTANTS
 // =============================================================================
+
+/** Fire-and-forget memory housekeeping after a session (no run awaits it): books under "daemon", as memory consolidation does. */
+const SESSION_SUMMARY_BILLING: OwnerlessBilling = { purpose: "session-summary", ownerless: "daemon" };
 
 const EMPTY_SUMMARY: Readonly<SessionSummary> = Object.freeze({
   summary: "",
@@ -98,7 +102,9 @@ export class SessionSummarizer {
         content: formattedTranscript,
       };
 
-      const response = await this.llmProvider.chat(
+      const response = await billedChat(
+        this.llmProvider,
+        SESSION_SUMMARY_BILLING,
         SYSTEM_PROMPT,
         [userMessage],
         [],

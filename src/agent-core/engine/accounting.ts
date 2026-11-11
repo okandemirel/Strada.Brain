@@ -28,6 +28,9 @@ import type {
 } from "../routing/routing-types.js";
 import type { ClassifyFailureParams, FailureVerdictContribution } from "../runner/orchestrator-port.js";
 import type { EngineRunContext } from "./engine-deps.js";
+import type { OwnerlessBilling, ProviderUsageLedger } from "../../agents/providers/billed-call.js";
+import type { BudgetSource, CostMetadata } from "../../budget/budget-types.js";
+import { estimateCostWithCache } from "../../common/cost-model.js";
 
 /** The dependency slice the accounting functions read (grows only with this module). */
 export interface AccountingDeps {
@@ -133,6 +136,50 @@ export function recordProviderUsage(
   modelId?: string,
 ): void {
   recordProviderUsageHelper(deps.getSupervisorRoutingContext(), providerName, usage, onUsage, modelId);
+}
+
+/** What the process ledger writes to: the counters a model turn bills, and the cost ledger. */
+export interface ProviderUsageLedgerDeps {
+  /** metrics (/api/metrics) and the rate limiter's daily wall: what recordProviderUsage writes. */
+  readonly counters: Pick<SupervisorRoutingContext, "metrics" | "rateLimiter">;
+  /** The cost ledger (UnifiedBudgetManager): where a call that belongs to no run is booked. */
+  readonly budget?: { recordCost(amount: number, source: BudgetSource, metadata: CostMetadata): void };
+}
+
+/**
+ * The ledger every direct provider call bills through (billed-call.ts, task #71).
+ *
+ * A call that is part of a run takes the run's own path: the hook a model turn
+ * bills through, with the run's onUsage — which books the run's cost ledger row
+ * itself, so nothing is booked twice. A call that belongs to no run takes the
+ * same hook, and its cost is booked to the ledger under the source the caller
+ * named, the way the background executor books a task's (cache-aware price;
+ * a free model books nothing).
+ */
+export function createProviderUsageLedger(deps: ProviderUsageLedgerDeps): ProviderUsageLedger {
+  return {
+    record(served, billing) {
+      const onUsage = "run" in billing ? billing.run.onUsage : ownerlessUsageSink(deps.budget, billing);
+      recordProviderUsageHelper(deps.counters, served.provider, served.usage, onUsage, served.model);
+    },
+  };
+}
+
+function ownerlessUsageSink(
+  budget: ProviderUsageLedgerDeps["budget"],
+  billing: OwnerlessBilling,
+): ((usage: TaskUsageEvent) => void) | undefined {
+  if (!budget) return undefined;
+  return (usage) => {
+    const costUsd = estimateCostWithCache(usage, usage.provider);
+    if (costUsd <= 0) return;
+    budget.recordCost(costUsd, billing.ownerless, {
+      model: usage.model ?? usage.provider,
+      tokensIn: usage.inputTokens,
+      tokensOut: usage.outputTokens,
+      triggerName: billing.purpose,
+    });
+  };
 }
 
 export function recordExecutionTrace(deps: AccountingDeps, params: RecordExecutionTraceParams): void {

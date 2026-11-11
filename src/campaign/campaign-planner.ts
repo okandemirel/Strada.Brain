@@ -13,9 +13,9 @@ import { z } from "zod";
 import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
 import type { IAIProvider, ProviderCallOptions } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
-import { streamOrChatText } from "../agents/providers/provider.interface.js";
-import { milestoneLadderSchema } from "./types.js";
-import type { MilestoneLadder, PlannedLadder } from "./types.js";
+import { billedStreamOrChatText } from "../agents/providers/billed-call.js";
+import { PLANNING_BILLING } from "./campaign-billing.js";
+import { milestoneLadderSchema, type MilestoneLadder, type PlannedLadder } from "./types.js";
 import { measureGddScope, uncoveredSections, type GddScope } from "./gdd-scope.js";
 import { ACCEPTANCE_DIR, DEFAULT_SCOPE_GATE_MODE, type ScopeGateMode } from "./scope-types.js";
 import {
@@ -280,8 +280,8 @@ export class CampaignPlanner {
     systemPrompt: string,
     userMessage: string,
     options?: ProviderCallOptions,
-  ): ReturnType<typeof streamOrChatText> {
-    return streamOrChatText(provider, systemPrompt, userMessage, options, { streaming: this.options.streamingEnabled });
+  ): ReturnType<typeof billedStreamOrChatText> {
+    return billedStreamOrChatText(provider, PLANNING_BILLING, systemPrompt, userMessage, options, { streaming: this.options.streamingEnabled });
   }
 
   /**
