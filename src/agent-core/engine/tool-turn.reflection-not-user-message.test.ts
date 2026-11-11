@@ -6,8 +6,9 @@
  * (buildToolResultContentBlocks). The session manager's last-user-message read returned that
  * text, so the readers that still use it mid-run (the interactive memory-refresh query, the
  * interactive PLANNING/REPLANNING handler, proactive decomposition) worked from the system's own
- * prompt instead of the request. A worker session holds no user turn, so the read is "" and the
- * reviewers fall back to the task description; an interactive one returns the person's words.
+ * prompt instead of the request. A worker's fresh session opens on one user turn that carries the
+ * task (Orchestrator.buildFreshRunSession), so the read is the task; an interactive one returns the
+ * person's words; a session with no user turn reads "" and the reviewers fall back to the task.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -36,17 +37,18 @@ function sessionManager(): SessionManager {
   } as unknown as ConstructorParameters<typeof SessionManager>[0]);
 }
 
-function setup(mode: "background" | "interactive") {
+/** `firstTurn`: the user turn the session opens on; none for a session that holds no user turn. */
+function setup(mode: "background" | "interactive", firstTurn?: string) {
   const sm = sessionManager();
   const session = sm.getOrCreateSession("chat-1");
-  if (mode === "interactive") sm.appendVisibleUserMessage(session, SAID);
+  if (firstTurn !== undefined) sm.appendVisibleUserMessage(session, firstTurn);
   const bundle = createAutonomyBundle({ prompt: TASK, iterationBudget: 20 });
   const queries: string[] = [];
   const runCtx = {
     iterationHealth: new IterationHealthTracker(Date.now()),
     session,
-    // What setup read from this session: a worker's holds no user turn.
-    requestText: mode === "interactive" ? SAID : "",
+    // What setup read from this session before the first tool turn.
+    requestText: firstTurn ?? "",
     chatId: "chat-1",
     toolExecMode: mode,
     executionJournal: bundle.executionJournal,
@@ -91,7 +93,25 @@ const batch = (n: number) =>
   [1, 2].map((k) => ({ id: `tc-${n}-${k}`, name: "file_read", input: { path: `src/part-${n}-${k}.ts` } })) as unknown as ToolCall[];
 
 describe("the system's text on a tool-result turn is not what the user last said", () => {
-  it("a worker: after a reflection-phase tool turn the read is empty and the reviewers get the task", async () => {
+  it("a worker: after a reflection-phase tool turn the read is the task its session opened on", async () => {
+    // A worker's fresh session: the task is its one user turn (buildFreshRunSession).
+    const { sm, session, runCtx, deps, taskPrompts } = setup("background", TASK);
+    const state = transitionPhase(createInitialState(TASK), AgentPhase.EXECUTING);
+
+    await portExecuteToolTurn(deps, [batch(1), undefined, state, "Reading"], runCtx);
+    // The reflection prompt rides on the tool-result turn just pushed.
+    expect(JSON.stringify(session.messages.at(-1))).toContain(REFLECTION_HEADER);
+
+    expect(sm.extractLastUserMessage(session)).toBe(TASK);
+    const reflectionDeps = { sessionManager: sm, buildInterventionDeps: vi.fn() } as unknown as ReflectionDeps;
+    const core = buildReflectionCoreContext(reflectionDeps, runCtx, "done", undefined, 0);
+    expect(core.prompt).toBe(TASK);
+
+    await portExecuteToolTurn(deps, [batch(2), undefined, state, "Reading again"], runCtx);
+    expect(taskPrompts).toEqual([TASK, TASK]);
+  });
+
+  it("a session with no user turn: the read is empty and the reviewers get the task description", async () => {
     const { sm, session, runCtx, deps, taskPrompts } = setup("background");
     const state = transitionPhase(createInitialState(TASK), AgentPhase.EXECUTING);
 
@@ -109,7 +129,7 @@ describe("the system's text on a tool-result turn is not what the user last said
   });
 
   it("an interactive session: the memory-refresh query after a tool turn is the person's words", async () => {
-    const { sm, session, runCtx, deps, queries } = setup("interactive");
+    const { sm, session, runCtx, deps, queries } = setup("interactive", SAID);
     const state = transitionPhase(createInitialState(TASK), AgentPhase.EXECUTING);
 
     await portExecuteToolTurn(deps, [batch(1), undefined, state, "Reading"], runCtx);
