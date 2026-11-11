@@ -1537,6 +1537,8 @@ async function bootstrapImpl(
     metrics,
     // The daily token quota and budget caps: without it a delegate's spend never counted toward them.
     rateLimiter,
+    // Task-metric rows (learning_stats, the dashboard's task metrics); a delegate's only as a subtask.
+    metricsRecorder,
     trajectoryReplayRetriever,
     // THE PIPELINE THE RUN TALKS TO. Without these two the orchestrator holds
     // nulls: guidance exposure ("this rule was in the prompt"), run credit
@@ -1590,7 +1592,6 @@ async function bootstrapImpl(
     streamingEnabled: config.streamingEnabled,
     stradaDeps,
     stradaConfig: config.strada,
-    metricsRecorder,
     goalDecomposer,
     interruptedGoalTrees,
     getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
@@ -2035,7 +2036,6 @@ async function bootstrapImpl(
         toolRegistry,
         channel,
         ragPipeline,
-        metricsRecorder,
         goalDecomposer,
         identityManager,
         cachedEmbeddingProvider,
