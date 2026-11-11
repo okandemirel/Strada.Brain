@@ -7,6 +7,7 @@
  * caller maps back to the loop control flow (`continue`, `return`, etc.).
  */
 
+import type { ParentRunScope } from "../agent-core/runner/agent-runner.js";
 import type { AgentState } from "./agent-state.js";
 import type { ConversationMessage, ProviderResponse } from "./providers/provider.interface.js";
 import type {
@@ -150,6 +151,8 @@ export interface EndTurnCoreContext {
   readonly recordPhaseOutcome: (params: RecordPhaseOutcomeParams) => void;
   readonly buildPhaseOutcomeTelemetry: (params: BuildPhaseOutcomeTelemetryParams) => PhaseOutcomeTelemetry | undefined;
   readonly usageHandler: ((usage: TaskUsageEvent) => void) | undefined;
+  /** The calling run's scope, lent to a loop-recovery delegate (see ParentRunScope). */
+  readonly parentRun?: ParentRunScope;
 }
 
 export interface BgEndTurnContext extends EndTurnCoreContext {
