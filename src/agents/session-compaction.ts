@@ -72,6 +72,8 @@ export function capRollingSummary(summary: string): string {
 
 import type { ConversationMessage } from "./providers/provider-core.interface.js";
 import { createTokenBuckets, type TokenBuckets } from "../common/token-estimator.js";
+import { isTaskTurn } from "./orchestrator-session-manager-task-turn.js";
+import { isSystemTurn } from "./orchestrator-session-manager-last-user.js";
 
 // =============================================================================
 // TYPES — broader than provider-core's ConversationMessage to support summaries
@@ -468,8 +470,15 @@ function stage3SlidingWindow(groups: MessageGroup[], maxGroups: number): Message
   return [...sys, ...(lastUser >= 0 && lastUser < cut ? [rest[lastUser]!] : []), ...rest.slice(cut)];
 }
 
-/** Index of the newest group that is a user turn someone wrote (not an orphaned tool result). */
+/**
+ * Index of the user group stages 2-4 keep verbatim: the run's task, the newest TaskTurn. Picking
+ * the newest user turn of any kind kept a later plain-text turn the loop wrote (a gate, a recall,
+ * a failure notice) and sent the task to the summary's 800-char preview (board #63). A history
+ * without a TaskTurn (written before the mark) keeps the newest user turn someone wrote.
+ */
 function newestUserGroup(groups: readonly MessageGroup[]): number {
+  const task = findLastIndex(groups, (g) => g.kind === "user" && isTaskTurn(g.messages[0] as ConversationMessage));
+  if (task >= 0) return task;
   return findLastIndex(groups, (g) => g.kind === "user" && isRealUserTurn(g.messages[0]!));
 }
 
@@ -540,9 +549,9 @@ function findLastIndex<T>(items: readonly T[], predicate: (item: T) => boolean):
   return -1;
 }
 
-/** A user turn a person (or the task) wrote — not a tool result whose call is gone. */
+/** A user turn a person (or the task) wrote — not a tool result whose call is gone, not a gate (SystemTurn). */
 function isRealUserTurn(msg: CompactableMessage): boolean {
-  if (msg.role !== "user") return false;
+  if (msg.role !== "user" || isSystemTurn(msg)) return false;
   if (typeof msg.content === "string") return msg.content.trim().length > 0;
   return (msg.content as readonly ContentBlock[]).some((b) => b.type !== "tool_result");
 }

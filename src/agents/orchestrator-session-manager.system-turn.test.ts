@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import { SessionManager } from "./orchestrator-session-manager.js";
 import { isSystemTurn, pushSystemTurn } from "./orchestrator-session-manager-last-user.js";
 import { compactSession } from "./session-compaction.js";
+import { isTaskTurn } from "./orchestrator-session-manager-task-turn.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { OllamaProvider } from "./providers/ollama.js";
@@ -77,8 +78,18 @@ describe("a system turn is not what the user last said", () => {
       const result = compactSession(messages, { maxTokens, preserveRecent: 4 });
       expect(result.compacted).toBe(true);
       const gateTurn = result.messages.at(-1)!;
-      expect(String(gateTurn.content).startsWith(GATE.slice(0, 10))).toBe(true);
       expect(isSystemTurn(gateTurn)).toBe(true);
+      // The person's turn is the run's task: compaction keeps it beside the gate (board #63).
+      const said = result.messages.filter((m) => isTaskTurn(m));
+      expect(said).toHaveLength(1);
+      if (maxTokens === 600) {
+        expect(String(gateTurn.content).startsWith(GATE.slice(0, 10))).toBe(true);
+        expect(said[0]!.content).toBe(SAID);
+      } else {
+        // 40 tokens is shared by the two pinned turns: both are cut to the marker, neither dropped.
+        expect(String(gateTurn.content)).toContain("truncated to fit the context window");
+        expect(String(said[0]!.content)).toContain("truncated to fit the context window");
+      }
     }
   });
 
