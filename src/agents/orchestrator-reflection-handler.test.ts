@@ -183,7 +183,7 @@ describe("handleBgReflectionReplan", () => {
 
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     expect(messages).toContainEqual({ role: "assistant", content: "The current approach is broken." });
-    expect(messages).toContainEqual({ role: "user", content: "Please create a new plan." });
+    expect(messages).toContainEqual({ role: "user", content: "Please create a new plan.", systemTurn: true });
   });
 
   it("does not push assistant message when responseText is undefined", () => {
@@ -195,7 +195,7 @@ describe("handleBgReflectionReplan", () => {
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     const assistantMessages = messages.filter((m) => m.role === "assistant");
     expect(assistantMessages).toHaveLength(0);
-    expect(messages).toContainEqual({ role: "user", content: "Please create a new plan." });
+    expect(messages).toContainEqual({ role: "user", content: "Please create a new plan.", systemTurn: true });
   });
 
   it("calls recordPhaseOutcome with status 'replanned'", () => {
@@ -281,7 +281,7 @@ describe("handleBgReflectionContinue", () => {
 
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     expect(messages).toContainEqual({ role: "assistant", content: "Continuing the analysis." });
-    expect(messages).toContainEqual({ role: "user", content: "Please continue." });
+    expect(messages).toContainEqual({ role: "user", content: "Please continue.", systemTurn: true });
   });
 
   it("does not push any messages when there are tool calls", async () => {
@@ -303,7 +303,7 @@ describe("handleBgReflectionContinue", () => {
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     const assistantMessages = messages.filter((m) => m.role === "assistant");
     expect(assistantMessages).toHaveLength(0);
-    expect(messages).toContainEqual({ role: "user", content: "Please continue." });
+    expect(messages).toContainEqual({ role: "user", content: "Please continue.", systemTurn: true });
   });
 
   it("finishes when a text-only continue draft is already finalizable", async () => {
@@ -402,7 +402,7 @@ describe("handleInteractiveReflectionContinue", () => {
     expect(result.flow).toBe("continue");
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     expect(messages).toContainEqual({ role: "assistant", content: "Let me keep going." });
-    expect(messages).toContainEqual({ role: "user", content: "Please continue." });
+    expect(messages).toContainEqual({ role: "user", content: "Please continue.", systemTurn: true });
   });
 
   it("routes text-only reflection continue through loop recovery when tracker is present", async () => {
@@ -438,7 +438,7 @@ describe("handleInteractiveReflectionContinue", () => {
     }
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     expect(messages).toContainEqual({ role: "assistant", content: "Let me keep going." });
-    expect(messages).toContainEqual({ role: "user", content: "[LOOP RECOVERY] Use tools now." });
+    expect(messages).toContainEqual({ role: "user", content: "[LOOP RECOVERY] Use tools now.", systemTurn: true });
 
     vi.restoreAllMocks();
   });
@@ -453,7 +453,7 @@ describe("handleInteractiveReflectionContinue", () => {
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     const assistantMessages = messages.filter((m) => m.role === "assistant");
     expect(assistantMessages).toHaveLength(0);
-    expect(messages).toContainEqual({ role: "user", content: "Please continue." });
+    expect(messages).toContainEqual({ role: "user", content: "Please continue.", systemTurn: true });
   });
 
   it("returns EXECUTING state with skipLastReflection applied", async () => {

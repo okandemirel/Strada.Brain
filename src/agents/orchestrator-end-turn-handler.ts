@@ -891,8 +891,7 @@ export async function handleInteractiveEndTurn(
           newState: transitionToVerifierReplanModel(agentState, ctx.responseText),
         };
       }
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-      ctx.session.messages.push({ role: "user", content: loopRecovery?.gate ?? visibilityDecision.gate });
+      pushContinuationMessages(ctx, loopRecovery?.gate ?? visibilityDecision.gate);
       return { flow: "continue", newState: agentState };
     }
 
