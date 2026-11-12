@@ -564,26 +564,97 @@ function cutText(text: string, ratio: number): string {
   return keep >= text.length ? text : text.slice(0, keep) + TRUNCATION_MARKER;
 }
 
-/** Shorten every payload of a group by the same ratio (tool inputs to their compacted form). */
+/**
+ * Stands in for an image stage 4 removed from a pinned turn: which image of the turn it was and
+ * how many the turn had, in the image's own place (board #76). An image counts a fixed
+ * IMAGE_TOKEN_ESTIMATE that no ratio can cut, so a turn of five images could not fit an
+ * 8000-token target and the result overran it.
+ */
+export function imageNote(position: number, total: number): string {
+  return `[image ${position} of ${total} removed to fit the context window]`;
+}
+
+const IMAGE_NOTE = /^\[image \d+ of \d+ removed to fit the context window\]$/;
+
+/** Images of a group in reading order, the ones inside an array tool_result included. */
+function countImages(messages: readonly CompactableMessage[]): number {
+  const inBlocks = (blocks: readonly ContentBlock[]): number => blocks.reduce((n, b) =>
+    n + (b.type === "image" ? 1 : b.type === "tool_result" && typeof b.content !== "string" ? inBlocks(b.content) : 0), 0);
+  return messages.reduce((n, m) => n + (typeof m.content === "string" ? 0 : inBlocks(m.content as readonly ContentBlock[])), 0);
+}
+
+/** Replace the group's oldest `drop` images by their notes; order and the newer images stay. */
+function replaceOldestImages(messages: readonly CompactableMessage[], drop: number): CompactableMessage[] {
+  const total = countImages(messages);
+  let ordinal = 0;
+  const visit = (b: ContentBlock): ContentBlock => {
+    if (b.type === "image") {
+      ordinal++;
+      return ordinal <= drop ? { type: "text", text: imageNote(ordinal, total) } : b;
+    }
+    if (b.type === "tool_result" && typeof b.content !== "string") return { ...b, content: b.content.map(visit) };
+    return b;
+  };
+  return messages.map((msg) => typeof msg.content === "string"
+    ? msg
+    : ({ ...msg, content: (msg.content as readonly ContentBlock[]).map(visit) } as CompactableMessage));
+}
+
+/** As few of the oldest images as the group needs to fit, all of them when even that is not enough. */
+function dropOldestImages(messages: readonly CompactableMessage[], maxTokens: number): CompactableMessage[] {
+  const total = countImages(messages);
+  let current = [...messages];
+  for (let drop = 1; drop <= total && estimateTokens(current) > maxTokens; drop++) {
+    current = replaceOldestImages(messages, drop);
+  }
+  return current;
+}
+
+/**
+ * A tool input shortened with its payloads. At the floor (ratio 0) it is `{}`: compactToolInput
+ * keeps every key, so an input of many small keys had no bound.
+ */
+function shrinkToolInput(input: unknown, ratio: number): unknown {
+  return ratio <= 0 ? {} : compactToolInput(input);
+}
+
+function shrinkBlock(b: ContentBlock, ratio: number): ContentBlock {
+  switch (b.type) {
+    case "text": return IMAGE_NOTE.test(b.text) ? b : { ...b, text: cutText(b.text, ratio) };
+    case "tool_use": return { ...b, input: shrinkToolInput(b.input, ratio) };
+    case "tool_result":
+      return typeof b.content === "string"
+        ? { ...b, content: cutText(b.content, ratio) }
+        : { ...b, content: b.content.map((inner) => shrinkBlock(inner, ratio)) };
+    case "image": return b;
+  }
+}
+
+/**
+ * Shorten every payload of a group by the same ratio. Ratio 0 is a real floor: text and tool
+ * results become the marker and tool inputs `{}`; images are already notes by then (shrinkToTokens
+ * replaces them first). Every block is a constant size, so the floor grows with the block count,
+ * never with the content.
+ */
 function shrinkGroup(messages: readonly CompactableMessage[], ratio: number): CompactableMessage[] {
   return messages.map((msg) => {
     const calls = toolCallsOf(msg);
     const base = calls.length > 0
-      ? ({ ...msg, tool_calls: calls.map((tc) => ({ ...tc, input: compactToolInput(tc.input) })) } as CompactableMessage)
+      ? ({ ...msg, tool_calls: calls.map((tc) => ({ ...tc, input: shrinkToolInput(tc.input, ratio) })) } as CompactableMessage)
       : msg;
     if (typeof base.content === "string") return { ...base, content: cutText(base.content, ratio) } as CompactableMessage;
-    const blocks = (base.content as readonly ContentBlock[]).map((b): ContentBlock => {
-      if (b.type === "text") return { ...b, text: cutText(b.text, ratio) };
-      if (b.type === "tool_result" && typeof b.content === "string") return { ...b, content: cutText(b.content, ratio) };
-      return b;
-    });
+    const blocks = (base.content as readonly ContentBlock[]).map((b) => shrinkBlock(b, ratio));
     return { ...base, content: blocks } as CompactableMessage;
   });
 }
 
-/** Shrink a group until it fits `maxTokens` (a few proportional passes, then a hard floor). */
+/**
+ * Shrink a group until it fits `maxTokens`: first its oldest images become notes (the text,
+ * often the task, is what the turn says), then a few proportional passes, then the floor.
+ */
 function shrinkToTokens(messages: readonly CompactableMessage[], maxTokens: number): CompactableMessage[] {
-  let current = [...messages];
+  if (estimateTokens(messages) <= maxTokens) return [...messages];
+  let current = dropOldestImages(messages, maxTokens);
   for (let pass = 0; pass < 4; pass++) {
     const cost = estimateTokens(current);
     if (cost <= maxTokens) return current;

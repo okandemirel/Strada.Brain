@@ -11,7 +11,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { ConversationMessage } from "./providers/provider-core.interface.js";
-import { compactSession, estimateTokens } from "./session-compaction.js";
+import { compactSession, estimateTokens, imageNote } from "./session-compaction.js";
 import { taskTurn, isTaskTurn } from "./orchestrator-session-manager-task-turn.js";
 import { pushSystemTurn } from "./orchestrator-session-manager-last-user.js";
 
@@ -130,11 +130,10 @@ describe("a task turn too large for the budget (board #63, steer 4)", () => {
     expect(textOf(kept!)).toBe(TASK);
   });
 
-  it("an image task larger than the whole budget: the text is cut, the image stays, and the result overruns (recorded)", () => {
-    // An image counts a fixed 1600 tokens and shrinkGroup cannot cut it. With a budget under
-    // that, the pinned task alone exceeds it: compaction returns the task with its text cut to
-    // the marker and its image intact, over budget. This pins that behaviour as evidence; it is
-    // the provider's request that fails then, not a silent loss of the task.
+  it("an image task larger than the whole budget: the image becomes a note and the result fits (board #76)", () => {
+    // An image counts a fixed 1600 tokens. #63 recorded that stage 4 could not cut it, so a
+    // pinned task with more image than budget came back over maxTokens. Stage 4 now replaces
+    // the image with a note saying which image it was; the task's text and its mark stay.
     const imageTask = taskTurn([
       { type: "text", text: TASK },
       { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
@@ -142,10 +141,11 @@ describe("a task turn too large for the budget (board #63, steer 4)", () => {
     const result = compactSession(history(imageTask, "plain"), { maxTokens: 1000, preserveRecent: 6 });
 
     expect(result.stageApplied).toBe("hard_truncation");
+    expect(result.finalTokens).toBeLessThanOrEqual(1000);
     const kept = result.messages.find((m) => isTaskTurn(m));
     expect(kept).toBeDefined();
-    expect(Array.isArray(kept!.content) && kept!.content.some((b) => b.type === "image")).toBe(true);
-    expect(result.finalTokens).toBeGreaterThan(1000);
-    expect(estimateTokens([kept!])).toBeGreaterThanOrEqual(1600);
+    expect(Array.isArray(kept!.content) && kept!.content.some((b) => b.type === "image")).toBe(false);
+    expect(textOf(kept!)).toBe(TASK + imageNote(1, 1));
+    expect(estimateTokens([kept!])).toBeLessThan(1600);
   });
 });
