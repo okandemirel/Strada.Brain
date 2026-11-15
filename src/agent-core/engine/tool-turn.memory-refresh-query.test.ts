@@ -94,12 +94,14 @@ const read = (n: number) =>
 
 describe("the interactive memory refresh reads the run's request", () => {
   it("every tool turn asks memory about the request, not the tool-result turn", async () => {
-    const { sm, session, runCtx, deps, queries } = setup();
+    const { session, runCtx, deps, queries } = setup();
     const state = transitionPhase(createInitialState(REQUEST), AgentPhase.EXECUTING);
 
     await portExecuteToolTurn(deps, [read(1), undefined, state, "Reading the planner"], runCtx);
-    // What the session's last user-role message says now: the tool-result turn, not the request.
-    expect(sm.extractLastUserMessage(session as never)).not.toBe(REQUEST);
+    // What the session's last user-role message holds now: the tool-result turn, not the request.
+    const last = session.messages.at(-1) as { role: string; content: unknown };
+    expect(last.role).toBe("user");
+    expect(last.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "tool_result" })]));
 
     await portExecuteToolTurn(deps, [read(2), undefined, state, "Reading the second file"], runCtx);
     expect(queries).toEqual([REQUEST, REQUEST]);

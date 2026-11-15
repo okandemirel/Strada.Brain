@@ -4,11 +4,13 @@
  * After a tool batch the tool turn pushes a user-role turn: the tool results, then gate notes,
  * the plan-state injection and, in the reflection phase, the reflection prompt
  * (buildToolResultContentBlocks). The session manager's last-user-message read returned that
- * text, so the readers that still use it mid-run (the interactive memory-refresh query, the
- * interactive PLANNING/REPLANNING handler, proactive decomposition) worked from the system's own
- * prompt instead of the request. A worker's fresh session opens on one user turn that carries the
- * task (Orchestrator.buildFreshRunSession), so the read is the task; an interactive one returns the
- * person's words; a session with no user turn reads "" and the reviewers fall back to the task.
+ * text, so the readers that still use it mid-run (the interactive PLANNING/REPLANNING handler,
+ * proactive decomposition) worked from the system's own prompt instead of the request. The
+ * memory-refresh query is not one of them: it reads the request pinned at setup
+ * (EngineRunContext.requestText, tool-turn.memory-refresh-query.test.ts). A worker's fresh
+ * session opens on one user turn that carries the task (Orchestrator.buildFreshRunSession), so
+ * the read is the task; an interactive one returns the person's words; a session with no user
+ * turn reads "" and the reviewers fall back to the task.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -128,13 +130,14 @@ describe("the system's text on a tool-result turn is not what the user last said
     expect(taskPrompts).toEqual([TASK, TASK]);
   });
 
-  it("an interactive session: the memory-refresh query after a tool turn is the person's words", async () => {
+  it("an interactive session: after a reflection-phase tool turn the read is the person's words", async () => {
     const { sm, session, runCtx, deps, queries } = setup("interactive", SAID);
     const state = transitionPhase(createInitialState(TASK), AgentPhase.EXECUTING);
 
     await portExecuteToolTurn(deps, [batch(1), undefined, state, "Reading"], runCtx);
     expect(JSON.stringify(session.messages.at(-1))).toContain(REFLECTION_HEADER);
 
+    // The memory-refresh query reads runCtx.requestText (d8244301), not the read below.
     expect(queries).toEqual([SAID]);
     expect(sm.extractLastUserMessage(session)).toBe(SAID);
   });
