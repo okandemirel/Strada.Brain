@@ -502,15 +502,14 @@ function stage4HardTruncation(messages: readonly CompactableMessage[], maxTokens
 
   const sysTokens = estimateTokens(sys);
   const pinnedTokens = [...pinned].reduce((sum, idx) => sum + estimateTokens(groups[idx]!.messages), 0);
-  // The pinned turns take what they need, or half the budget when the summary competes for it.
-  const pinnedCap = sysTokens + pinnedTokens <= maxTokens ? maxTokens - sysTokens : Math.floor(maxTokens / 2);
+  // The pinned turns take what they need. When they do not fit, the summary keeps what it really
+  // holds, at most half the budget, and the pinned turns get the rest (board #77): a flat half
+  // left an 8000-token target with one screenshot of six and 80% of it empty.
+  const pinnedCap = sysTokens + pinnedTokens <= maxTokens
+    ? maxTokens - sysTokens
+    : maxTokens - Math.min(sysTokens, Math.floor(maxTokens / 2));
   const keptGroups = new Map<number, CompactableMessage[]>();
-  let pinnedUsed = 0;
-  for (const idx of pinned) {
-    const shrunk = shrinkToTokens(groups[idx]!.messages, Math.max(1, Math.floor(pinnedCap / pinned.size)));
-    keptGroups.set(idx, shrunk);
-    pinnedUsed += estimateTokens(shrunk);
-  }
+  const pinnedUsed = sharePinned(groups, pinned, pinnedCap, keptGroups);
 
   let budget = maxTokens - pinnedUsed - sysTokens;
   if (budget < 0) {
@@ -541,6 +540,30 @@ function stage4HardTruncation(messages: readonly CompactableMessage[], maxTokens
   }
   const kept = [...keptGroups.entries()].sort((x, y) => x[0] - y[0]).flatMap(([, msgs]) => msgs);
   return [...sys.filter((m) => m.role !== "system" || String(m.content).length > 0), ...kept];
+}
+
+/**
+ * Split `cap` among the pinned turns, the smallest first: each gets an equal share of what is
+ * left, and what a turn does not use passes on to the larger ones (board #77). An equal split cut
+ * the large turn to its half while the small one left most of its half empty.
+ */
+function sharePinned(
+  groups: readonly MessageGroup[],
+  pinned: ReadonlySet<number>,
+  cap: number,
+  kept: Map<number, CompactableMessage[]>,
+): number {
+  const bySize = [...pinned]
+    .map((idx) => ({ idx, need: estimateTokens(groups[idx]!.messages) }))
+    .sort((x, y) => x.need - y.need);
+  let used = 0;
+  bySize.forEach(({ idx }, i) => {
+    const share = Math.max(1, Math.floor((cap - used) / (bySize.length - i)));
+    const shrunk = shrinkToTokens(groups[idx]!.messages, share);
+    kept.set(idx, shrunk);
+    used += estimateTokens(shrunk);
+  });
+  return used;
 }
 
 function findLastIndex<T>(items: readonly T[], predicate: (item: T) => boolean): number {
