@@ -27,6 +27,11 @@ describe("complaintsAboutUnit", () => {
     expect(complaintsAboutUnit("Failed to load something odd", unitPath)).toEqual(["Failed to load something odd"]);
   });
 
+  it("keeps a 'Warning:' or 'Error:' line: a word before the colon is not a file", () => {
+    const lines = ["Warning: unit file changed on disk", "Error: bad", "Failed: something"];
+    expect(complaintsAboutUnit(lines.join("\n"), unitPath)).toEqual(lines);
+  });
+
   it("does not treat another directory's strada-brain.service as ours", () => {
     expect(complaintsAboutUnit("/etc/systemd/system/strada-brain.service:3: Support for option X= has been removed", unitPath)).toEqual([]);
   });

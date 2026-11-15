@@ -1,5 +1,7 @@
 import path from "node:path";
 
+const UNIT_SUFFIX = /\.(service|slice|target|socket|mount|timer|path|scope|device|swap|automount)$/;
+
 /**
  * `systemd-analyze verify <unit>` also loads the units the unit depends on and
  * reports on the host's own files (the CI image's xfs_scrub_all.service, a new
@@ -18,7 +20,9 @@ export function complaintsAboutUnit(output: string, unitPath: string): string[] 
     .filter(Boolean)
     .filter((line) => {
       const owner = /^([^\s:]+):/.exec(line)?.[1];
-      return owner === undefined || ownNames.has(owner);
+      // "Warning:" / "Error:" name no file: only a path or a unit name is an owner.
+      const namesAFile = owner !== undefined && (owner.includes("/") || UNIT_SUFFIX.test(owner));
+      return !namesAFile || ownNames.has(owner);
     })
     // The runner may not have Node at /usr/bin/node; that is the host, not the unit.
     .filter((line) => !/Command \/usr\/bin\/node is not executable/.test(line));
