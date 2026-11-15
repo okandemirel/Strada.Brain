@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { resumeRejectionDetail } from "./resume-rejection-detail.js";
+import { describeUnapprovedSteps } from "./stopped-plan-summary.js";
 import { completedPlanOnResume, dependentClosure, effectiveLeafDependencies, invalidationTargets, stopAfterDeadline } from "./supervisor-brain.js";
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 
@@ -234,13 +234,29 @@ describe("a rejected node takes its dependents with it on the ORDINARY path too 
 });
 
 describe("the message of a resume whose re-verification failed", () => {
+  const failed = (id: string, output: string) => ({ nodeId: id as GoalNodeId, status: "failed", output }) as never;
+
   it("names each step by its task text and carries no goal id", () => {
-    const text = resumeRejectionDetail(
-      [{ nodeId: "goal_1793abc" as GoalNodeId, status: "failed", output: "output did not match" } as never],
-      [{ id: "goal_1793abc", task: "Write the level loader" }],
+    const text = describeUnapprovedSteps(
+      [failed("goal_1793abc", "output did not match")],
+      { request: "build it", nodes: [{ id: "goal_1793abc", task: "Write the level loader" }] },
     );
     expect(text).not.toContain("goal_");
     expect(text).toContain("Write the level loader");
     expect(text).toContain("output did not match");
+  });
+
+  it("names a step of unknown text by its position, in the request's language", () => {
+    const text = describeUnapprovedSteps([failed("goal_zz", "olmadı")], { request: "Lütfen bunu şimdi yapar mısın", nodes: [] });
+    expect(text).not.toContain("goal_");
+    expect(text).toContain("1. adım");
+  });
+
+  it("the supervisor builds the message through that helper, not from raw node ids", () => {
+    const source = readFileSync("src/supervisor/supervisor-brain.ts", "utf8");
+    const at = source.indexOf("const unapproved = report.candidates - report.approved;");
+    const branch = source.slice(at, source.indexOf("return {", at));
+    expect(branch).toContain("describeUnapprovedSteps(verified,");
+    expect(branch).not.toContain("${String(r.nodeId)}:");
   });
 });
