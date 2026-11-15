@@ -5,6 +5,7 @@ import {
   refreshMemoryIfNeeded,
   runConsensusIfAvailable,
 } from "./orchestrator-loop-shared.js";
+import { phaseWriteRefusal, splitCallsByPhase } from "../agent-core/engine/phase-write-access.js";
 
 // ---------------------------------------------------------------------------
 // executeAndTrackTools
@@ -128,6 +129,37 @@ describe("executeAndTrackTools", () => {
       content: [
         { type: "tool_result", tool_use_id: "tc-1", content: expect.stringContaining("message is too long"), is_error: true },
         { type: "tool_result", tool_use_id: "tc-2", content: expect.stringContaining("message is too long"), is_error: true },
+      ],
+    });
+  });
+
+  it("answers a refused call with its refusal, in the model's order, when the calls that ran throw", async () => {
+    // agent-core/engine/phase-write-access.ts: the spine split the turn; the refused write is in
+    // the assistant turn, and the failed batch must still answer it with what it was told.
+    const session = { messages: [] as unknown[] };
+    const write = { id: "tc-w", name: "file_write", input: { path: "a.ts" } };
+    const split = splitCallsByPhase([write, toolCall], AgentPhase.PLANNING, (name) => name === "file_write");
+    const executeToolCalls = vi.fn().mockRejectedValue(new Error("Bad Request: message is too long"));
+    await expect(
+      executeAndTrackTools({
+        chatId: "c6",
+        responseText: "",
+        toolCalls: [...split.runnable],
+        split,
+        session: session as any,
+        executeToolCalls,
+        executeOptions: {},
+        trackingParams: makeTrackingParams() as any,
+      }),
+    ).rejects.toThrow("message is too long");
+
+    expect(executeToolCalls).toHaveBeenCalledWith("c6", [toolCall], {});
+    expect((session.messages[0] as { tool_calls: { id: string }[] }).tool_calls.map((tc) => tc.id)).toEqual(["tc-w", "tc-1"]);
+    expect(session.messages[1]).toEqual({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "tc-w", content: phaseWriteRefusal(AgentPhase.PLANNING), is_error: true },
+        { type: "tool_result", tool_use_id: "tc-1", content: expect.stringContaining("message is too long"), is_error: true },
       ],
     });
   });

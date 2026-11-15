@@ -249,6 +249,51 @@ function verdictFor(state: AgentState) {
   });
 }
 
+describe("the phase rule the spine splits a turn with covers every write, not only file_write", () => {
+  /** A tool that declares itself, as registered tools do (ToolMetadata.isReadOnly). */
+  const declared = (name: string, isReadOnly: boolean) => ({
+    name,
+    description: name,
+    inputSchema: { type: "object" as const, properties: {} },
+    metadata: { name, description: name, isReadOnly, requiresConfirmation: false },
+    execute: vi.fn().mockResolvedValue({ content: "ran" }),
+  });
+
+  it("refuses an allowlisted write, a write a tool declares, and a batch, in every phase that does not write; create_skill passes", () => {
+    const withTools = new Orchestrator({
+      providerManager: {
+        getProvider: () => createMockProvider(),
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as never,
+      tools: [
+        declared("file_edit", true), // on the allowlist: a write whatever it declares
+        declared("shell_exec", true),
+        declared("scene_patch", false), // a write only by its own declaration
+        declared("batch_execute", true), // a write by construction: it runs what it carries
+        declared("create_skill", false), // a write the phase rule exempts: it has its own guards
+        declared("file_read", true),
+      ] as never,
+      channel: createMockChannel() as never,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+    const refuses: PhaseRefuses = (name, phase) =>
+      (withTools as unknown as { phaseRefuses: PhaseRefuses }).phaseRefuses(name, phase);
+    const made = ["file_edit", "shell_exec", "scene_patch", "batch_execute", "create_skill", "file_read"].map(
+      (name) => ({ id: `tc-${name}`, name, input: {} }) as ToolCall,
+    );
+
+    for (const phase of [AgentPhase.PLANNING, AgentPhase.REPLANNING, AgentPhase.REFLECTING]) {
+      const split = splitCallsByPhase(made, phase, refuses);
+      expect(split.runnable.map((c) => c.name), phase).toEqual(["create_skill", "file_read"]);
+      expect([...split.refusals.keys()], phase).toEqual(["tc-file_edit", "tc-shell_exec", "tc-scene_patch", "tc-batch_execute"]);
+    }
+    expect(splitCallsByPhase(made, AgentPhase.EXECUTING, refuses).runnable).toEqual(made);
+  });
+});
+
 describe("a write refused while planning is not a step the run took", () => {
   beforeEach(() => resetNoWorkEvidenceGates());
 
