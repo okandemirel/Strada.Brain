@@ -127,15 +127,17 @@ export function toolNamesRunnableIn(
  */
 export function buildPhaseWriteNotice(phase: AgentPhase): string | undefined {
   if (phaseAllowsWrites(phase)) return undefined;
-  const lines = [
-    "## Writes in this phase",
-    `The agent is ${phase}. Your tool list is the same in every phase, but a write tool called now ` +
-      "does not run: it is answered with a refusal, and writes run in the executing phase.",
-  ];
-  if (phase === AgentPhase.REFLECTING) {
-    lines.push("This is a reflection turn: answer with your decision. A tool call made in it is not run.");
-  } else {
-    lines.push("Read what you need with read-only tools, then answer with the plan.");
-  }
-  return lines.join("\n");
+  const listed = `The agent is ${phase}. Your tool list is the same in every phase, but `;
+  // A reflecting turn's calls are neither run nor answered: the runner reads its decision only.
+  const lines =
+    phase === AgentPhase.REFLECTING
+      ? [
+          listed + "no tool called in this turn runs, a read or a write, and none is answered: writes run in the executing phase.",
+          "This is a reflection turn: answer with your decision. A tool call made in it is not run.",
+        ]
+      : [
+          listed + "a write tool called now does not run: it is answered with a refusal, and writes run in the executing phase.",
+          "Read what you need with read-only tools, then answer with the plan.",
+        ];
+  return ["## Writes in this phase", ...lines].join("\n");
 }

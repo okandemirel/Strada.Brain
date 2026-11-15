@@ -688,7 +688,7 @@ export class V2AgentRunner implements AgentRunner {
           // phase (reflection REPLAN, the end-turn verifier's replan arm, the
           // reflection-override escalation) handed the spine a state it could
           // never leave, and for the rest of the run write tools were stripped
-          // (allowWriteTools is false in REPLANNING) and the reflection
+          // (the tool list then hid writes in REPLANNING) and the reflection
           // boundary never fired again.
           if (state.phase === AgentPhase.PLANNING || state.phase === AgentPhase.REPLANNING) {
             const prevPhase = state.phase;

@@ -146,11 +146,18 @@ describe("prepareIteration: a byte-stable system prompt", () => {
       const context = turnContextIn(phase);
       expect(context, phase).toContain("## Writes in this phase");
       expect(context, phase).toContain(`The agent is ${phase}.`);
-      expect(context, phase).toContain(
-        "a write tool called now does not run: it is answered with a refusal, and writes run in the executing phase.",
-      );
+      expect(context, phase).toContain("writes run in the executing phase.");
       expect(phaseWriteRefusal(phase)).toContain("writes run in the executing phase");
     }
+    for (const phase of [AgentPhase.PLANNING, AgentPhase.REPLANNING]) {
+      expect(turnContextIn(phase), phase).toContain(
+        "a write tool called now does not run: it is answered with a refusal, and writes run in the executing phase.",
+      );
+    }
+    // A reflecting turn's calls are neither run nor answered (the runner reads its decision only),
+    // so its notice does not promise a refusal.
+    expect(turnContextIn(AgentPhase.REFLECTING)).toContain("no tool called in this turn runs, a read or a write, and none is answered");
+    expect(turnContextIn(AgentPhase.REFLECTING)).not.toContain("answered with a refusal");
     expect(turnContextIn(AgentPhase.REFLECTING)).toContain("A tool call made in it is not run.");
     expect(turnContextIn(AgentPhase.EXECUTING)).not.toContain("## Writes in this phase");
   });
