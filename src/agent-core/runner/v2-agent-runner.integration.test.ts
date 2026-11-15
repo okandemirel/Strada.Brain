@@ -444,6 +444,84 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(started).toEqual(["tc-1"]);
   });
 
+  it("B6: a write called in the replanning turn is refused at the spine like one called while planning", async () => {
+    // The split is made in whatever phase the turn was made in; every other test of it plans.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "Plan: 1. write a.cs, b.cs and c.cs", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-1", "a.cs"), writeCall("tc-2", "b.cs"), writeCall("tc-3", "c.cs")],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "The approach is wrong.\n\n**REPLAN**", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "New plan: 1. read a.cs 2. rewrite it",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-replan-write", "replanned.cs"), { id: "tc-replan-read", name: "file_read", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["a.cs"])];
+    const h = buildHarness(provider, tools);
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    const workerCalls = workerCallsOf(provider);
+    expect(workerCalls.map((c) => phaseOf(c.last)).slice(0, 5)).toEqual([
+      "planning", "executing", "reflecting", "replanning", "executing",
+    ]);
+    const written = tools[1]!.execute.mock.calls.map(([input]) => (input as { path: string }).path);
+    expect(written, "the replanning turn's write ran").toEqual(["a.cs", "b.cs", "c.cs"]);
+    expect(tools[0]!.execute, "the replanning turn's read was discarded").toHaveBeenCalledTimes(1);
+    expect(workerCalls[4]!.last).toContain(phaseWriteRefusal(AgentPhase.REPLANNING));
+    expect(result.toolTrace.map((t) => t.toolCallId)).toEqual(["tc-1", "tc-2", "tc-3", "tc-replan-read"]);
+    expect(result.terminalState!.stepResults.map((s) => s.toolName)).toEqual(["file_write", "file_write", "file_write", "file_read"]);
+    const started = io.onEvent.mock.calls
+      .map((c) => c[0] as { type?: string; toolCallId?: string })
+      .filter((e) => e.type === "tool.started")
+      .map((e) => e.toolCallId);
+    expect(started).toEqual(["tc-1", "tc-2", "tc-3", "tc-replan-read"]);
+  });
+
+  it("B7: a planning turn's calls are recorded in the planning phase, so failing reads there ask for no reflection", async () => {
+    // The plan transition moves the state to EXECUTING before the planning turn's calls run. Run
+    // with that state, two failing reads were a persistent failure of the executing phase: the
+    // step record moved to REFLECTING and the tool results carried the reflection prompt into a
+    // turn that is executing (the spine keeps the phase the plan transition produced).
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(
+        resp({
+          text: "Plan: 1. read a.cs and b.cs 2. write the fix",
+          stopReason: "tool_use",
+          toolCalls: [
+            { id: "tc-read-a", name: "file_read", input: { path: "a.cs" } },
+            { id: "tc-read-b", name: "file_read", input: { path: "b.cs" } },
+          ],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const failingRead = mkTool("file_read");
+    failingRead.execute.mockResolvedValue({ content: "Error: no such file", isError: true } as never);
+    const h = buildHarness(provider, [failingRead, mkTool("file_write", true, ["a.cs"])]);
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    expect(failingRead.execute).toHaveBeenCalledTimes(2);
+    expect(result.terminalState!.stepResults.map((s) => [s.toolName, s.success])).toEqual([
+      ["file_read", false],
+      ["file_read", false],
+    ]);
+    const workerCalls = workerCallsOf(provider);
+    expect(phaseOf(workerCalls[1]!.last)).toBe("executing");
+    expect(workerCalls[1]!.last, "the planning turn's reads asked for a reflection").not.toContain("## Reflection Phase");
+  });
+
   it("C: interactive renders to the channel (real divergence)", async () => {
     const provider = mkScriptedProvider();
     provider.chat
