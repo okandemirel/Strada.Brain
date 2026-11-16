@@ -19,6 +19,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { createLogger } from "../../utils/logger.js";
 import { createBudget } from "../control/budget.js";
 import { runBudget, toBudgetUsage, withRunBudget } from "../control/budget-scope.js";
@@ -233,6 +234,134 @@ describe("tripwire: no run Budget is created where the calls it pays for cannot 
         }
         expect(statSync(join(root, producer.proof)).isFile(), `${file}: its proof ${producer.proof} is gone`).toBe(true);
       }
+    },
+    120_000,
+  );
+});
+
+// ─── Tripwire: every call of the funnels runs where a run's Budget is in scope ───────────────
+
+const FUNNELS = new Set(["recordProviderUsage", "recordAuxiliaryUsage", "consensusUsageSink", "decompositionUsageSink"]);
+
+const IN_RUN = "inside a V2 run's dispatch: V2AgentRunner.run opens the run's Budget scope (v2-agent-runner.run-budget.test.ts)";
+const IN_ADMISSION = "inside the supervisor admission's Budget scope (orchestrator-supervisor-run-budget.test.ts)";
+const PASS_THROUGH = "a funnel's own wrapper: it runs in its caller's scope, and its callers are pinned here";
+
+/** Where each production call of a funnel runs, keyed "file › enclosing names → funnel". */
+const FUNNEL_CALLERS: Record<string, { count: number; scope: string }> = {
+  "src/agent-core/engine/accounting.ts › consensusUsageSink → recordProviderUsage": { count: 1, scope: PASS_THROUGH },
+  "src/agent-core/engine/accounting.ts › recordProviderUsage → recordProviderUsage": {
+    count: 1,
+    scope: "the shared recorder under the funnel, called once and after the debit (the shared-recorder tripwire above)",
+  },
+  "src/agent-core/engine/agent-engine.ts › AgentEngine.recordAuxiliaryUsage → recordAuxiliaryUsage": { count: 1, scope: PASS_THROUGH },
+  "src/agent-core/engine/agent-engine.ts › AgentEngine.recordProviderUsage → recordProviderUsage": { count: 1, scope: PASS_THROUGH },
+  "src/agent-core/engine/port.ts › createAgentCorePort.portImpl.recordProviderUsage → recordProviderUsage": {
+    count: 1,
+    scope: `the port's record, which the runner calls for every model turn: ${IN_RUN}`,
+  },
+  "src/agent-core/engine/reflection.ts › buildInteractiveEndTurnContext.runTextConsensusIfCritical.onUsage → consensusUsageSink": { count: 1, scope: IN_RUN },
+  "src/agent-core/engine/review.ts › reviewShellCommandWithProvider → recordAuxiliaryUsage": { count: 1, scope: `the shell review of a tool turn: ${IN_RUN}` },
+  "src/agent-core/engine/review.ts › runVisibilityReview → recordAuxiliaryUsage": { count: 1, scope: `the end-turn visibility review: ${IN_RUN}` },
+  "src/agent-core/engine/tool-turn.ts › portExecuteToolTurn.consensusVerdict.onUsage → consensusUsageSink": { count: 1, scope: IN_RUN },
+  "src/agent-core/runner/v2-agent-runner.ts › V2AgentRunner.runInner → recordProviderUsage": {
+    count: 3,
+    scope: `the served turn, its auxiliaryUsage and a failed attempt's usageBy: ${IN_RUN}`,
+  },
+  "src/agents/autonomy/progress-assessment.ts › runProgressAssessment → recordAuxiliaryUsage": { count: 1, scope: `the intervention pipeline: ${IN_RUN}` },
+  "src/agents/orchestrator-goal-decomposition.ts › decompositionUsageSink → recordProviderUsage": { count: 1, scope: PASS_THROUGH },
+  "src/agents/orchestrator-goal-decomposition.ts › runProactiveGoalDecomposition.goalTree.onUsage → decompositionUsageSink": {
+    count: 1,
+    scope: `the port's decomposeGoalsIfPlanning: ${IN_RUN}`,
+  },
+  "src/agents/orchestrator-goal-decomposition.ts › runReactiveGoalDecomposition.updatedTree.onUsage → decompositionUsageSink": {
+    count: 1,
+    scope: `reflection's re-plan: ${IN_RUN}`,
+  },
+  "src/agents/orchestrator-intervention-pipeline.ts › resolveLoopRecoveryReview → recordAuxiliaryUsage": { count: 1, scope: `the intervention pipeline: ${IN_RUN}` },
+  "src/agents/orchestrator-intervention-pipeline.ts › reviewClarification → recordAuxiliaryUsage": { count: 1, scope: `the intervention pipeline: ${IN_RUN}` },
+  "src/agents/orchestrator.ts › Orchestrator.buildInterventionDeps.recordAuxiliaryUsage → recordAuxiliaryUsage": { count: 1, scope: PASS_THROUGH },
+  "src/agents/orchestrator.ts › Orchestrator.evaluateSupervisorAdmission.result.onPlanningUsage → decompositionUsageSink": {
+    count: 1,
+    scope: `the supervisor's plan: ${IN_ADMISSION}`,
+  },
+  "src/agents/orchestrator.ts › Orchestrator.evaluateSupervisorAdmission.result.onPlanningUsage → recordProviderUsage": {
+    count: 1,
+    scope: `the supervisor's plan: ${IN_ADMISSION}`,
+  },
+  "src/agents/orchestrator.ts › Orchestrator.recordAuxiliaryUsage → recordAuxiliaryUsage": { count: 1, scope: PASS_THROUGH },
+  "src/agents/orchestrator.ts › Orchestrator.recordProviderUsage → recordProviderUsage": {
+    count: 2,
+    scope: `${PASS_THROUGH} (the private wrapper, and the goal-decomposition deps' hook)`,
+  },
+  "src/agents/orchestrator.ts › Orchestrator.resolveGroundedSupervisorPlanningPrompt → recordProviderUsage": {
+    count: 1,
+    scope: `the grounding call on an image, before the plan: ${IN_ADMISSION}`,
+  },
+  "src/agents/orchestrator.ts › Orchestrator.synthesizeGoalExecutionResult → recordProviderUsage": {
+    count: 1,
+    scope: "no production caller today, tests only: name the scope before one is wired",
+  },
+  "src/agents/orchestrator.ts › Orchestrator.synthesizeUserFacingResponse → recordProviderUsage": {
+    count: 1,
+    scope: `the end-turn, reflection and intervention syntheses: ${IN_RUN}`,
+  },
+};
+
+/** Every production call of a funnel, keyed by its file and the names that enclose it. */
+function funnelCalls(): Record<string, number> {
+  const root = join(SRC, "..");
+  const counts: Record<string, number> = {};
+  for (const file of sourceFiles(SRC)) {
+    const text = readFileSync(file, "utf8");
+    if (![...FUNNELS].some((name) => text.includes(name))) continue;
+    const rel = relative(root, file).split("\\").join("/");
+    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    // A funnel imported under another name is still that funnel (`import { x as y }`).
+    const local = new Map<string, string>([...FUNNELS].map((name) => [name, name]));
+    for (const statement of sf.statements) {
+      const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : undefined;
+      if (!bindings || !ts.isNamedImports(bindings)) continue;
+      for (const element of bindings.elements) {
+        const original = (element.propertyName ?? element.name).text;
+        if (FUNNELS.has(original)) local.set(element.name.text, original);
+      }
+    }
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const callee = ts.isIdentifier(node.expression)
+          ? local.get(node.expression.text)
+          : ts.isPropertyAccessExpression(node.expression) && FUNNELS.has(node.expression.name.text)
+            ? node.expression.name.text
+            : undefined;
+        if (callee !== undefined) {
+          const names: string[] = [];
+          for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
+            const named = ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p) || ts.isClassDeclaration(p)
+              || ts.isPropertyAssignment(p) || ts.isVariableDeclaration(p);
+            const name = named ? (p as { name?: ts.Node }).name : undefined;
+            if (name && (ts.isIdentifier(name) || ts.isStringLiteral(name))) names.unshift(name.text);
+          }
+          const key = `${rel} › ${names.join(".")} → ${callee}`;
+          counts[key] = (counts[key] ?? 0) + 1;
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return counts;
+}
+
+describe("tripwire: every call of the usage funnels is pinned with the run Budget scope it runs in", () => {
+  it(
+    "a new caller fails until it names the scope its call is debited in",
+    () => {
+      expect(
+        funnelCalls(),
+        "a new call of a usage funnel: run it where a run's Budget is in scope (withRunBudget, control/budget-scope.ts) " +
+          "and pin it in FUNNEL_CALLERS with that scope and the test that measures it",
+      ).toEqual(Object.fromEntries(Object.entries(FUNNEL_CALLERS).map(([key, caller]) => [key, caller.count])));
     },
     120_000,
   );

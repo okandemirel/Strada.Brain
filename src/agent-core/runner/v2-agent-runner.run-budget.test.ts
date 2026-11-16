@@ -18,6 +18,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { FakeClock } from "../control/clock.js";
 import { createControlPlane } from "../control/control-plane.js";
 import { createBudget, type Budget } from "../control/budget.js";
+import { UNSCOPED_DEBIT_LOG } from "../control/budget-scope.js";
 import { V2AgentRunner, type V2RunnerDeps } from "./v2-agent-runner.js";
 import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
 import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
@@ -328,6 +329,10 @@ const GAUGE_PROMPT = "Explain what the pier 4 gauge has been reading since Monda
 describe("V2AgentRunner — every provider call a run makes is debited from its Budget", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    // The runtime half of the funnel tripwire: nothing the run recorded was out of a Budget's scope.
+    const unscoped = loggerStub.warn.mock.calls.filter(([message]) => message === UNSCOPED_DEBIT_LOG);
+    loggerStub.warn.mockClear();
+    expect(unscoped, "a call the run made was recorded with no run's Budget in scope").toEqual([]);
   });
 
   it("a goal decomposition's reply counts against the run's output-token spend", async () => {
