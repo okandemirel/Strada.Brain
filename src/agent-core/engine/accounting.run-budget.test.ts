@@ -8,6 +8,10 @@
  * keeps it true: provider usage reaches the metrics and rate-limiter counters only through those
  * two funnels. A new writer of the counters, or a second call of the shared recorder, records spend
  * that no run's Budget sees — the fifth time this class was found (#67, #71, #72, #73, #87).
+ *
+ * A funnel debits only the Budget whose scope is open around it. QA found the supervisor run's
+ * Budget opened with no scope, so its plan call was recorded and debited nowhere: the last
+ * tripwire pins every place that creates a run Budget and how the work it pays for reaches it.
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -164,6 +168,65 @@ describe("tripwire: no provider spend is recorded where the run's Budget cannot 
       expect(importers, `the shared recorder is called from outside the funnels: ${FIX}`).toEqual([ACCOUNTING]);
       const calls = readFileSync(join(SRC, "agent-core/engine/accounting.ts"), "utf8").match(/recordProviderUsageHelper\(/g) ?? [];
       expect(calls.length, `a second call of the shared recorder skips the run's Budget: ${FIX}`).toBe(1);
+    },
+    120_000,
+  );
+});
+
+// ─── Tripwire: every run Budget is reachable from the calls it pays for ──────────────────────
+
+/**
+ * Every production `createBudget(` site, how many it has, and how the calls its Budget pays for
+ * reach it: a scope opened around the work, or a child run opened on a Budget whose parent it is.
+ * `evidence` must match in `where`; `proof` is the test that measures it end to end.
+ */
+const BUDGET_PRODUCERS: Record<string, { count: number; how: string; where: string; evidence: RegExp; proof: string }> = {
+  "src/agent-core/control/control-plane.ts": {
+    count: 2,
+    how: "openRun's Budget: V2AgentRunner.run opens its scope around the whole run",
+    where: "src/agent-core/runner/v2-agent-runner.ts",
+    evidence: /withRunBudget\(opened\.budget, /,
+    proof: "src/agent-core/runner/v2-agent-runner.run-budget.test.ts",
+  },
+  "src/agents/orchestrator.ts": {
+    count: 1,
+    how: "the supervisor run's Budget: evaluateSupervisorAdmission opens its scope around SupervisorBrain.execute",
+    where: "src/agents/orchestrator.ts",
+    evidence: /withRunBudget\(runBudget, \(\) => brain\.execute\(/,
+    proof: "src/agents/orchestrator-supervisor-run-budget.test.ts",
+  },
+  "src/agents/multi/delegation/delegation-manager.ts": {
+    count: 1,
+    how: "a delegation's slice spends nothing itself: the delegated V2 run opens its scope on a Budget whose parent it is",
+    where: "src/agents/multi/delegation/delegation-manager.ts",
+    evidence: /childBudget: runBudget\s*\?\s*\{ slice: runBudget\.carveChild\(1, 1\), parent: runBudget \}/,
+    proof: "src/agent-core/runner/v2-agent-runner.run-budget.test.ts",
+  },
+  "src/agent-core/control/budget.ts": {
+    count: 1,
+    how: "a pool holder spends nothing itself: each node run opens its scope on a Budget whose parent it is",
+    where: "src/agent-core/control/budget.ts",
+    evidence: /childBudget: \{ slice, parent: holder \}/,
+    proof: "src/agents/orchestrator-supervisor-run-budget.test.ts",
+  },
+};
+
+describe("tripwire: no run Budget is created where the calls it pays for cannot reach it", () => {
+  it(
+    "every place that creates a run Budget is pinned with the scope or parent link its spend arrives through",
+    () => {
+      const sites = codeLineCounts(/(?<!function )\bcreateBudget\(/);
+      expect(
+        sites,
+        "a new run Budget: open withRunBudget(budget, …) around the work it pays for (control/budget-scope.ts), " +
+          "or spend it only through child runs opened on it as parent; then pin it in BUDGET_PRODUCERS with the test that measures it",
+      ).toEqual(Object.fromEntries(Object.entries(BUDGET_PRODUCERS).map(([file, p]) => [file, p.count])));
+      const root = join(SRC, "..");
+      for (const [file, producer] of Object.entries(BUDGET_PRODUCERS)) {
+        const source = readFileSync(join(root, producer.where), "utf8");
+        expect(producer.evidence.test(source), `${file}: ${producer.how} — no longer true in ${producer.where}`).toBe(true);
+        expect(statSync(join(root, producer.proof)).isFile(), `${file}: its proof ${producer.proof} is gone`).toBe(true);
+      }
     },
     120_000,
   );
