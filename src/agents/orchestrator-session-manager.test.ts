@@ -13,6 +13,7 @@ import {
 } from "./orchestrator-session-manager.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import { RecallLedger } from "./recall-ledger.js";
+import { lastTaskTurnIndex } from "./orchestrator-session-manager-task-turn.js";
 import { INTERRUPTED_TOOL_RESULT, normalizeConversation } from "./conversation-normalizer.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
 import type { AssistantMessage } from "./providers/provider-core.interface.js";
@@ -375,13 +376,70 @@ describe("SessionManager", () => {
     expect(sm.extractLastUserContent(session)).toBe("rename the spawner");
   });
 
-  it("known limit: a user message folded in front of a recorded result is passed over (board proposal #69)", () => {
-    // normalizeConversation folds every follower of an unanswered call up to the last one that
-    // carries its result into one answer (conversation-normalizer.ts answerFor). The person's
-    // words and the gate text then sit in one turn behind a recorded result, where nothing tells
-    // them apart, and the read counts the turn as the system's. No live path is known to leave
-    // this shape (reviewed 2026-11-11); #69 proposes keeping the earlier follower separate. When
-    // that lands, this read is "new request" and this test changes with it.
+  it("a person's message in front of the follower that carries a result is what the user said (#69)", () => {
+    // The live producer marks the person's turn (appendVisibleUserMessage → taskTurn), and
+    // normalizeConversation keeps a marked follower out of the answer it folds (answerFor).
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "old request");
+    sm.appendVisibleAssistantMessage(session, "done");
+    session.messages.push({ role: "assistant", content: "", tool_calls: [{ id: "a", name: "file_read", input: {} }] } as never);
+    sm.appendVisibleUserMessage(session, "new request");
+    session.messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: "ok" }, { type: "text", text: "[VERIFY] gate" }] });
+    session.messages = normalizeConversation(session.messages);
+    // The gate note stays on the result turn, the person's turn follows it.
+    expect(session.messages.at(-2)?.content).toEqual([
+      { type: "tool_result", tool_use_id: "a", content: "ok" },
+      { type: "text", text: "[VERIFY] gate" },
+    ]);
+    expect(session.messages.at(-1)?.content).toBe("new request");
+    expect(lastTaskTurnIndex(session.messages)).toBe(session.messages.length - 1);
+
+    expect(sm.extractLastUserMessage(session)).toBe("new request");
+  });
+
+  it("a saved session keeps the person's turn apart across a restart; one saved folded stays folded (#69)", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "old request");
+    sm.appendVisibleAssistantMessage(session, "done");
+    session.messages.push({ role: "assistant", content: "", tool_calls: [{ id: "a", name: "file_read", input: {} }] } as never);
+    sm.appendVisibleUserMessage(session, "new request");
+    session.messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: "ok" }, { type: "text", text: "[VERIFY] gate" }] });
+    // serializeSession normalizes what it writes; the mark is a field of the message and is written with it.
+    const restored = SessionManager.deserializeSession(SessionManager.serializeSession(session))!;
+    expect(restored.messages.at(-1)?.content).toBe("new request");
+    expect(lastTaskTurnIndex(restored.messages)).toBe(restored.messages.length - 1);
+    expect(sm.extractLastUserMessage(restored)).toBe("new request");
+
+    // Known limit: a file written before the mark holds the turn already folded, unmarked
+    // (serializeSession normalized it on the way out). Nothing in it tells the person's words
+    // from the gate's, so it cannot be split again and the read passes over it.
+    const savedFolded = JSON.stringify({
+      lastActivity: new Date().toISOString(),
+      messages: [
+        { role: "user", content: "old request" },
+        { role: "assistant", content: "done" },
+        { role: "assistant", content: "", tool_calls: [{ id: "a", name: "file_read", input: {} }] },
+        { role: "user", content: [
+          { type: "tool_result", tool_use_id: "a", content: "ok" },
+          { type: "text", text: "new request" },
+          { type: "text", text: "[VERIFY] gate" },
+        ] },
+      ],
+    });
+    const legacy = SessionManager.deserializeSession(savedFolded)!;
+    expect(legacy.messages).toHaveLength(4);
+    expect(sm.extractLastUserMessage(legacy)).toBe("old request");
+  });
+
+  it("known limit: an unmarked user message folded in front of a recorded result is passed over (#69)", () => {
+    // normalizeConversation folds every unmarked follower of an unanswered call up to the last
+    // one that carries its result into one answer (conversation-normalizer.ts answerFor): ORC-5
+    // pins that for a gate, and a turn saved before the task-turn mark existed looks the same.
+    // The person's words and the gate text then sit in one turn behind a recorded result, where
+    // nothing tells them apart, and the read counts the turn as the system's. A marked turn is
+    // kept apart (the tests above); this pins what an unmarked one still does.
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");
     sm.appendVisibleUserMessage(session, "old request");

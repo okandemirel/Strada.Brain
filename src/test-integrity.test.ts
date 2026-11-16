@@ -226,12 +226,35 @@ describe("the commit layer names a test bent to green (docs/contracts/test-integ
     expect(guard.pinLoosening(none!, null, 5)).toEqual([]);
   });
 
+  it("treats a new or raised wall-clock-frozen mark like a raised wall-clock baseline line", () => {
+    // A mark leaves a wall-clock bound uncounted (docs/contracts/wall-clock-assertions.md),
+    // so adding one loosens the ratchet as much as raising WALL_CLOCK_BASELINE does.
+    const marks = guard.PINS.find((p) => p.name === "WALL_CLOCK_FROZEN_MARKS")!;
+    expect(marks).toMatchObject({ file: "src/tests/wall-clock-assertions.test.ts", shape: "record", direction: "up" });
+    expect(guard.pinLoosening(marks, {}, { "src/a.test.ts": 1 })).toEqual([
+      "src/tests/wall-clock-assertions.test.ts WALL_CLOCK_FROZEN_MARKS gained src/a.test.ts (1)",
+    ]);
+    expect(guard.pinLoosening(marks, { "src/a.test.ts": 1 }, { "src/a.test.ts": 2 })).toEqual([
+      "src/tests/wall-clock-assertions.test.ts WALL_CLOCK_FROZEN_MARKS src/a.test.ts 1 -> 2",
+    ]);
+    expect(guard.pinLoosening(marks, { "src/a.test.ts": 2 }, { "src/a.test.ts": 1 })).toEqual([]);
+    expect(guard.pinLoosening(marks, { "src/a.test.ts": 1 }, {})).toEqual([]);
+    const text = "const WALL_CLOCK_FROZEN_MARKS: Readonly<Record<string, number>> = {\n  \"src/a.test.ts\": 1,\n};\n";
+    expect(guard.readPin(text, marks)).toEqual({ "src/a.test.ts": 1 });
+    expect(guard.readPin("const WALL_CLOCK_FROZEN_MARKS: Readonly<Record<string, number>> = {};\n", marks)).toEqual({});
+  });
+
   it("can read every pin it guards from the tree as it is", () => {
     // A renamed constant would make a pin invisible to the parent comparison.
     for (const pin of guard.PINS) {
       const value = guard.readPin(readFileSync(join(REPO, pin.file), "utf8"), pin);
       expect(value, `${pin.file} ${pin.name}`).not.toBeNull();
-      if (pin.shape === "record") expect(Object.keys(value as Record<string, number>).length).toBeGreaterThan(0);
+      // An empty record is read only where the source spells the empty literal; any other pin must read keys.
+      if (pin.shape === "record" && Object.keys(value as Record<string, number>).length === 0) {
+        expect(readFileSync(join(REPO, pin.file), "utf8"), `${pin.file} ${pin.name}`).toMatch(
+          new RegExp(`const ${pin.name}\\b[^=]*=\\s*\\{\\s*\\}`),
+        );
+      } else if (pin.shape === "record") expect(Object.keys(value as Record<string, number>).length).toBeGreaterThan(0);
     }
   });
 });

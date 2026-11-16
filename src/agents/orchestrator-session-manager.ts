@@ -29,7 +29,7 @@ import { appendWarningFooter, type ResponseAttribution } from "../learning/feedb
 import { mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { MemoryRefresher } from "./memory-refresher.js";
+import { MemoryRefresher, type RefresherIdentity } from "./memory-refresher.js";
 import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
@@ -39,6 +39,7 @@ import { withoutRecalledMemory } from "./recall-ledger.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
 import { getLogger } from "../utils/logger.js";
 import { trimSessionMessages } from "./orchestrator-session-manager-trim.js";
+import { taskTurn } from "./orchestrator-session-manager-task-turn.js";
 import { writeFileAtomic } from "../common/atomic-file.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1067,8 +1068,7 @@ export class SessionManager {
   }
 
   /**
-   * Trim session history to keep context manageable.
-   * Trims at safe boundaries to avoid orphaning tool_use/tool_result pairs.
+   * Trim at safe boundaries, keeping the run's task turn (orchestrator-session-manager-trim.ts).
    * Returns the trimmed (removed) messages for persistence.
    */
   trimSession(session: Session, maxMessages: number): ConversationMessage[] {
@@ -1089,7 +1089,7 @@ export class SessionManager {
   }
 
   appendVisibleUserMessage(session: Session, content: string | MessageContent[]): void {
-    const message: ConversationMessage = { role: "user", content };
+    const message = taskTurn(content);
     session.messages.push(message);
     this.ensureVisibleMessages(session).push(message);
   }
@@ -1315,17 +1315,13 @@ export class SessionManager {
   createMemoryRefresher(
     initialContentHashes: string[],
     chatId?: string,
-    /**
-     * Who the run belongs to (item 3.9 / audit 05.cap / 13F4 / D66): in-run
-     * re-retrieval is automatic recall, so it must be scoped to the person and
-     * the project, not to the chat alone.
-     */
-    identity?: { readonly userId?: string; readonly projectId?: string },
+    identity?: RefresherIdentity,
   ): MemoryRefresher | null {
     if (!this.deps.reRetrievalConfig?.enabled) return null;
     const refresher = new MemoryRefresher(this.deps.reRetrievalConfig, {
       chatId,
       ...(identity?.userId ? { userId: identity.userId } : {}),
+      ...(identity?.instinctOwner ? { instinctOwner: identity.instinctOwner } : {}),
       ...(identity?.projectId ? { projectId: identity.projectId } : {}),
       memoryManager: this.deps.memoryManager,
       ragPipeline: this.deps.ragPipeline,

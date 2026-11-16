@@ -19,7 +19,6 @@ import { AgentPhase } from "../../agents/agent-state.js";
 import type { ToolCall } from "../../agents/providers/provider-core.interface.js";
 import {
   allCallsRun,
-  isPhaseWriteRefusal,
   phaseWriteRefusal,
   splitCallsByPhase,
   toolNamesRunnableIn,
@@ -37,9 +36,13 @@ describe("splitCallsByPhase", () => {
     expect(split.asMade).toEqual(made);
     expect(split.runnable.map((c) => c.id)).toEqual(["r1", "r2"]);
     expect([...split.refusals.keys()]).toEqual(["w1"]);
-    const refusal = split.refusals.get("w1")!;
-    expect(refusal).toMatchObject({ toolCallId: "w1", content: phaseWriteRefusal(AgentPhase.PLANNING), isError: true });
-    expect(isPhaseWriteRefusal(refusal)).toBe(true);
+    // The answer is the refusal text and nothing else: no mark a reader could filter on, since
+    // readers are handed `runnable` and never see a refusal.
+    expect(split.refusals.get("w1")).toEqual({
+      toolCallId: "w1",
+      content: phaseWriteRefusal(AgentPhase.PLANNING),
+      isError: true,
+    });
   });
 
   it("refuses nothing in a phase that writes, and allCallsRun refuses nothing at all", () => {

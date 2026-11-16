@@ -39,20 +39,13 @@ export function phaseWriteRefusal(phase: AgentPhase): string {
   );
 }
 
-/** The metadata key that marks a result as this refusal; its value is the phase. */
-const REFUSED_IN_PHASE = "refusedInPhase";
-
 /**
  * The tool result a write called in `phase` gets in place of running: an error the model reads,
- * and a mark that says the tool never ran ({@link isPhaseWriteRefusal}).
+ * and nothing else. It carries no mark for a reader to filter on: a reader is handed the calls
+ * that run ({@link splitCallsByPhase}), never the refusals, so it has nothing to skip.
  */
 export function phaseWriteRefusalResult(toolCallId: string, phase: AgentPhase): ToolResult {
-  return { toolCallId, content: phaseWriteRefusal(phase), isError: true, metadata: { [REFUSED_IN_PHASE]: phase } };
-}
-
-/** Whether `result` is the refusal of a write in a phase that does not write. */
-export function isPhaseWriteRefusal(result: Pick<ToolResult, "isError" | "metadata"> | undefined): boolean {
-  return result?.isError === true && typeof result.metadata?.[REFUSED_IN_PHASE] === "string";
+  return { toolCallId, content: phaseWriteRefusal(phase), isError: true };
 }
 
 /** The phase rule as one predicate: whether a call of `toolName` made in `phase` is refused. */

@@ -71,6 +71,7 @@ import { resolveServedIdentity } from "../../agents/orchestrator-phase-telemetry
 import type { ProviderServedBy } from "../../agents/providers/provider-core.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { splitCallsByPhase, type PhaseCallSplit } from "../engine/phase-write-access.js";
+import { setupInputOf } from "./setup-input.js";
 // Free helpers imported directly by the spine (no `this`). The max_tokens continuation gate +
 // pusher are the v1 shared helpers; nothing here closes over the Orchestrator.
 import {
@@ -393,15 +394,15 @@ export class V2AgentRunner implements AgentRunner {
       let consecutiveMaxTokens = 0;
 
       // What the run lends its tool turns: a sub-agent a tool starts is cancelled with this run,
-      // carved from this run's budget and bounded by this run's clock. Tool calls are NOT raced
-      // against the cancel — a tool may be writing into the run's workspace lease, which the
-      // caller releases once run() returns — so a cancel reaches tools through the signal and
-      // the next gate stops the run once the batch has settled.
+      // carved from its budget, bounded by its clock and given its instinct owner. Tool calls are
+      // NOT raced against the cancel (a tool may be writing into the lease the caller releases once
+      // run() returns): a cancel reaches tools through the signal, and the next gate stops the run.
       const runScope: ParentRunScope = {
         signal: runClock.taskToken.signal,
         budget,
         clockView: runClock.view,
         metricId: setup.metricId || undefined,
+        instinctUserId: setup.instinctUserId,
       };
 
       // The deriveCallLimits carve the spine hands enterCall (subtractive-min vs task remaining is
@@ -1185,27 +1186,7 @@ export class V2AgentRunner implements AgentRunner {
   // ─── small spine-local glue (NO v1 logic — pure shape adapters) ───────────────────────
 
   private toSetupInput(request: AgentRunRequest, mode: RunnerMode): AgentRunSetupInput {
-    return {
-      prompt: request.prompt,
-      chatId: request.chatId,
-      channelType: String(request.channelType),
-      userId: request.userId,
-      conversationId: request.conversationId,
-      attachments: request.attachments,
-      userContent: request.userContent,
-      mode,
-      interactiveSession: request.interactiveSession,
-      assignedProvider: request.assignedProvider,
-      assignedModel: request.assignedModel,
-      taskRunId: request.taskRunId,
-      parentMetricId: request.parentMetricId,
-      onUsage: request.onUsage,
-      workspaceLease: request.workspaceLease,
-      workspaceLeaseRetained: request.workspaceLeaseRetained,
-      workspacePolicy: request.workspacePolicy,
-      goalContext: request.goalContext,
-      monitorScope: request.monitorScope,
-    };
+    return setupInputOf(request, mode);
   }
 
   private budgetCheckpoint(

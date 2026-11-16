@@ -33,7 +33,6 @@ import { executeAndTrackTools } from "./orchestrator-loop-shared.js";
 import { validateReflectionDecision } from "./orchestrator-runtime-utils.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./autonomy/verifier-pipeline.js";
 import {
-  isPhaseWriteRefusal,
   phaseWriteRefusal,
   splitCallsByPhase,
   type PhaseRefuses,
@@ -297,12 +296,9 @@ describe("the phase rule the spine splits a turn with covers every write, not on
 describe("a write refused while planning is not a step the run took", () => {
   beforeEach(() => resetNoWorkEvidenceGates());
 
-  it("the gate marks its refusal, and only its refusal", async () => {
+  it("the gate answers with the refusal text and nothing a reader could filter on", async () => {
     const refusal = await refusedWhilePlanning("p1");
-    expect(refusal.content).toBe(phaseWriteRefusal(AgentPhase.PLANNING));
-    expect(isPhaseWriteRefusal(refusal)).toBe(true);
-    expect(isPhaseWriteRefusal(failedAtRunTime("x"))).toBe(false);
-    expect(isPhaseWriteRefusal({ toolCallId: "y", content: phaseWriteRefusal(AgentPhase.PLANNING), isError: true })).toBe(false);
+    expect(refusal).toEqual({ toolCallId: "p1", content: phaseWriteRefusal(AgentPhase.PLANNING), isError: true });
     // The spine's split answers a refused call with the same result the gate gives.
     const split = splitCallsByPhase([writeOf("p1"), readOf("r1")], AgentPhase.PLANNING, phaseRefuses);
     expect(split.refusals.get("p1")).toEqual(refusal);

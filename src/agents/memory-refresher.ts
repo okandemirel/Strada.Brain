@@ -21,6 +21,7 @@ import { denseCosineSimilarity } from "../rag/vector-math.js";
 import type { ChatId } from "../types/index.js";
 import { isOk } from "../types/index.js";
 import { getLogger } from "../utils/logger.js";
+import { instinctUserIdOf, type InstinctOwner } from "../agent-core/engine/instinct-scope.js";
 
 // =============================================================================
 // TYPES
@@ -40,6 +41,8 @@ export interface MemoryRefresherDeps {
    * alone, a memory owned by another user still came back inside this run.
    */
   readonly userId?: string;
+  /** Whose instincts re-retrieval returns when not `userId`'s (a delegated run's caller). */
+  readonly instinctOwner?: InstinctOwner;
   readonly projectId?: string;
   readonly memoryManager?: IMemoryManager;
   readonly ragPipeline?: IRAGPipeline;
@@ -47,6 +50,14 @@ export interface MemoryRefresherDeps {
   readonly embeddingProvider?: IEmbeddingProvider;
   readonly eventBus?: IEventEmitter;
 }
+
+/**
+ * Who the run a refresher serves belongs to (item 3.9 / audit 05.cap / 13F4 /
+ * D66): in-run re-retrieval is automatic recall, so it must be scoped to the
+ * person and the project, not to the chat alone. `instinctOwner` names whose
+ * instincts it re-retrieves when that is not `userId`'s (a delegate's caller).
+ */
+export type RefresherIdentity = Pick<MemoryRefresherDeps, "userId" | "instinctOwner" | "projectId">;
 
 /** Reason for re-retrieval decision */
 export type RefreshReason = "periodic" | "topic_shift" | "budget_exhausted" | "none" | "skipped";
@@ -319,7 +330,7 @@ export class MemoryRefresher {
       this.deps.instinctRetriever
         // item 3.1: the run's user, so their own teaching is retrievable and
         // nobody else's is.
-        ? this.deps.instinctRetriever.getInsightsForTask(query, undefined, this.deps.userId)
+        ? this.deps.instinctRetriever.getInsightsForTask(query, undefined, instinctUserIdOf(this.deps))
         : Promise.resolve(null),
     ]);
 

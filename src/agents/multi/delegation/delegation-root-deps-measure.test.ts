@@ -481,14 +481,27 @@ describe("root dependencies in a delegated run (measured)", () => {
     expect(row.sameAnswer).toBe(true);
   });
 
-  it("goalDecomposer: every delegation spends decomposition calls its budget is not charged for", async () => {
+  it("goalDecomposer: every token a delegation's decomposition calls bill is charged to its budget", async () => {
+    // Measured before task #67: +2,562 tokens billed, 158 charged (the decomposer read no usage).
+    // Its calls now bill through the run's usage hook, so metered equals billed, exactly.
     const base = await delegateWith();
     const goalDecomposer = new GoalDecomposer(provider as never, 3, [0], { streamingEnabled: false });
     const run = await delegateWith({ goalDecomposer });
     const row = delta("goalDecomposer", base, run);
     expect(row.auxiliaryCalls).toBeGreaterThan(0);
     expect(row.billedTokens).toBeGreaterThan(0);
-    expect(row.meteredTokens).toBeLessThan(row.billedTokens);
+    expect(row.meteredTokens).toBe(row.billedTokens);
+  });
+
+  it("goalDecomposer beside the shared rate limiter: the daily counter takes each decomposition token once", async () => {
+    // The limiter is a shared delegate dependency since 4c3e6244, and the decomposition now bills
+    // through the same hook as the worker turns: once, never twice.
+    const goalDecomposer = new GoalDecomposer(provider as never, 3, [0], { streamingEnabled: false });
+    const rateLimiter = new RateLimiter({ tokensPerDay: 1_000_000 });
+    const run = await delegateWith({ goalDecomposer, rateLimiter });
+    expect(run.auxiliaryCalls).toBeGreaterThan(0);
+    expect(rateLimiter.getSnapshot().tokensToday).toBe(run.billedTokens);
+    expect(run.meteredTokens).toBe(run.billedTokens);
   });
 
   it("supervisorBrain: a delegated run never asks it", async () => {

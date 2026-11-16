@@ -20,6 +20,9 @@ import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
 import { getLogger } from "../utils/logger.js";
 import { GoalDecompositionProviderError } from "../goals/goal-decomposer.js";
 import { getResilienceMessage } from "./resilience-messages.js";
+import type { ProviderResponse } from "./providers/provider-core.interface.js";
+import type { TaskUsageEvent } from "../tasks/types.js";
+import type { DecompositionUsageSink } from "../goals/decomposition-usage.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +36,24 @@ export interface GoalDecompositionDeps {
   /** Best-effort goal-tree persistence (v1 parity: the interactive onGoalDecomposed callback
    *  upserted the tree; the helper now owns it so EVERY decomposition path persists). */
   readonly goalStorage: { upsertTree(tree: GoalTree, status: string): void } | null;
+  /**
+   * The hook a model turn bills through (Orchestrator.recordProviderUsage: metrics, the rate
+   * limiter's daily cost, the run's onUsage). Every decomposition reply bills here too (task #67).
+   */
+  readonly recordProviderUsage: (
+    providerName: string,
+    usage: ProviderResponse["usage"] | undefined,
+    onUsage?: (usage: TaskUsageEvent) => void,
+    modelId?: string,
+  ) => void;
+}
+
+/** The sink one run's decomposition calls bill to: the shell's hook, curried with the run's onUsage. */
+export function decompositionUsageSink(
+  recordProviderUsage: GoalDecompositionDeps["recordProviderUsage"],
+  onUsage: ((usage: TaskUsageEvent) => void) | undefined,
+): DecompositionUsageSink {
+  return (served) => recordProviderUsage(served.provider, served.usage, onUsage, served.model);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -87,6 +108,8 @@ export async function runProactiveGoalDecomposition(
     language?: string;
     /** The run's cancel signal: a /cancel stops the decomposer's retry ladder (TSK-16). */
     signal?: AbortSignal;
+    /** The run's usage callback (runCtx.onUsage); the plan's calls are this run's spend. */
+    onUsage?: (usage: TaskUsageEvent) => void;
   },
 ): Promise<AgentState> {
   if (!deps.goalDecomposer || !deps.goalDecomposer.shouldDecompose(opts.userMessage)) {
@@ -94,7 +117,10 @@ export async function runProactiveGoalDecomposition(
   }
   try {
     const goalTree = await withLivenessHeartbeat(opts.chatId, () =>
-      deps.goalDecomposer!.decomposeProactive(opts.conversationScope, opts.userMessage, { signal: opts.signal }),
+      deps.goalDecomposer!.decomposeProactive(opts.conversationScope, opts.userMessage, {
+        signal: opts.signal,
+        onUsage: decompositionUsageSink(deps.recordProviderUsage, opts.onUsage),
+      }),
     );
     deps.activeGoalTrees.set(opts.conversationScope, goalTree);
     emitGoalEvent(deps.eventEmitter, goalTree.rootId, goalTree.rootId, "pending", 0);
@@ -165,6 +191,8 @@ export async function runReactiveGoalDecomposition(
     chatId: string;
     session: Session;
     responseText: string;
+    /** The run's usage callback (runCtx.onUsage); the re-plan call is this run's spend. */
+    onUsage?: (usage: TaskUsageEvent) => void;
   },
 ): Promise<void> {
   if (!deps.goalDecomposer || !deps.activeGoalTrees.has(opts.conversationScope)) {
@@ -193,6 +221,7 @@ export async function runReactiveGoalDecomposition(
         goalTree,
         executingNodeId,
         opts.responseText,
+        { onUsage: decompositionUsageSink(deps.recordProviderUsage, opts.onUsage) },
       );
       if (updatedTree) {
         deps.activeGoalTrees.set(opts.conversationScope, updatedTree);
