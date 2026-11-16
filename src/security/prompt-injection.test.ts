@@ -70,12 +70,32 @@ describe("prompt-injection", () => {
 
     it("stays linear on a long run of spaces after an opening bracket", () => {
       // A bracket closer written `\[\s*\/?\s*` has two adjacent `\s*` and
-      // backtracks quadratically here: about 650 ms for this input. Linear: ~2 ms.
-      const hostile = ("[SYSTEM][" + " ".repeat(1990) + "z").repeat(200);
-      const started = performance.now();
-      sanitizePromptInjection(hostile);
-      expect(performance.now() - started).toBeLessThan(100);
-    });
+      // backtracks quadratically on a run of spaces: doubling the run
+      // quadruples the work, where a linear scan only doubles it. The test
+      // compares the same input at two sizes, taking the fastest of a few runs
+      // of each, so a slow machine slows both alike. (A millisecond ceiling
+      // measured the machine's load: the old bound of 100 ms was the
+      // narrowest wall-clock limit in the repo.) Measured 2026-11-16: linear
+      // ratio ~2, quadratic ratio ~4; the line is 3. Both sizes stay under the
+      // 2000-character span the closer is searched in: past it the closer is
+      // never reached, and the cost steps up for a reason that is not the
+      // backtracking.
+      const hostile = (spaces: number): string => ("[SYSTEM][" + " ".repeat(spaces) + "z").repeat(100);
+      const fastest = (spaces: number): number => {
+        const input = hostile(spaces);
+        let best = Infinity;
+        for (let run = 0; run < 5; run++) {
+          const started = performance.now();
+          sanitizePromptInjection(input);
+          best = Math.min(best, performance.now() - started);
+        }
+        return best;
+      };
+      sanitizePromptInjection(hostile(100)); // warm the regex before timing it
+      const small = fastest(500);
+      const doubled = fastest(1000);
+      expect(doubled / small).toBeLessThan(3);
+    }, 60_000);
 
     it("flags (but does not decode) long base64 blocks", () => {
       // 60+ char run that includes '+', '/', and '=' — meets both the length

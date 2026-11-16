@@ -15,6 +15,28 @@ import type { VectorEntry, CodeChunk } from "../rag.interface.js";
 // This file is a benchmark-style suite and is too memory-intensive for the default test run.
 const runHnswPerfTests = !!process.env["HNSW_PERF_TESTS"];
 
+/**
+ * What the search must be: sub-linear, not a scan. A millisecond ceiling on
+ * the search says how fast the machine was that day. The speed-up over an
+ * exact scan of the same vectors, measured in the same run, says whether the
+ * index prunes: when the graph stops pruning (efSearch as large as the store,
+ * a fallback to a scan) the speed-up falls to about 1 at any machine load,
+ * and it grows with the store, so each size has its own floor. Measured
+ * 2026-11-16, random 384-d vectors, 10K: about 9x with the real index. The
+ * 100K and 1M floors are scaled down from that, not measured: those two
+ * tests are skipped because they are too slow to run.
+ */
+const MIN_SPEEDUP_OVER_SCAN = { "10K": 4, "100K": 10, "1M": 30 } as const;
+
+function exactTopK(entries: VectorEntry[], query: number[], topK: number): string[] {
+  const scored = entries.map((e) => {
+    let dot = 0;
+    for (let i = 0; i < query.length; i++) dot += query[i]! * e.vector[i]!;
+    return { id: e.id, dot };
+  });
+  return scored.sort((a, b) => b.dot - a.dot).slice(0, topK).map((r) => r.id);
+}
+
 describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
   const dimensions = 384; // MiniLM dimensions
 
@@ -24,6 +46,8 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
   ): Promise<{
     insertTimeMs: number;
     searchTimeMs: number;
+    /** Same queries answered by an exact scan of the same vectors, in the same run. */
+    scanTimeMs: number;
     vectorsPerSecond: number;
     searchesPerSecond: number;
   }> {
@@ -71,6 +95,7 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     // Benchmark search (average of 100 searches)
     const searchTimes: number[] = [];
+    const scanTimes: number[] = [];
     const numSearches = Math.min(100, vectorCount);
 
     for (let i = 0; i < numSearches; i++) {
@@ -81,9 +106,19 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
       const searchStart = performance.now();
       await store.search(normalizedQuery, topK);
       searchTimes.push(performance.now() - searchStart);
+
+      // The exact answer to the same query, timed back to back with the search
+      // so that machine load slows both alike. The first ten queries are enough
+      // to measure a scan; it costs vectorCount * dimensions each.
+      if (i < 10) {
+        const scanStart = performance.now();
+        exactTopK(entries, normalizedQuery, topK);
+        scanTimes.push(performance.now() - scanStart);
+      }
     }
 
     const avgSearchTimeMs = searchTimes.reduce((a, b) => a + b, 0) / searchTimes.length;
+    const avgScanTimeMs = scanTimes.reduce((a, b) => a + b, 0) / scanTimes.length;
 
     await store.shutdown();
     rmSync(tempDir, { recursive: true, force: true });
@@ -91,6 +126,7 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
     return {
       insertTimeMs,
       searchTimeMs: avgSearchTimeMs,
+      scanTimeMs: avgScanTimeMs,
       vectorsPerSecond: (vectorCount / insertTimeMs) * 1000,
       searchesPerSecond: (1 / avgSearchTimeMs) * 1000,
     };
@@ -102,12 +138,12 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     console.log("\n=== 10K Vectors Performance ===");
     console.log(`Insert time: ${results.insertTimeMs.toFixed(2)}ms`);
-    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms`);
+    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms (exact scan ${results.scanTimeMs.toFixed(2)}ms)`);
     console.log(`Vectors/sec: ${results.vectorsPerSecond.toFixed(0)}`);
     console.log(`Searches/sec: ${results.searchesPerSecond.toFixed(0)}`);
 
     expect(results.insertTimeMs).toBeLessThan(30000); // Should insert in < 30s
-    expect(results.searchTimeMs).toBeLessThan(10); // Should search in < 10ms
+    expect(results.scanTimeMs / results.searchTimeMs).toBeGreaterThan(MIN_SPEEDUP_OVER_SCAN["10K"]);
   }, 60000);
 
   // Skip in CI — too slow for standard test runs
@@ -116,12 +152,12 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     console.log("\n=== 100K Vectors Performance ===");
     console.log(`Insert time: ${results.insertTimeMs.toFixed(2)}ms`);
-    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms`);
+    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms (exact scan ${results.scanTimeMs.toFixed(2)}ms)`);
     console.log(`Vectors/sec: ${results.vectorsPerSecond.toFixed(0)}`);
     console.log(`Searches/sec: ${results.searchesPerSecond.toFixed(0)}`);
 
     expect(results.insertTimeMs).toBeLessThan(180000); // Should insert in < 3min
-    expect(results.searchTimeMs).toBeLessThan(20); // Should search in < 20ms
+    expect(results.scanTimeMs / results.searchTimeMs).toBeGreaterThan(MIN_SPEEDUP_OVER_SCAN["100K"]);
   }, 180000);
 
   // Skip 1M test in CI - too slow
@@ -130,12 +166,12 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     console.log("\n=== 1M Vectors Performance ===");
     console.log(`Insert time: ${results.insertTimeMs.toFixed(2)}ms`);
-    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms`);
+    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms (exact scan ${results.scanTimeMs.toFixed(2)}ms)`);
     console.log(`Vectors/sec: ${results.vectorsPerSecond.toFixed(0)}`);
     console.log(`Searches/sec: ${results.searchesPerSecond.toFixed(0)}`);
 
     expect(results.insertTimeMs).toBeLessThan(600000); // Should insert in < 10min
-    expect(results.searchTimeMs).toBeLessThan(50); // Should search in < 50ms
+    expect(results.scanTimeMs / results.searchTimeMs).toBeGreaterThan(MIN_SPEEDUP_OVER_SCAN["1M"]);
   }, 600000);
 });
 
