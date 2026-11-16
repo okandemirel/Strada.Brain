@@ -1059,7 +1059,6 @@ export class LearningPipeline {
     // Detection is event-driven (handleToolResult); drain leftovers from previous sessions now.
     void this.runDetectionBatch().catch(() => { /* non-critical startup drain */ });
 
-    this.tickEvolution(); // boot pass: a daemon restarted more often than hourly would never evolve
     this.evolutionTimer = setInterval(() => this.tickEvolution(), this.config.evolutionIntervalMs);
 
     // Periodic trajectory extraction — use detection interval from config
@@ -1073,8 +1072,9 @@ export class LearningPipeline {
    * Evolution tick with error isolation. An unguarded throw in a setInterval
    * callback escapes to the process and the global uncaughtException handler
    * shuts the whole daemon down, so swallow it (non-fatal; the next tick retries).
+   * Public: bootstrap runs the boot pass after setProjectPath (project-scoped artifacts).
    */
-  private tickEvolution(): void {
+  tickEvolution(): void {
     try {
       this.runEvolution();
     } catch {
