@@ -291,9 +291,8 @@ import type { AgentRunSetupInput } from "../agent-core/runner/orchestrator-port.
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import { estimateTextTokens } from "../common/token-estimator.js";
 import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
-import { resolveUnreservedCostCapUsd } from "../agent-core/engine/budget.js";
 import { phaseAllowsWrites, phaseWriteRefusalResult } from "../agent-core/engine/phase-write-access.js";
-import { createBudget } from "../agent-core/control/budget.js";
+import { supervisorRunBudget } from "./orchestrator-supervisor-budget.js";
 import {
   isUnityEditorExclusiveTool,
   withUnityEditorLock,
@@ -1858,8 +1857,10 @@ export class Orchestrator {
     }
 
     let supervisorPlanningPrompt = coarsePlanningPrompt;
+    // One Budget for the admission: the grounding call, the plan and the nodes' slices (ACR-9, #87).
+    const admissionBudget = supervisorRunBudget(() => this.unifiedBudgetManager ?? null);
     if (shouldRegroundRichInput) {
-      const groundedPlanningPrompt = await this.resolveGroundedSupervisorPlanningPrompt(params, coarsePlanningPrompt);
+      const groundedPlanningPrompt = await admissionBudget.within(() => this.resolveGroundedSupervisorPlanningPrompt(params, coarsePlanningPrompt));
       if (!groundedPlanningPrompt) {
         return {
           path: fallbackPath,
@@ -1896,7 +1897,8 @@ export class Orchestrator {
       } catch {
         // Activation feedback is best-effort only.
       }
-      const result = await this.supervisorBrain.execute(params.prompt, {
+      const brain = this.supervisorBrain;
+      const result = await admissionBudget.within((runBudget) => brain.execute(params.prompt, {
         chatId: params.chatId,
         channelType: params.channelType,
         userId: params.userId,
@@ -1916,14 +1918,8 @@ export class Orchestrator {
         ...(params.onGoalDecomposed ? { onGoalDecomposed: params.onGoalDecomposed } : {}),
         ...(params.reportUpdate ? { reportUpdate: params.reportUpdate } : {}),
         ...(params.onLiveness ? { onLiveness: params.onLiveness } : {}),
-        // The supervisor runs before any run is open, so there is no run budget to carve its
-        // nodes from: they share the global headroom other in-flight work has not reserved.
-        // The output-token cap stays per node run (its own policy), so only cost is shared.
-        runBudget: createBudget(
-          Number.POSITIVE_INFINITY,
-          resolveUnreservedCostCapUsd({ unifiedBudgetManager: () => this.unifiedBudgetManager ?? null }),
-        ),
-      });
+        runBudget,
+      }));
       if (!result) {
         return {
           path: fallbackPath,
