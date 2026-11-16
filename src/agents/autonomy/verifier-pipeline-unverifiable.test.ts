@@ -18,9 +18,9 @@
  */
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AgentPhase, type AgentState } from "../agent-state.js";
 import { recordStepResultsAndCheckReflection } from "../orchestrator-loop-utils.js";
 import type { ToolResult } from "../providers/provider-core.interface.js";
@@ -28,7 +28,7 @@ import { FileWriteTool } from "../tools/file-write.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { NODE_SCOPE_MARKER } from "./node-tool-offer.js";
 import { fileOnPath } from "./completion-review-answers.js";
-import { measureProjectChecks } from "./verifier-pipeline-project-checks.js";
+import { SCAN_LIMITS, SKIPPED_DIRS, measureProjectChecks } from "./verifier-pipeline-project-checks.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
 import { draftClaimsCheckPassed, takeUnverifiedNotice, unverifiedNotice, withUnverifiedNotice } from "./verifier-pipeline-unverifiable.js";
 
@@ -49,9 +49,10 @@ function rootWith(files: Readonly<Record<string, string>>): string {
   for (const [name, content] of Object.entries(files)) {
     // A name ending in "/" is a directory, with one file in it.
     if (name.endsWith("/")) {
-      mkdirSync(join(root, name));
+      mkdirSync(join(root, name), { recursive: true });
       writeFileSync(join(root, name, "lantern-check.txt"), content);
     } else {
+      mkdirSync(dirname(join(root, name)), { recursive: true });
       writeFileSync(join(root, name), content);
     }
   }
@@ -82,7 +83,7 @@ const CHAT = "chat-unverifiable";
  * its target, and why nothing could check.
  */
 const NOTICE_RE =
-  /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\): README\.md is a file, so that path cannot exist\. Then file_write wrote notes\/lantern\.txt, the same file name in another directory\. Nothing here could check the result: none of the 7 available tools runs a build or a test, and the project declares no build or test command\.$/;
+  /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\): README\.md is a file, so that path cannot exist\. Then file_write wrote notes\/lantern\.txt, the same file name in another directory\. Nothing here could check the result: none of the 7 available tools runs a build or a test, and a search of the whole project for \d+ kinds of build or test manifest found none \(\d+ directories read, up to 20000 entries and 12 levels deep\)\.$/;
 /** QA's drafts, 2026-11-16: each says "unverified" and claims a check at once. */
 const CLAIMING_DRAFTS = [
   "Wrote notes/lantern.txt and verified it works; nothing is left unverified.",
@@ -249,10 +250,13 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
       source: "tool registry offered to this turn",
       offered: NO_CHECK_TOOLS.length,
       checkTools: [],
-      // shell_exec is offered, so the project's own manifests were read too, and named.
+      // shell_exec is offered, so the project's own manifests were read too, in the whole tree, and named.
       projectChecks: {
-        source: "project root manifests",
+        source: "project tree manifests",
         root: project,
+        directoriesRead: expect.any(Number),
+        limits: SCAN_LIMITS,
+        skipped: SKIPPED_DIRS,
         looked: expect.arrayContaining(["package.json (test/build/check/lint scripts)", "Makefile (test/build/check targets)", "pyproject.toml", "go.mod"]),
         found: [],
       },
@@ -274,11 +278,14 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
 
     expect(plan.evidence.verificationTooling?.projectChecks?.looked.length).toBe(looked);
     expect(looked).toBeGreaterThan(20);
+    const directories = plan.evidence.verificationTooling?.projectChecks?.directoriesRead;
     expect(rowOf(plan, "the project declares a check shell_exec could run")).toMatchObject({
-      value: `none of the ${looked} manifests looked for`,
+      value: `none of the ${looked} manifest kinds looked for, in all ${directories} directories (limits: 20000 entries, 12 levels)`,
       effect: "allows",
     });
-    expect(plan.evidence.unverifiableDecision?.notice).toContain("and the project declares no build or test command.");
+    expect(plan.evidence.unverifiableDecision?.notice).toContain(
+      `and a search of the whole project for ${looked} kinds of build or test manifest found none (${directories} directories read, up to 20000 entries and 12 levels deep).`,
+    );
   });
 
   it("opens over package.json's npm-init placeholder, which runs no test", async () => {
@@ -421,7 +428,7 @@ describe("the notice the run's answer carries", () => {
 
     expect(plan.initialDecision).toBe("approve");
     expect(plan.evidence.unverifiableDecision?.notice).toMatch(
-      /^Doğrulanmadı: file_write README\.md\/lantern\.txt başarısız oldu \(Error: could not write file \(E[A-Z]+\)\): README\.md bir dosya, bu yüzden o yol var olamaz\. Ardından file_write aynı adlı dosyayı başka bir dizine yazdı: notes\/lantern\.txt\. Sonucu burada hiçbir şey denetleyemedi: sunulan 7 aracın hiçbiri derleme ya da test çalıştırmıyor ve proje hiçbir derleme ya da test komutu bildirmiyor\.$/,
+      /^Doğrulanmadı: file_write README\.md\/lantern\.txt başarısız oldu \(Error: could not write file \(E[A-Z]+\)\): README\.md bir dosya, bu yüzden o yol var olamaz\. Ardından file_write aynı adlı dosyayı başka bir dizine yazdı: notes\/lantern\.txt\. Sonucu burada hiçbir şey denetleyemedi: sunulan 7 aracın hiçbiri derleme ya da test çalıştırmıyor ve projenin tamamında \d+ türde derleme ya da test bildirgesi arandı, hiçbiri bulunamadı \(\d+ dizin okundu, en çok 20000 girdi ve 12 düzey derinliğe kadar\)\.$/,
     );
   });
 
@@ -529,6 +536,69 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: rootWith({ Makefile: "install:\n\tcp a b\n" }) });
 
     expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([]);
+    expect(plan.initialDecision).toBe("approve");
+  });
+
+  it.each([
+    ["a package.json one level down", { "app/package.json": JSON.stringify({ scripts: { test: "node --test" } }) }, ["app/package.json scripts.test"]],
+    ["a Python package in a folder", { "backend/pyproject.toml": "[project]\nname = \"lantern\"\n", "backend/tests/test_a.py": "def test_a(): pass\n" },
+      ["backend/pyproject.toml", "backend/tests/"]],
+    ["a C# project two levels down", { "src/App/App.csproj": "<Project />\n" }, ["src/App/*.sln / *.csproj"]],
+    ["a Go module in a folder", { "server/go.mod": "module example.com/lantern\n" }, ["server/go.mod"]],
+    ["a workspaces monorepo whose test lives in a package",
+      { "package.json": JSON.stringify({ workspaces: ["packages/*"] }), "packages/a/package.json": JSON.stringify({ scripts: { test: "vitest run" } }) },
+      ["packages/a/package.json scripts.test"]],
+  ])("shell_exec is offered and a directory under the root declares a check: %s (QA 2026-11-16)", async (_label, files, found) => {
+    const startedAt = Date.now() - 49_000 - found[0]!.length;
+    const plan = await verdictAfter({
+      calls: [["shell_exec", "node app/main.js", CRASHED], ["file_write", "app/main.js"], ["shell_exec", "node app/main.js", RAN]],
+      draft: NOT_VERIFIED,
+      tools: NO_CHECK_TOOLS,
+      projectPath: rootWith(files),
+      startedAt,
+    });
+
+    expect(plan.evidence.recentFailureRetries).toEqual({ rerun: 1, rewritten: 0 });
+    expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual(found);
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("keeps the gate");
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a tree deeper than the scan's limit: what lies below is unread, so nothing is said of it", async () => {
+    const startedAt = Date.now() - 51_000;
+    const deep = Array.from({ length: SCAN_LIMITS.depth + 1 }, (_, i) => `d${i + 1}`).join("/");
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, projectPath: rootWith({ [`${deep}/`]: "" }), startedAt });
+
+    expect(plan.evidence.verificationTooling?.projectChecks?.incomplete).toBe(`${deep}/ is deeper than ${SCAN_LIMITS.depth} levels`);
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("unknown: keeps the gate");
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a linked directory is not followed, so the scan is incomplete", async () => {
+    const root = rootWith({});
+    const elsewhere = rootWith({ "package.json": JSON.stringify({ scripts: { test: "vitest run" } }) });
+    symlinkSync(elsewhere, join(root, "linked"), "junction");
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, projectPath: root });
+
+    expect(plan.evidence.verificationTooling?.projectChecks?.incomplete).toBe("linked/ is a linked directory, not followed");
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("unknown: keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
+  it("a check inside a dependency folder is not the project's: the scan skips it and the exit opens", async () => {
+    const plan = await verdictAfter({
+      draft: DONE,
+      tools: NO_CHECK_TOOLS,
+      projectPath: rootWith({ "node_modules/left-pad/package.json": JSON.stringify({ scripts: { test: "tape test.js" } }) }),
+    });
+
+    expect(plan.evidence.verificationTooling?.projectChecks).toMatchObject({ found: [], skipped: expect.arrayContaining(["node_modules"]) });
+    expect(plan.evidence.verificationTooling?.projectChecks?.incomplete).toBeUndefined();
     expect(plan.initialDecision).toBe("approve");
   });
 
@@ -664,6 +734,62 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(plan.initialDecision).toBe("continue");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("the run made the file that blocks the failed path: the record cannot say the path was impossible before (#88)", async () => {
+    const startedAt = Date.now() - 52_000;
+    const root = rootWith({});
+    const plan = await verdictAfter({
+      // The task names no path, so only the blocker's origin can keep the gate here.
+      task: "Write the kappa note into the notes folder",
+      calls: [["file_write", "notes"], ["file_write", "notes/kappa.txt"], ["file_write", "docs/kappa.txt"]],
+      draft: "Wrote the kappa note.",
+      tools: NO_CHECK_TOOLS,
+      projectPath: root,
+      startedAt,
+    });
+
+    expect(plan.evidence.recentFailures).toEqual([expect.stringMatching(/^file_write: Error: could not write file/)]);
+    expect(existsSync(join(root, "notes", "kappa.txt"))).toBe(false);
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a writer that names no path ran in the run (shell_exec): it may have made the blocker, so the record cannot tell", async () => {
+    const root = rootWith({ notes: "made by a shell command\n" });
+    const plan = await verdictAfter({
+      task: "Write the kappa note into the notes folder",
+      calls: [["shell_exec", "printf x > notes", { content: "" }], ["file_write", "notes/kappa.txt"], ["file_write", "docs/kappa.txt"]],
+      draft: "Wrote the kappa note.",
+      tools: NO_CHECK_TOOLS,
+      projectPath: root,
+    });
+
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
+  it("the task names the same file at two paths and only one was written (#88)", async () => {
+    const startedAt = Date.now() - 53_000;
+    const root = rootWith({});
+    const plan = await verdictAfter({
+      task: "Create notes/alpha.txt and docs/alpha.txt, each containing the word ALPHA",
+      calls: [["file_write", "README.md/alpha.txt"], ["file_write", "docs/alpha.txt"]],
+      draft: "Created notes/alpha.txt and docs/alpha.txt.",
+      tools: NO_CHECK_TOOLS,
+      projectPath: root,
+      startedAt,
+    });
+
+    expect(existsSync(join(root, "notes", "alpha.txt"))).toBe(false);
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
   });
 
@@ -862,5 +988,34 @@ describe("fileOnPath: why a failed write's path cannot exist, measured in the pr
 
     expect(fileOnPath(project, "../outside.txt/lantern.txt")).toBeNull();
     expect(fileOnPath(project, join(sandbox, "outside.txt", "lantern.txt"))).toBeNull();
+  });
+});
+
+describe("measureProjectChecks: none is said only of a whole tree", () => {
+  it("stops at the entry limit: the tree is unread past it", () => {
+    const root = rootWith({ "a.txt": "", "b.txt": "", "c.txt": "", "d.txt": "" });
+    const record = measureProjectChecks(root, { entries: 3, depth: SCAN_LIMITS.depth });
+
+    expect(record).toMatchObject({ found: [], directoriesRead: 1, incomplete: "the tree holds more than 3 entries" });
+  });
+
+  it("a directory it cannot read leaves the scan incomplete; an unreadable root gives no record", () => {
+    const root = rootWith({ "app/": "" });
+    const refused = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    const readDirectory = (dir: string) => {
+      if (dir === join(root, "app")) throw refused;
+      return readdirSync(dir, { withFileTypes: true });
+    };
+
+    expect(measureProjectChecks(root, SCAN_LIMITS, readDirectory)).toMatchObject({ found: [], incomplete: "app/ could not be read (EACCES)" });
+    expect(measureProjectChecks(root, SCAN_LIMITS, () => { throw refused; })).toBeNull();
+  });
+
+  it("reads every directory of a tree within the limits, and says so", () => {
+    const root = rootWith({ "docs/": "", "src/lib/": "" });
+    const record = measureProjectChecks(root);
+
+    expect(record).toMatchObject({ found: [], directoriesRead: 4 });
+    expect(record?.incomplete).toBeUndefined();
   });
 });

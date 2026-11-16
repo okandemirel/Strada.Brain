@@ -159,14 +159,26 @@ function projectRow(
   projectPath: string | undefined,
   tooling: VerificationToolingRecord | null,
 ): DecisionInput {
-  const base = { input: "the project declares a check shell_exec could run", source: "the project root's manifests", whenUnknown: "keeps the gate" };
+  const base = {
+    input: "the project declares a check shell_exec could run",
+    source: "the project tree's manifests (measureProjectChecks: every directory but SKIPPED_DIRS, within SCAN_LIMITS)",
+    whenUnknown: "no root, an unreadable root, or an incomplete scan (a limit reached, a directory unreadable, a linked directory) keeps the gate",
+  };
   if (offerUnknownBecause(toolNames, taskDescription)) return { ...base, value: "not read: the offer itself is unknown", effect: KEEPS };
   if (!toolNames?.includes("shell_exec")) return { ...base, value: "shell_exec is not offered: nothing could run one", effect: "allows" };
   const checks = tooling?.projectChecks;
   if (!checks) return { ...base, value: projectPath ? "the project root could not be read" : "no project root was passed in", effect: KEEPS };
+  if (checks.incomplete) {
+    return { ...base, value: `the scan is incomplete after ${checks.directoriesRead} directories: ${checks.incomplete}`, effect: KEEPS };
+  }
   return checks.found.length > 0
     ? { ...base, value: `declares ${checks.found.join(", ")}`, effect: "keeps the gate" }
-    : { ...base, value: `none of the ${checks.looked.length} manifests looked for`, effect: "allows" };
+    : {
+      ...base,
+      value: `none of the ${checks.looked.length} manifest kinds looked for, in all ${checks.directoriesRead} directories ` +
+        `(limits: ${checks.limits.entries} entries, ${checks.limits.depth} levels)`,
+      effect: "allows",
+    };
 }
 
 /**
@@ -240,14 +252,15 @@ export function decideUnverifiableExit(params: {
   };
   const offered = params.toolNames?.length ?? 0;
   const shellOffered = params.toolNames?.includes("shell_exec") === true;
+  const scan = params.tooling?.projectChecks ?? undefined;
   const language = detectSupervisorFeedbackLanguage(params.prompt);
   return {
     opens,
     inputs: [...deciding, claimRow],
     ask,
-    nothingCanCheck: NOTICE.en.nothing(offered, shellOffered),
+    nothingCanCheck: NOTICE.en.nothing(offered, shellOffered, scan),
     ...(opens && !ask
-      ? { notice: unverifiedNotice(evidence.recentFailureAnswers ?? [], { offered, shellOffered }, claims, language) }
+      ? { notice: unverifiedNotice(evidence.recentFailureAnswers ?? [], { offered, shellOffered, scan }, claims, language) }
       : {}),
   };
 }
@@ -271,7 +284,7 @@ interface Words {
   readonly samePath: (call: string, error: string, tool: string, path: string) => string;
   readonly sameName: (call: string, error: string, tool: string, path: string, blockedBy: string) => string;
   readonly earlier: (n: number) => string;
-  readonly nothing: (offered: number, shellOffered: boolean) => string;
+  readonly nothing: (offered: number, shellOffered: boolean, scan?: ProjectCheckRecord) => string;
   readonly why: (nothing: string) => string;
   readonly claim: string;
 }
@@ -285,9 +298,12 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
     sameName: (call, error, tool, path, blockedBy) =>
       `${call} failed (${error}): ${blockedBy} is a file, so that path cannot exist. Then ${tool} wrote ${path}, the same file name in another directory.`,
     earlier: (n) => `${n} earlier failed step(s) are not listed.`,
-    nothing: (offered, shellOffered) =>
+    nothing: (offered, shellOffered, scan) =>
       `none of the ${offered} available tools runs a build or a test` +
-      (shellOffered ? ", and the project declares no build or test command" : ""),
+      (shellOffered && scan
+        ? `, and a search of the whole project for ${scan.looked.length} kinds of build or test manifest found none ` +
+          `(${scan.directoriesRead} directories read, up to ${scan.limits.entries} entries and ${scan.limits.depth} levels deep)`
+        : ""),
     why: (nothing) => `Nothing here could check the result: ${nothing}.`,
     claim: "The report above mentions a check, but no check ran in this run.",
   },
@@ -298,9 +314,12 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
     sameName: (call, error, tool, path, blockedBy) =>
       `${call} başarısız oldu (${error}): ${blockedBy} bir dosya, bu yüzden o yol var olamaz. Ardından ${tool} aynı adlı dosyayı başka bir dizine yazdı: ${path}.`,
     earlier: (n) => `Daha önceki ${n} başarısız adım listelenmedi.`,
-    nothing: (offered, shellOffered) =>
+    nothing: (offered, shellOffered, scan) =>
       `sunulan ${offered} aracın hiçbiri derleme ya da test çalıştırmıyor` +
-      (shellOffered ? " ve proje hiçbir derleme ya da test komutu bildirmiyor" : ""),
+      (shellOffered && scan
+        ? ` ve projenin tamamında ${scan.looked.length} türde derleme ya da test bildirgesi arandı, hiçbiri bulunamadı ` +
+          `(${scan.directoriesRead} dizin okundu, en çok ${scan.limits.entries} girdi ve ${scan.limits.depth} düzey derinliğe kadar)`
+        : ""),
     why: (nothing) => `Sonucu burada hiçbir şey denetleyemedi: ${nothing}.`,
     claim: "Yukarıdaki rapor bir denetimden söz ediyor, ama bu çalışmada hiçbir denetim koşmadı.",
   },
@@ -326,7 +345,7 @@ function answerSentence(answer: FailureAnswer, words: Words): string {
  */
 export function unverifiedNotice(
   answers: readonly FailureAnswer[],
-  offer: { readonly offered: number; readonly shellOffered: boolean },
+  offer: { readonly offered: number; readonly shellOffered: boolean; readonly scan?: ProjectCheckRecord },
   draftClaimsCheck: boolean,
   language: SupervisorFeedbackLanguage,
 ): string {
@@ -336,7 +355,7 @@ export function unverifiedNotice(
     words.head,
     ...shown.map((answer) => answerSentence(answer, words)),
     answers.length > shown.length ? words.earlier(answers.length - shown.length) : "",
-    words.why(words.nothing(offer.offered, offer.shellOffered)),
+    words.why(words.nothing(offer.offered, offer.shellOffered, offer.scan)),
     draftClaimsCheck ? words.claim : "",
   ].filter(Boolean).join(" ");
 }

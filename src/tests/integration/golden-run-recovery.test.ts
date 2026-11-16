@@ -334,14 +334,16 @@ const UNDER_A_FILE = "README.md/kappa.txt";
  * was answered by a write of the same file name under notes/, and that
  * nothing here could check. Built from the record: both targets, the error
  * (its code is the platform's), README.md measured to be a file in the
- * project, and the tool count (the registry's).
+ * project, the tool count (the registry's), and the scan of the project tree
+ * that found no manifest (its directory count is the run's).
  */
 const notVerifiedUnder = (answer: string, name: string, tail = ""): RegExp =>
   new RegExp(
     `^${escapeRegExp(answer)}\\n\\nNot verified: file_write README\\.md/${escapeRegExp(name)} failed ` +
       "\\(Error: could not write file \\(E[A-Z]+\\)\\): README\\.md is a file, so that path cannot exist\\. " +
       `Then file_write wrote notes/${escapeRegExp(name)}, the same file name in another directory\\. Nothing here could check ` +
-      "the result: none of the \\d+ available tools runs a build or a test, and the project declares no build or test command\\." +
+      "the result: none of the \\d+ available tools runs a build or a test, and a search of the whole project for \\d+ kinds of build or test " +
+      "manifest found none \\(\\d+ directories read, up to 20000 entries and 12 levels deep\\)\\." +
       `${escapeRegExp(tail)}$`,
   );
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

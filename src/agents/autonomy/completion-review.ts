@@ -169,7 +169,8 @@ export function collectCompletionReviewEvidence(params: {
       ? [{ step, later: steps.slice(i + 1) }]
       : []);
   const recentFailures = openFailures.slice(-5).map(({ step }) => `${step.toolName}: ${step.summary}`);
-  const answers = openFailures.map(({ step, later }) => failureAnsweredBy(step, later, params.projectPath));
+  const run = { steps: params.state.stepResults, task: params.state.taskDescription };
+  const answers = openFailures.map(({ step, later }) => failureAnsweredBy(step, later, params.projectPath, run));
   const recentFailureAnswers = answers.length > 0 && answers.every((answer) => answer !== null)
     ? answers as readonly FailureAnswer[]
     : undefined;
