@@ -21,15 +21,15 @@ describe("the block a stopped goal is given", () => {
   const task = { id: "task_1", chatId: "cli-local", prompt: "Sort the recipe cards and rebuild the index.", origin: "agent" };
   const tree = { rootId: "goal_root" };
 
-  function harness(opts: { tipStatus?: string } = {}) {
+  function harness(opts: { tipStatus?: string; submit?: () => unknown } = {}) {
     const executor = Object.create(BackgroundExecutor.prototype) as BackgroundExecutor;
     const taskManager = {
       findLatestLineageTask: () => (opts.tipStatus ? { id: "task_tip", status: opts.tipStatus } : null),
       getStatus: () => null,
       block: vi.fn(),
       appendTaskNotice: vi.fn(),
-      retryGoalRoot: vi.fn(() => ({ id: "task_2" })),
-      replanGoalRoot: vi.fn(() => ({ id: "task_2" })),
+      retryGoalRoot: vi.fn(opts.submit ?? (() => ({ id: "task_2" }))),
+      replanGoalRoot: vi.fn(opts.submit ?? (() => ({ id: "task_2" }))),
     };
     Object.assign(executor, {
       taskManager,
@@ -94,5 +94,36 @@ describe("the block a stopped goal is given", () => {
     expect(cancelled.taskManager.block.mock.calls).toEqual([[task.id, STOPPED]]);
     expect(cancelled.taskManager.retryGoalRoot).not.toHaveBeenCalled();
     expect(cancelled.taskManager.replanGoalRoot).not.toHaveBeenCalled();
+  });
+
+  const NOT_STARTED = "The automatic retry above could not be started";
+
+  it("tells the user when the promised retry was not submitted (null or error), replay and replan alike", () => {
+    for (const submit of [() => null, () => { throw new Error("storage closed"); }]) {
+      const replay = harness({ submit });
+      replay.resume();
+      expect(replay.taskManager.retryGoalRoot).toHaveBeenCalledTimes(1);
+      expect(replay.taskManager.appendTaskNotice).toHaveBeenCalledTimes(1);
+      expect(replay.taskManager.appendTaskNotice).toHaveBeenCalledWith(task.id, expect.stringContaining(NOT_STARTED));
+
+      const replan = harness({ submit });
+      replan.resume();
+      replan.taskManager.appendTaskNotice.mockClear();
+      replan.resume();
+      expect(replan.taskManager.replanGoalRoot).toHaveBeenCalledTimes(1);
+      expect(replan.taskManager.appendTaskNotice).toHaveBeenCalledWith(task.id, expect.stringContaining(NOT_STARTED));
+    }
+  });
+
+  it("adds no note when the retry was submitted", () => {
+    const { taskManager, resume } = harness();
+    resume();
+    expect(taskManager.appendTaskNotice).not.toHaveBeenCalled();
+  });
+
+  it("still returns when the notice itself cannot be written", () => {
+    const { taskManager, resume } = harness({ submit: () => null });
+    taskManager.appendTaskNotice.mockImplementation(() => { throw new Error("closed"); });
+    expect(() => resume()).not.toThrow();
   });
 });

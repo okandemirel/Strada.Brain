@@ -1,4 +1,5 @@
 import type { AgentState, StepResult } from "../agent-state.js";
+import { failureAnsweredBy, type FailureAnswer } from "./completion-review-answers.js";
 import { verifierOutputVerdict, type VerificationState } from "./self-verification.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { analyzePromptTargets } from "../prompt-targets.js";
@@ -9,11 +10,21 @@ export interface CompletionReviewEvidence {
   readonly touchedFiles: readonly string[];
   readonly recentFailures: readonly string[];
   /**
-   * Every open failure (not only the last five) was followed by a successful
-   * call of the same tool: the step was re-run and the re-run worked, so what
-   * is missing is a verification, not a repair. False when nothing failed.
+   * Every open failure (not only the last five) was answered by a later
+   * success (failureAnsweredBy): what is missing is a verification, not a
+   * repair. False when nothing failed.
    */
   readonly recentFailuresRetriedOk?: boolean;
+  /**
+   * How the open failures were answered, when all of them were: `rerun`, the
+   * same call (same tool, same input) succeeded later; `rewritten`, a writer
+   * failed and the same tool later acted on that path, or wrote that file name
+   * in another directory because the failed path cannot exist
+   * (completion-review-answers.ts).
+   */
+  readonly recentFailureRetries?: { readonly rerun: number; readonly rewritten: number };
+  /** Each open failure and the success that answered it, oldest first, when all of them were answered. */
+  readonly recentFailureAnswers?: readonly FailureAnswer[];
   readonly recentLogIssues: readonly LogEntry[];
   readonly recentSteps: readonly string[];
   readonly totalStepCount: number;
@@ -145,6 +156,8 @@ export function collectCompletionReviewEvidence(params: {
   logEntries: readonly LogEntry[];
   chatId: string;
   taskStartedAtMs: number;
+  /** The root the run's tools write in: where a write's failure is measured (completion-review-answers.ts). */
+  projectPath?: string;
 }): CompletionReviewEvidence {
   const touchedFiles = [...params.verificationState.touchedFiles].sort();
   const reviewCutoff = Math.max(
@@ -156,8 +169,18 @@ export function collectCompletionReviewEvidence(params: {
       ? [{ step, later: steps.slice(i + 1) }]
       : []);
   const recentFailures = openFailures.slice(-5).map(({ step }) => `${step.toolName}: ${step.summary}`);
-  const recentFailuresRetriedOk =
-    openFailures.length > 0 && openFailures.every(({ step, later }) => sameToolLaterSucceeded(step, later));
+  const run = { steps: params.state.stepResults, task: params.state.taskDescription };
+  const answers = openFailures.map(({ step, later }) => failureAnsweredBy(step, later, params.projectPath, run));
+  const recentFailureAnswers = answers.length > 0 && answers.every((answer) => answer !== null)
+    ? answers as readonly FailureAnswer[]
+    : undefined;
+  const recentFailuresRetriedOk = recentFailureAnswers !== undefined;
+  const recentFailureRetries = recentFailureAnswers
+    ? {
+      rerun: recentFailureAnswers.filter((a) => a.kind === "rerun").length,
+      rewritten: recentFailureAnswers.filter((a) => a.kind !== "rerun").length,
+    }
+    : undefined;
   const recentSteps = params.state.stepResults
     .slice(-8)
     .map((step) => `[${step.success ? "OK" : "FAIL"}] ${step.toolName}: ${step.summary}`);
@@ -172,6 +195,7 @@ export function collectCompletionReviewEvidence(params: {
     touchedFiles,
     recentFailures,
     recentFailuresRetriedOk,
+    ...(recentFailureRetries ? { recentFailureRetries, recentFailureAnswers } : {}),
     recentSteps,
     totalStepCount: params.state.stepResults.length,
     inspectionStepCount,
@@ -179,6 +203,7 @@ export function collectCompletionReviewEvidence(params: {
     mutationStepCount,
     recentLogIssues: params.logEntries
       .filter((entry) => isRelevantLogIssue(entry, params.chatId, reviewCutoff))
+      .filter((entry) => !providerDropAnswered(entry, params.state.stepResults))
       .slice(-8),
     verificationState: params.verificationState,
   };
@@ -195,11 +220,7 @@ export function collectCompletionReviewEvidence(params: {
  * and failed has a failing path to re-run.
  */
 function refusalRetriedOk(step: StepResult, later: readonly StepResult[]): boolean {
-  return isPathTargetRefusal(step.summary) && sameToolLaterSucceeded(step, later);
-}
-
-function sameToolLaterSucceeded(step: StepResult, later: readonly StepResult[]): boolean {
-  return later.some((next) => next.success && next.toolName === step.toolName);
+  return isPathTargetRefusal(step.summary) && later.some((next) => next.success && next.toolName === step.toolName);
 }
 
 export function shouldRunCompletionReview(
@@ -261,8 +282,43 @@ export function buildAutonomyDeflectionGate(
 
 
 
+/**
+ * When a log line was logged. The cutoff is a millisecond instant and the
+ * string a floored second: read as a time, a line logged in the cutoff's
+ * second fell before it and the same line a second later after it, so the
+ * verdict moved with the clock (measured 2026-11-11: a golden run with 1.2 s
+ * per provider call was asked for a targeted repro on every run). The string
+ * is read only for an entry that carries no millisecond stamp.
+ */
+function logEntryMs(entry: LogEntry): number {
+  return entry.timestampMs ?? Date.parse(entry.timestamp);
+}
+
+/**
+ * What the orchestrator logs when a provider call drops (orchestrator.ts: the
+ * turn's stream, then its non-streaming fallback). A drop is the provider's
+ * failure, not the work's: there is no failing path in the project to re-run.
+ */
+const PROVIDER_DROP_MESSAGES: ReadonlySet<string> = new Set([
+  "Silent stream error",
+  "Silent stream fallback chat failed",
+]);
+
+/**
+ * A provider drop that a later call has answered: a step succeeded after it,
+ * so the provider answered again and the work went on. The run's failure
+ * ledger already gives the next turn its notice of the drop. A drop nothing
+ * succeeded after still counts: the answer under review may rest on a turn
+ * that never came back. Same shape as refusalRetriedOk for tool steps.
+ */
+function providerDropAnswered(entry: LogEntry, steps: readonly StepResult[]): boolean {
+  if (!PROVIDER_DROP_MESSAGES.has(entry.message)) return false;
+  const droppedAt = logEntryMs(entry);
+  return steps.some((step) => step.success && step.timestamp > droppedAt);
+}
+
 function isRelevantLogIssue(entry: LogEntry, chatId: string, cutoffMs: number): boolean {
-  const timestampMs = Date.parse(entry.timestamp);
+  const timestampMs = logEntryMs(entry);
   if (!Number.isFinite(timestampMs) || timestampMs < cutoffMs) {
     return false;
   }

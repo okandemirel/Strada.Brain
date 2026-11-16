@@ -38,6 +38,7 @@ import type {
 } from "./delegation-types.js";
 import type { DelegationLog } from "./delegation-log.js";
 import { resolveDelegationBudget } from "./delegation-budget.js";
+import { delegationBrief } from "./delegation-brief.js";
 import type { TierRouter } from "./tier-router.js";
 import type { ProviderCredentialMap, ProviderConfig } from "../../providers/provider-registry.js";
 import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-registry.js";
@@ -644,10 +645,6 @@ export class DelegationManager {
     const providerManager = this.buildSubAgentProviderManager(provider, providerConfig.name);
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
-    const systemPrompt =
-      typeConfig.systemPrompt ??
-      `You are a specialized sub-agent for ${typeConfig.name.replace(/_/g, " ")} tasks. Complete the assigned task concisely and return the result. Do not delegate further.`;
-
     // Set up timeout with abort controller
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), typeConfig.timeoutMs);
@@ -819,6 +816,9 @@ export class DelegationManager {
     // project behind the caller's lease — whose own commit then found the
     // file changed since its seed and quarantined the caller's version.
     const callerTree = callerWorkTree(request.toolContext?.projectPath, this.opts.projectPath);
+    // A delegate's task metric is its calling run's subtask. With no parent id it would be
+    // recorded as one more 'background' task, so it is not recorded at all.
+    const parentMetricId = request.toolContext?.parentRun?.metricId;
 
     // Held outside the try so the finally can release it: an Orchestrator owns a
     // session-cleanup timer and a budget listener that otherwise outlive the run.
@@ -863,6 +863,7 @@ export class DelegationManager {
         providerRouter: this.opts.providerRouter,
         vaultRegistry: this.opts.vaultRegistry,
         vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
+        metricsRecorder: parentMetricId ? this.opts.sharedOrchestratorDeps.metricsRecorder : undefined,
         maxIterations: typeConfig.maxIterations,
         authorizedPathsStore: this.opts.authorizedPathsStore,
         onUsage,
@@ -895,19 +896,15 @@ export class DelegationManager {
         channelType: "cli",
         chatId: delegateChatId,
         userId: "sub-agent",
-        text: request.context
-          ? `${systemPrompt}\n\nTask: ${request.task}\n\nContext: ${request.context}`
-          : `${systemPrompt}\n\nTask: ${request.task}`,
+        text: delegationBrief(typeConfig, request.task, request.context),
         timestamp: new Date(),
       };
 
       let workerResult: import("../../supervisor/supervisor-types.js").WorkerRunResult | undefined;
       if (typeof (orchestrator as Orchestrator & { createAgentCorePort?: unknown }).createAgentCorePort === "function") {
-        // Route the delegated sub-agent through the AgentRunner seam (the V2 spine — cutover
-        // Step 5 deleted the v1 engine; the probe now keys on the Agent Core wiring hook, NOT the
-        // deleted runWorkerTask). Mirrors background-executor.executeWorkerRun: supervisor-node ⇒
-        // the "delegated" worker mode; the never-returning waitForAbort still races the run for
-        // the delegation timeout; toWorkerRunResult projects AgentRunResult → WorkerRunResult.
+        // Route the delegated sub-agent through the AgentRunner seam (the probe keys on the Agent
+        // Core wiring hook). As background-executor.executeWorkerRun: supervisor-node ⇒ "delegated"
+        // tool mode; waitForAbort races the run for the timeout; toWorkerRunResult projects it.
         const mode = "supervisor-node" as const;
         const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
         const runPromise = runner.run(
@@ -917,6 +914,8 @@ export class DelegationManager {
               taskRunId: subAgentId,
               channelType: message.channelType,
               userId: message.userId,
+              // Only instinct retrieval is for the caller's person; no caller run ⇒ shared learning only.
+              instinctOwner: { userId: request.toolContext?.parentRun?.instinctUserId },
               workspaceLease,
               // The V2 runner reads its sink from the REQUEST, not the Orchestrator.
               onUsage,
@@ -926,6 +925,7 @@ export class DelegationManager {
               // Opened inside the calling run: bounded by its clock, gated on this
               // delegation's remaining slice, and debiting its spend back up.
               parentClockView: request.toolContext?.parentRun?.clockView,
+              parentMetricId,
               childBudget: runBudget
                 ? { slice: runBudget.carveChild(1, 1), parent: runBudget }
                 : undefined,

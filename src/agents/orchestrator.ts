@@ -80,11 +80,7 @@ import { archiveToolFailure } from "./tool-failure-archive.js";
 import { unknownToolMessage } from "./unknown-tool-hint.js";
 import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
-import {
-  AgentPhase,
-  type AgentState,
-  type StepResult,
-} from "./agent-state.js";
+import type { AgentPhase, AgentState, StepResult } from "./agent-state.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import { TeachingParser } from "../learning/feedback/teaching-parser.js";
@@ -255,6 +251,7 @@ import {
 } from "../supervisor/supervisor-feedback.js";
 import { announceSupervisorFallback } from "./orchestrator-supervisor-fallback.js";
 import { SessionManager, replaceProviderFailureNotice, type Session } from "./orchestrator-session-manager.js";
+import { freshRunSession } from "./orchestrator-session-manager-task-turn.js";
 import {
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
   resolveAskUserClarificationIntervention as resolveAskUserClarificationInterventionHelper,
@@ -282,6 +279,7 @@ import {
 import {
   runProactiveGoalDecomposition as runProactiveGoalDecompositionHelper,
   runReactiveGoalDecomposition as runReactiveGoalDecompositionHelper,
+  decompositionUsageSink,
   type GoalDecompositionDeps,
 } from "./orchestrator-goal-decomposition.js";
 // Agent Core v2 — the strangler seam. The Orchestrator IMPLEMENTS OrchestratorPort by binding
@@ -294,6 +292,7 @@ import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import { estimateTextTokens } from "../common/token-estimator.js";
 import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
 import { resolveUnreservedCostCapUsd } from "../agent-core/engine/budget.js";
+import { phaseAllowsWrites, phaseWriteRefusalResult } from "../agent-core/engine/phase-write-access.js";
 import { createBudget } from "../agent-core/control/budget.js";
 import {
   isUnityEditorExclusiveTool,
@@ -302,22 +301,9 @@ import {
 } from "./unity-editor-lock.js";
 
 
-/** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
+/** Self-improvement tools pass the phase write gate — they have their own guards. */
 const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
   "create_skill",
-]);
-
-/**
- * Phases in which a write may run.
- *
- * Mirrors buildWorkerToolDefinitions, which removes write tools from what the
- * model is offered in the other three. Keeping both in one place is what stops
- * the offer and the gate from drifting apart again.
- */
-const PHASES_ALLOWING_WRITES: ReadonlySet<AgentPhase> = new Set([
-  AgentPhase.EXECUTING,
-  AgentPhase.COMPLETE,
-  AgentPhase.FAILED,
 ]);
 const TYPING_INTERVAL_MS = 4000;
 
@@ -1380,7 +1366,7 @@ export class Orchestrator {
       streamInitialTimeoutMs: this.streamInitialTimeoutMs,
       streamStallTimeoutMs: this.streamStallTimeoutMs,
       // Step 3 (prepare-iteration): the tool registry is shell state → inject as a callback.
-      buildWorkerToolDefinitions: (task, phase, role) => this.buildWorkerToolDefinitions(task, phase, role),
+      buildWorkerToolDefinitions: (task) => this.buildWorkerToolDefinitions(task),
       // Step 4 (synthesis/projection).
       providerManager: this.providerManager,
       // Step 5b (review/verify): systemPrompt is mutable (rebuilt) → LAZY GETTER.
@@ -1460,6 +1446,8 @@ export class Orchestrator {
       // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
       // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).
       executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
+      // The gate's phase rule as one predicate: the spine splits each model turn's calls with it.
+      phaseRefuses: (toolName, phase) => this.phaseRefuses(toolName, phase),
       emitToolResult: (chatId, tc, tr, sig) => this.emitToolResult(chatId, tc, tr, sig),
       buildToolBatchProgressSignal: (params) => this.buildToolBatchProgressSignal(params),
       // BUG#1 P2: route the plain-loop live step DAG through the shell's MonitorLifecycle (lazy —
@@ -1916,6 +1904,8 @@ export class Orchestrator {
         taskRunId: params.taskRunId,
         attachments: params.attachments,
         onUsage: params.onUsage,
+        // The planning call bills through the hook the nodes' model turns use (task #67).
+        onPlanningUsage: decompositionUsageSink((p, u, h, m) => this.recordProviderUsage(p, u, h, m), params.onUsage),
         workspaceLease: params.workspaceLease,
         ...(params.workspacePolicy ? { workspacePolicy: params.workspacePolicy } : {}),
         ...(params.nodeWorkspaces ? { nodeWorkspaces: params.nodeWorkspaces } : {}),
@@ -3094,21 +3084,18 @@ export class Orchestrator {
   }
 
 
+  /**
+   * The worker's tool list: the same in every phase and role of a run, so a phase change does
+   * not break the provider's prefix cache (src/agent-core/engine/phase-write-access.ts). A
+   * write called in a phase that does not write is refused at the gate (runToolCallGateChain).
+   */
   private buildWorkerToolDefinitions(
     _task: TaskClassification,
-    phase: AgentPhase,
-    role: SupervisorAssignment["role"],
   ): Array<{
     name: string;
     description: string;
     input_schema: import("../types/index.js").JsonObject;
   }> {
-    const allowWriteTools =
-      role === "executor" &&
-      phase !== AgentPhase.PLANNING &&
-      phase !== AgentPhase.REPLANNING &&
-      phase !== AgentPhase.REFLECTING;
-
     // Once per process: what the schemas cost per turn, and which tools carry it
     // (measured 2026-09-09: 29 863 chars for 59 tools on every worker turn).
     if (!this.toolSchemaBudgetLogged && this.toolDefinitions.length > 0) {
@@ -3136,17 +3123,7 @@ export class Orchestrator {
       // `dotnet build` without one answers MSB1003. Measured across two runs —
       // three attempts, three MSB1003s — while unity_verify_change, which
       // compiles headlessly with no Editor, sat in the same block unused.
-      if (DOTNET_PROJECT_TOOLS.has(definition.name) && !this.dotnetProject.check()) {
-        return false;
-      }
-      if (!allowWriteTools && metadata?.readOnly === false) {
-        // Allow self-improvement tools in all phases
-        if (SELF_IMPROVEMENT_TOOLS.has(definition.name)) {
-          return true;
-        }
-        return false;
-      }
-      return true;
+      return !(DOTNET_PROJECT_TOOLS.has(definition.name) && !this.dotnetProject.check());
     });
   }
 
@@ -3232,6 +3209,7 @@ export class Orchestrator {
       synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
       runVisibilityReview: (p) => this.runVisibilityReview(p),
       executeToolCalls: (chatId, toolCalls, opts) => this.executeToolCalls(chatId, toolCalls, opts),
+      phaseRefuses: (toolName, phase) => this.phaseRefuses(toolName, phase),
       getLogRingBuffer: () => typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
       buildStructuredProgressSignal: (prompt, title, signal, lang) => this.buildStructuredProgressSignal(prompt, title, signal, lang),
       isAutonomousActive: (chatId, userId) => this.dmPolicy?.isAutonomousActive(chatId, userId) ?? false,
@@ -3332,8 +3310,7 @@ export class Orchestrator {
       trajectoryReplayRetriever: this.trajectoryReplayRetriever as ContextBuilderDeps["trajectoryReplayRetriever"],
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       runtimeArtifactMatches: this.runtimeArtifactMatches,
-      buildWorkerToolDefinitions: (task, phase, role) =>
-        this.buildWorkerToolDefinitions(task, phase, role as SupervisorAssignment["role"]),
+      buildWorkerToolDefinitions: (task) => this.buildWorkerToolDefinitions(task),
       skillEntries: this.getSkillEntries?.(),
     };
   }
@@ -5460,25 +5437,18 @@ export class Orchestrator {
     // named in a response anyway went straight to the tool, because the rule was
     // a property of the menu rather than of the kitchen. Same shape as the
     // batch_execute hole: a restriction enforced on one path, and everything
-    // arriving by another path exempt by construction.
+    // arriving by another path exempt by construction. The menu no longer
+    // varies by phase (it broke the prefix cache); this gate is the rule.
     //
     // Applied only where the phase is known, so callers that attach no agent
     // state keep their behaviour; this tightens a known case rather than
     // guessing at unknown ones.
     const phase = options.agentState?.phase;
-    if (
-      phase !== undefined &&
-      !PHASES_ALLOWING_WRITES.has(phase) &&
-      this.isWriteOperation(tc.name) &&
-      !SELF_IMPROVEMENT_TOOLS.has(tc.name)
-    ) {
-      return {
-        toolCallId: tc.id,
-        content:
-          `Write operations are not available while the agent is ${phase}. ` +
-          `Finish planning or reflecting first; writes run in the executing phase.`,
-        isError: true,
-      };
+    if (phase !== undefined && this.phaseRefuses(tc.name, phase)) {
+      // The spine refuses a model turn's writes before they reach this gate (splitCallsByPhase);
+      // what arrives here is another caller's call, made with a state in such a phase.
+      ctx.logger.info("Phase write refused", { chatId: ctx.chatId, tool: tc.name, phase, at: "gate" });
+      return phaseWriteRefusalResult(tc.id, phase);
     }
 
     let activeToolCall = tc;
@@ -5564,7 +5534,7 @@ export class Orchestrator {
       // named a write tool in PLANNING, or a bridge tool while the bridge was
       // down, cost the very turn it exists to save).
       const phase = options.agentState?.phase;
-      const writesAllowed = phase === undefined || PHASES_ALLOWING_WRITES.has(phase);
+      const writesAllowed = phase === undefined || phaseAllowsWrites(phase);
       const callable = [...this.tools.keys()].filter((name) => {
         const meta = this.toolMetadataByName.get(name);
         if (meta?.controlPlaneOnly || meta?.available === false) return false;
@@ -6004,6 +5974,16 @@ export class Orchestrator {
         ...(archivedFailure ? { metadata: { archivedFailure } } : {}),
       };
     }
+  }
+
+  /**
+   * The phase rule as one predicate: whether a call of `toolName` made in `phase` is refused, that
+   * is, a write in a phase that does not write. The spine splits each model turn's calls with it
+   * before anything reads them (agent-core/engine/phase-write-access.ts splitCallsByPhase), the
+   * loop recovery asks it before it delegates, and this gate applies it to every other caller.
+   */
+  private phaseRefuses(toolName: string, phase: AgentPhase): boolean {
+    return !phaseAllowsWrites(phase) && this.isWriteOperation(toolName) && !SELF_IMPROVEMENT_TOOLS.has(toolName);
   }
 
   /**
@@ -6540,17 +6520,13 @@ export class Orchestrator {
       eventEmitter: this.eventEmitter,
       workspaceBus: this.workspaceBus,
       goalStorage: this.goalStorage,
+      recordProviderUsage: (providerName, usage, onUsage, modelId) => this.recordProviderUsage(providerName, usage, onUsage, modelId),
     };
   }
 
-  private async runProactiveGoalDecomposition(opts: {
-    conversationScope: string;
-    userMessage: string;
-    chatId: string;
-    session: Session;
-    agentState: AgentState;
-    signal?: AbortSignal;
-  }): Promise<AgentState> {
+  private async runProactiveGoalDecomposition(
+    opts: Omit<Parameters<typeof runProactiveGoalDecompositionHelper>[1], "language">,
+  ): Promise<AgentState> {
     // Thread the resolved user language so a provider-outage notice surfaced from the
     // helper (all-providers-failed during decomposition) is localized, not hardcoded EN.
     return runProactiveGoalDecompositionHelper(this.goalDecompositionDeps, {
@@ -6559,12 +6535,9 @@ export class Orchestrator {
     });
   }
 
-  private async runReactiveGoalDecomposition(opts: {
-    conversationScope: string;
-    chatId: string;
-    session: Session;
-    responseText: string;
-  }): Promise<void> {
+  private async runReactiveGoalDecomposition(
+    opts: Parameters<typeof runReactiveGoalDecompositionHelper>[1],
+  ): Promise<void> {
     return runReactiveGoalDecompositionHelper(this.goalDecompositionDeps, opts);
   }
 
@@ -6666,12 +6639,7 @@ export class Orchestrator {
         request.attachments ? [...request.attachments] : undefined, // readonly → mutable for buildUserContent
         supportsVision,
       );
-    const initialUserMessage: ConversationMessage = { role: "user", content: userContent };
-    return {
-      messages: [initialUserMessage],
-      visibleMessages: [initialUserMessage],
-      lastActivity: new Date(),
-    };
+    return freshRunSession(userContent);
   }
 
   /**

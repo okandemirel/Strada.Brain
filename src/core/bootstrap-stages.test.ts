@@ -501,6 +501,7 @@ describe("bootstrap-stages", () => {
       getRuntimeArtifactManager: vi.fn().mockReturnValue(undefined),
       setProjectPath: vi.fn(),
       setPromotionThreshold: vi.fn(),
+      tickEvolution: vi.fn(),
     } as any;
 
     const result = initializeRuntimeStateStage({
@@ -543,6 +544,10 @@ describe("bootstrap-stages", () => {
     expect(identityManager.setProjectContext).toHaveBeenCalledWith("/Users/test/Game");
     expect(pipeline.setProjectPath).toHaveBeenCalledWith("/Users/test/Game");
     expect(pipeline.setPromotionThreshold).toHaveBeenCalledWith(0.75);
+    // The boot evolution pass runs once, after the project scope and threshold are set.
+    expect(pipeline.tickEvolution).toHaveBeenCalledTimes(1);
+    expect(pipeline.tickEvolution.mock.invocationCallOrder[0]).toBeGreaterThan(pipeline.setProjectPath.mock.invocationCallOrder[0]);
+    expect(pipeline.tickEvolution.mock.invocationCallOrder[0]).toBeGreaterThan(pipeline.setPromotionThreshold.mock.invocationCallOrder[0]);
     if (result.uptimeInterval) {
       clearInterval(result.uptimeInterval);
     }
@@ -1167,7 +1172,6 @@ describe("bootstrap-stages", () => {
       metrics: { _tag: "metrics" } as any,
       ragPipeline: { _tag: "rag" } as any,
       rateLimiter: { _tag: "rate-limiter" } as any,
-      instinctRetriever: { _tag: "instincts" } as any,
       metricsRecorder: { _tag: "metrics-recorder" } as any,
       goalDecomposer: { _tag: "goal-decomposer" } as any,
       identityManager: {

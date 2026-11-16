@@ -865,7 +865,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             // 30s → ≤10min ladder and re-probed the dead provider every expiry. A probe
             // failure earns the same cooldown class a real attempt would.
             if (isCredentialRejection(probeErr)) {
-              health.recordCredentialRejected(provider.name, probeMsg);
+              health.recordCredentialRejected(provider.name, probeMsg, health.liveSuccessor(this.providers.map((p) => p.name), provider.name));
             } else {
               this.recordClassifiedFailure(health, provider, probeErr, probeMsg);
             }
@@ -1067,7 +1067,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         const isSingleProvider = this.providers.length === 1;
         // A refused key is benched before the redundancy check below reads the
         // chain: classified generically first, it counted twice and never warned.
-        if (isCredentialRejection(error)) health.recordCredentialRejected(provider.name, errorMsg);
+        if (isCredentialRejection(error)) health.recordCredentialRejected(provider.name, errorMsg, health.liveSuccessor(this.providers.map((p) => p.name), provider.name));
         else this.recordClassifiedFailure(health, provider, error, errorMsg);
 
         // Reset thinking success counter on any failure

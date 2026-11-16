@@ -18,8 +18,12 @@ import { MAX_UNITY_ERROR_ATTEMPTS, type VerificationState } from "./self-verific
 import { FAILED_TERMINAL_KEYS, systemStampsIn } from "./terminal-outcome.js";
 import {
   measureVerificationTooling,
+  decideUnverifiableExit,
+  recordUnverifiedNotice,
+  resetUnverifiableState,
   unverifiableFailureCheck,
-  unverifiableFailureOutcome,
+  unverifiableRunKey,
+  type UnverifiableDecision,
   type VerificationToolingRecord,
 } from "./verifier-pipeline-unverifiable.js";
 
@@ -53,6 +57,8 @@ export interface VerifierPipelineEvidence extends CompletionReviewEvidence {
   readonly repeatedErrorSignature: string | null;
   /** What the run's tool registry said about verification; null when it was not measured. */
   readonly verificationTooling?: VerificationToolingRecord | null;
+  /** Every input of the unverifiable-failure exit, what was read and what it decided; set when a failure is open. */
+  readonly unverifiableDecision?: UnverifiableDecision;
 }
 
 export interface VerifierPipelinePlan {
@@ -75,7 +81,23 @@ export interface VerifierPipelineResult {
   readonly stageResults?: readonly CompletionReviewStageResult[];
 }
 
-export function planVerifierPipeline(params: {
+/**
+ * The plan, and the notice the run's final answer carries: set only by a
+ * verdict that lets the run end (approve) with the unverifiable-failure exit
+ * open, cleared by every other verdict.
+ */
+export function planVerifierPipeline(params: PlanVerifierPipelineParams): VerifierPipelinePlan {
+  const plan = planVerifierChecks(params);
+  recordUnverifiedNotice(
+    unverifiableRunKey(params.chatId, params.taskStartedAtMs),
+    plan.initialDecision === "approve" ? plan.evidence.unverifiableDecision?.notice : undefined,
+  );
+  return plan;
+}
+
+type PlanVerifierPipelineParams = Parameters<typeof planVerifierChecks>[0];
+
+function planVerifierChecks(params: {
   prompt: string;
   draft: string;
   state: AgentState;
@@ -89,8 +111,10 @@ export function planVerifierPipeline(params: {
   buildToolsAvailable?: boolean;
   /** The tools this run was offered: the record "nothing here can verify" is read from. */
   availableToolNames?: readonly string[];
+  /** The project root, whose manifests say whether shell_exec has a check to run. */
+  projectPath?: string;
 }): VerifierPipelinePlan {
-  const tooling = measureVerificationTooling(params.availableToolNames, params.state.taskDescription);
+  const tooling = measureVerificationTooling(params.availableToolNames, params.state.taskDescription, params.projectPath);
   const collected = collectVerifierPipelineEvidence({
     state: params.state,
     task: params.task,
@@ -100,12 +124,31 @@ export function planVerifierPipeline(params: {
     taskStartedAtMs: params.taskStartedAtMs,
     draft: params.draft,
     conformanceGate: params.conformanceGate,
+    projectPath: params.projectPath,
   });
-  const evidence: VerifierPipelineEvidence = { ...collected, verificationTooling: tooling };
-  // A failure re-run successfully in a run whose registry holds no check
-  // tool: the draft must say it is not verified, and then it stops gating
+  // A failure answered by a later success in a run where nothing can check
+  // it: decided from the record, one row per input, the draft never opening it
   // (verifier-pipeline-unverifiable.ts says when, and why).
-  const unverifiable = unverifiableFailureOutcome(evidence, tooling, params.draft);
+  const runKey = unverifiableRunKey(params.chatId, params.taskStartedAtMs);
+  const decision = collected.recentFailures.length > 0
+    ? decideUnverifiableExit({
+      evidence: collected,
+      tooling,
+      toolNames: params.availableToolNames,
+      taskDescription: params.state.taskDescription,
+      projectPath: params.projectPath,
+      lastVerificationAt: params.verificationState.lastVerificationAt,
+      draft: params.draft,
+      runKey,
+      prompt: params.prompt,
+    })
+    : undefined;
+  const evidence: VerifierPipelineEvidence = {
+    ...collected,
+    verificationTooling: tooling,
+    ...(decision ? { unverifiableDecision: decision } : {}),
+  };
+  const unverifiable = decision?.opens === true ? decision : null;
 
   const checks: VerifierCheck[] = [];
   // Exhausted debt takes the gating path whatever the tooling says: with the
@@ -123,8 +166,8 @@ export function planVerifierPipeline(params: {
   // completion over unreproduced failures precisely when nothing could have
   // verified it. Keep it active; the honest terminal failure report remains the
   // one accepted way out when the tooling truly cannot come back.
-  const targetedCheck = unverifiable && tooling
-    ? unverifiableFailureCheck(unverifiable, evidence, tooling)
+  const targetedCheck = unverifiable
+    ? unverifiableFailureCheck(unverifiable, evidence, runKey)
     : params.buildToolsAvailable === false && evidence.hasTerminalFailureReport
       ? null
       : buildTargetedReproVerifierCheck(evidence);
@@ -395,6 +438,7 @@ function buildFailureWithoutAttemptGate(evidence: VerifierPipelineEvidence): str
 const noWorkGateEmissions = new Map<string, number>();
 /** Test hook: forget every run's no-work gate count. */
 export function resetNoWorkEvidenceGates(): void {
+  resetUnverifiableState();
   zeroAttemptFailureGates.clear();
   unpaidDebtGateEmissions.clear();
   noWorkGateEmissions.clear();
@@ -443,6 +487,8 @@ export function collectVerifierPipelineEvidence(params: {
   taskStartedAtMs: number;
   draft: string;
   conformanceGate: string | null;
+  /** The root the run's tools write in: where a failed write is measured. */
+  projectPath?: string;
 }): VerifierPipelineEvidence {
   // Detect consecutive same errors — SINCE THE LAST REPAIR. Successful steps
   // were filtered out before the streak was counted, so three identical
@@ -488,6 +534,7 @@ export function collectVerifierPipelineEvidence(params: {
       logEntries: params.logEntries,
       chatId: params.chatId,
       taskStartedAtMs: params.taskStartedAtMs,
+      projectPath: params.projectPath,
     }),
     task: params.task,
     hasTerminalFailureReport: isTerminalFailureReport(params.draft),
@@ -806,7 +853,7 @@ function buildVerifierPipelineGate(
   const tail = decision === "replan"
     ? "Preserve the useful evidence, discard the failing approach, create a new plan, and continue only after the new path has a clean verifier result."
     : checks.every((check) => check.name === "unverifiable-failure")
-      ? "Nothing can be verified here: report now, and say the result is not verified."
+      ? "Nothing can be verified here: rewrite the report without claiming a check, and finish."
       : "Continue internally. Resolve the failing verifier checks, rerun the relevant verification, and only then declare the task complete.";
 
   return [

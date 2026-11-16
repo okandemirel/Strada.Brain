@@ -70,6 +70,8 @@ import { AgentPhase, createInitialState, type AgentState } from "../../agents/ag
 import { resolveServedIdentity } from "../../agents/orchestrator-phase-telemetry.js";
 import type { ProviderServedBy } from "../../agents/providers/provider-core.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+import { splitCallsByPhase, type PhaseCallSplit } from "../engine/phase-write-access.js";
+import { setupInputOf } from "./setup-input.js";
 // Free helpers imported directly by the spine (no `this`). The max_tokens continuation gate +
 // pusher are the v1 shared helpers; nothing here closes over the Orchestrator.
 import {
@@ -262,6 +264,17 @@ const PHASE_TRACE_MAP: Record<string, RecordExecutionTraceParams["phase"]> = {
   [AgentPhase.REPLANNING]: "replanning",
 };
 
+/** One tool call of a turn, as the port reports it. */
+interface ToolTraceRow {
+  toolName: string;
+  toolCallId: string;
+  success: boolean;
+  errorCategory?: string;
+  touchedFiles?: readonly string[];
+  /** The tool's result text (truncated) — the evidence the test verdict reads. */
+  resultText?: string;
+}
+
 export class V2AgentRunner implements AgentRunner {
   constructor(private readonly deps: V2RunnerDeps) {}
 
@@ -381,14 +394,15 @@ export class V2AgentRunner implements AgentRunner {
       let consecutiveMaxTokens = 0;
 
       // What the run lends its tool turns: a sub-agent a tool starts is cancelled with this run,
-      // carved from this run's budget and bounded by this run's clock. Tool calls are NOT raced
-      // against the cancel — a tool may be writing into the run's workspace lease, which the
-      // caller releases once run() returns — so a cancel reaches tools through the signal and
-      // the next gate stops the run once the batch has settled.
+      // carved from its budget, bounded by its clock and given its instinct owner. Tool calls are
+      // NOT raced against the cancel (a tool may be writing into the lease the caller releases once
+      // run() returns): a cancel reaches tools through the signal, and the next gate stops the run.
       const runScope: ParentRunScope = {
         signal: runClock.taskToken.signal,
         budget,
         clockView: runClock.view,
+        metricId: setup.metricId || undefined,
+        instinctUserId: setup.instinctUserId,
       };
 
       // The deriveCallLimits carve the spine hands enterCall (subtractive-min vs task remaining is
@@ -656,6 +670,15 @@ export class V2AgentRunner implements AgentRunner {
           }
           consecutiveMaxTokens = 0; // reset on every non-(toolless-max_tokens) turn (v1 ~5346)
 
+          // The turn's calls, split once by the phase they were made in, before anything reads them:
+          // every reader takes `calls.runnable`; a refused write is answered in the session alone
+          // (agent-core/engine/phase-write-access.ts). The log counts how often a model names one.
+          const calls = splitCallsByPhase(outcome.response.toolCalls, state.phase, (n, p) => port.phaseRefuses(n, p));
+          if (calls.refusals.size > 0) {
+            const tools = calls.asMade.filter((tc) => calls.refusals.has(tc.id)).map((tc) => tc.name);
+            log.info("Phase write refused", { chatId: request.chatId, phase: state.phase, tools, at: "spine" });
+          }
+
           // PLANNING / REPLANNING: plan-phase transition + goal decomposition
           // (gauntlet #13,#14,#15).
           //
@@ -667,7 +690,7 @@ export class V2AgentRunner implements AgentRunner {
           // phase (reflection REPLAN, the end-turn verifier's replan arm, the
           // reflection-override escalation) handed the spine a state it could
           // never leave, and for the rest of the run write tools were stripped
-          // (allowWriteTools is false in REPLANNING) and the reflection
+          // (the tool list then hid writes in REPLANNING) and the reflection
           // boundary never fired again.
           if (state.phase === AgentPhase.PLANNING || state.phase === AgentPhase.REPLANNING) {
             const prevPhase = state.phase;
@@ -678,7 +701,7 @@ export class V2AgentRunner implements AgentRunner {
               providerName: prepared.currentAssignment.providerName,
               modelId: prepared.currentAssignment.modelId,
               chatId: request.chatId,
-              toolCallCount: outcome.response.toolCalls.length,
+              toolCallCount: calls.runnable.length,
             });
             state = plan.agentState;
             if (plan.yield) {
@@ -717,29 +740,28 @@ export class V2AgentRunner implements AgentRunner {
             // named here is refused there, rather than executed in the phase that
             // exists to prevent it.
             //
+            // The calls run in the phase they were made in. The plan transition
+            // above has already moved `state` to EXECUTING; handed that state, the
+            // gate ran a write named in the planning turn, and the turn's records
+            // filed its calls as executing ones. The split above was made in the
+            // planning phase, and the tool turn is handed that phase too
+            // (phase-write-access.ts).
+            //
             // The phase the plan transition just produced is kept:
             // recordStepResultsAndCheckReflection can hand back a REFLECTING
             // state, and letting that overwrite the move to EXECUTING would
             // strand the run in the phase it just left.
-            if (outcome.response.toolCalls.length > 0) {
-              for (const tc of outcome.response.toolCalls) {
+            // A refused write runs nothing; the turn still goes through the tool
+            // turn, so each tool_use the model made is answered.
+            if (calls.asMade.length > 0) {
+              for (const tc of calls.runnable) {
                 emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
               }
-              const planned = await this.executeTools(setup, outcome.response, state, runScope, () =>
+              const madeIn = { ...state, phase: prevPhase };
+              const planned = await this.executeTools(setup, outcome.response, calls, madeIn, runScope, () =>
                 emit({ type: "heartbeat", source: "tool-running" }),
               );
-              for (const tr of planned.trace) {
-                toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
-                for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
-                emit({
-                  type: "tool.finished",
-                  toolName: tr.toolName,
-                  toolCallId: tr.toolCallId,
-                  success: tr.success,
-                  errorCategory: tr.errorCategory,
-                  touchedFiles: tr.touchedFiles,
-                });
-              }
+              this.finishTools(planned.trace, toolTrace, touchedFiles, emit);
               if (planned.progressSignal) emit({ type: "narrative", signal: planned.progressSignal });
               if (planned.advancedState) {
                 state = { ...planned.advancedState, phase: state.phase };
@@ -839,27 +861,15 @@ export class V2AgentRunner implements AgentRunner {
           }
 
           // EXECUTING with tool calls (gauntlet #16,#17,#18,#19,#20,#21,#22).
-          if (outcome.response.toolCalls.length > 0) {
+          if (calls.asMade.length > 0) {
             const prevPhase = state.phase;
-            for (const tc of outcome.response.toolCalls) {
+            for (const tc of calls.runnable) {
               emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
             }
-            const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state, runScope, () =>
+            const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, calls, state, runScope, () =>
               emit({ type: "heartbeat", source: "tool-running" }),
             );
-            for (const tr of trace) {
-              toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
-              for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
-              // The learning-bridge sink mirrors tool.finished → "tool:result" (wired on the bus).
-              emit({
-                type: "tool.finished",
-                toolName: tr.toolName,
-                toolCallId: tr.toolCallId,
-                success: tr.success,
-                errorCategory: tr.errorCategory,
-                touchedFiles: tr.touchedFiles,
-              });
-            }
+            this.finishTools(trace, toolTrace, touchedFiles, emit);
             // v1 parity (bg loop :4687): the port's localized per-tool-batch progress signal rides
             // the bus as a `narrative` event; the background io adapter unwraps it back into the
             // v1 TaskProgressUpdate stream (Kanban/progress detail: kind + toolNames + files).
@@ -1176,27 +1186,7 @@ export class V2AgentRunner implements AgentRunner {
   // ─── small spine-local glue (NO v1 logic — pure shape adapters) ───────────────────────
 
   private toSetupInput(request: AgentRunRequest, mode: RunnerMode): AgentRunSetupInput {
-    return {
-      prompt: request.prompt,
-      chatId: request.chatId,
-      channelType: String(request.channelType),
-      userId: request.userId,
-      conversationId: request.conversationId,
-      attachments: request.attachments,
-      userContent: request.userContent,
-      mode,
-      interactiveSession: request.interactiveSession,
-      assignedProvider: request.assignedProvider,
-      assignedModel: request.assignedModel,
-      taskRunId: request.taskRunId,
-      parentMetricId: request.parentMetricId,
-      onUsage: request.onUsage,
-      workspaceLease: request.workspaceLease,
-      workspaceLeaseRetained: request.workspaceLeaseRetained,
-      workspacePolicy: request.workspacePolicy,
-      goalContext: request.goalContext,
-      monitorScope: request.monitorScope,
-    };
+    return setupInputOf(request, mode);
   }
 
   private budgetCheckpoint(
@@ -1297,19 +1287,12 @@ export class V2AgentRunner implements AgentRunner {
   private async executeTools(
     setup: RunSetup,
     response: ProviderResponse,
+    calls: PhaseCallSplit,
     state: AgentState,
     runScope: ParentRunScope,
     keepalive?: () => void,
   ): Promise<{
-    trace: {
-      toolName: string;
-      toolCallId: string;
-      success: boolean;
-      errorCategory?: string;
-      touchedFiles?: readonly string[];
-      /** The tool's result text (truncated) — the evidence the test verdict reads. */
-      resultText?: string;
-    }[];
+    trace: ToolTraceRow[];
     advancedState?: AgentState;
     /** v1 parity: the port's localized per-tool-batch progress signal (emitted as `narrative`). */
     progressSignal?: TaskProgressSignal;
@@ -1318,27 +1301,17 @@ export class V2AgentRunner implements AgentRunner {
     // The port's executeToolCalls is the existing ExecuteToolCallsFn seam (variadic). We pass the
     // tool calls, the session, the live AgentState (the real port reads the 3rd arg to drive
     // recordStepResultsAndCheckReflection), response.text as the 4th arg (D2 fix: the port pushes
-    // it onto the session before the tool results, v1 parity), and the run's scope as the 5th (the
-    // tools' cancel signal + the budget/clock a sub-agent is opened inside); the mock ignores extra args.
+    // it onto the session before the tool results, v1 parity), the run's scope as the 5th (the
+    // tools' cancel signal + the budget/clock a sub-agent is opened inside), and the turn's split
+    // as the 6th (the first arg is the calls that run; a refused one is answered in the session).
+    // The mock ignores extra args.
     const raw = (await this.keepAliveWhile(
-      port.executeToolCalls(response.toolCalls, setup.session, state, response.text, runScope),
+      port.executeToolCalls(calls.runnable, setup.session, state, response.text, runScope, calls),
       keepalive,
     )) as
+      | ToolTraceRow[]
       | {
-          toolName: string;
-          toolCallId: string;
-          success: boolean;
-          errorCategory?: string;
-          touchedFiles?: readonly string[];
-        }[]
-      | {
-          trace: {
-            toolName: string;
-            toolCallId: string;
-            success: boolean;
-            errorCategory?: string;
-            touchedFiles?: readonly string[];
-          }[];
+          trace: ToolTraceRow[];
           advancedState?: AgentState;
           progressSignal?: TaskProgressSignal;
         }
@@ -1349,6 +1322,34 @@ export class V2AgentRunner implements AgentRunner {
       return { trace: raw.trace ?? [], advancedState: raw.advancedState, progressSignal: raw.progressSignal };
     }
     return { trace: [] };
+  }
+
+  /**
+   * Each row of a tool turn into the run's executed-tool sequence and its `tool.finished`. The
+   * rows are the calls that ran: a write the phase refused is not one (the turn's PhaseCallSplit),
+   * so it has no row, no `tool.started` and no `tool.finished`. As a row it reached the
+   * supervisor's node verifier as a tool error, and four refusals while planning took every
+   * "Tool errors" place ahead of a real failure (QA, 2026-11-11). The learning-bridge sink
+   * mirrors tool.finished → "tool:result".
+   */
+  private finishTools(
+    trace: readonly ToolTraceRow[],
+    toolTrace: { toolName: string; toolCallId: string; success: boolean; resultText?: string }[],
+    touchedFiles: Set<string>,
+    emit: (e: Parameters<AgentRunEventBus["emit"]>[0]) => number,
+  ): void {
+    for (const tr of trace) {
+      toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success, resultText: tr.resultText });
+      for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
+      emit({
+        type: "tool.finished",
+        toolName: tr.toolName,
+        toolCallId: tr.toolCallId,
+        success: tr.success,
+        errorCategory: tr.errorCategory,
+        touchedFiles: tr.touchedFiles,
+      });
+    }
   }
 
   /**

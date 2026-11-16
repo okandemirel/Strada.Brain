@@ -43,7 +43,7 @@
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
 import type { MessageContent, ProviderResponse, ProviderServedBy } from "../../agents/providers/provider-core.interface.js";
 import type { Attachment } from "../../channels/channel-messages.interface.js";
-import type { AgentState } from "../../agents/agent-state.js";
+import type { AgentPhase, AgentState } from "../../agents/agent-state.js";
 import type { ExecutionJournal } from "../../agents/autonomy/execution-journal.js";
 import type {
   SupervisorAssignment,
@@ -64,6 +64,7 @@ import type { PolicySeed } from "../control/policy.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { GatewayToolDefinition } from "../model/model-gateway.js";
 import type { RunnerMode, TerminalStatus } from "./agent-runner.js";
+import type { InstinctOwner } from "../engine/instinct-scope.js";
 
 /** The runner-facing mode the port keys its mode-dependent dispatch on. */
 export type RunnerModeLike = RunnerMode;
@@ -101,6 +102,8 @@ export interface RunSetup {
    *  initial AgentState so the PLANNING prompt's "### Learned Patterns" block renders them (v1 parity:
    *  runBackgroundTask :3381). Absent/empty ⇒ no insights this run. */
   readonly learnedInsights?: readonly string[];
+  /** Whose user-scoped instincts setup retrieved (instinctUserIdOf); lent to the run's sub-agents. */
+  readonly instinctUserId?: string;
 }
 
 // ── The verdict-bridge contribution type (the load-bearing one) ────────────────────────
@@ -136,6 +139,8 @@ export interface AgentRunSetupInput {
   /** User + conversation identity for resolveIdentityKey — multi-user / cross-channel keying of
    *  sessions, profiles, and provider selection. Absent ⇒ falls back to the conversation scope. */
   readonly userId?: string;
+  /** Whose user-scoped instincts setup retrieves when not `userId`'s (see AgentRunRequest). */
+  readonly instinctOwner?: InstinctOwner;
   readonly conversationId?: string;
   /** Multimodal inputs — gap #3 builds a FRESH per-run session from these for worker/background
    *  (v1 parity: pre-Step5 runBackgroundTask — v1 @ a3de7d1 orchestrator.ts:3278-3289), so parallel runs on one chatId never collide. */
@@ -275,9 +280,11 @@ export interface PlanPhaseParams {
   readonly providerName: string;
   readonly modelId?: string;
   readonly chatId: string;
-  /** Tool-call count on the response. v1's plan-review gate fired only on a text-only PLANNING
-   *  response (`response.toolCalls.length === 0`, orchestrator.ts ~5812); the port needs the count
-   *  to replicate that guard (PlanPhaseParams otherwise carries only `responseText`). */
+  /** How many of the response's tool calls run. v1's plan-review gate fired only on a text-only
+   *  PLANNING response (`response.toolCalls.length === 0`, orchestrator.ts ~5812); the port needs the count
+   *  to replicate that guard (PlanPhaseParams otherwise carries only `responseText`). A write the
+   *  phase refuses runs nothing, so it is not counted: counted, it skipped the review the user
+   *  asked for (the spine's PhaseCallSplit.runnable, agent-core/engine/phase-write-access.ts). */
   readonly toolCallCount: number;
 }
 
@@ -477,8 +484,18 @@ export interface OrchestratorPort {
   decomposeGoalsIfPlanning(params: GoalDecompositionParams): Promise<AgentState>;
 
   // ════ Tool execution (gauntlet #18) ════════════════════════════════════════════════
-  /** The bound executeToolCalls closure threaded into the free executeAndTrackTools helper. */
+  /**
+   * The bound executeToolCalls closure threaded into the free executeAndTrackTools helper. Its
+   * sixth positional argument is the spine's split of the turn's calls (PhaseCallSplit): only
+   * the runnable calls run, and a refused one is answered in the session and nowhere else.
+   */
   readonly executeToolCalls: ExecuteToolCallsFn;
+  /**
+   * The phase rule, as the orchestrator's tool-call gate applies it: whether a call of `toolName`
+   * made in `phase` is refused. The spine splits each model turn's calls with it, once, before
+   * anything reads them (agent-core/engine/phase-write-access.ts splitCallsByPhase).
+   */
+  phaseRefuses(toolName: string, phase: AgentPhase): boolean;
 
   // ════ Limits / config (read-only) ══════════════════════════════════════════════════
   getInteractiveIterationLimit(): number;

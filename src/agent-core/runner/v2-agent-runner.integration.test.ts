@@ -33,6 +33,8 @@ import {
   type CapabilityAdapter,
 } from "../control/index.js";
 import { V2AgentRunner, type V2RunnerDeps } from "./v2-agent-runner.js";
+import { TURN_CONTEXT_HEADER } from "../../agents/turn-context.js";
+import { phaseWriteRefusal } from "../engine/phase-write-access.js";
 import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
 import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
 import type { WorkspaceLease } from "../../agents/supervisor/supervisor-types.js";
@@ -305,6 +307,219 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
 
     expect(readTool.execute, "the planning turn's tool call was discarded").toHaveBeenCalledTimes(1);
     expect(result.toolTrace.map((t) => t.toolName)).toContain("file_read");
+  });
+
+  /** A write of `path` the scripted model calls. */
+  const writeCall = (id: string, path: string) => ({ id, name: "file_write", input: { path, content: "x" } });
+  /** A message's text: its string, or each block's text and tool-result content, in order. */
+  const textOfMessage = (m: { content: unknown } | undefined): string =>
+    typeof m?.content === "string"
+      ? m.content
+      : ((m?.content ?? []) as { text?: string; content?: unknown }[])
+          .map((block) => block.text ?? (typeof block.content === "string" ? block.content : ""))
+          .join("\n");
+  /** The worker's calls, which carry the turn context (review and verifier calls do not). */
+  const workerCallsOf = (provider: ReturnType<typeof mkScriptedProvider>) =>
+    provider.chat.mock.calls
+      .map(([, messages, toolDefs]) => ({ last: textOfMessage((messages as { content: unknown }[]).at(-1)), tools: toolDefs as unknown }))
+      .filter((c) => c.last.includes(TURN_CONTEXT_HEADER));
+  /** The phase a worker call was made in, read from the turn context's write notice. */
+  const phaseOf = (last: string): string => /## Writes in this phase\nThe agent is (\w+)\./.exec(last)?.[1] ?? "executing";
+
+  it("B3: every worker call of a run sends one tool list, through planning, executing, reflecting and replanning", async () => {
+    // Write tools used to be taken out of the list while planning, replanning and reflecting.
+    // The list comes before the history in a request, so every phase change missed the whole
+    // history in the provider's prefix cache, the reflection call's included: 35–46% of
+    // consecutive calls in the replayed daemon logs. The list is now the run's list in every
+    // phase; the phase's rule is the gate's refusal and a sentence in the turn context
+    // (src/agent-core/engine/phase-write-access.ts).
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "Plan: 1. write a.cs, b.cs and c.cs", stopReason: "end_turn" }))
+      // EXECUTING: three writes make three consequential steps, the reflection interval.
+      .mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-1", "a.cs"), writeCall("tc-2", "b.cs"), writeCall("tc-3", "c.cs")],
+        }),
+      )
+      // REFLECTING: asks for a new plan, and names a write on the way.
+      .mockResolvedValueOnce(
+        resp({
+          text: "The files are written but the approach is wrong.\n\n**REPLAN**",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-reflect-write", "reflected.cs")],
+        }),
+      )
+      // REPLANNING, then EXECUTING to the end.
+      .mockResolvedValueOnce(resp({ text: "New plan: 1. rewrite a.cs", stopReason: "end_turn" }))
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["a.cs"])];
+    const h = buildHarness(provider, tools);
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    const workerCalls = workerCallsOf(provider);
+    expect(workerCalls.map((c) => phaseOf(c.last)).slice(0, 5)).toEqual([
+      "planning", "executing", "reflecting", "replanning", "executing",
+    ]);
+    const first = JSON.stringify(workerCalls[0]!.tools);
+    expect(first).toContain('"file_write"');
+    for (const [i, c] of workerCalls.entries()) {
+      expect(JSON.stringify(c.tools), `worker call ${i + 1} (${phaseOf(c.last)}) sent another tool list`).toBe(first);
+    }
+    // The reflecting turn's write was offered and did not run.
+    const written = tools[1]!.execute.mock.calls.map(([input]) => (input as { path: string }).path);
+    expect(written).toEqual(["a.cs", "b.cs", "c.cs"]);
+  });
+
+  it("B4: a write called in the planning turn is refused by the gate, and the read beside it runs", async () => {
+    // The plan transition moves the state to EXECUTING before the planning turn's calls run,
+    // and the gate reads the phase from the state it is handed: with that state the write ran.
+    // Hidden from the planning turn's list, it was rarely named; listed now, it is refused.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(
+        resp({
+          text: "Plan: 1. read a.cs 2. write it",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-plan-write", "planned.cs"), { id: "tc-plan-read", name: "file_read", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["planned.cs"])];
+    const h = buildHarness(provider, tools);
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    expect(tools[1]!.execute, "the planning turn's write ran").not.toHaveBeenCalled();
+    expect(tools[0]!.execute, "the planning turn's read was discarded").toHaveBeenCalledTimes(1);
+    const workerCalls = workerCallsOf(provider);
+    expect(phaseOf(workerCalls[0]!.last)).toBe("planning");
+    expect(workerCalls[1]!.last).toContain(phaseWriteRefusal(AgentPhase.PLANNING));
+  });
+
+  it("B5: a write refused while planning and written while executing leaves nothing to verify, and no extra reflection", async () => {
+    // The refusal ran nothing. Recorded as a failed write step, it was an open failing path
+    // the verifier asked to re-run ("[TARGETED VERIFICATION REQUIRED]") in a project with no
+    // build and no tests, and three of them kept forcing a reflection after every batch
+    // (QA 2026-11-11). It is the model's answer, not a step the run took.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(
+        resp({
+          text: "Plan: 1. write notes/a.txt, notes/b.txt and notes/c.txt",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-p1", "notes/a.txt"), writeCall("tc-p2", "notes/b.txt"), writeCall("tc-p3", "notes/c.txt")],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "", stopReason: "tool_use", toolCalls: [writeCall("tc-1", "notes/a.txt")] }))
+      .mockResolvedValue(resp({ text: "Wrote notes/a.txt.", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["notes/a.txt"])];
+    const h = buildHarness(provider, tools);
+
+    const io = mkIO("worker");
+    const result = await drive(h.clock, h.runner.run(mkRequest({ prompt: "Write notes/a.txt" }), io));
+
+    expect(tools[1]!.execute).toHaveBeenCalledTimes(1);
+    const workerCalls = workerCallsOf(provider);
+    // plan (refused writes), act (the write), report: no reflection turn between them.
+    expect(workerCalls.map((c) => phaseOf(c.last))).toEqual(["planning", "executing", "executing"]);
+    for (const c of workerCalls) {
+      expect(c.last).not.toContain("[TARGETED VERIFICATION REQUIRED]");
+      expect(c.last).not.toContain("[UNVERIFIED FAILURE]");
+    }
+    expect(result.status).toBe("completed");
+    // The planning turn's refusals are not steps the run took, and not tools it executed: the
+    // run's tool sequence is what reaches the supervisor's node verifier as "Tool errors".
+    expect(result.terminalState!.stepResults.map((s) => s.toolName)).toEqual(["file_write"]);
+    expect(result.toolTrace.map((t) => [t.toolCallId, t.success])).toEqual([["tc-1", true]]);
+    // The run's tool events are the calls that ran: a refused one has no tool.started and no
+    // tool.finished, and every tool.started has its tool.finished.
+    const events = io.onEvent.mock.calls.map((c) => c[0] as { type?: string; toolCallId?: string });
+    const started = events.filter((e) => e.type === "tool.started").map((e) => e.toolCallId);
+    const finished = events.filter((e) => e.type === "tool.finished");
+    expect(finished.map((e) => e.toolCallId)).toEqual(started);
+    expect(started).toEqual(["tc-1"]);
+  });
+
+  it("B6: a write called in the replanning turn is refused at the spine like one called while planning", async () => {
+    // The split is made in whatever phase the turn was made in; every other test of it plans.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "Plan: 1. write a.cs, b.cs and c.cs", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-1", "a.cs"), writeCall("tc-2", "b.cs"), writeCall("tc-3", "c.cs")],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "The approach is wrong.\n\n**REPLAN**", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "New plan: 1. read a.cs 2. rewrite it",
+          stopReason: "tool_use",
+          toolCalls: [writeCall("tc-replan-write", "replanned.cs"), { id: "tc-replan-read", name: "file_read", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const tools = [mkTool("file_read"), mkTool("file_write", true, ["a.cs"])];
+    const h = buildHarness(provider, tools);
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    const workerCalls = workerCallsOf(provider);
+    expect(workerCalls.map((c) => phaseOf(c.last)).slice(0, 5)).toEqual([
+      "planning", "executing", "reflecting", "replanning", "executing",
+    ]);
+    const written = tools[1]!.execute.mock.calls.map(([input]) => (input as { path: string }).path);
+    expect(written, "the replanning turn's write ran").toEqual(["a.cs", "b.cs", "c.cs"]);
+    expect(tools[0]!.execute, "the replanning turn's read was discarded").toHaveBeenCalledTimes(1);
+    expect(workerCalls[4]!.last).toContain(phaseWriteRefusal(AgentPhase.REPLANNING));
+    expect(result.toolTrace.map((t) => t.toolCallId)).toEqual(["tc-1", "tc-2", "tc-3", "tc-replan-read"]);
+    expect(result.terminalState!.stepResults.map((s) => s.toolName)).toEqual(["file_write", "file_write", "file_write", "file_read"]);
+    const started = io.onEvent.mock.calls
+      .map((c) => c[0] as { type?: string; toolCallId?: string })
+      .filter((e) => e.type === "tool.started")
+      .map((e) => e.toolCallId);
+    expect(started).toEqual(["tc-1", "tc-2", "tc-3", "tc-replan-read"]);
+  });
+
+  it("B7: a planning turn's calls are recorded in the planning phase, so failing reads there ask for no reflection", async () => {
+    // The plan transition moves the state to EXECUTING before the planning turn's calls run. Run
+    // with that state, two failing reads were a persistent failure of the executing phase: the
+    // step record moved to REFLECTING and the tool results carried the reflection prompt into a
+    // turn that is executing (the spine keeps the phase the plan transition produced).
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(
+        resp({
+          text: "Plan: 1. read a.cs and b.cs 2. write the fix",
+          stopReason: "tool_use",
+          toolCalls: [
+            { id: "tc-read-a", name: "file_read", input: { path: "a.cs" } },
+            { id: "tc-read-b", name: "file_read", input: { path: "b.cs" } },
+          ],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const failingRead = mkTool("file_read");
+    failingRead.execute.mockResolvedValue({ content: "Error: no such file", isError: true } as never);
+    const h = buildHarness(provider, [failingRead, mkTool("file_write", true, ["a.cs"])]);
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    expect(failingRead.execute).toHaveBeenCalledTimes(2);
+    expect(result.terminalState!.stepResults.map((s) => [s.toolName, s.success])).toEqual([
+      ["file_read", false],
+      ["file_read", false],
+    ]);
+    const workerCalls = workerCallsOf(provider);
+    expect(phaseOf(workerCalls[1]!.last)).toBe("executing");
+    expect(workerCalls[1]!.last, "the planning turn's reads asked for a reflection").not.toContain("## Reflection Phase");
   });
 
   it("C: interactive renders to the channel (real divergence)", async () => {
@@ -1910,4 +2125,84 @@ describe("run teardown — the ended run stops publishing its build state", () =
       liveWorker.dispose();
     }
   });
+});
+
+describe("goal decomposition bills the run that asked for the plan (task #67)", () => {
+  // Measured before the fix: the REAL GoalDecomposer's plan call billed 1,800 in / 600 out and the
+  // run's usage record, the rate limiter and the metrics took 0 of it — on the root run and on a
+  // delegated run alike, because nothing between the port and the decomposer carried a usage hook.
+  const PLAN = JSON.stringify({
+    nodes: [
+      { id: "a", task: "Write the parser for the recipe file format", dependsOn: [] },
+      { id: "b", task: "Add a test that loads three sample recipe files", dependsOn: ["a"] },
+    ],
+  });
+
+  async function runWithRealDecomposer(request: Partial<AgentRunRequest>) {
+    const { GoalDecomposer } = await import("../../goals/goal-decomposer.js");
+    const planner = mkScriptedProvider();
+    planner.name = "planner";
+    planner.chat.mockResolvedValue(
+      resp({ text: PLAN, usage: { inputTokens: 1800, outputTokens: 600, totalTokens: 2400 } }),
+    );
+    const provider = mkScriptedProvider();
+    scriptTwoBatchRun(provider);
+    const rateLimiter = { recordTokenUsage: vi.fn(), checkMessageRate: vi.fn(() => ({ allowed: true })) };
+    const metrics = { recordTokenUsage: vi.fn() };
+    const clock = new FakeClock(0);
+    const orch = new Orchestrator({
+      providerManager: {
+        getProvider: vi.fn(() => provider),
+        getActiveInfo: () => ({ providerName: "mock", model: "mock-model", isDefault: true }),
+        shutdown: vi.fn(),
+      },
+      tools: [mkTool("file_read"), mkTool("edit_file", true, ["a.cs"])],
+      channel: mkChannel(),
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      agentCoreClock: clock,
+      rateLimiter,
+      metrics,
+      goalDecomposer: new GoalDecomposer(planner as never, 1, [0]),
+    } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
+    const { port, gateway, seed, createHealthCore } = orch.createAgentCorePort();
+    const controlPlane = createControlPlane({ clock, seed, createHealthCore });
+    const runner = new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock } as V2RunnerDeps);
+    const onUsage = vi.fn();
+    const prompt = "Import recipes from three file formats, validate them, and show the import report";
+    // `drive` drains microtasks only; the real decomposer's lazy imports are real I/O, so this pump
+    // also yields a macrotask turn per step (else a cold first module load outlasts the pump).
+    let settled = false;
+    const run = runner.run(mkRequest({ prompt, onUsage, ...request }), mkIO("worker")).finally(() => {
+      settled = true;
+    });
+    for (let i = 0; i < 5000 && !settled; i++) {
+      await new Promise<void>((r) => setImmediate(r));
+      clock.advance(5000);
+    }
+    await run;
+    return { planner, onUsage, rateLimiter, metrics };
+  }
+
+  for (const [label, request] of [
+    ["a delegated run (the request DelegationManager opens)", { mode: "supervisor-node", taskRunId: "sub-1" }],
+    ["the root run", {}],
+  ] as const) {
+    it(`${label}: the plan call's billed tokens reach its usage record, the rate limiter and the metrics`, async () => {
+      const { planner, onUsage, rateLimiter, metrics } = await runWithRealDecomposer(request);
+      expect(planner.chat).toHaveBeenCalledTimes(1); // the plan parsed: exactly one decomposition call
+
+      const planEvents = onUsage.mock.calls.map(([u]) => u).filter((u) => u.provider === "planner");
+      expect(planEvents).toEqual([
+        expect.objectContaining({ provider: "planner", inputTokens: 1800, outputTokens: 600 }),
+      ]);
+      expect(rateLimiter.recordTokenUsage.mock.calls.filter((c) => c[2] === "planner")).toEqual([
+        [1800, 600, "planner", undefined, {}],
+      ]);
+      expect(metrics.recordTokenUsage.mock.calls.filter((c) => c[2] === "planner")).toEqual([
+        [1800, 600, "planner"],
+      ]);
+    });
+  }
 });

@@ -24,11 +24,8 @@ import type { TaskManager } from "../../tasks/task-manager.js";
 import type { TaskCheckpointStore } from "../../tasks/task-checkpoint-store.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
-import type { MetricsCollector } from "../../dashboard/metrics.js";
 import type { IRAGPipeline } from "../../rag/rag.interface.js";
-import type { RateLimiter } from "../../security/rate-limiter.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
-import type { MetricsRecorder } from "../../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../../goals/goal-decomposer.js";
 import type { IdentityState } from "../../identity/identity-state.js";
 import type { ReRetrievalConfig, StradaDependencyConfig } from "../../config/config.js";
@@ -81,11 +78,18 @@ interface ToolRegistryLike {
  * that runs a chat turn. Every key is required, so bootstrap cannot build the
  * object without deciding each one; a dependency added here reaches the root,
  * every per-agent orchestrator and every delegated one at once. The learning
- * bus and the instinct retriever were passed beside it, so a delegated run
- * emitted no tool result to learning and retrieved no instinct.
+ * bus, the instinct retriever, the dashboard counters and the rate limiter
+ * were passed beside it, so a delegated run emitted no tool result to
+ * learning, retrieved no instinct, counted no tool call or token where
+ * /api/metrics reads, and spent outside the daily token quota and budget.
+ * The task-metric recorder is shared too; a delegated run records with it
+ * only as its calling run's subtask (DelegationManager).
  */
 type SharedOrchestratorDepKey =
   | "eventEmitter"
+  | "metrics"
+  | "rateLimiter"
+  | "metricsRecorder"
   | "instinctRetriever"
   | "trajectoryReplayRetriever"
   | "learningPipeline"
@@ -174,9 +178,7 @@ export interface AgentManagerOptions {
   readonly projectPath: string;
   readonly readOnly: boolean;
   readonly requireConfirmation: boolean;
-  readonly metrics?: MetricsCollector;
   readonly ragPipeline?: IRAGPipeline;
-  readonly rateLimiter?: RateLimiter;
   readonly defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
   readonly streamInitialTimeoutMs?: number;
   readonly streamStallTimeoutMs?: number;
@@ -184,7 +186,6 @@ export interface AgentManagerOptions {
   readonly streamingEnabled?: boolean;
   readonly stradaDeps: StradaDepsStatus;
   readonly stradaConfig?: Partial<StradaDependencyConfig>;
-  readonly metricsRecorder?: MetricsRecorder;
   readonly goalDecomposer?: GoalDecomposer;
   readonly getIdentityState?: () => IdentityState;
   readonly reRetrievalConfig?: ReRetrievalConfig;
@@ -850,16 +851,13 @@ export class AgentManager {
       readOnly: this.opts.readOnly,
       requireConfirmation: this.opts.requireConfirmation,
       memoryManager: adapter,
-      metrics: this.opts.metrics,
       ragPipeline: this.opts.ragPipeline,
-      rateLimiter: this.opts.rateLimiter,
       defaultLanguage: this.opts.defaultLanguage,
       streamInitialTimeoutMs: this.opts.streamInitialTimeoutMs,
       streamStallTimeoutMs: this.opts.streamStallTimeoutMs,
       streamingEnabled: this.opts.streamingEnabled,
       stradaDeps: this.opts.stradaDeps,
       stradaConfig: this.opts.stradaConfig,
-      metricsRecorder: this.opts.metricsRecorder,
       goalDecomposer: this.opts.goalDecomposer,
       getIdentityState: this.opts.getIdentityState,
       reRetrievalConfig: this.opts.reRetrievalConfig,

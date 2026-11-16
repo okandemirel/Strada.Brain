@@ -13,16 +13,27 @@
  * 2. The supervisor throws. The orchestrator catches it and one worker runs
  *    the request. What the user is told about it is pinned.
  * 3. Everything fails once. The planner answers in prose and is asked again;
+ *    a node names four writes while planning, which the phase gate refuses
+ *    and its verifier is not shown as tool errors;
  *    a node's write is refused for its target, and the node writes the right
  *    path and finishes; the provider drops two calls of the next node, which
  *    is asked again at once without streaming and then on its next turn.
  * 4. A node's write fails at run time and its next write succeeds. No tool
- *    this run has can verify that, so the node is asked once to say the
- *    result is not verified, says so, and finishes: no block, no re-run.
+ *    this run has can verify that, and the project declares no check for
+ *    shell_exec to run, so the node finishes at once: no ask, no block, no
+ *    re-run. The system itself puts "Not verified: …" under its answer.
  * 5. The same failure in a run whose registry holds a tool that runs a check.
  *    The failure waits for that verification whatever the draft says, the
  *    node is blocked, and the blocked goal is resumed without waiting for a
  *    person and the node runs again.
+ * 6. The worker is slow. With the progress heartbeat off, as every run
+ *    starts, the chat reads only the answer however long the worker takes;
+ *    with it on, the real heartbeat path sends the user a progress message
+ *    before the answer.
+ * 7. A short request whose write fails and is written where it belongs, and whose worker says
+ *    it verified the work. Nothing ran a check: the worker is asked once to
+ *    report honestly, still claims it, and the chat reads its answer with
+ *    the system's "Not verified: …" under it.
  *
  * When a deliberate change alters the calls a run makes, the failure names
  * the step it expected and the call it got. Update that run's script in the
@@ -59,6 +70,8 @@ import {
 import { TERMINAL_STATUSES, TaskStatus, type Task } from "../../tasks/types.js";
 import { ToolRegistry } from "../../core/tool-registry.js";
 import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
+import { AgentPhase } from "../../agents/agent-state.js";
+import { phaseWriteRefusal } from "../../agent-core/engine/phase-write-access.js";
 
 // ─── Script pieces ───────────────────────────────────────────────────────────
 
@@ -84,7 +97,12 @@ function planStep(step: string, task: string): Step {
   return {
     step,
     check: (call) =>
-      requires([isWorkerOn(task)(call), isFirstTurn(call), offers(call, "file_write") && "a planning turn offers file_write"]),
+      requires([
+        isWorkerOn(task)(call),
+        isFirstTurn(call),
+        // One tool list in every phase (phase-write-access.ts): a write called now is refused.
+        !offers(call, "file_write") && "the planning turn does not offer file_write",
+      ]),
     reply: say("Plan: write the file with file_write, then report."),
   };
 }
@@ -171,6 +189,28 @@ function verifyStep(node: string, done: string): Step {
   };
 }
 
+/**
+ * The node verifier is shown the node's tool errors, at most four of them. A write the phase
+ * gate refused ran nothing and is not one; a write the tool itself refused is.
+ * Measured 2026-11-11 (QA): four writes refused while planning took all four places, and a
+ * real failure after them was not shown.
+ */
+function verifyShowsToolErrors(node: string, done: string, shows: string, hides: string): Step {
+  const base = verifyStep(node, done);
+  return {
+    ...base,
+    check: (call) => {
+      const prompt = textOf(call.messages.at(-1));
+      const errors = prompt.split("Tool errors:\n")[1] ?? "";
+      return requires([
+        base.check(call),
+        !errors.includes(shows) && `the verifier's tool errors do not show "${shows}"`,
+        prompt.includes(hides) && `the verifier is shown "${hides.slice(0, 60)}…"`,
+      ]);
+    },
+  };
+}
+
 // ─── Run 1: a short request ──────────────────────────────────────────────────
 
 /** Under 60 characters: the classifier rates it simple, so no supervisor is asked and no plan is decomposed. */
@@ -226,6 +266,10 @@ const BETA_DONE = "Wrote notes/beta.txt.";
 const RECOVERY_ANSWER = `${ALPHA_DONE}\n\n${BETA_DONE}`;
 /** Outside the project: file_write refuses it, and the worker must read the refusal and write again. */
 const ESCAPING_PATH = "../outside/alpha.txt";
+/** Writes alpha's planner names while planning: each is refused, and none runs. */
+const ALPHA_PLANNED_WRITES = [1, 2, 3, 4].map((n) => writeCall(`call_alpha_plan_${n}`, "notes/alpha.txt", "ALPHA\n"));
+/** What the phase gate answers a write called while planning. */
+const PLANNING_REFUSAL = phaseWriteRefusal(AgentPhase.PLANNING);
 /** The provider drops two of beta's calls in a row, the way a busy upstream does. */
 const PROVIDER_DROP = "503 Service Unavailable: the upstream is overloaded";
 /** What the session is told when a turn's every attempt dropped. */
@@ -238,9 +282,15 @@ const RECOVERY_SCRIPT: readonly Step[] = [
     "I would split this in two: first write alpha, then write beta."),
   decomposeStep("decompose again, told why the first answer was refused", RECOVERY_REQUEST,
     twoNodes(NODE_ALPHA, NODE_BETA), true),
-  planStep("alpha: plan", NODE_ALPHA),
+  // The planner names four writes in its planning turn. The phase gate refuses each one, and
+  // nothing runs: the refusals are answered and leave no failure behind (see alpha: verify).
+  {
+    ...planStep("alpha: plan, naming four writes", NODE_ALPHA),
+    reply: { text: "Plan: write notes/alpha.txt with file_write, then report.", toolCalls: ALPHA_PLANNED_WRITES, stopReason: "tool_use" },
+  },
   actStep("alpha: act, on a path outside the project", NODE_ALPHA,
-    [writeCall("call_alpha_escape", ESCAPING_PATH, "ALPHA\n")]),
+    [writeCall("call_alpha_escape", ESCAPING_PATH, "ALPHA\n")],
+    (call) => ALPHA_PLANNED_WRITES.map((w) => carriesResult(call, w.id)).find(Boolean) ?? false),
   actStep("alpha: act again, after reading the refusal", NODE_ALPHA,
     [writeCall("call_alpha_fixed", "notes/alpha.txt", "ALPHA\n")],
     (call) => carriesResult(call, "call_alpha_escape")),
@@ -265,7 +315,7 @@ const RECOVERY_SCRIPT: readonly Step[] = [
   reportStep("beta: report", NODE_BETA, ["call_beta"], BETA_DONE),
   // Cheapest node first (ResultAggregator): beta answered in three calls, alpha in four.
   verifyStep("beta", BETA_DONE),
-  verifyStep("alpha", ALPHA_DONE),
+  verifyShowsToolErrors("alpha", ALPHA_DONE, "- Error: Path resolves outside the project directory", PLANNING_REFUSAL),
 ];
 
 // ─── Run 4: a write fails at run time ────────────────────────────────────────
@@ -279,11 +329,24 @@ const KAPPA_DONE = "Wrote notes/kappa.txt.";
 const SIGMA_DONE = "Wrote notes/sigma.txt.";
 /** Inside the project, under a FILE: the guard lets it through, and the filesystem fails the write. */
 const UNDER_A_FILE = "README.md/kappa.txt";
-/** What the worker reports when it is told nothing here can verify the failed write. */
-const KAPPA_UNVERIFIED = "Wrote notes/kappa.txt. Not verified: this project has no build and no tests to run.";
-const RUNTIME_ANSWER = `${KAPPA_UNVERIFIED}\n\n${SIGMA_DONE}`;
-/** The gate kappa meets once: the run's tool registry holds no tool that runs a check. */
-const NO_VERIFICATION_TOOL = "[NO VERIFICATION TOOL] Steps in this run failed, and the same tools then succeeded:";
+/**
+ * What the system writes under an answer whose write under README.md failed,
+ * was answered by a write of the same file name under notes/, and that
+ * nothing here could check. Built from the record: both targets, the error
+ * (its code is the platform's), README.md measured to be a file in the
+ * project, the tool count (the registry's), and the scan of the project tree
+ * that found no manifest (its directory count is the run's).
+ */
+const notVerifiedUnder = (answer: string, name: string, tail = ""): RegExp =>
+  new RegExp(
+    `^${escapeRegExp(answer)}\\n\\nNot verified: file_write README\\.md/${escapeRegExp(name)} failed ` +
+      "\\(Error: could not write file \\(E[A-Z]+\\)\\): README\\.md is a file, so that path cannot exist\\. " +
+      `Then file_write wrote notes/${escapeRegExp(name)}, the same file name in another directory\\. Nothing here could check ` +
+      "the result: none of the \\d+ available tools runs a build or a test, and a search of the whole project for \\d+ kinds of build or test " +
+      "manifest found none \\(\\d+ directories read, up to 20000 entries and 12 levels deep\\)\\." +
+      `${escapeRegExp(tail)}$`,
+  );
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const RUNTIME_SCRIPT: readonly Step[] = [
   decomposeStep("decompose", RUNTIME_REQUEST, twoNodes(NODE_KAPPA, NODE_SIGMA)),
@@ -293,24 +356,45 @@ const RUNTIME_SCRIPT: readonly Step[] = [
   actStep("kappa: act again, after reading the failure", NODE_KAPPA,
     [writeCall("call_kappa_fixed", "notes/kappa.txt", "KAPPA\n")],
     (call) => carriesResult(call, "call_kappa_fails")),
+  // The failed write's file was written where it belongs, none of the tools this run was
+  // offered runs a check, and the project declares none: kappa ends here,
+  // and the system writes "Not verified: …" under its answer. Measured
+  // 2026-11-06, before the fix: the failure waited for a verification
+  // nothing here could run; the worker was asked six times, loop detection
+  // blocked kappa, the goal ran again from the start, and the re-run
+  // completed with no verification at all.
   reportStep("kappa: report", NODE_KAPPA, ["call_kappa_fixed"], KAPPA_DONE),
-  // The failed write was re-run and worked, and none of the tools this run
-  // was offered runs a check, so the gate asks once for an honest report and
-  // closes on it. Measured 2026-11-06, before the fix: the failure waited for
-  // a verification nothing here could run; the worker was asked six times,
-  // loop detection blocked kappa, the goal ran again from the start, and the
-  // re-run completed with no verification at all.
-  {
-    step: "kappa: told nothing here can verify it, reports it not verified",
-    check: (call) => requires([isWorkerOn(NODE_KAPPA)(call), lastSays(call, NO_VERIFICATION_TOOL)]),
-    reply: say(KAPPA_UNVERIFIED),
-  },
   planStep("sigma: plan", NODE_SIGMA),
   actStep("sigma: act", NODE_SIGMA, [writeCall("call_sigma", "notes/sigma.txt", "SIGMA\n")]),
   reportStep("sigma: report", NODE_SIGMA, ["call_sigma"], SIGMA_DONE),
-  // Cheapest node first (ResultAggregator): sigma answered in three calls, kappa in five.
+  // Cheapest node first (ResultAggregator): sigma answered in three calls, kappa in four.
   verifyStep("sigma", SIGMA_DONE),
-  verifyStep("kappa", KAPPA_UNVERIFIED),
+  // The node verifier reads kappa's answer with the notice under it.
+  verifyStep("kappa", `${KAPPA_DONE}\n\nNot verified: file_write README.md/kappa.txt failed (Error: could not write file (E`),
+];
+
+// ─── Run 7: a short request, a failed write written where it belongs, and a worker that claims a check
+
+const THETA_REQUEST = "Create notes/theta.txt containing the word THETA.";
+const THETA_CLAIM = "Wrote notes/theta.txt and verified it works.";
+const CLAIM_ASK = "[NO VERIFICATION TOOL] Your report says a check passed, but no check ran in this run.";
+const CLAIMED_CHECK = " The report above mentions a check, but no check ran in this run.";
+
+const CLAIM_SCRIPT: readonly Step[] = [
+  planStep("theta: plan", THETA_REQUEST),
+  actStep("theta: act, on a path under a file", THETA_REQUEST,
+    [writeCall("call_theta_fails", "README.md/theta.txt", "THETA\n")]),
+  actStep("theta: act again, after reading the failure", THETA_REQUEST,
+    [writeCall("call_theta_fixed", "notes/theta.txt", "THETA\n")],
+    (call) => carriesResult(call, "call_theta_fails")),
+  reportStep("theta: report, claiming a check", THETA_REQUEST, ["call_theta_fixed"], THETA_CLAIM),
+  // The claim contradicts the record: asked once, and only once.
+  {
+    step: "theta: asked once for an honest report, claims the check again",
+    check: (call) => requires([isWorkerOn(THETA_REQUEST)(call), lastSays(call, CLAIM_ASK)]),
+    reply: say(THETA_CLAIM),
+  },
+  visibilityReviewStep("theta: review the draft", THETA_REQUEST, THETA_CLAIM),
 ];
 
 // ─── Run 5: the same failure, and the registry holds a check tool ───────────
@@ -417,6 +501,18 @@ function settledAfterResume(): (tasks: readonly Task[], delivered: readonly stri
 
 // ─── The runs ────────────────────────────────────────────────────────────────
 
+/**
+ * The short request with a worker that answers its action turn well after
+ * the heartbeat's timer (HEARTBEAT_AFTER_MS) has run: slower than any
+ * heartbeat setting this file uses, so the heartbeat's presence is decided by
+ * configuration and not by how long the machine happens to take.
+ */
+const HEARTBEAT_AFTER_MS = 300;
+const SLOW_WORKER_MS = 1_800;
+const SLOW_PROVIDER_CALL_MS = 1_300;
+const slowShortScript = (): Step[] =>
+  SHORT_SCRIPT.map((step, index) => (index === 1 ? { ...step, delayMs: SLOW_WORKER_MS } : step));
+
 /** What bootstrap tells every chat when it starts: not part of any run. */
 const SYSTEM_STATUS = expect.stringMatching(/^\*System Status\*\n/);
 
@@ -442,6 +538,38 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(run.task?.result).toBe(GAMMA_DONE);
     expect(texts(run)).toEqual([SYSTEM_STATUS, GAMMA_DONE]);
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("a slow worker does not change what the chat reads: the progress heartbeat is off unless a run asks for it", async () => {
+    const run = await runGolden({
+      name: "slow-heartbeat-off",
+      request: SHORT_REQUEST,
+      script: slowShortScript(),
+      settled: settledWhenAnswered,
+    });
+
+    expect(run.violations).toEqual([]);
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, GAMMA_DONE]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("the progress heartbeat still reaches the chat when a run turns it on and the worker is slow", async () => {
+    const run = await runGolden({
+      name: "slow-heartbeat-on",
+      request: SHORT_REQUEST,
+      script: slowShortScript(),
+      heartbeatAfterMs: HEARTBEAT_AFTER_MS,
+      settled: settledWhenAnswered,
+    });
+
+    expect(run.violations).toEqual([]);
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    const read = texts(run);
+    expect(read[0]).toEqual(SYSTEM_STATUS);
+    expect(read.at(-1), "the answer is the last thing the chat reads").toBe(GAMMA_DONE);
+    const heartbeats = read.slice(1, -1);
+    expect(heartbeats.length, `the chat read only: ${JSON.stringify(read)}`).toBeGreaterThanOrEqual(1);
+    for (const message of heartbeats) expect(message).toMatch(/^Stage: .+\. Last action: .+\. Next: .+\.$/);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("a supervisor that throws hands the request to one worker", async () => {
@@ -501,13 +629,20 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(run.violations).toEqual([]);
     expect(run.served).toEqual(RECOVERY_SCRIPT.map((s) => s.step));
 
-    // What each tool reported back: the refusal first, then every write.
+    // What each call was answered: the planning turn's four writes refused by the phase gate,
+    // then the tool's own refusal of the escaping path, then every write.
     expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
+      ...ALPHA_PLANNED_WRITES.map((w) => ({ id: w.id, isError: true })),
       { id: "call_alpha_escape", isError: true },
       { id: "call_alpha_fixed", isError: false },
       { id: "call_beta", isError: false },
     ]);
-    expect(run.toolResults[0]?.content).toMatch(/^Error: Path resolves outside the project directory/);
+    for (const w of ALPHA_PLANNED_WRITES) {
+      expect(run.toolResults.find((r) => r.toolCallId === w.id)?.content).toBe(PLANNING_REFUSAL);
+    }
+    expect(run.toolResults.find((r) => r.toolCallId === "call_alpha_escape")?.content).toMatch(
+      /^Error: Path resolves outside the project directory/,
+    );
     expect(existsSync(join(run.project, "..", "outside"))).toBe(false);
     // The worker writes in a lease, so an escape that got through would land beside it.
     expect(existsSync(join(run.leaseRoot, "outside"))).toBe(false);
@@ -527,7 +662,24 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
-  it("a node whose write failed at run time, in a run with no check tool, finishes once and says it is not verified", async () => {
+  it("the same recovery run reads the same when every provider call takes 1.3 s", async () => {
+    // Measured 2026-11-16 (#85): with 1.2 s or more per call, the dropped calls' log lines fell in
+    // the review cutoff's floored second and the node worker was asked for a targeted repro
+    // instead of "beta: verify". The ordinary run is too fast to meet that clock.
+    const run = await runGolden({
+      name: "recovery-slow-provider",
+      request: RECOVERY_REQUEST,
+      script: RECOVERY_SCRIPT.map((step) => ({ ...step, delayMs: (step.delayMs ?? 0) + SLOW_PROVIDER_CALL_MS })),
+      settled: settledWhenAnswered,
+    });
+
+    expect(run.violations).toEqual([]);
+    expect(run.served).toEqual(RECOVERY_SCRIPT.map((s) => s.step));
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, RECOVERY_ANSWER]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("a node whose write failed at run time, in a run with no check tool, finishes at once and the system says it is not verified", async () => {
     const run = await runGolden({
       name: "runtime-failure-unverifiable",
       request: RUNTIME_REQUEST,
@@ -554,14 +706,35 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
 
     // One task, completed on its first attempt: nothing blocked, nothing resumed.
     expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
-    expect(run.task?.result).toBe(RUNTIME_ANSWER);
+    const answer = notVerifiedUnder(KAPPA_DONE, "kappa.txt", `\n\n${SIGMA_DONE}`);
+    expect(run.task?.result).toMatch(answer);
 
-    // What the user read says the failed step is not verified; it does not
-    // read as a plain "done".
-    expect(texts(run)).toEqual([SYSTEM_STATUS, RUNTIME_ANSWER]);
-    expect(run.task?.result).toMatch(/^Wrote notes\/kappa\.txt\. Not verified: /);
+    // What the user read says the failed step is not verified, and why, in
+    // the system's words: the worker's draft said only "Wrote …".
+    expect(texts(run)).toEqual([SYSTEM_STATUS, expect.stringMatching(answer)]);
     expect(texts(run)).not.toContain(FALLBACK_NOTICE);
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("a worker that claims a check nothing ran is asked once, and the chat reads the system's notice under its answer", async () => {
+    const run = await runGolden({ name: "claimed-check", request: THETA_REQUEST, script: CLAIM_SCRIPT, settled: settledWhenAnswered });
+
+    expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(run.violations).toEqual([]);
+    expect(run.served).toEqual(CLAIM_SCRIPT.map((s) => s.step));
+    expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
+      { id: "call_theta_fails", isError: true },
+      { id: "call_theta_fixed", isError: false },
+    ]);
+    expect(readFileSync(join(run.project, "notes", "theta.txt"), "utf8")).toBe("THETA\n");
+
+    // The chat reads the worker's words and, under them, that nothing was
+    // verified and that the claimed check never ran. (The interactive
+    // rendering of the notice is pinned in reflection.unverified-notice.test.ts.)
+    const answer = notVerifiedUnder(THETA_CLAIM, "theta.txt", CLAIMED_CHECK);
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(run.task?.result).toMatch(answer);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, expect.stringMatching(answer)]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("the same failure in a run with a check tool waits for a verification: blocked, then resumed on its own", async () => {

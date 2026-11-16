@@ -185,6 +185,8 @@ export interface SupervisorContext extends WorkerExecutionEnvelope {
   readonly planningPrompt?: string;
   readonly goalTree?: GoalTree;
   readonly onGoalDecomposed?: (goalTree: GoalTree) => void;
+  /** Where the brain's planning call bills: the shell's usage hook, curried with the run's onUsage (task #67). */
+  readonly onPlanningUsage?: import("../goals/decomposition-usage.js").DecompositionUsageSink;
   readonly reportUpdate?: (markdown: string) => Promise<void> | void;
   /** Liveness ping on every node status change — re-arms the task inactivity
    *  watchdog, which milestone-only progress updates leave to expire. */

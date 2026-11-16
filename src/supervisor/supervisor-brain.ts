@@ -8,6 +8,7 @@
  * when the pipeline is interrupted mid-execution.
  */
 
+import { describeUnapprovedSteps } from "./stopped-plan-summary.js";
 import type { GoalNode, GoalNodeId, GoalStatus, GoalTree } from "../goals/types.js";
 import { withLivenessHeartbeat } from "../agents/liveness-hub.js";
 import { getLoggerSafe } from "../utils/logger.js";
@@ -44,7 +45,7 @@ import {
 /** Minimal interface for the GoalDecomposer dependency */
 export interface SupervisorDecomposer {
   shouldDecompose(prompt: string): boolean;
-  decomposeProactive(sessionId: string, taskDescription: string, opts?: { signal?: AbortSignal }): Promise<GoalTree>;
+  decomposeProactive(sessionId: string, taskDescription: string, opts?: import("../goals/goal-decomposer.js").DecomposeOptions): Promise<GoalTree>;
 }
 
 // =============================================================================
@@ -404,7 +405,7 @@ export class SupervisorBrain {
       const planningSignal = externalSignal ? AbortSignal.any([externalSignal, internalSignal]) : internalSignal;
       const decomposedGoalTree = context.goalTree ?? await withLivenessHeartbeat(
         context.chatId,
-        () => this.decomposer.decomposeProactive(context.chatId, planningTask, { signal: planningSignal }),
+        () => this.decomposer.decomposeProactive(context.chatId, planningTask, { signal: planningSignal, onUsage: context.onPlanningUsage }),
         context.onLiveness,
       );
       const visibleGoalTree = this.buildVisibleGoalTree(decomposedGoalTree, task);
@@ -497,11 +498,7 @@ export class SupervisorBrain {
             // unverified node keeps its explanation in the output.
             const unapproved = report.candidates - report.approved;
             if (unapproved > 0) {
-              const detail = verified
-                .filter((r) => r.status !== "ok" || (r.output ?? "").length > 0)
-                .map((r) => `- ${String(r.nodeId)}: ${(r.output ?? "").slice(0, 200) || r.status}`)
-                .slice(0, 8)
-                .join("\n");
+              const detail = describeUnapprovedSteps(verified, { request: task, nodes: decomposedGoalTree.nodes.values() });
               // A REJECTED step is no longer a completed checkpoint: writing
               // it back as failed makes the next retry re-run the work rather
               // than re-verify the same saved output (Codex 2026-09-11 C#5).

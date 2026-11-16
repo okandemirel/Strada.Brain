@@ -46,9 +46,28 @@ const CJK_ROLE_HIJACK_RE =
  * The slash after the pipe may follow the same whitespace the opener allows there
  * (`<| /system |>`). It is written `\s*(?:\/\s*)?` rather than `\s*\/?\s*`: two
  * `\s*` with nothing between them backtrack quadratically on a long run of spaces.
+ * The bracket closer (`[ / SYSTEM ]`) is written the same way for the same reason.
+ *
+ * ChatML (`<|im_start|>system … <|im_end|>`) and Llama 3
+ * (`<|start_header_id|>system<|end_header_id|> … <|eot_id|>`) carry the role
+ * inside the envelope, so they get their own closed-envelope alternative ahead
+ * of the lone-token one. Measured 2026-11-06: with only the lone-token rule,
+ * `<|im_start|>system\nXPAY<|im_end|>` came out as
+ * `[filtered:envelope] system\nXPAY[filtered:envelope]` — tags gone, payload kept.
+ * The opener is a literal and the span is bounded, so the scan stays linear.
+ *
+ * The alternative covers every pipe-token family whose turn has a literal
+ * opener and a literal closer, with all of that family's closers. Measured
+ * 2026-11-16: with only `<|im_end|>`/`<|eot_id|>` as closers, a turn ended by
+ * any other closer kept its payload, and those closers passed through alone.
+ *   ChatML / Qwen / Phi-4   <|im_start|> … <|im_end|> | <|endoftext|>  (<|im_sep|> inside)
+ *   Kimi                    <|im_system|>/<|im_user|>/<|im_assistant|> … <|im_end|>  (<|im_middle|> inside)
+ *   Llama 3.x               <|start_header_id|> … <|eot_id|> | <|eom_id|> | <|end_of_text|>  (<|python_tag|> inside)
+ *   gpt-oss Harmony         <|start|> … <|end|> | <|return|> | <|call|>  (<|channel|>, <|message|>, <|constrain|> inside)
+ * GLM (`<|system|> … <|user|>`) is already a closed pipe envelope above.
  */
 const ENVELOPE_RE =
-  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\s*(?:\/\s*)?(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*\/?\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|im_end|start_header_id|end_header_id|eot_id|begin_of_text)\|>/gi;
+  /<\|?\s*(?:system|assistant|user|developer|tool|function)\s*\|?>[\s\S]{0,2000}?<\/?\|?\s*(?:\/\s*)?(?:system|assistant|user|developer|tool|function)\s*\|?>|\[\s*(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST|\/INST)\s*\][\s\S]{0,2000}?\[\s*(?:\/\s*)?(?:SYSTEM|ASSISTANT|USER|DEVELOPER|TOOL|INST)\s*\]|<\|(?:im_start|im_system|im_user|im_assistant|start_header_id|start)\|>[\s\S]{0,2000}?<\|(?:im_end|endoftext|eot_id|eom_id|end_of_text|end|return|call)\|>|<\|(?:im_start|im_end|im_sep|im_system|im_user|im_assistant|im_middle|endoftext|start_header_id|end_header_id|eot_id|eom_id|python_tag|begin_of_text|end_of_text|start|end|return|call|channel|message|constrain)\|>/gi;
 
 /**
  * Unopened/open-only envelope tags (e.g. lone `[SYSTEM]:` prefix, `<|system|>` header).

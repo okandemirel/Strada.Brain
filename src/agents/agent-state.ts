@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export enum AgentPhase {
   PLANNING = "planning",
   EXECUTING = "executing",
@@ -13,6 +15,39 @@ export interface StepResult {
   readonly summary: string;
   readonly timestamp: number;
   readonly errorCategory?: import("./orchestrator-runtime-utils.js").StepErrorCategory;
+  /**
+   * The call's input as a short digest (stepInputSignature), so a later call
+   * can be told to be the same call run again: a failed `node main.js`
+   * followed by a successful `ls` is the same tool, not the same step.
+   * Absent on states recorded before it existed.
+   */
+  readonly inputSignature?: string;
+  /**
+   * The path the call names (stepTargetPath), so a failed write can be told
+   * answered by a later write: the same path, or the same file name in
+   * another directory. A write to some other file answers nothing (QA of
+   * #41, 2026-11-16). Absent when the input names no path.
+   */
+  readonly targetPath?: string;
+}
+
+/** The path a call's input names: `path`/`file`/`name`, or a rename's `new_path`; undefined when none. */
+export function stepTargetPath(input: Readonly<Record<string, unknown>> | undefined): string | undefined {
+  if (!input) return undefined;
+  return [input["path"], input["file"], input["name"], input["new_path"]].find(
+    (value): value is string => typeof value === "string" && value.trim() !== "",
+  );
+}
+
+/** Sorted-key JSON of a call's input, sha1, 16 hex: equal inputs give equal signatures whatever their key order. */
+export function stepInputSignature(input: unknown): string {
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(Object.keys(value).sort().map((k) => [k, canonical((value as Record<string, unknown>)[k])]))
+        : value;
+  return createHash("sha1").update(JSON.stringify(canonical(input ?? null)) ?? "null").digest("hex").slice(0, 16);
 }
 
 export interface AgentState {

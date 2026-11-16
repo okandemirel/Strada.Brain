@@ -29,17 +29,23 @@ import type {
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { RunClockView } from "../control/run-clock.js";
 import type { Budget, ChildBudget } from "../control/budget.js";
+import type { InstinctOwner } from "../engine/instinct-scope.js";
 
 /**
  * What a run lends the tools it calls, so a sub-agent a tool starts stays inside the run: the
  * run's cancel signal (its task token — a /cancel, the task ceiling or the run's own end aborts
  * it), its live Budget (a child is carved a slice of it and debits its spend back to it), and a
- * read-only view of its wall clock.
+ * read-only view of its wall clock. And its task-metric id, so a sub-agent's metric row is
+ * recorded as this run's subtask; absent when the run records no metric. It also names whose
+ * user-scoped instincts the run's setup retrieved (RunSetup.instinctUserId), so a sub-agent
+ * is given that person's learning and no one else's; absent, shared learning only.
  */
 export interface ParentRunScope {
   readonly signal: AbortSignal;
   readonly budget: Budget;
   readonly clockView: RunClockView;
+  readonly metricId?: string;
+  readonly instinctUserId?: string;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -149,6 +155,8 @@ export interface AgentRunRequest {
   readonly channelType: ChannelType | string;
   readonly conversationId?: string;
   readonly userId?: string;
+  /** Whose user-scoped instincts the run retrieves when not `userId`'s (see InstinctOwner). */
+  readonly instinctOwner?: InstinctOwner;
 
   /** Per-run id for metrics/workspace correlation (`BackgroundTaskOptions.taskRunId`). */
   readonly taskRunId?: string;
@@ -162,9 +170,8 @@ export interface AgentRunRequest {
   readonly assignedModel?: string;
 
   /**
-   * Subtask metric parent (`BackgroundTaskOptions.parentMetricId`). Accepted by the contract but
-   * NOT threaded by V1AgentRunner in Phase 0 — v1's executeWorkerRun forwarded it on neither the
-   * structured nor the legacy path; Phase 2 wires it deliberately. Setting it now is a no-op.
+   * The calling run's task-metric id (its `ParentRunScope.metricId`). Set, the run's metric row is
+   * a 'subtask' with this parent; DelegationManager sets it for a delegated sub-agent.
    */
   readonly parentMetricId?: string;
 

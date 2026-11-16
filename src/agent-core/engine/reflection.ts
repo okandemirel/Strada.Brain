@@ -14,6 +14,7 @@
 import { AgentPhase, transitionPhase, type AgentState } from "../../agents/agent-state.js";
 import type { ProviderResponse, ConversationMessage } from "../../agents/providers/provider-core.interface.js";
 import type { Session } from "../../agents/orchestrator-session-manager.js";
+import { pushSystemTurn } from "../../agents/orchestrator-session-manager-task-turn.js";
 import type { DMPolicy } from "../../security/dm-policy.js";
 import type { TaskUsageEvent, TaskProgressSignal } from "../../tasks/types.js";
 import type { ProgressLanguage } from "../../tasks/progress-signals.js";
@@ -29,6 +30,7 @@ import type { ConfidenceEstimator } from "../routing/confidence-estimator.js";
 import type { ClarificationContext } from "../../agents/orchestrator-clarification.js";
 import type { TaskManager } from "../../tasks/task-manager.js";
 import { userExplicitlyAskedForPlan, draftLooksLikeInternalPlanArtifact } from "../../agents/autonomy/index.js";
+import { takeUnverifiedNotice, withUnverifiedNotice } from "../../agents/autonomy/verifier-pipeline-unverifiable.js";
 import { applyVisibleResponseContract } from "../../agents/orchestrator-text-utils.js";
 import {
   handleInteractiveEndTurn,
@@ -106,12 +108,14 @@ export interface ReflectionDeps extends ReviewDeps, RenderDeps {
     session: Session;
     agentState: AgentState;
     signal?: AbortSignal;
+    onUsage?: (usage: TaskUsageEvent) => void;
   }) => Promise<AgentState>;
   readonly runReactiveGoalDecomposition: (opts: {
     conversationScope: string;
     chatId: string;
     session: Session;
     responseText: string;
+    onUsage?: (usage: TaskUsageEvent) => void;
   }) => Promise<void>;
 }
 
@@ -351,12 +355,13 @@ export async function portDispatchReflection(
           chatId,
           session: runCtx.session,
           responseText: params.responseText ?? "",
+          onUsage: runCtx.onUsage,
         });
         let replanState = transitionPhase(action.newState, AgentPhase.REPLANNING);
         if (params.responseText) {
           runCtx.session.messages.push({ role: "assistant", content: params.responseText });
         }
-        runCtx.session.messages.push({ role: "user", content: "Please create a new plan." });
+        pushSystemTurn(runCtx.session.messages, "Please create a new plan.");
         return { agentState: replanState, terminal: false, extendRequested: true };
       }
     } else {
@@ -384,7 +389,8 @@ export async function portDispatchReflection(
       // intervention extended the run — the spine must honor it over the parse-time verdict.
       return { agentState: action.newState, terminal: false, extendRequested: true };
     case "done": {
-      await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
+      const notice = takeUnverifiedNotice(chatId, runCtx.taskStartedAtMs);
+      await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore, notice);
       return { agentState: action.newState, terminal: true, reason: action.status ?? "done" };
     }
     case "blocked": {
@@ -407,6 +413,10 @@ export async function portDispatchReflection(
  * workers' internal answers to the user's chat. Off the interactive path the text is only
  * recorded, once: the background handlers append the answers they produce themselves, so the
  * boundary appends only when the handler recorded nothing.
+ *
+ * `notice` is the verifier's "Not verified: …" (verifier-pipeline-unverifiable.ts): the run
+ * ended over a failure nothing here could check, and the user reads that under the answer
+ * whatever the draft said. Every finished run passes here, so the notice cannot miss a path.
  */
 async function settleVisibleBoundary(
   deps: ReflectionDeps,
@@ -415,13 +425,31 @@ async function settleVisibleBoundary(
   session: Session,
   visibleText: string | undefined,
   transcriptLengthBefore: number,
+  notice?: string,
 ): Promise<{ text: string; marked: boolean }> {
-  if (mode === "interactive") return emitVisibleBoundary(deps, chatId, session, visibleText);
-  const safe = sanitizeBlockedVisibleText(deps, visibleText ?? "");
-  if (safe.text && deps.sessionManager.getVisibleTranscript(session).length === transcriptLengthBefore) {
+  const text = withUnverifiedNotice(visibleText, notice);
+  if (mode === "interactive") return emitVisibleBoundary(deps, chatId, session, text);
+  const handlerAppended = deps.sessionManager.getVisibleTranscript(session).length !== transcriptLengthBefore;
+  if (notice && handlerAppended) appendNoticeToLastAnswer(session, deps.sessionManager.getVisibleTranscript(session), notice);
+  const safe = sanitizeBlockedVisibleText(deps, text ?? "");
+  if (safe.text && !handlerAppended) {
     deps.sessionManager.appendVisibleAssistantMessage(session, safe.text);
   }
   return safe;
+}
+
+/**
+ * The handler appended its own answer: the notice goes into that message, because the
+ * run's final text is read back from the last visible assistant message (port.synthesizeFinal).
+ */
+function appendNoticeToLastAnswer(session: Session, visible: ConversationMessage[], notice: string): void {
+  const at = visible.map((m) => m.role).lastIndexOf("assistant");
+  const last = visible[at];
+  if (!last || last.role !== "assistant") return;
+  const replaced: ConversationMessage = { ...last, content: withUnverifiedNotice(last.content, notice) ?? last.content };
+  visible[at] = replaced;
+  const inHistory = session.messages.lastIndexOf(last);
+  if (inHistory >= 0) session.messages[inHistory] = replaced;
 }
 
 /**
@@ -498,7 +526,8 @@ export async function portDispatchEndTurn(
 
   switch (action.flow) {
     case "done": {
-      const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
+      const notice = takeUnverifiedNotice(chatId, runCtx.taskStartedAtMs);
+      const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore, notice);
       return {
         agentState: action.newState,
         finalText: safe.text,
@@ -561,6 +590,8 @@ export async function portHandlePlanPhase(
     if (phase === AgentPhase.PLANNING && taskManager) {
       const goalBlock = parseGoalBlock(params.responseText ?? "");
       if (goalBlock && goalBlock.isGoal) {
+        // The same read as lastUserMessage: the person's last turn, never the tool-result turn,
+        // whose tool_result read as rich input here (no goal tree, the plan state handed off).
         const lastUserContent = deps.sessionManager.extractLastUserContent(runCtx.session);
         const lastUserHasRichInput =
           (runCtx.attachments?.length ?? 0) > 0 ||
@@ -591,7 +622,9 @@ export async function portHandlePlanPhase(
     // presents the plan; the user approves on the next message (cleared upstream by
     // interactionPolicy.noteUserMessage in processMessage, so this gate won't re-trigger).
     if (
-      params.toolCallCount === 0 && // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only
+      // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only. The count is of the
+      // calls that run: a write the phase refuses is not one (PlanPhaseParams.toolCallCount).
+      params.toolCallCount === 0 &&
       userExplicitlyAskedForPlan(lastUserMessage) &&
       draftLooksLikeInternalPlanArtifact(params.responseText ?? "", { toolNames: runCtx.lastToolNames }) &&
       !deps.dmPolicy?.isAutonomousActive(chatId, runCtx.userId)
@@ -611,6 +644,7 @@ export async function portHandlePlanPhase(
           chatId,
           session: runCtx.session,
           agentState,
+          onUsage: runCtx.onUsage,
         });
       }
       deps.interactionPolicy.requirePlanReview(
