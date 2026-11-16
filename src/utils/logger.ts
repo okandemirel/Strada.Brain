@@ -11,7 +11,15 @@ import { applySecretPatterns, DEFAULT_SECRET_PATTERNS, sanitizeSecretsQuiet } fr
 // ---------------------------------------------------------------------------
 
 export interface LogEntry {
+  /** The file and console format, `YYYY-MM-DD HH:mm:ss`: second resolution. */
   timestamp: string;
+  /**
+   * When the line was logged, in epoch milliseconds. A reader that compares a
+   * line with a millisecond instant (a task start, a verification) reads this
+   * one: the string floors to its second, so a warning in the same second as
+   * the instant read as "before" it and one a second later as "after".
+   */
+  timestampMs?: number;
   level: string;
   message: string;
   meta?: Record<string, unknown>;
@@ -93,8 +101,20 @@ function sanitizeMetaValue(value: unknown, ancestors: WeakSet<object> = new Weak
   }
 }
 
+/**
+ * The instant of the log call, on a symbol key so no transport writes it: the
+ * file and console lines keep their format (scripts/eval parse it by date).
+ */
+const EPOCH_MS = Symbol.for("strada.logger.epochMs");
+
+const stampEpochMsFormat = winston.format((info) => {
+  (info as unknown as Record<symbol, unknown>)[EPOCH_MS] = Date.now();
+  return info;
+});
+
 class RingBufferTransport extends TransportStream {
   log(info: { timestamp?: string; level: string; message: string; service?: string; [key: string]: unknown }, callback: () => void): void {
+    const epochMs = (info as unknown as Record<symbol, unknown>)[EPOCH_MS];
     const { timestamp, level, message, service: _service, ...meta } = info;
     let storedMeta: Record<string, unknown> | undefined;
     if (Object.keys(meta).length > 0) {
@@ -117,6 +137,7 @@ class RingBufferTransport extends TransportStream {
     }
     LOG_RING_BUFFER.push({
       timestamp: String(timestamp ?? new Date().toISOString()),
+      timestampMs: typeof epochMs === "number" ? epochMs : Date.now(),
       level,
       // Plain string — safe to sanitize directly (metrics-quiet on this hot path).
       message: sanitizeSecretsQuiet(String(message).slice(0, MAX_MESSAGE_LENGTH)),
@@ -182,6 +203,7 @@ export function createLogger(level: string, logFile: string): winston.Logger {
   logger = winston.createLogger({
     level,
     format: winston.format.combine(
+      stampEpochMsFormat(),
       winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
       winston.format.errors({ stack: true }),
       // Before json() so the redaction sees structured leaves, and before every
