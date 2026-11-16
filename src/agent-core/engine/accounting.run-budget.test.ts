@@ -313,6 +313,8 @@ const FUNNEL_CALLERS: Record<string, { count: number; scope: string }> = {
   "src/learning/chains/chain-synthesizer.ts › ChainSynthesizer.callLLM.response → billedChat": { count: 1, scope: OWNERLESS("daemon") },
   "src/memory/unified/session-summarizer.ts › SessionSummarizer.summarize.response → billedChat": { count: 1, scope: OWNERLESS("daemon") },
   "src/vault/symbol-summarizer.ts › summarizeSymbol.response → billedChat": { count: 1, scope: OWNERLESS("chat") },
+  "src/core/bootstrap-stages/stage-agents.ts › initializeMemoryConsolidationStage.summarizeWithLLM.response → billedChat": { count: 1, scope: OWNERLESS("daemon") },
+  "src/agents/providers/fallback-chain.ts › FallbackChainProvider.tryWithFallback.probe → billedChat": { count: 1, scope: OWNERLESS("daemon") },
   "src/supervisor/capability-matcher.ts › CapabilityMatcher.matchWithTriage.response → billedChat": {
     count: 1,
     scope: `run-billed capability triage, before the nodes are carved: ${IN_ADMISSION}`,

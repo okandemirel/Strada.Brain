@@ -54,3 +54,15 @@ export class LostUsage {
     return Object.assign(err, { usage: this.total, usageBy: this.parts.map((p) => ({ ...p })) });
   }
 }
+
+/**
+ * Drop the spend an error carries once it has been billed (billedChat bills a
+ * throwing call's error.usage, then rethrows it). An error that travels on —
+ * the fallback chain keeps its recovery probe's failure as lastError and can
+ * rethrow it — would otherwise be billed a second time by the chain's caller
+ * (task #72 QA: 9 tokens counted 18).
+ */
+export function forgetBilledUsage<E>(err: E): E {
+  if (err && typeof err === "object") Object.assign(err, { usage: undefined, usageBy: undefined });
+  return err;
+}
