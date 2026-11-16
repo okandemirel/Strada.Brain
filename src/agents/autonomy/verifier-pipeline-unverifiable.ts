@@ -19,10 +19,10 @@
  * builds "Not verified: …" from the record, in the task's language: each
  * failed call and its target, and the call that answered it and its target.
  * The run's final answer carries it whatever the draft says (agent-core
- * reflection.ts, settleVisibleBoundary, through {@link takeUnverifiedNotice}). A draft that
- * claims a check passed contradicts the record: the gate asks once for an
- * honest report. That reading can only add the ask; the notice is attached
- * either way.
+ * reflection.ts, settleVisibleBoundary, through {@link takeUnverifiedNotice}).
+ * A draft that claims a check passed contradicts the record: the gate asks
+ * once for an honest report. That reading can only add the ask; the notice
+ * is attached either way.
  *
  * docs/memory/entries/2026-11-11-unverifiable-failure-closes-on-an-honest-report.md
  * records the alternatives.
@@ -250,7 +250,7 @@ export function decideUnverifiableExit(params: {
   };
 }
 
-/** "yes: 1 run again with the same input; 1 file of the same name written in another directory" */
+/** "yes: 1 run again with the same input; 1 whose file name the same tool wrote later in another directory" */
 function howAnswered(answers: readonly FailureAnswer[]): string {
   const count = (kind: FailureAnswer["kind"]) => answers.filter((a) => a.kind === kind).length;
   const parts = [
@@ -261,7 +261,7 @@ function howAnswered(answers: readonly FailureAnswer[]): string {
   return `yes: ${parts.join("; ")}`;
 }
 
-type Words = {
+interface Words {
   readonly head: string;
   readonly rerun: (call: string, error: string) => string;
   readonly samePath: (call: string, error: string, tool: string, path: string) => string;
@@ -270,7 +270,7 @@ type Words = {
   readonly nothing: (offered: number, shellOffered: boolean) => string;
   readonly why: (nothing: string) => string;
   readonly claim: string;
-};
+}
 
 /** The notice's words, in the languages the system speaks to the user (supervisor-feedback.ts detects which). */
 const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
