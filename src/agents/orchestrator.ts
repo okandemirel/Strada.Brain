@@ -294,6 +294,7 @@ import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
 import { resolveUnreservedCostCapUsd } from "../agent-core/engine/budget.js";
 import { phaseAllowsWrites, phaseWriteRefusalResult } from "../agent-core/engine/phase-write-access.js";
 import { createBudget } from "../agent-core/control/budget.js";
+import { withRunBudget } from "../agent-core/control/budget-scope.js";
 import {
   isUnityEditorExclusiveTool,
   withUnityEditorLock,
@@ -1896,7 +1897,18 @@ export class Orchestrator {
       } catch {
         // Activation feedback is best-effort only.
       }
-      const result = await this.supervisorBrain.execute(params.prompt, {
+      // The supervisor runs before any run is open, so there is no run budget to carve its
+      // nodes from: they share the global headroom other in-flight work has not reserved.
+      // The output-token cap stays per node run (its own policy), so only cost is shared.
+      const runBudget = createBudget(
+        Number.POSITIVE_INFINITY,
+        resolveUnreservedCostCapUsd({ unifiedBudgetManager: () => this.unifiedBudgetManager ?? null }),
+      );
+      const brain = this.supervisorBrain;
+      // The supervisor's own calls — the plan, and whatever else it asks a model — are debited
+      // from that budget before its nodes' slices are carved from it; each node's run opens its
+      // own scope on its slice, so nothing is counted twice (task #87).
+      const result = await withRunBudget(runBudget, () => brain.execute(params.prompt, {
         chatId: params.chatId,
         channelType: params.channelType,
         userId: params.userId,
@@ -1916,14 +1928,8 @@ export class Orchestrator {
         ...(params.onGoalDecomposed ? { onGoalDecomposed: params.onGoalDecomposed } : {}),
         ...(params.reportUpdate ? { reportUpdate: params.reportUpdate } : {}),
         ...(params.onLiveness ? { onLiveness: params.onLiveness } : {}),
-        // The supervisor runs before any run is open, so there is no run budget to carve its
-        // nodes from: they share the global headroom other in-flight work has not reserved.
-        // The output-token cap stays per node run (its own policy), so only cost is shared.
-        runBudget: createBudget(
-          Number.POSITIVE_INFINITY,
-          resolveUnreservedCostCapUsd({ unifiedBudgetManager: () => this.unifiedBudgetManager ?? null }),
-        ),
-      });
+        runBudget,
+      }));
       if (!result) {
         return {
           path: fallbackPath,
