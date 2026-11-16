@@ -19,6 +19,7 @@ import { createLogger } from "../utils/logger.js";
 import { SessionManager, type Session, type SessionManagerDeps } from "./orchestrator-session-manager.js";
 import { isTaskTurn, taskTurn } from "./orchestrator-session-manager-task-turn.js";
 import { compactSession } from "./session-compaction.js";
+import { INTERRUPTED_TOOL_RESULT, normalizeConversation } from "./conversation-normalizer.js";
 import { ClaudeProvider } from "./providers/claude.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { OllamaProvider } from "./providers/ollama.js";
@@ -273,5 +274,76 @@ describe("the task-turn mark", () => {
       expect(JSON.stringify(request)).toContain(TASK);
       expect(JSON.stringify(request)).not.toContain("taskTurn");
     }
+  });
+});
+
+/**
+ * A run cut off mid-call (a stop, a daemon restart) leaves an assistant turn whose tool call
+ * never answered; the person's next request follows it. normalizeConversation answers the call
+ * before every provider call (Orchestrator.normalizeSessionForCall), on persist and on load. It
+ * folded the request into that answer as a new turn without the mark, so the trim took the older
+ * request as the run's task, kept it as the head and dropped the current one (board #58, QA).
+ */
+describe("a request after an interrupted call", () => {
+  const OLD_REQUEST = "Draft the bakery's winter opening hours";
+  const interrupted = { role: "assistant", content: "", tool_calls: [{ id: "cut-1", name: "timetable_read", input: {} }] } as ConversationMessage;
+
+  function interruptedSession(sm: SessionManager, name: string): Session {
+    const session = sm.getOrCreateSession(name);
+    sm.appendVisibleUserMessage(session, OLD_REQUEST);
+    session.messages.push(interrupted);
+    sm.appendVisibleUserMessage(session, TASK);
+    return session;
+  }
+
+  it("normalizing answers the call and keeps the request as its own marked turn", () => {
+    const sm = sessionManager();
+    const session = interruptedSession(sm, "normalize");
+    const request = session.messages.at(-1)!;
+
+    const normalized = normalizeConversation(session.messages);
+
+    expect(normalized).toHaveLength(4);
+    expect(normalized[2]!.content).toEqual([
+      { type: "tool_result", tool_use_id: "cut-1", content: INTERRUPTED_TOOL_RESULT, is_error: true },
+    ]);
+    expect(normalized[3], "the request is the same turn, mark and transcript identity kept").toBe(request);
+    expect(isTaskTurn(normalized[3]!)).toBe(true);
+    expect(normalizeConversation(normalized), "a normalized history is stable").toBe(normalized);
+  });
+
+  it("the mark survives a restart of the interrupted session", () => {
+    const sm = sessionManager();
+    const restored = SessionManager.deserializeSession(SessionManager.serializeSession(interruptedSession(sm, "restart-cut")))!;
+    expect(restored.messages.filter(isTaskTurn).map(textOf)).toEqual([OLD_REQUEST, TASK]);
+    expect(textOf(restored.messages.at(-1))).toBe(TASK);
+  });
+
+  it("normalized before every call and trimmed at 40 over 60 tool pairs, the current request leads", () => {
+    const sm = sessionManager();
+    const session = interruptedSession(sm, "cut-run");
+    let trims = 0;
+    for (const step of pairs(60)) {
+      session.messages = normalizeConversation(session.messages);
+      session.messages.push(...step);
+      if (sm.trimSession(session, 40).length > 0) trims++;
+      expect(session.messages.map(textOf), "the current request stays in the history").toContain(TASK);
+      if (trims > 0) {
+        expect(textOf(session.messages[0]), "once trimmed, the current request leads").toBe(TASK);
+        expect(session.messages.map(textOf)).not.toContain(OLD_REQUEST);
+      }
+      expectSendable(session.messages, 80);
+    }
+    expect(trims, "the trim ran").toBeGreaterThan(0);
+  });
+
+  it("an orphaned tool result rewritten as text keeps the turn's mark", () => {
+    const turn = taskTurn([
+      { type: "tool_result", tool_use_id: "gone-1", content: "ok" },
+      { type: "text", text: TASK },
+    ]);
+    const [kept] = normalizeConversation([turn]);
+    expect(kept).not.toBe(turn);
+    expect(isTaskTurn(kept!)).toBe(true);
   });
 });
