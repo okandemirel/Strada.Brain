@@ -5,6 +5,7 @@ import type {
   ProviderCapabilities,
   ResponseSchema,
 } from "./provider.interface.js";
+import { promptCacheUsage, type OpenAICompatCacheUsage } from "./openai-compat.js";
 import { OpenAIProvider } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse, StreamParseState } from "./openai.js";
 import { stripReasoningBlocks, OPENAI_STOP_REASON_MAP } from "./openai.js";
@@ -31,7 +32,7 @@ interface MiniMaxResponse {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens?: number;
-  };
+  } & OpenAICompatCacheUsage;
 }
 
 /**
@@ -258,6 +259,7 @@ export class MiniMaxProvider extends OpenAIProvider {
         inputTokens: usage?.prompt_tokens ?? 0,
         outputTokens: usage?.completion_tokens ?? 0,
         totalTokens: usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0),
+        ...promptCacheUsage(usage),
       },
     };
   }

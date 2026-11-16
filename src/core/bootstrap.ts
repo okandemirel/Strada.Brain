@@ -1533,6 +1533,12 @@ async function bootstrapImpl(
     // No bus: no tool result reaches learning. No retriever: no instinct is used.
     eventEmitter: learningResult.eventBus,
     instinctRetriever,
+    // The dashboard's counters: without them a run's tool calls and tokens never reach /api/metrics.
+    metrics,
+    // The daily token quota and budget caps: without it a delegate's spend never counted toward them.
+    rateLimiter,
+    // Task-metric rows (learning_stats, the dashboard's task metrics); a delegate's only as a subtask.
+    metricsRecorder,
     trajectoryReplayRetriever,
     // THE PIPELINE THE RUN TALKS TO. Without these two the orchestrator holds
     // nulls: guidance exposure ("this rule was in the prompt"), run credit
@@ -1579,16 +1585,13 @@ async function bootstrapImpl(
     readOnly: config.security.readOnlyMode,
     requireConfirmation: config.security.requireEditConfirmation,
     memoryManager,
-    metrics,
     ragPipeline,
-    rateLimiter,
     defaultLanguage: config.language,
     streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
     streamStallTimeoutMs: config.llmStreamStallTimeoutMs,
     streamingEnabled: config.streamingEnabled,
     stradaDeps,
     stradaConfig: config.strada,
-    metricsRecorder,
     goalDecomposer,
     interruptedGoalTrees,
     getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
@@ -2032,10 +2035,7 @@ async function bootstrapImpl(
         providerManager,
         toolRegistry,
         channel,
-        metrics,
         ragPipeline,
-        rateLimiter,
-        metricsRecorder,
         goalDecomposer,
         identityManager,
         cachedEmbeddingProvider,

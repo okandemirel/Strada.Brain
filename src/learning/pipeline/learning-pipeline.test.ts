@@ -1173,6 +1173,53 @@ describe("LearningPipeline", () => {
       }
     });
 
+    it("start() runs no evolution pass itself; the hourly timer does", () => {
+      pipeline.stop();
+      vi.useFakeTimers();
+      try {
+        const spy = vi.spyOn(
+          pipeline as unknown as { runEvolution: () => unknown },
+          "runEvolution",
+        );
+        pipeline.start();
+        // The boot pass belongs to bootstrap, after setProjectPath (see below).
+        expect(spy).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(5000);
+        expect(spy).toHaveBeenCalledTimes(1);
+      } finally {
+        pipeline.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it("bootstrap order (start, setProjectPath, boot tickEvolution) yields a project-scoped artifact", () => {
+      const instinct: Instinct = {
+        id: `instinct_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        name: "Boot Pass Scope",
+        type: "tool_usage",
+        status: "active",
+        confidence: 0.97,
+        triggerPattern: "repeat verified compile workflow",
+        action: "read error -> inspect files -> dotnet build",
+        contextConditions: [],
+        stats: { timesSuggested: 50, timesApplied: 48, timesFailed: 2, successRate: 0.96, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+      };
+      storage.createInstinct(instinct);
+
+      pipeline.start();
+      expect(storage.getRuntimeArtifacts({ states: ["shadow"] })).toHaveLength(0);
+      pipeline.setProjectPath("/projects/A");
+      pipeline.tickEvolution();
+
+      const artifacts = storage.getRuntimeArtifacts({ states: ["shadow"] });
+      expect(artifacts).toHaveLength(1);
+      expect(artifacts[0]!.projectWorldFingerprint).toBeTruthy();
+    });
+
     it("should still clear evolutionTimer and shut down embeddingQueue on stop()", () => {
       // Just verify stop() doesn't throw
       pipeline.start();

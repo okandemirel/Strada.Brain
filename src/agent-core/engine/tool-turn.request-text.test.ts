@@ -99,13 +99,15 @@ const write = (n: number) =>
 
 describe("the consensus step reads the run's request", () => {
   it("on the turn after a tool turn, the reviewer is given the request, not the tool-result turn", async () => {
-    const { sm, session, runCtx, deps, consensusPrompts } = setup();
+    const { session, runCtx, deps, consensusPrompts } = setup();
     const state = transitionPhase(createInitialState(TASK), AgentPhase.EXECUTING);
 
     await portExecuteToolTurn(deps, [write(1), undefined, state, "Writing the first part"], runCtx);
-    // What the session's last user-role message says now: not the request.
+    // What the session's last user-role message holds now: not the request.
     expect(session.messages.length).toBeGreaterThan(1);
-    expect(sm.extractLastUserMessage(session as never)).not.toBe(TASK);
+    const last = session.messages.at(-1) as { role: string; content: unknown };
+    expect(last.role).toBe("user");
+    expect(last.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: "tool_result" })]));
 
     await portExecuteToolTurn(deps, [write(2), undefined, state, "Writing the second part"], runCtx);
     expect(consensusPrompts).toEqual([TASK, TASK]);

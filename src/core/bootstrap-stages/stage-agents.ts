@@ -6,8 +6,6 @@ import type { IRAGPipeline } from "../../rag/rag.interface.js";
 import type { CachedEmbeddingProvider } from "../../rag/embeddings/embedding-cache.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
 import type { DashboardServer } from "../../dashboard/server.js";
-import type { MetricsCollector } from "../../dashboard/metrics.js";
-import type { RateLimiter } from "../../security/rate-limiter.js";
 import type { IEventBus, LearningEventMap } from "../event-bus.js";
 import { IdentityStateManager } from "../../identity/identity-state.js";
 import { GoalDecomposer } from "../../goals/index.js";
@@ -23,7 +21,6 @@ import { HeartbeatLoop } from "../../daemon/heartbeat-loop.js";
 import { DaemonStorage } from "../../daemon/daemon-storage.js";
 import { ApprovalQueue } from "../../daemon/security/approval-queue.js";
 import { TriggerRegistry } from "../../daemon/trigger-registry.js";
-import { MetricsRecorder } from "../../metrics/metrics-recorder.js";
 import type { AgentId } from "../../agents/multi/agent-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
@@ -61,10 +58,7 @@ export async function initializeMultiAgentDelegationStage(
     providerManager: ProviderManager;
     toolRegistry: ToolRegistry;
     channel: IChannelAdapter;
-    metrics: MetricsCollector;
     ragPipeline?: IRAGPipeline;
-    rateLimiter?: RateLimiter;
-    metricsRecorder?: MetricsRecorder;
     goalDecomposer?: GoalDecomposer;
     identityManager?: IdentityStateManager;
     cachedEmbeddingProvider?: CachedEmbeddingProvider;
@@ -120,16 +114,13 @@ export async function initializeMultiAgentDelegationStage(
     projectPath: params.config.unityProjectPath,
     readOnly: params.config.security.readOnlyMode,
     requireConfirmation: params.config.security.requireEditConfirmation,
-    metrics: params.metrics,
     ragPipeline: params.ragPipeline,
-    rateLimiter: params.rateLimiter,
     defaultLanguage: params.config.language,
     streamInitialTimeoutMs: params.config.llmStreamInitialTimeoutMs,
     streamStallTimeoutMs: params.config.llmStreamStallTimeoutMs,
     streamingEnabled: params.config.streamingEnabled,
     stradaDeps: params.stradaDeps,
     stradaConfig: params.config.strada,
-    metricsRecorder: params.metricsRecorder,
     goalDecomposer: params.goalDecomposer,
     getIdentityState: params.identityManager ? () => params.identityManager!.getState() : undefined,
     reRetrievalConfig: params.config.reRetrieval,

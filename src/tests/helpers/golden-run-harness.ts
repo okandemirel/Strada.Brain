@@ -203,7 +203,24 @@ class RunClock {
   }
 }
 
-function makeConfig(project: string, memoryDir: string, chain: readonly string[]): Config {
+/**
+ * The progress reporter's heartbeat is a real timer: 1.5 s after a task's
+ * first progress signal (capped by interaction.heartbeatAfterMs) it sends the
+ * user "Stage: …. Last action: …". How long a run takes between two provider
+ * calls is the machine's load, so with the heartbeat on, the list of messages
+ * a run delivers depended on the load (measured 2026-11-11: load 120-570
+ * broke the recovery and failover runs). A run therefore starts with the
+ * heartbeat off, by configuration (0 means off); a run that is about the
+ * heartbeat asks for it with `heartbeatAfterMs`.
+ */
+const HEARTBEAT_OFF_MS = 0;
+
+function makeConfig(
+  project: string,
+  memoryDir: string,
+  chain: readonly string[],
+  heartbeatAfterMs: number,
+): Config {
   const loaded = loadConfig({
     UNITY_PROJECT_PATH: project,
     PROVIDER_CHAIN: chain.join(","),
@@ -225,6 +242,7 @@ function makeConfig(project: string, memoryDir: string, chain: readonly string[]
     // Listeners and the update check are not the loop.
     DASHBOARD_ENABLED: "false",
     AUTO_UPDATE_ENABLED: "false",
+    INTERACTION_HEARTBEAT_AFTER_MS: String(heartbeatAfterMs),
   });
   return {
     ...loaded,
@@ -247,6 +265,12 @@ export interface GoldenRequest {
   readonly script: readonly Step[];
   /** PROVIDER_CHAIN's seats, in order; each needs its scriptedSeat edge. One deepseek seat when unset. */
   readonly chain?: readonly string[];
+  /**
+   * interaction.heartbeatAfterMs for this run. Off when unset, so the messages
+   * the chat receives do not depend on how long the machine takes (see
+   * HEARTBEAT_OFF_MS). A run about the heartbeat itself sets it.
+   */
+  readonly heartbeatAfterMs?: number;
   /**
    * Whether the run is over, read every 50 ms once the request is handed off:
    * the chat's tasks, oldest first (a retry submits a new one), and the texts
@@ -314,7 +338,7 @@ export async function runGolden(request: GoldenRequest): Promise<GoldenOutcome> 
   const toChat = (): Delivered[] => edges.delivered.filter((m) => m.chatId === GOLDEN_CHAT_ID);
 
   const { bootstrap } = await import("../../core/bootstrap.js");
-  const booting = bootstrap({ channelType: "cli", config: makeConfig(project, memoryDir, chain), daemonMode: false });
+  const booting = bootstrap({ channelType: "cli", config: makeConfig(project, memoryDir, chain, request.heartbeatAfterMs ?? HEARTBEAT_OFF_MS), daemonMode: false });
   const app = await clock.within("bootstrap", clock.bootAndRunLeft(), booting).catch((error: unknown) => {
     // A boot that finishes after its limit is still shut down.
     void booting.then((late) => late.shutdown()).catch(() => undefined);

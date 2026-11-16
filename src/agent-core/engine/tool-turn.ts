@@ -40,6 +40,7 @@ import type { EngineRunContext } from "./engine-deps.js";
 import type { ParentRunScope } from "../runner/agent-runner.js";
 import type { SetupDeps } from "./setup.js";
 import { instinctScopeKey } from "./instinct-scope.js";
+import { allCallsRun, type PhaseCallSplit } from "./phase-write-access.js";
 
 /** v1 parity: the PAOR reflection cadence on the agent-core route (orchestrator const copy). */
 const REFLECT_INTERVAL_AGENT_CORE = 3;
@@ -116,6 +117,7 @@ export interface AgentCoreToolTurnResult {
     success: boolean;
     errorCategory?: string;
     touchedFiles?: readonly string[];
+    resultText?: string;
   }>;
   readonly advancedState: AgentState;
   readonly progressSignal?: TaskProgressSignal;
@@ -167,7 +169,11 @@ export async function portExecuteToolTurn(
     args: unknown[],
     runCtx: EngineRunContext,
   ): Promise<AgentCoreToolTurnResult> {
-    const toolCalls = args[0] as ToolCall[];
+    // The turn's calls as the spine split them by phase (the 6th arg; ./phase-write-access.ts).
+    // `toolCalls` is the calls that run, and every step below reads only it and their results; a
+    // refused call is in the assistant turn the model made and answered there, and nowhere else.
+    const calls = (args[5] as PhaseCallSplit | undefined) ?? allCallsRun(args[0] as ToolCall[]);
+    const toolCalls = [...calls.runnable];
     const agentState = (args[2] as AgentState | undefined) ?? createInitialState("");
     const chatId = runCtx.chatId;
     const session = runCtx.session;
@@ -190,6 +196,7 @@ export async function portExecuteToolTurn(
       chatId,
       responseText,
       toolCalls,
+      split: calls,
       session: session as { messages: ConversationMessage[] },
       executeToolCalls: (c, tc, opts) => deps.executeToolCalls(c, tc, opts),
       executeOptions: {
@@ -287,8 +294,10 @@ export async function portExecuteToolTurn(
       }
     }
 
-    // STEP D — consensus (non-fatal; gated on the managers existing).
-    if (deps.consensusManager && deps.confidenceEstimator && deps.providerRouter) {
+    // STEP D — consensus (non-fatal; gated on the managers existing). It reviews a step that ran:
+    // a turn whose every call the phase refused did nothing to review, and an empty call list
+    // would have made it review any task, not only a critical one.
+    if (deps.consensusManager && deps.confidenceEstimator && deps.providerRouter && toolCalls.length > 0) {
       const consensusVerdict = await runConsensusIfAvailable({
         consensusManager: deps.consensusManager,
         confidenceEstimator: deps.confidenceEstimator,
@@ -326,12 +335,16 @@ export async function portExecuteToolTurn(
     }
 
     // STEP E — record step results + PAOR transition (the REAL transition; returns new state).
-    const step = recordStepResultsAndCheckReflection({
-      agentState,
-      toolCalls,
-      toolResults,
-      reflectInterval: REFLECT_INTERVAL_AGENT_CORE,
-    });
+    // A turn in which nothing ran took no step.
+    const step =
+      toolCalls.length > 0
+        ? recordStepResultsAndCheckReflection({
+            agentState,
+            toolCalls,
+            toolResults,
+            reflectInterval: REFLECT_INTERVAL_AGENT_CORE,
+          })
+        : { agentState, shouldReflect: false };
 
     // STEP E.5 — BUG#1 P2: live plain-loop step DAG. Model each tool batch as a node so the plain
     // interactive/background loop drives per-node monitor status (executing→completed) instead of
@@ -365,7 +378,14 @@ export async function portExecuteToolTurn(
     const stateCtx = runCtx.taskPlanner.getStateInjection();
     // Reuse the centralizing helper (single source for the user-facing health string + the guard).
     const providerHealthContext = runCtx.iterationHealth.buildHealthSummary();
-    const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, toolResults, {
+    // Every call the model made is answered, in its order: a refused one by its refusal, the
+    // others by their results, which come back in the order of the calls that ran.
+    let ranIndex = 0;
+    const answers = calls.asMade.flatMap((tc) => {
+      const answer = calls.refusals.get(tc.id) ?? toolResults[ranIndex++];
+      return answer ? [answer] : [];
+    });
+    const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, answers, {
       providerHealthContext,
       notes: turnNotes,
     });
@@ -384,12 +404,11 @@ export async function portExecuteToolTurn(
     const mem = await refreshMemoryIfNeeded({
       memoryRefresher: runCtx.memoryRefresher,
       iteration: step.agentState.iteration,
-      // v1 parity per route (trio catch): interactive re-scans the session (a fresh extract —
-      // the tool-result block was pushed above); background/delegated pins the STABLE task
-      // prompt (v1 @ a3de7d1 :4756) so drift detection never runs against planner boilerplate.
-      queryContext: isInteractiveTurn
-        ? deps.sessionManager.extractLastUserMessage(session)
-        : agentState.taskDescription || requestText,
+      // Interactive asks about the request pinned at setup. It used to re-scan the session, but
+      // the tool-result turn was pushed just above, so the query was "" or a gate note on every
+      // tool turn (measured: tool-turn.memory-refresh-query.test.ts). Background/delegated pins the
+      // STABLE task prompt (v1 @ a3de7d1 :4756) so drift detection never runs against planner boilerplate.
+      queryContext: isInteractiveTurn ? requestText : agentState.taskDescription || requestText,
       chatId,
       agentState: step.agentState,
       // v1 interactive parity (trio catch, a3de7d1 :6444-6452): surface refreshed instinct IDs —
@@ -436,9 +455,10 @@ export async function portExecuteToolTurn(
     // + files, localized). v1 emitProgress'd it inline; the port RETURNS it so the spine emits it
     // as a `narrative` bus event — the background io adapter unwraps it back into the v1
     // TaskProgressUpdate stream. Non-fatal: a classification error must never fail the tool turn.
+    // It names what the batch did, so a batch in which nothing ran reports no progress.
     let progressSignal: TaskProgressSignal | undefined;
     try {
-      progressSignal = deps.buildToolBatchProgressSignal({
+      progressSignal = toolCalls.length === 0 ? undefined : deps.buildToolBatchProgressSignal({
         prompt: agentState.taskDescription || requestText,
         title: runCtx.progressTitle,
         toolCalls,

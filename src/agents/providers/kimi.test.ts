@@ -270,4 +270,16 @@ describe("KimiProvider", () => {
       expect(user.content).toContain("<reasoning>");
     });
   });
+
+  describe("parseResponse - prompt cache share", () => {
+    it("keeps the provider's cache share, 0 included, and none when absent", () => {
+      const base = { choices: [{ message: { content: "x" }, finish_reason: "stop" }] };
+      const p = (u: Record<string, unknown>) => (getParseResponse(new KimiProvider("test-key"))({ ...base, usage: u })) as { usage: Record<string, unknown> };
+      expect(p({ prompt_tokens: 10, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 6 } }).usage)
+        .toMatchObject({ cacheReadInputTokens: 6, cacheReadField: "prompt_tokens_details.cached_tokens" });
+      expect(p({ prompt_tokens: 10, completion_tokens: 1, prompt_cache_hit_tokens: 0 }).usage)
+        .toMatchObject({ cacheReadInputTokens: 0, cacheReadField: "prompt_cache_hit_tokens" });
+      expect(p({ prompt_tokens: 10, completion_tokens: 1 }).usage).not.toHaveProperty("cacheReadInputTokens");
+    });
+  });
 });

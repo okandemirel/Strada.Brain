@@ -745,7 +745,21 @@ async function runDaemonSmoke(memoryDir, projectDir, sandbox) {
     ORDER BY completed_at DESC
     LIMIT 1
   `).get(CLI_CHAT_ID, PAOR_RECOVERY_PROMPT, PAOR_RECOVERY_PROMPT);
+  // The delegated sub-agent ran a tool (the mock has it list a directory). Its
+  // run is built from the bootstrap's shared object, so the observation exists
+  // only if that object carried the learning event bus: with the bus missing
+  // the delegated call leaves nothing here, under any session id.
+  const delegatedObservation = learningDb.prepare(`
+    SELECT COUNT(*) AS count
+    FROM observations
+    WHERE session_id LIKE 'delegation-%'
+      AND tool_name = 'list_directory'
+  `).get();
   learningDb.close();
+  assert(
+    delegatedObservation.count >= 1,
+    "delegated sub-agent's tool call should be stored in learning.db as an observation with a delegation- session",
+  );
 
   const backgroundRows = [
     ...autonomyMetricsRows.filter((row) => row.task_type === "background"),

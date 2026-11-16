@@ -561,6 +561,8 @@ export async function portHandlePlanPhase(
     if (phase === AgentPhase.PLANNING && taskManager) {
       const goalBlock = parseGoalBlock(params.responseText ?? "");
       if (goalBlock && goalBlock.isGoal) {
+        // The same read as lastUserMessage: the person's last turn, never the tool-result turn,
+        // whose tool_result read as rich input here (no goal tree, the plan state handed off).
         const lastUserContent = deps.sessionManager.extractLastUserContent(runCtx.session);
         const lastUserHasRichInput =
           (runCtx.attachments?.length ?? 0) > 0 ||
@@ -591,7 +593,9 @@ export async function portHandlePlanPhase(
     // presents the plan; the user approves on the next message (cleared upstream by
     // interactionPolicy.noteUserMessage in processMessage, so this gate won't re-trigger).
     if (
-      params.toolCallCount === 0 && // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only
+      // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only. The count is of the
+      // calls that run: a write the phase refuses is not one (PlanPhaseParams.toolCallCount).
+      params.toolCallCount === 0 &&
       userExplicitlyAskedForPlan(lastUserMessage) &&
       draftLooksLikeInternalPlanArtifact(params.responseText ?? "", { toolNames: runCtx.lastToolNames }) &&
       !deps.dmPolicy?.isAutonomousActive(chatId, runCtx.userId)

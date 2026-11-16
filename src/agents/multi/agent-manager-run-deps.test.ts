@@ -12,9 +12,10 @@
  *
  * These tests drive the real AgentManager → real Orchestrator construction and
  * read the per-agent orchestrator through the surfaces a run uses. The last
- * block is a textual tripwire over the two construction sites: bootstrap's root
+ * blocks are textual tripwires over the construction sites: bootstrap's root
  * orchestrator cannot be run in a unit test, so a dependency added there is
- * caught by comparing the two option lists instead.
+ * caught by comparing the root's option list with the per-agent one and with
+ * DelegationManager's delegated one.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,6 +111,9 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
       // Not the manager's own eventBus: the run's learning bus comes from here.
       eventEmitter: { tag: "learning-bus", emit: vi.fn() } as never,
       instinctRetriever: { tag: "instinct-retriever" } as never,
+      metrics: { tag: "dashboard-metrics" } as never,
+      rateLimiter: { tag: "rate-limiter" } as never,
+      metricsRecorder: { tag: "task-metrics-recorder" } as never,
       trajectoryReplayRetriever: { tag: "trajectory-replay" } as never,
       learningPipeline: { tag: "learning-pipeline" } as never,
       errorLearningHooks: { tag: "error-learning-hooks" } as never,
@@ -272,6 +276,9 @@ describe("AgentManager per-agent orchestrators carry the root orchestrator's run
     for (const key of [
       "eventEmitter",
       "instinctRetriever",
+      "metrics",
+      "rateLimiter",
+      "metricsRecorder",
       "learningPipeline",
       "errorLearningHooks",
       "interventionEngine",
@@ -398,5 +405,90 @@ describe("per-agent Orchestrator construction (tripwire over the construction si
     const bootstrap = read("../../core/bootstrap.ts");
     const call = bootstrap.slice(bootstrap.indexOf("await initializeMultiAgentDelegationStage({"));
     expect(call.slice(0, call.indexOf("});"))).toMatch(/\bsharedOrchestratorDeps\b/);
+  });
+});
+
+// =============================================================================
+// Tripwire: a root dependency cannot be dropped at the delegated site unnoticed
+// =============================================================================
+
+/**
+ * Root-orchestrator options a delegated sub-agent's orchestrator deliberately
+ * does not take, and why. A delegate is a sub-task run: its prompt is the
+ * parent model's brief, its user id is "sub-agent", its channel only captures,
+ * and its spend is bounded by the delegation budget. Anything the root gets
+ * that is neither here nor at the delegated site fails the test below.
+ *
+ * Each "measured" reason is what delegation/delegation-root-deps-measure.test.ts
+ * saw when the option was handed to a real delegated run (2 provider calls,
+ * ~13,800 input tokens, a 24,775-char system prompt without it). That file
+ * cannot see whether a real model answers better with the option, only what
+ * the run sends, calls and writes.
+ */
+const DELEGATE_EXEMPT: Record<string, string> = {
+  // Root-only, as for per-agent orchestrators (ROOT_ONLY above).
+  taskExecutionStore: "the root memory's execution store; a sub-task's turns are not the user's execution history",
+  sessionSummarizer: "summarizes into the root memory's execution store, which a delegate does not write",
+  memoryDbPath: "the root's session files; a delegate's session lives and ends with its run",
+  interruptedGoalTrees: "the last process's goal trees resume once, on the root, not once per delegation",
+  crashRecoveryContext: "crash recovery is reported once, by the root, to the user",
+  // Measured: each costs a delegated run something, or changes what the user sees, for no gain the run shows.
+  memoryManager:
+    "measured: recall is scoped to the person, so a delegate ('sub-agent') finds none of the user's memory and its " +
+    "prompt is unchanged; what it does instead is file its brief and answer in the user's memory DB, twice per run " +
+    "(two conversation entries under its delegation chat, three embedding calls), where nothing reads them",
+  ragPipeline:
+    "measured: one search per run, which embeds the query itself, and the code context rides on every worker call " +
+    "(+5,392 chars, ~1,350 tokens per call for six ~890-char chunks; RAG_CONTEXT_MAX_TOKENS caps it at 4,000 tokens " +
+    "per call). The delegate reads code with its tools; whether the context is worth that is the owner's cost call",
+  embeddingProvider:
+    "measured: one embedding of the whole brief per run, read by nothing a delegate has (no memoryManager, no " +
+    "ragPipeline); the prompt and the provider calls are unchanged",
+  reRetrievalConfig:
+    "measured: beside the delegate's instinct retriever it re-asks that retriever once five iterations in, and the " +
+    "insights it gets are already in the prompt (0 tokens, 0 provider calls, same answer); its memory and RAG " +
+    "refreshes need options a delegate does not have",
+  goalDecomposer:
+    "measured: one extra LLM call per delegation (+2,562 tokens on a ~13,900-token run), of which the delegation's " +
+    "budget is charged 158 because the decomposer reports no usage; the answer is the same",
+  supervisorBrain:
+    "measured: a delegated run never asks it (0 calls, with the complexity threshold at 'simple'): only the background " +
+    "executor admits work to the supervisor, so passing it changes nothing today and would fan a sub-task out the day a " +
+    "delegate is admitted",
+  dmPolicy:
+    "measured: a delegate builds its own; the root's, passed alone, is asked twice and changes nothing (approvals are " +
+    "self-managed, requireConfirmation is false); beside the user profiles it keeps one never-expiring entry per " +
+    "delegation. The user's per-chat state is keyed by their id and chat and is not reachable either way",
+  userProfileStore:
+    "measured: the brief's text created a profile row for the user id 'sub-agent', which every later delegate reads " +
+    "(+169 chars per call); no real user's row is read or written",
+  soulLoader:
+    "measured: the persona file rides on every worker call (+3,823 chars, ~956 tokens per call), with rules written " +
+    "for the user's chat: use their name, suggest next steps, ask one question",
+  getIdentityState:
+    "measured: the daemon's identity section (name, boot count, uptime) rides on every worker call (+235 chars, " +
+    "~59 tokens per call); a sub-task brief does not use it",
+};
+
+describe("delegated Orchestrator construction (tripwire over the construction sites)", () => {
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const anchor = "const orchestrator = new Orchestrator({";
+  const root = orchestratorOptionKeys(read("../../core/bootstrap.ts"), anchor);
+  const delegated = orchestratorOptionKeys(read("./delegation/delegation-manager.ts"), anchor);
+
+  it("spreads the one shared deps object at the delegated site", () => {
+    expect(delegated.spreads).toContain("this.opts.sharedOrchestratorDeps");
+  });
+
+  it("gives the delegated orchestrator every option the root gets, or names why not", () => {
+    const dropped = [...root.keys].filter((key) => !delegated.keys.has(key) && !(key in DELEGATE_EXEMPT));
+    expect(dropped, "root options a delegated run would run without: pass them or list them in DELEGATE_EXEMPT").toEqual([]);
+  });
+
+  it("lists in DELEGATE_EXEMPT only options the root really has and the delegate really lacks", () => {
+    for (const key of Object.keys(DELEGATE_EXEMPT)) {
+      expect(root.keys.has(key), `${key} is a root option`).toBe(true);
+      expect(delegated.keys.has(key), `${key} is not passed to a delegate`).toBe(false);
+    }
   });
 });

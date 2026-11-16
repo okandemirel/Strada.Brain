@@ -13,7 +13,9 @@ import {
 } from "./orchestrator-session-manager.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import { RecallLedger } from "./recall-ledger.js";
+import { INTERRUPTED_TOOL_RESULT, normalizeConversation } from "./conversation-normalizer.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
+import type { AssistantMessage } from "./providers/provider-core.interface.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
   return {
@@ -297,15 +299,106 @@ describe("SessionManager", () => {
     expect(JSON.stringify(session.messages)).toContain(recall);
     expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
 
-    // On a tool-result turn that holds nothing else: no user text, as without the recall.
+    // On a tool-result turn: the user's words before it, as without the recall.
     session.messages.push(
       { role: "assistant", content: "", tool_calls: [{ id: "tc-1", name: "file_read", input: {} }] } as never,
       { role: "user", content: [{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }] } as never,
     );
     ledger.add(session.messages, recall);
     expect(JSON.stringify(session.messages.at(-1))).toContain(recall);
+    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
+    expect(sm.extractLastUserContent(session)).toBe("rename the spawner");
+  });
+
+  it("the system's text on a tool-result turn is not what the user said (buildToolResultContentBlocks)", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    const toolTurn = (id: string) => [
+      { role: "assistant", content: "", tool_calls: [{ id, name: "file_read", input: {} }] },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: id, content: "ok" },
+          { type: "text", text: "[VERIFY] 2 files modified without build check" },
+          { type: "text", text: "## Plan State\n- step 1 done" },
+        ],
+      },
+    ] as never[];
+
+    // A session that holds no user turn: nothing, so the readers fall back to the task.
+    session.messages.push(...toolTurn("tc-1"));
     expect(sm.extractLastUserMessage(session)).toBe("");
-    expect(sm.extractLastUserContent(session)).toEqual([{ type: "tool_result", tool_use_id: "tc-1", content: "ok" }]);
+
+    // An interactive one: the person's last words, however many tool turns follow them.
+    sm.appendVisibleUserMessage(session, "rename the spawner");
+    session.messages.push(...toolTurn("tc-2"), ...toolTurn("tc-3"));
+    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
+  });
+
+  it("a user message the normalizer folds into an interrupted call's answer is what the user said (conversation-normalizer.ts)", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "old request");
+    sm.appendVisibleAssistantMessage(session, "done");
+    // A call that never answered, then the person's next message.
+    session.messages.push(
+      { role: "assistant", content: "", tool_calls: [{ id: "tc-9", name: "file_read", input: {} }] } as never,
+      { role: "user", content: "new request" },
+    );
+    session.messages = normalizeConversation(session.messages);
+    // The normalizer answered the call and folded the message into that answer.
+    expect(session.messages.at(-1)?.content).toEqual([
+      { type: "tool_result", tool_use_id: "tc-9", content: INTERRUPTED_TOOL_RESULT, is_error: true },
+      { type: "text", text: "new request" },
+    ]);
+
+    expect(sm.extractLastUserMessage(session)).toBe("new request");
+    // The content is the same turn's: the person's block, without the placeholder result.
+    expect(sm.extractLastUserContent(session)).toEqual([{ type: "text", text: "new request" }]);
+  });
+
+  it("an interrupted answer with nothing folded into it is passed over for the user's words", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "rename the spawner");
+    // A throw left the call dangling (ORC-2); the normalizer answers it with a placeholder.
+    session.messages.push(
+      { role: "assistant", content: "", tool_calls: [{ id: "x", name: "file_read", input: {} }] } as never,
+      { role: "assistant", content: "error: message too long" },
+    );
+    session.messages = normalizeConversation(session.messages);
+    expect(session.messages[2]?.content).toEqual([
+      { type: "tool_result", tool_use_id: "x", content: INTERRUPTED_TOOL_RESULT, is_error: true },
+    ]);
+
+    expect(sm.extractLastUserMessage(session)).toBe("rename the spawner");
+    expect(sm.extractLastUserContent(session)).toBe("rename the spawner");
+  });
+
+  it("known limit: a user message folded in front of a recorded result is passed over (board proposal #69)", () => {
+    // normalizeConversation folds every follower of an unanswered call up to the last one that
+    // carries its result into one answer (conversation-normalizer.ts answerFor). The person's
+    // words and the gate text then sit in one turn behind a recorded result, where nothing tells
+    // them apart, and the read counts the turn as the system's. No live path is known to leave
+    // this shape (reviewed 2026-11-11); #69 proposes keeping the earlier follower separate. When
+    // that lands, this read is "new request" and this test changes with it.
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    sm.appendVisibleUserMessage(session, "old request");
+    sm.appendVisibleAssistantMessage(session, "done");
+    session.messages.push(
+      { role: "assistant", content: "", tool_calls: [{ id: "a", name: "file_read", input: {} }] } as never,
+      { role: "user", content: "new request" },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "a", content: "ok" }, { type: "text", text: "[VERIFY] gate" }] },
+    );
+    session.messages = normalizeConversation(session.messages);
+    expect(session.messages.at(-1)?.content).toEqual([
+      { type: "tool_result", tool_use_id: "a", content: "ok" },
+      { type: "text", text: "new request" },
+      { type: "text", text: "[VERIFY] gate" },
+    ]);
+
+    expect(sm.extractLastUserMessage(session)).toBe("old request");
   });
 
   it("a user turn that holds only a recall is passed over for the user's words before it (recall-ledger.ts)", () => {
@@ -411,6 +504,45 @@ describe("SessionManager", () => {
       assertValidHead(session);
     });
 
+    it("a hard-cap trim of a pure tool loop keeps the task turn and the newest tool pairs", () => {
+      // Board #30: a worker loop is task + N tool pairs with no plain user turn after the
+      // overflow point. The hard-cap fallback cut at the overflow index and the head repair
+      // then shifted off every tool_result and assistant turn, leaving an EMPTY history: the
+      // model's next call carried neither the task nor the latest tool results.
+      const sm = new SessionManager(createMockDeps());
+      const session = buildToolOnlySession(sm, 60); // 121 messages, hard cap of 40 is 80
+      const history = session.messages;
+
+      const trimmed = sm.trimSession(session, 40);
+
+      expect(session.messages, "trimmed in place: the run loop holds this array").toBe(history);
+      expect(session.visibleMessages?.map((m) => m.content)).toContain("kick off");
+
+      expect(trimmed.length).toBeGreaterThan(0);
+      expect(session.messages.length).toBeLessThanOrEqual(40);
+      expect(session.messages[0]?.content, "the task turn leads the trimmed history").toBe("kick off");
+      assertValidHead(session);
+      // The newest pairs survive, each tool_result right after the tool_use it answers.
+      const tail = session.messages.slice(-4);
+      expect(tail.map((m) => m.role)).toEqual(["assistant", "user", "assistant", "user"]);
+      expect((tail[2] as AssistantMessage).tool_calls?.[0]?.id).toBe("call-59");
+      expect(JSON.stringify(tail[3]!.content)).toContain("call-59");
+      for (let i = 1; i < session.messages.length; i++) {
+        const msg = session.messages[i]!;
+        if (!Array.isArray(msg.content)) continue;
+        for (const block of msg.content) {
+          if ((block as { type?: string }).type !== "tool_result") continue;
+          const prev = session.messages[i - 1] as AssistantMessage;
+          const ids = prev.tool_calls?.map((c) => c.id) ?? [];
+          expect(ids, `tool_result at ${i} answers a tool_use right before it`)
+            .toContain((block as { tool_use_id: string }).tool_use_id);
+        }
+      }
+      // What was removed is exactly what is gone: nothing kept is also reported trimmed.
+      expect(trimmed.length + session.messages.length).toBe(121);
+      expect(trimmed.some((m) => m.content === "kick off")).toBe(false);
+    });
+
     it("keeps a legitimate multimodal user turn as a valid head", () => {
       // A user message with ARRAY content is only invalid when it carries a
       // tool_result; images/documents must survive.
@@ -443,6 +575,65 @@ describe("SessionManager", () => {
       for (const m of removed) {
         expect(session.visibleMessages ?? []).not.toContain(m);
       }
+    });
+
+    /** Every removed message leaves the visible transcript; every kept visible one stays. */
+    function assertVisibleFollowsTrim(
+      session: { messages: ConversationMessage[]; visibleMessages?: ConversationMessage[] },
+      visibleBefore: ConversationMessage[],
+      removed: ConversationMessage[],
+    ) {
+      expect(removed.length, "the fixture trims messages that were visible").toBeGreaterThan(0);
+      for (const m of removed) {
+        expect(visibleBefore, "a removed message was in the visible transcript").toContain(m);
+        expect(session.visibleMessages ?? []).not.toContain(m);
+      }
+      const keptVisible = visibleBefore.filter((m) => session.messages.includes(m));
+      expect(keptVisible.length).toBeGreaterThan(0);
+      expect(session.visibleMessages).toEqual(keptVisible);
+    }
+
+    it("a hard-cap trim drops the removed messages, before and after the task turn, from the visible transcript", () => {
+      // The fixture above only has the task turn visible, and the hard cap now keeps it, so
+      // that case can no longer fail. Here every message is visible, including an orphaned
+      // tool_result ahead of the task turn, so both removed spans are in the transcript.
+      const sm = new SessionManager(createMockDeps());
+      const session = sm.getOrCreateSession("chat-trim-visible");
+      const visible: ConversationMessage[] = [];
+      const add = (m: ConversationMessage) => { session.messages.push(m); visible.push(m); };
+      add({ role: "user", content: [{ type: "tool_result", tool_use_id: "call-old", content: "stale" }] } as ConversationMessage);
+      add({ role: "user", content: "kick off" });
+      for (let i = 0; i < 12; i++) {
+        add({
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: `call-${i}`, type: "function", function: { name: "t", arguments: "{}" } }],
+        } as ConversationMessage);
+        add({ role: "user", content: [{ type: "tool_result", tool_use_id: `call-${i}`, content: "ok" }] } as ConversationMessage);
+      }
+      session.visibleMessages = [...visible];
+
+      const removed = sm.trimSession(session, 4); // 26 messages, hard cap 8
+
+      expect(session.messages[0]?.content).toBe("kick off");
+      expect(removed).toContain(visible[0]); // the span before the task turn
+      expect(removed).toContain(visible[2]); // the span after it
+      assertVisibleFollowsTrim(session, visible, removed);
+    });
+
+    it("a safe-boundary trim drops the removed messages from the visible transcript", () => {
+      const sm = new SessionManager(createMockDeps());
+      const session = sm.getOrCreateSession("chat-trim-soft");
+      for (let i = 0; i < 6; i++) {
+        sm.appendVisibleUserMessage(session, `user-${i}`);
+        sm.appendVisibleAssistantMessage(session, `assistant-${i}`);
+      }
+      const visibleBefore = [...(session.visibleMessages ?? [])];
+      expect(visibleBefore).toEqual(session.messages);
+
+      const removed = sm.trimSession(session, 4); // under the hard cap: the safe-boundary path
+
+      assertVisibleFollowsTrim(session, visibleBefore, removed);
     });
   });
 
