@@ -3,30 +3,21 @@
  *
  * Rule no-new-wall-clock-bound. A test that asserts how little wall-clock time
  * something took, `expect(Date.now() - started).toBeLessThan(500)`, measures
- * the machine as much as the code. Several agents share this machine and its
- * load average passes 100; such a bound then turns red on a change that has
- * nothing to do with it. The repository already holds the bounds counted in
- * WALL_CLOCK_BASELINE, file by file: this is a RATCHET. No file may gain one,
- * and a file whose count drops lowers its line here in the same change, so the
- * number only goes down. Raising a line is a loosened pin for
- * scripts/ci/check-test-integrity.mjs and needs a Test-Weakened line.
+ * the machine as much as the code, and so does the same inequality written any
+ * other way: a lower bound on the time left (`expect(until - Date.now())
+ * .toBeGreaterThan(K)`), a stamp under a start plus slack, an average of timed
+ * runs. Several agents share this machine and its load average passes 100;
+ * such a bound then turns red on a change that has nothing to do with it.
  *
- * What counts, worked out with the TypeScript parser and its name resolution,
- * not by line: an `expect(x)` or `expect.soft(x)`, with or without a message,
- * ending in `.toBeLessThan(…)`, `.toBeLessThanOrEqual(…)`,
- * `.not.toBeGreaterThan(…)` or `.not.toBeGreaterThanOrEqual(…)`, where `x` is
- * an elapsed time: a clock read minus anything (`Date.now() - t`,
- * `performance.now() - t`, `end - t` with `const end = Date.now()`), or a
- * stamp minus a name holding an earlier clock read (`cooldownUntil - before`);
- * or any value under a bound that is such a name plus anything
- * (`expect(expiresAt).toBeLessThanOrEqual(before + 5_000)`);
- * also as the value of a name (`const elapsed = Date.now() - t`), of a
- * destructured or object property (`const { ms } = await timed(…)`, `run.ms`),
- * of what a function the file declares returns, or inside Math.abs/round/….
- * The clock is the global `Date` or `performance`, or `performance` imported
- * from node:perf_hooks under any name. The time left until a deadline
- * (`deadline - Date.now()`) is not an elapsed time: load can only shrink it.
- * The contract lists what this sees in full and what it cannot see.
+ * What counts is decided by the clock-taint analysis in
+ * ./wall-clock-assertions-taint.ts: an ordering matcher whose target or bound
+ * comes from a real clock read, except an order of two bare clock values and an
+ * assertion under a fake clock. The repository already holds the bounds counted
+ * in WALL_CLOCK_BASELINE, file by file: this is a RATCHET. No file may gain
+ * one, and a file whose count drops lowers its line here in the same change, so
+ * the number only goes down. Raising a line is a loosened pin for
+ * scripts/ci/check-test-integrity.mjs and needs a Test-Weakened line. The
+ * contract lists what the analysis cannot see; each item is a fixture below.
  *
  * Rule repo-scan-carries-its-limit. A test of a gates detector
  * (scripts/ci/gates.mjs DETECTORS) that walks a directory inside its body
@@ -44,6 +35,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
+import { type Bound, judgeBounds, wallClockBounds } from "./wall-clock-assertions-taint.js";
 
 const REPO = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const SELF = "src/tests/wall-clock-assertions.test.ts";
@@ -52,50 +44,109 @@ const { testFiles } = (await import(pathToFileURL(path.join(REPO, "scripts", "ci
 };
 
 /**
- * Wall-clock upper bounds per test file, as this detector sees them. Measured
- * on main at 9f662581 (2026-11-16): 64 in 42 files. Lower a count when you
+ * Clock-tainted ordering assertions per test file, as this detector sees them. Measured
+ * on main at 40e73868 (2026-11-16): 286 in 101 files. Lower a count when you
  * replace a bound with fake timers or a counted event; delete its line at
  * zero. Never raise one, never add one.
  */
 const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
+  "src/agent-core/engine/tool-turn.guidance-exposure.test.ts": 3,
+  "src/agent-core/engine/tool-turn.request-text.test.ts": 1,
+  "src/agent-core/runner/v2-agent-runner.integration.test.ts": 4,
+  "src/agents/autonomy/progress-assessment.test.ts": 3,
+  "src/agents/iteration-health-tracker.test.ts": 2,
   "src/agents/memory-refresher.test.ts": 1,
+  "src/agents/multi/agent-manager-memory-embedding.test.ts": 1,
+  "src/agents/multi/agent-types.test.ts": 1,
   "src/agents/multi/delegation/delegation-manager.test.ts": 1,
+  "src/agents/multi/workspace-change-review.test.ts": 1,
   "src/agents/orchestrator-provider-failover.test.ts": 1,
-  "src/agents/providers/claude-seat-review.test.ts": 1,
-  "src/agents/providers/fallback-chain.test.ts": 2,
+  "src/agents/orchestrator-reflection-handler.test.ts": 1,
+  "src/agents/orchestrator-session-manager.test.ts": 1,
+  "src/agents/provider-failure-notice.test.ts": 1,
+  "src/agents/providers/claude-seat-review.test.ts": 3,
+  "src/agents/providers/credential-rejected.test.ts": 1,
+  "src/agents/providers/fallback-chain.test.ts": 8,
   "src/agents/providers/first-response-budget.test.ts": 1,
+  "src/agents/providers/free-tier-limit.test.ts": 2,
+  "src/agents/providers/provider-behavioral-profiles.test.ts": 1,
   "src/agents/providers/provider-features.test.ts": 1,
+  "src/agents/providers/provider-health.test.ts": 1,
+  "src/agents/providers/provider-outage.test.ts": 3,
+  "src/agents/providers/quota-reset-from-message.test.ts": 4,
   "src/agents/review/codex-second-opinion.test.ts": 1,
+  "src/agents/tools/browser-automation.test.ts": 2,
   "src/agents/tools/search-glob-cost.test.ts": 4,
   "src/agents/tools/search-regex-timeout.test.ts": 2,
   "src/bench/bounded-command.test.ts": 1,
+  "src/campaign/acceptance-in-prompt.test.ts": 4,
   "src/campaign/campaign-intake.test.ts": 2,
+  "src/campaign/campaign-ledger-lifecycle.test.ts": 3,
   "src/campaign/campaign-manager-dispose.test.ts": 1,
-  "src/channels/discord/rate-limiter.test.ts": 3,
-  "src/channels/slack/__tests__/rate-limiter.test.ts": 1,
+  "src/campaign/campaign-manager.test.ts": 37,
+  "src/campaign/scope-settle-manager.test.ts": 4,
+  "src/channels/discord/rate-limiter.test.ts": 4,
+  "src/channels/slack/__tests__/rate-limiter.test.ts": 3,
+  "src/channels/slack/app.test.ts": 1,
   "src/common/fetch-with-retry.test.ts": 2,
+  "src/common/openai-subscription-auth.test.ts": 1,
+  "src/config/strada-deps.test.ts": 1,
   "src/core/runtime-lock.test.ts": 1,
   "src/core/status-report.test.ts": 1,
   "src/daemon/deployment/bounded-process.test.ts": 3,
+  "src/daemon/reporting/digest-formatter.test.ts": 5,
+  "src/dashboard/canvas-routes.test.ts": 2,
+  "src/dashboard/metrics.test.ts": 2,
+  "src/dashboard/server-system-routes.test.ts": 1,
+  "src/dashboard/server.test.ts": 2,
+  "src/goals/goal-decomposer.test.ts": 1,
+  "src/goals/goal-renderer.test.ts": 2,
+  "src/goals/goal-storage.test.ts": 1,
+  "src/identity/crash-recovery.test.ts": 2,
+  "src/identity/identity-state.test.ts": 2,
   "src/intelligence/csharp-parser.test.ts": 2,
-  "src/learning/chains/chain-detector.test.ts": 1,
-  "src/learning/chains/chain-parallel.test.ts": 1,
+  "src/intelligence/framework/framework-git-fallback.test.ts": 1,
+  "src/learning/chains/chain-detector.test.ts": 4,
+  "src/learning/chains/chain-parallel.test.ts": 2,
+  "src/learning/exposure-coverage.test.ts": 1,
+  "src/learning/exposure-time.test.ts": 3,
+  "src/learning/initial-confidence.test.ts": 4,
   "src/learning/matching/pattern-matcher-bounds.test.ts": 2,
+  "src/learning/matching/pattern-matcher.test.ts": 9,
+  "src/learning/non-application-evidence.test.ts": 1,
+  "src/learning/pipeline/learning-pipeline.test.ts": 11,
   "src/learning/pipeline/learning-queue-bounds.test.ts": 1,
   "src/learning/pipeline/learning-queue.test.ts": 1,
+  "src/learning/scoring/confidence-scorer.test.ts": 15,
+  "src/learning/storage/learning-storage.test.ts": 2,
+  "src/memory/unified/agentdb-decay-writes.test.ts": 2,
+  "src/memory/unified/agentdb-retrieval.test.ts": 10,
+  "src/memory/unified/agentdb-tiering.test.ts": 6,
+  "src/memory/unified/consolidation-engine.test.ts": 4,
+  "src/rag/chunker.test.ts": 1,
+  "src/rag/docs/composite-rag-pipeline.test.ts": 5,
   "src/rag/file-pattern.test.ts": 2,
   "src/rag/hnsw/hnsw-integration.test.ts": 1,
   "src/rag/hnsw/hnsw-performance.test.ts": 6,
   "src/rag/hnsw/hnsw-vector-store.test.ts": 1,
+  "src/rag/reranker.test.ts": 1,
+  "src/rag/vector-store.test.ts": 7,
+  "src/security/auth-hardened.test.ts": 1,
   "src/security/prompt-injection.test.ts": 1,
   "src/skills/bundled/file-utils/file-utils.test.ts": 1,
   "src/skills/bundled/web-search/web-search.test.ts": 1,
   "src/skills/project-files.test.ts": 1,
   "src/skills/skill-import-scan.test.ts": 1,
-  "src/supervisor/__tests__/supervisor-dispatcher.test.ts": 2,
-  "src/tasks/command-handler.test.ts": 1,
+  "src/supervisor/__tests__/capability-matcher.test.ts": 3,
+  "src/supervisor/__tests__/provider-assigner.test.ts": 4,
+  "src/supervisor/__tests__/supervisor-dispatcher.test.ts": 7,
+  "src/supervisor/dead-provider-stops-getting-work.test.ts": 1,
+  "src/tasks/background-executor.test.ts": 1,
+  "src/tasks/command-handler.test.ts": 2,
   "src/tasks/task-manager.test.ts": 1,
-  "src/utils/process-runner.test.ts": 3,
+  "src/tasks/task-storage.test.ts": 1,
+  "src/tests/integration/golden-run-failover.test.ts": 2,
+  "src/utils/process-runner.test.ts": 4,
   "src/vault/canvas-generator.test.ts": 1,
   "src/vault/glob-match.test.ts": 1,
   "src/vault/unity-project-vault.test.ts": 1,
@@ -105,389 +156,9 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
 /** The limit a test that scans the repository carries, as clean-checkout.test.ts and dist-readers.test.ts do. */
 const REPO_SCAN_TIMEOUT_MS = 120_000;
 
-// ---------------------------------------------------------------------------
-// Rule no-new-wall-clock-bound
-// ---------------------------------------------------------------------------
-
-const UPPER = new Set(["toBeLessThan", "toBeLessThanOrEqual"]);
-const UPPER_NEGATED = new Set(["toBeGreaterThan", "toBeGreaterThanOrEqual"]);
-const PERF_HOOKS = new Set(["perf_hooks", "node:perf_hooks"]);
-
-/** A wall-clock upper bound: where it is and how it reads. */
-interface Bound {
-  file: string;
-  line: number;
-  text: string;
-  form: string;
-}
-
-/** Parens, `as`, `!` and `satisfies` change nothing about the value. */
-function strip(node: ts.Expression): ts.Expression {
-  let n = node;
-  while (
-    ts.isParenthesizedExpression(n) ||
-    ts.isAsExpression(n) ||
-    ts.isNonNullExpression(n) ||
-    ts.isSatisfiesExpression(n) ||
-    ts.isTypeAssertionExpression(n)
-  ) {
-    n = n.expression;
-  }
-  return n;
-}
-
-/** One program over every file, so a name resolves to its declaration in its own scope. */
-function program(files: Map<string, string>): ts.TypeChecker & { sourceOf(file: string): ts.SourceFile } {
-  const sources = new Map<string, ts.SourceFile>();
-  for (const [file, text] of files) {
-    sources.set(file, ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
-  }
-  const host: ts.CompilerHost = {
-    getSourceFile: (name) => sources.get(path.resolve(name)),
-    getDefaultLibFileName: () => "lib.d.ts",
-    writeFile: () => undefined,
-    getCurrentDirectory: () => REPO,
-    getCanonicalFileName: (name) => name,
-    useCaseSensitiveFileNames: () => true,
-    getNewLine: () => "\n",
-    fileExists: (name) => sources.has(path.resolve(name)),
-    readFile: () => undefined,
-  };
-  const checker = ts.createProgram([...sources.keys()], { noLib: true, noResolve: true, types: [] }, host).getTypeChecker();
-  return Object.assign(checker, { sourceOf: (file: string) => sources.get(file)! });
-}
-
-function declarationOf(checker: ts.TypeChecker, id: ts.Identifier): ts.Declaration | undefined {
-  return checker.getSymbolAtLocation(id)?.declarations?.[0];
-}
-
-/** `performance`, global or imported from node:perf_hooks under any name, or `ns.performance` of that module. */
-function isPerformance(checker: ts.TypeChecker, node: ts.Expression): boolean {
-  if (ts.isIdentifier(node)) {
-    const decl = declarationOf(checker, node);
-    if (!decl) return node.text === "performance";
-    if (!ts.isImportSpecifier(decl)) return false;
-    const imported = (decl.propertyName ?? decl.name).text;
-    const from = decl.parent.parent.parent.moduleSpecifier;
-    return imported === "performance" && ts.isStringLiteral(from) && PERF_HOOKS.has(from.text);
-  }
-  if (ts.isPropertyAccessExpression(node) && node.name.text === "performance" && ts.isIdentifier(node.expression)) {
-    const decl = declarationOf(checker, node.expression);
-    const clause = decl && (ts.isNamespaceImport(decl) ? decl.parent : ts.isImportClause(decl) ? decl : undefined);
-    const from = clause?.parent.moduleSpecifier;
-    return from !== undefined && ts.isStringLiteral(from) && PERF_HOOKS.has(from.text);
-  }
-  return false;
-}
-
-/** Math functions that keep an elapsed time an elapsed time: `Math.abs(Date.now() - t)`. */
-const KEEPS_ELAPSED = new Set(["abs", "round", "floor", "ceil", "trunc"]);
-/** Array methods whose result, on an array of elapsed times, is one: a sum or average by `reduce`, an entry by `at`. */
-const ARRAY_FOLDS = new Set(["reduce", "reduceRight", "at"]);
-
-/** What a `return` of a function the file declares hands back: `timed(x)` with `const timed = (…) => { …; return Date.now() - t; }`. */
-function returnsOf(checker: ts.TypeChecker, callee: ts.Expression): ts.Expression[] {
-  if (!ts.isIdentifier(callee)) return [];
-  const decl = declarationOf(checker, callee);
-  let fn: ts.FunctionLikeDeclaration | undefined;
-  if (decl && ts.isFunctionDeclaration(decl)) fn = decl;
-  else if (decl && ts.isVariableDeclaration(decl) && decl.initializer) {
-    const init = strip(decl.initializer);
-    if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) fn = init;
-  }
-  if (!fn?.body) return [];
-  if (!ts.isBlock(fn.body)) return [fn.body];
-  const out: ts.Expression[] = [];
-  const visit = (n: ts.Node): void => {
-    if (ts.isFunctionLike(n)) return; // a nested function's return is not this one's
-    if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
-    ts.forEachChild(n, visit);
-  };
-  ts.forEachChild(fn.body, visit);
-  return out;
-}
-
-/** The value of property `name` in an object literal: `{ ms }` or `{ ms: … }`. */
-function propertyValue(checker: ts.TypeChecker, obj: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
-  for (const p of obj.properties) {
-    if (!p.name || !ts.isIdentifier(p.name) || p.name.text !== name) continue;
-    if (ts.isPropertyAssignment(p)) return p.initializer;
-    if (ts.isShorthandPropertyAssignment(p)) {
-      const decl = checker.getShorthandAssignmentValueSymbol(p)?.declarations?.[0];
-      if (decl && ts.isVariableDeclaration(decl)) return decl.initializer;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Works out what the expressions of one program stand for. Each answer is
- * kept per node, and a node already being worked out stands for itself, so a
- * name declared in terms of itself ends.
- */
-function valueReader(checker: ts.TypeChecker) {
-  const values = new Map<ts.Node, ts.Expression[]>();
-  const forms = new Map<ts.Node, string | undefined>();
-  const elements = new Map<ts.Node, ts.Expression[]>();
-
-  /** Property `key` of what `holder` stands for, where that is an object literal. */
-  const member = (holder: ts.Expression, key: string): ts.Expression[] =>
-    valuesOf(holder).flatMap((h) => {
-      const value = ts.isObjectLiteralExpression(h) ? propertyValue(checker, h, key) : undefined;
-      return value ? valuesOf(value) : [];
-    });
-
-  /**
-   * The values an expression stands for: itself, through `await`; the `const`
-   * a name was declared with, also by object destructuring
-   * (`const { ms } = await timed(…)`); what a function the file declares
-   * returns; and a property of an object literal any of these is.
-   */
-  function valuesOf(node: ts.Expression): ts.Expression[] {
-    const n = strip(node);
-    const known = values.get(n);
-    if (known) return known;
-    values.set(n, [n]);
-    let out: ts.Expression[] = [];
-    if (ts.isAwaitExpression(n)) out = valuesOf(n.expression);
-    else if (ts.isIdentifier(n)) {
-      const decl = declarationOf(checker, n);
-      if (decl && ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name) && decl.initializer) out = valuesOf(decl.initializer);
-      else if (decl && ts.isBindingElement(decl) && !decl.dotDotDotToken && ts.isObjectBindingPattern(decl.parent)) {
-        const holder = decl.parent.parent;
-        const key = decl.propertyName ?? decl.name;
-        if (ts.isVariableDeclaration(holder) && holder.initializer && ts.isIdentifier(key)) out = member(holder.initializer, key.text);
-      }
-    } else if (ts.isCallExpression(n)) out = returnsOf(checker, n.expression).flatMap(valuesOf);
-    else if (ts.isPropertyAccessExpression(n)) out = member(n.expression, n.name.text);
-    if (out.length === 0) out = [n];
-    values.set(n, out);
-    return out;
-  }
-
-  /** `Date.now()` on the global Date or `performance.now()`, written out at this spot. */
-  const isNowCall = (n: ts.Expression): boolean => {
-    if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression) || n.expression.name.text !== "now") return false;
-    const clock = strip(n.expression.expression);
-    if (ts.isIdentifier(clock) && clock.text === "Date") return declarationOf(checker, clock) === undefined;
-    return isPerformance(checker, clock);
-  };
-
-  /** A clock read, as it is or as what the expression stands for. */
-  const isClockRead = (node: ts.Expression): boolean => valuesOf(node).some(isNowCall);
-
-  /**
-   * Which form of elapsed time an expression is, or undefined:
-   * - "clock minus": a clock read minus anything (`Date.now() - t`, `end - t`, `Date.now() - a - b`);
-   * - "stamp minus start": anything minus a name that holds an earlier clock read, or one
-   *   minus anything (`entry.cooldownUntil - before`, `call.since - expectedSince` with
-   *   `const expectedSince = now - 30 * DAY`), which grows with every millisecond the code under test took;
-   * - and either of them as what a name, a call or a property stands for (above),
-   *   or wrapped in Math.abs/round/floor/ceil/trunc.
-   * A clock read written out on the right (`deadline - Date.now()`) is the time left, which load only shrinks.
-   */
-  function elapsedForm(node: ts.Expression): string | undefined {
-    const n = strip(node);
-    if (forms.has(n)) return forms.get(n);
-    forms.set(n, undefined);
-    let form: string | undefined;
-    for (const v of valuesOf(n)) {
-      form = binaryForm(v) ?? callForm(v);
-      if (!form && ts.isElementAccessExpression(v)) form = firstForm(elementsOf(v.expression));
-      if (form) break;
-    }
-    forms.set(n, form);
-    return form;
-  }
-
-  /** `a - b` (above), an elapsed time divided by anything (an average), or one times anything (a unit change). */
-  function binaryForm(v: ts.Expression): string | undefined {
-    if (!ts.isBinaryExpression(v)) return undefined;
-    const op = v.operatorToken.kind;
-    if (op === ts.SyntaxKind.MinusToken) {
-      if (isClockRead(v.left) || elapsedForm(v.left) === "clock minus") return "clock minus";
-      if (ts.isIdentifier(strip(v.right)) && (isClockRead(v.right) || elapsedForm(v.right) === "clock minus")) {
-        return "stamp minus start";
-      }
-      return undefined;
-    }
-    if (op === ts.SyntaxKind.SlashToken) return elapsedForm(v.left);
-    if (op === ts.SyntaxKind.AsteriskToken) return elapsedForm(v.left) ?? elapsedForm(v.right);
-    return undefined;
-  }
-
-  /**
-   * Math.abs/round/floor/ceil/trunc of an elapsed time, Math.max/min over
-   * elapsed times (also spread from an array), and `.reduce(…)`, `.reduceRight(…)`
-   * or `.at(…)` on an array of them.
-   */
-  function callForm(v: ts.Expression): string | undefined {
-    if (!ts.isCallExpression(v) || !ts.isPropertyAccessExpression(v.expression)) return undefined;
-    const { expression: holder, name } = v.expression;
-    if (ts.isIdentifier(holder) && holder.text === "Math") {
-      if (KEEPS_ELAPSED.has(name.text) && v.arguments[0]) return elapsedForm(v.arguments[0]);
-      if (name.text === "max" || name.text === "min") {
-        return firstForm(v.arguments.flatMap((a) => (ts.isSpreadElement(a) ? elementsOf(a.expression) : [a])));
-      }
-      return undefined;
-    }
-    if (ARRAY_FOLDS.has(name.text)) return firstForm(elementsOf(holder));
-    return undefined;
-  }
-
-  const firstForm = (exprs: readonly ts.Expression[]): string | undefined => {
-    for (const e of exprs) {
-      const f = elapsedForm(e);
-      if (f) return f;
-    }
-    return undefined;
-  };
-
-  /**
-   * The elements an array expression holds: those of an array literal it
-   * stands for (spreads followed), and for a name, every value pushed onto it
-   * with `name.push(…)` in the file it was declared in.
-   */
-  function elementsOf(node: ts.Expression): ts.Expression[] {
-    const n = strip(node);
-    const known = elements.get(n);
-    if (known) return known;
-    elements.set(n, []);
-    const out: ts.Expression[] = [];
-    for (const v of valuesOf(n)) {
-      if (!ts.isArrayLiteralExpression(v)) continue;
-      for (const el of v.elements) out.push(...(ts.isSpreadElement(el) ? elementsOf(el.expression) : [el]));
-    }
-    const symbol = ts.isIdentifier(n) ? checker.getSymbolAtLocation(n) : undefined;
-    const decl = symbol?.declarations?.[0];
-    if (symbol && decl) {
-      const visit = (m: ts.Node): void => {
-        if (
-          ts.isCallExpression(m) &&
-          ts.isPropertyAccessExpression(m.expression) &&
-          m.expression.name.text === "push" &&
-          ts.isIdentifier(m.expression.expression) &&
-          checker.getSymbolAtLocation(m.expression.expression) === symbol
-        ) {
-          out.push(...m.arguments.map((a) => (ts.isSpreadElement(a) ? a.expression : a)));
-        }
-        ts.forEachChild(m, visit);
-      };
-      visit(decl.getSourceFile());
-    }
-    elements.set(n, out);
-    return out;
-  }
-
-  /**
-   * "stamp under start plus": the bound itself is an earlier clock read held
-   * in a name plus anything (`before + 36 * HOUR + 5_000`), directly or as the
-   * value of a name. `expect(stamp).toBeLessThanOrEqual(before + X)` is
-   * `stamp - before <= X` rearranged, and it grows with load the same way.
-   * A clock read written out in the bound (`Date.now() + X`) is read at the
-   * assertion, after the code ran, and load only widens it.
-   */
-  function boundForm(bound: ts.Expression): string | undefined {
-    const startPlus = (e: ts.Expression): boolean => {
-      for (const v of valuesOf(e)) {
-        if (!ts.isBinaryExpression(v) || v.operatorToken.kind !== ts.SyntaxKind.PlusToken) continue;
-        for (const side of [v.left, v.right]) {
-          if ((ts.isIdentifier(strip(side)) && isClockRead(side)) || startPlus(side)) return true;
-        }
-      }
-      return false;
-    };
-    return startPlus(bound) ? "stamp under start plus" : undefined;
-  }
-
-  return { elapsedForm, boundForm };
-}
-
-/** `expect(x, msg?)` or `expect.soft(x, msg?)` at the root of a matcher chain, and whether `.not` is on it. */
-function expectTarget(call: ts.CallExpression): { target: ts.Expression; matcher: string; negated: boolean } | undefined {
-  if (!ts.isPropertyAccessExpression(call.expression)) return undefined;
-  const matcher = call.expression.name.text;
-  let negated = false;
-  let obj = call.expression.expression;
-  while (ts.isPropertyAccessExpression(obj)) {
-    if (obj.name.text === "not") negated = !negated;
-    else return undefined;
-    obj = obj.expression;
-  }
-  if (!ts.isCallExpression(obj) || obj.arguments.length === 0) return undefined;
-  const head = obj.expression;
-  const isExpect =
-    (ts.isIdentifier(head) && head.text === "expect") ||
-    (ts.isPropertyAccessExpression(head) && head.name.text === "soft" && ts.isIdentifier(head.expression) && head.expression.text === "expect");
-  return isExpect ? { target: obj.arguments[0]!, matcher, negated } : undefined;
-}
-
-/**
- * Every wall-clock upper bound in the test files of `root` (repo-relative names).
- * A file that never spells `now` and an upper matcher has no clock read for the
- * parse to find, so only the others are parsed.
- */
-function wallClockBounds(root: string, rels: readonly string[]): Bound[] {
-  const texts = new Map<string, string>();
-  const relOf = new Map<string, string>();
-  for (const rel of rels) {
-    const file = path.resolve(root, rel);
-    const text = readFileSync(file, "utf8");
-    if (!/\bnow\b/.test(text) || !/\b(?:toBeLessThan|toBeGreaterThan)/.test(text)) continue;
-    texts.set(file, text);
-    relOf.set(file, rel);
-  }
-  const checker = program(texts);
-  const { elapsedForm, boundForm } = valueReader(checker);
-  const found: Bound[] = [];
-  for (const file of texts.keys()) {
-    const sf = checker.sourceOf(file);
-    const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node)) {
-        const e = expectTarget(node);
-        const upper = e && (e.negated ? UPPER_NEGATED.has(e.matcher) : UPPER.has(e.matcher));
-        const bound = node.arguments[0];
-        const form = e && upper ? (elapsedForm(e.target) ?? (bound && boundForm(bound))) : undefined;
-        if (e && form) {
-          found.push({
-            file: relOf.get(file)!,
-            line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
-            text: node.getText(sf).replace(/\s+/g, " "),
-            form,
-          });
-        }
-      }
-      ts.forEachChild(node, visit);
-    };
-    visit(sf);
-  }
-  return found;
-}
-
-function countByFile(bounds: readonly Bound[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const b of bounds) counts[b.file] = (counts[b.file] ?? 0) + 1;
-  return counts;
-}
-
-/** What the ratchet says about a measurement: bounds over the baseline, and baseline lines left too high. */
-function judgeBounds(bounds: readonly Bound[], baseline: Readonly<Record<string, number>>): { added: string[]; stale: string[] } {
-  const counts = countByFile(bounds);
-  const added: string[] = [];
-  for (const [file, n] of Object.entries(counts)) {
-    const allowed = baseline[file] ?? 0;
-    if (n <= allowed) continue;
-    const here = bounds.filter((b) => b.file === file).map((b) => `  ${b.file}:${b.line}  ${b.text}`);
-    added.push(`${file}: ${n} wall-clock upper bound(s), baseline ${allowed}\n${here.join("\n")}`);
-  }
-  const stale = Object.entries(baseline)
-    .filter(([file, n]) => (counts[file] ?? 0) < n)
-    .map(([file, n]) => `${file}: baseline ${n}, now ${counts[file] ?? 0}`);
-  return { added, stale };
-}
-
 const NEW_BOUND_ADVICE =
-  "A test gained an upper bound on wall-clock time (docs/contracts/wall-clock-assertions.md). On a machine " +
+  "A test gained an ordering assertion on a value from a real clock (docs/contracts/wall-clock-assertions.md): " +
+  "an upper bound on time taken, a lower bound on time left, or the same inequality rearranged. On a machine " +
   "several agents share, such a bound turns red on unrelated changes. Assert the behaviour instead of the " +
   "machine's speed: fake timers (vi.useFakeTimers / vi.advanceTimersByTime), an injected clock, a counted " +
   "call or attempt, or the order of events. Do not move the bound into a helper or a property to hide it; " +
@@ -663,8 +334,8 @@ function fixtureRoot(files: Record<string, string>): string {
   return root;
 }
 
-describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clock-assertions.md)", () => {
-  it("no test file gained a wall-clock upper bound", () => {
+describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-assertions.md)", () => {
+  it("no test file gained a wall-clock bound", () => {
     const { added } = judgeBounds(measureRepo(), WALL_CLOCK_BASELINE);
     expect(added, NEW_BOUND_ADVICE).toEqual([]);
   }, REPO_SCAN_TIMEOUT_MS);
@@ -674,110 +345,133 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
     expect(stale, `lower these lines in WALL_CLOCK_BASELINE in ${SELF} (delete at zero) so the ratchet holds`).toEqual([]);
   }, REPO_SCAN_TIMEOUT_MS);
 
-  it("counts every form the contract says it sees", () => {
-    const root = fixtureRoot({
-      "src/seen.test.ts": [
-        'import { performance as perf } from "node:perf_hooks";',
-        'import * as hooks from "node:perf_hooks";',
-        "const t = Date.now();",
-        "expect(Date.now() - t).toBeLessThan(500);",
-        'expect(Date.now() - t, "late").toBeLessThanOrEqual(500);',
-        "expect(performance.now() - t).toBeLessThan(500);",
-        "expect(perf.now() - t).toBeLessThan(500);",
-        "expect(hooks.performance.now() - t).toBeLessThan(500);",
-        "const elapsed = Date.now() - t;",
-        "expect(elapsed).toBeLessThan(500);",
-        "const end = performance.now();",
-        "expect(end - t).not.toBeGreaterThan(500);",
-        "let took = (Date.now() - t) as number;",
-        "expect.soft(took).not.toBeGreaterThanOrEqual(500);",
-        "function inner() { const ms = performance.now() - t; expect(ms!).toBeLessThan(500); }",
-        "expect(Math.abs(Date.now() - DAY - since)).toBeLessThan(500);",
-        "expect(entry.cooldownUntil - t).toBeLessThanOrEqual(500);",
-        "const expectedSince = t - DAY;",
-        "expect(Math.round(call.since - expectedSince)).toBeLessThan(500);",
-        "const timed = (run: () => void): number => { const s = performance.now(); run(); return performance.now() - s; };",
-        "expect(timed(work)).toBeLessThan(500);",
-        "async function measured() { const s = Date.now(); await work(); return { result: 1, ms: Date.now() - s }; }",
-        "const { ms } = await measured();",
-        "expect(ms).toBeLessThan(500);",
-        "const run = await measured();",
-        "expect(run.ms).toBeLessThan(500);",
-        "function bench() { const insertMs = Date.now() - t; return { insertMs }; }",
-        "expect(bench().insertMs).toBeLessThan(500);",
-        "const times: number[] = [];",
-        "for (const q of queries) { const s = performance.now(); search(q); times.push(performance.now() - s); }",
-        "const avg = times.reduce((a, b) => a + b, 0) / times.length;",
-        "expect(avg).toBeLessThan(10);",
-        "expect(Math.max(...times)).toBeLessThan(50);",
-        "expect(times[0]).toBeLessThan(50);",
-        "expect(times.at(-1)).toBeLessThan(50);",
-        "expect(((Date.now() - t) / 1000) * 1000).toBeLessThan(500);",
-        "const laps = [Date.now() - t];",
-        "expect(laps.reduce((a, b) => a + b, 0)).toBeLessThan(500);",
-        "expect(result.expiresAt).toBeLessThanOrEqual(t + 36 * HOUR + 5_000);",
-        "const latest = 5_000 + t;",
-        "expect(entry.cooldownUntil).not.toBeGreaterThan(latest);",
-      ].join("\n"),
-    });
-    const bounds = wallClockBounds(root, testFiles(root));
-    expect(bounds.map((b) => `${b.line} ${b.form}`)).toEqual([
-      "4 clock minus",
-      "5 clock minus",
-      "6 clock minus",
-      "7 clock minus",
-      "8 clock minus",
-      "10 clock minus",
-      "12 clock minus",
-      "14 clock minus",
-      "15 clock minus",
-      "16 clock minus",
-      "17 stamp minus start",
-      "19 stamp minus start",
-      "21 clock minus",
-      "24 clock minus",
-      "26 clock minus",
-      "28 clock minus",
-      "32 clock minus",
-      "33 clock minus",
-      "34 clock minus",
-      "35 clock minus",
-      "36 clock minus",
-      "38 clock minus",
-      "39 stamp under start plus",
-      "41 stamp under start plus",
+  /** A fixture file from `[line, form]` pairs; returns the file and the `line:form` the detector must report. */
+  const spec = (entries: readonly (readonly [string, Bound["form"] | null])[]): { body: string; want: string[] } => ({
+    body: entries.map(([line]) => line).join("\n"),
+    want: entries.flatMap(([, form], i) => (form ? [`${i + 1} ${form}`] : [])),
+  });
+  const found = (root: string): string[] => wallClockBounds(root, testFiles(root)).map((b) => `${b.line} ${b.form}`);
+
+  it("counts an ordering assertion with a clock-tainted side, whatever its direction or arrangement", () => {
+    const { body, want } = spec([
+      ['import { performance as perf } from "node:perf_hooks";', null],
+      ['import * as hooks from "node:perf_hooks";', null],
+      ['import proc from "node:process";', null],
+      ["const t = Date.now();", null],
+      ["expect(Date.now() - t).toBeLessThan(500);", "target"],
+      ['expect(Date.now() - t, "late").toBeLessThanOrEqual(500);', "target"],
+      ["expect(performance.now() - t).not.toBeGreaterThan(500);", "target"],
+      ["expect(perf.now() - t).toBeLessThan(500);", "target"],
+      ["expect(hooks.performance.now() - t).toBeLessThan(500);", "target"],
+      ["const elapsed = Date.now() - t;", null],
+      ["expect.soft(elapsed).toBeLessThan(500);", "target"],
+      ["expect(entry.cooldownUntil - t).toBeLessThanOrEqual(500);", "target"],
+      ["expect(result.expiresAt).toBeLessThanOrEqual(t + 36 * HOUR + 5_000);", "bound"],
+      ["expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(60_000 - 500);", "target"],
+      ["expect(entry.cooldownUntil).toBeGreaterThan(Date.now() + 60_000 - 500);", "bound"],
+      ["expect(t + 5_000).toBeGreaterThanOrEqual(result.expiresAt);", "target"],
+      ["const deadline = Date.now() + 5_000;", null],
+      ["expect(Date.now()).toBeLessThan(deadline);", "both"],
+      ["const early = Date.now() - 1;", null],
+      ["expect(result.expiresAt).toBeLessThanOrEqual(early + 5_000);", "bound"],
+      ["const remainingMs = (): number => resetAt - Date.now();", null],
+      ["expect(remainingMs()).toBeGreaterThan(2 * HOUR);", "target"],
+      ["const times: number[] = [];", null],
+      ["for (const q of queries) { const s = performance.now(); search(q); times.push(performance.now() - s); }", null],
+      ["expect(times.reduce((a, b) => a + b, 0) / times.length).toBeLessThan(10);", "target"],
+      ["async function measured() { const s = Date.now(); await work(); return { result: 1, ms: Date.now() - s }; }", null],
+      ["const { ms } = await measured();", null],
+      ["expect(ms).toBeLessThan(500);", "target"],
+      ["const run = await measured();", null],
+      ["expect(run.ms).toBeLessThan(500);", "target"],
+      ['expect(run["ms"]).toBeLessThan(500);', "target"],
+      ["let took = 0;", null],
+      ["took = Date.now() - t;", null],
+      ["expect(took).toBeLessThan(500);", "target"],
+      ["const [first] = [Date.now() - t];", null],
+      ["expect(first).toBeLessThan(500);", "target"],
+      ["expect(msSinceFailure(t + 90_000)).toBeLessThan(95_000);", "target"],
+      ["const start = proc.hrtime.bigint();", null],
+      ["expect(process.hrtime.bigint() - start).toBeLessThan(5_000_000n);", "target"],
+      ["expect(new Date().getTime() - t).toBeLessThan(500);", "target"],
+      ["expect(+new Date() - t).toBeLessThan(500);", "target"],
+      ["expect(Math.abs(Date.now() - DAY - since)).toBeLessThan(500);", "target"],
+      ["const laps = new Map<string, number>();", null],
+      ['laps.set("a", Date.now() - t);', null],
+      ['expect(laps.get("a")).toBeLessThan(500);', "target"],
+      ["const end = Date.now();", null],
+      ["expect(end).toBeLessThan(t + 500);", "both"],
+      ['it("fakes timeouts only", () => { vi.useFakeTimers({ toFake: ["setTimeout"] }); expect(Date.now() - t).toBeLessThan(500); });', "target"],
+      ['it("real again", () => { vi.useFakeTimers(); vi.useRealTimers(); expect(Date.now() - t).toBeLessThan(500); });', "target"],
     ]);
+    expect(found(fixtureRoot({ "src/seen.test.ts": body }))).toEqual(want);
   });
 
-  it("does not count lower bounds, time left to a deadline, other numbers or a clock that is not the global one", () => {
+  it("leaves out an order of two bare clock values, an assertion under a fake clock, and one with no clock in it", () => {
     const root = fixtureRoot({
-      "src/unseen.test.ts": [
-        "const t = 1_000;",
-        "expect(Date.now() - t).toBeGreaterThanOrEqual(300);",
-        "expect(Date.now() - t).not.toBeLessThan(300);",
-        "expect(deadline - Date.now()).toBeLessThan(60_000);",
-        "expect(deadline - (Date.now() - 5)).toBeLessThan(60_000);",
-        "const left = deadline - Date.now();",
-        "expect(left).toBeLessThan(60_000);",
-        "expect(rows.length - 1).toBeLessThan(5);",
-        "const insertMs = Date.now() - t;",
-        "expect(rows.length / insertMs).toBeLessThan(5);",
-        "const sizes: number[] = [];",
-        "sizes.push(rows.length);",
-        "expect(sizes.reduce((a, b) => a + b, 0)).toBeLessThan(5);",
-        "expect(x).toBeLessThanOrEqual(limit + 1);",
-        "expect(stamp).toBeLessThanOrEqual(Date.now() + 5_000);",
-        "const before = Date.now();",
-        "expect(stamp).toBeGreaterThanOrEqual(before + 1_000);",
+      "src/excluded.test.ts": [
+        'import { performance as fake } from "./fake-clock.js";',
+        "const a = Date.now();",
+        "const b = Date.now();",
+        "expect(b).toBeGreaterThanOrEqual(a);",
+        "const fast = performance.now() - a;",
+        "const slow = performance.now() - b;",
+        "expect(fast).toBeLessThan(slow);",
+        "expect(rows.length).toBeLessThan(5);",
+        "expect(x).toBeGreaterThan(limit + 1);",
         "let time = 1_000_000;",
+        "time += HOUR;",
         "expect(entry.cooldownUntil).toBeLessThan(time + HOUR);",
-        "const now = () => 5;",
-        "function f(Date: { now(): number }) { expect(Date.now() - t).toBeLessThan(5); }",
-        'import { performance } from "./fake-clock.js";',
-        "expect(performance.now() - t).toBeLessThan(5);",
+        "function f(Date: { now(): number }) { expect(Date.now() - 5).toBeLessThan(5); }",
+        "expect(fake.now() - 5).toBeLessThan(5);",
+        'it("faked", () => { vi.useFakeTimers(); const t0 = Date.now(); expect(Date.now() - t0).toBeLessThan(5); });',
+        'it("set", () => { vi.setSystemTime(5); expect(Date.now() - 1).toBeLessThan(5); });',
+        'it("spied", () => { vi.spyOn(Date, "now").mockReturnValue(5); expect(Date.now() - 1).toBeLessThan(5); });',
+        'it("spied perf", () => { vi.spyOn(performance, "now").mockReturnValue(5); expect(performance.now() - 1).toBeLessThan(5); });',
+        'describe("hooked", () => { beforeEach(() => { vi.useFakeTimers(); }); it("x", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
+        'describe("plain", () => { vi.useFakeTimers(); it("y", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
       ].join("\n"),
     });
-    expect(wallClockBounds(root, testFiles(root))).toEqual([]);
+    expect(found(root)).toEqual([]);
+  });
+
+  it("cannot see a clock read through what the contract lists under 'What it cannot see'", () => {
+    const root = fixtureRoot({
+      "src/timing.ts": "export const timed = (run: () => void): number => { const s = Date.now(); run(); return Date.now() - s; };\n",
+      "src/blind.test.ts": [
+        'import { timed } from "./timing.js";',
+        "expect(timed(work)).toBeLessThan(5);",
+        "logCall(Date.now() - 160_000);",
+        "expect(medianMs()).toBeLessThan(165_000);",
+        "function fast(ms: number) { expect(ms).toBeLessThan(100); }",
+        "fast(Date.now() - 5);",
+        "class Clock { start = Date.now(); took() { return Date.now() - this.start; } }",
+        "const c = new Clock();",
+        "expect(c.took()).toBeLessThan(5);",
+        "const now = Date.now;",
+        "expect(now() - 5).toBeLessThan(5);",
+        "expect(globalThis.Date.now() - 5).toBeLessThan(5);",
+        "expect(Date.now.bind(Date)() - 5).toBeLessThan(5);",
+        "expect(Date.now() - 5 < 500).toBe(true);",
+        "assert.ok(Date.now() - 5 < 500);",
+        "expect(Date.now() - 5).toSatisfy((ms: number) => ms < 500);",
+        'expect(Date.now() - 5)["toBeLessThan"](500);',
+        "expect(Date.now() - 5).to.be.below(500);",
+      ].join("\n"),
+    });
+    expect(found(root)).toEqual([]);
+  });
+
+  it("counts too much where the contract says it errs toward counting", () => {
+    const { body, want } = spec([
+      ["expect(deadline - Date.now()).toBeLessThan(60_000);", "target"],
+      ["const after = Date.now();", null],
+      ["expect(state.stamp).toBeLessThanOrEqual(after);", "bound"],
+      ['function freeze() { vi.spyOn(Date, "now").mockReturnValue(5); }', null],
+      ['it("frozen by a helper", () => { freeze(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ["expect(items.filter((i) => i.at < Date.now()).length).toBeLessThan(3);", "target"],
+    ]);
+    expect(found(fixtureRoot({ "src/over.test.ts": body }))).toEqual(want);
   });
 
   it("turns red on a new expect(Date.now() - t).toBeLessThan(500), and green once the baseline holds it", () => {
@@ -788,7 +482,7 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
     const bounds = wallClockBounds(root, testFiles(root));
     const kept = { "src/kept.test.ts": 1 };
     expect(judgeBounds(bounds, kept).added).toEqual([
-      "src/fresh.test.ts: 1 wall-clock upper bound(s), baseline 0\n  src/fresh.test.ts:3  expect(Date.now() - t).toBeLessThan(500)",
+      "src/fresh.test.ts: 1 wall-clock bound(s), baseline 0\n  src/fresh.test.ts:3  expect(Date.now() - t).toBeLessThan(500)",
     ]);
     expect(judgeBounds(bounds, { ...kept, "src/fresh.test.ts": 1 })).toEqual({ added: [], stale: [] });
     expect(judgeBounds(bounds, { ...kept, "src/fresh.test.ts": 1, "src/gone.test.ts": 2 }).stale).toEqual([
