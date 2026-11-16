@@ -142,8 +142,24 @@ export function recordProviderUsage(
   onUsage?: (usage: TaskUsageEvent) => void,
   modelId?: string,
 ): void {
-  debitRunBudget(usage, providerName, modelId);
-  recordProviderUsageHelper(deps.getSupervisorRoutingContext(), providerName, usage, onUsage, modelId);
+  recordServedCall(deps.getSupervisorRoutingContext(), providerName, usage, onUsage, modelId, true);
+}
+
+/**
+ * The one place a served call reaches the shared recorder: recordProviderUsage's and the direct-
+ * call ledger's. A call a run pays for is debited from the Budget in scope first (task #87); a call
+ * that belongs to no run is not (createProviderUsageLedger says why).
+ */
+function recordServedCall(
+  counters: Pick<SupervisorRoutingContext, "metrics" | "rateLimiter">,
+  providerName: string,
+  usage: ProviderResponse["usage"] | undefined,
+  onUsage: ((usage: TaskUsageEvent) => void) | undefined,
+  modelId: string | undefined,
+  runPays: boolean,
+): void {
+  if (runPays) debitRunBudget(usage, providerName, modelId);
+  recordProviderUsageHelper(counters, providerName, usage, onUsage, modelId);
 }
 
 /** What the process ledger writes to: the counters a model turn bills, and the cost ledger. */
@@ -159,16 +175,26 @@ export interface ProviderUsageLedgerDeps {
  *
  * A call that is part of a run takes the run's own path: the hook a model turn
  * bills through, with the run's onUsage — which books the run's cost ledger row
- * itself, so nothing is booked twice. A call that belongs to no run takes the
- * same hook, and its cost is booked to the ledger under the source the caller
- * named, the way the background executor books a task's (cache-aware price;
- * a free model books nothing).
+ * itself, so nothing is booked twice — and the debit from the run's Budget in
+ * scope (task #87: the supervisor's verification and triage calls run inside
+ * its admission Budget, which its node slices are carved from). A call that
+ * belongs to no run takes the same hook, and its cost is booked to the ledger
+ * under the source the caller named, the way the background executor books a
+ * task's (cache-aware price; a free model books nothing).
+ *
+ * An ownerless call debits no run's Budget, even when it happens to run inside
+ * one (a session summary started from a turn, a daemon timer): the caller said
+ * no run pays, its cost lands in the global ledger every run's cost cap is
+ * seeded from, and charging the run it ran in as well would count it twice and
+ * bill that run for work it did not ask for. Nor is it logged as unscoped: its
+ * payer is named, so nothing goes unseen.
  */
 export function createProviderUsageLedger(deps: ProviderUsageLedgerDeps): ProviderUsageLedger {
   return {
     record(served, billing) {
-      const onUsage = "run" in billing ? billing.run.onUsage : ownerlessUsageSink(deps.budget, billing);
-      recordProviderUsageHelper(deps.counters, served.provider, served.usage, onUsage, served.model);
+      const runPays = "run" in billing;
+      const onUsage = runPays ? billing.run.onUsage : ownerlessUsageSink(deps.budget, billing);
+      recordServedCall(deps.counters, served.provider, served.usage, onUsage, served.model, runPays);
     },
   };
 }

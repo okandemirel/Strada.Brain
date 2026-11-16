@@ -12,10 +12,15 @@
  * planning context, and that call was recorded before the scope opened — debited nowhere, or,
  * when admission ran inside another run's scope, from that run's Budget.
  *
- * Drives the REAL Orchestrator admission → REAL SupervisorBrain → REAL GoalDecomposer; only the
- * providers, the budget manager's snapshot and the node executor are seams.
+ * QA, attempt 4: after task #71 the supervisor's capability triage and node verification bill
+ * through the direct-call ledger (billedChat → createProviderUsageLedger), which reached the
+ * shared recorder without the Budget's debit: 0 debited inside the admission's scope.
+ *
+ * Drives the REAL Orchestrator admission → REAL SupervisorBrain → REAL GoalDecomposer and REAL
+ * CapabilityMatcher, with the REAL direct-call ledger installed; only the providers, the budget
+ * manager's snapshot and the node executor are seams.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Orchestrator } from "./orchestrator.js";
 import { SupervisorBrain } from "../supervisor/supervisor-brain.js";
 import { CapabilityMatcher } from "../supervisor/capability-matcher.js";
@@ -23,6 +28,8 @@ import { ProviderAssigner } from "../supervisor/provider-assigner.js";
 import { GoalDecomposer } from "../goals/goal-decomposer.js";
 import { toBudgetUsage, UNSCOPED_DEBIT_LOG, withRunBudget } from "../agent-core/control/budget-scope.js";
 import { createBudget, type Budget, type ChildBudget } from "../agent-core/control/budget.js";
+import { createProviderUsageLedger } from "../agent-core/engine/accounting.js";
+import { installProviderUsageLedger } from "./providers/billed-call.js";
 import type { SupervisorConfig } from "../supervisor/supervisor-types.js";
 
 const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
@@ -58,6 +65,7 @@ const PLAN = JSON.stringify({
 
 const PLAN_USAGE = { inputTokens: 200_000, outputTokens: 40_000, totalTokens: 240_000 };
 const GROUNDING_USAGE = { inputTokens: 3_000, outputTokens: 500, totalTokens: 3_500 };
+const TRIAGE_USAGE = { inputTokens: 1_200, outputTokens: 150, totalTokens: 1_350 };
 const DAILY_LIMIT_USD = 10;
 const PROMPT = "Import tide tables from three file formats, validate them, and show the import report";
 /** A screenshot of the import screen: rich input, so admission grounds it before planning. */
@@ -72,6 +80,8 @@ interface Options {
   readonly image?: boolean;
   /** The brain finds nothing to decompose after admission has grounded the input. */
   readonly brainDeclines?: boolean;
+  /** Give the capability matcher a triage model, which bills through the direct-call ledger. */
+  readonly triage?: boolean;
 }
 
 async function runSupervisor(opts: Options = {}) {
@@ -90,11 +100,24 @@ async function runSupervisor(opts: Options = {}) {
       usage: GROUNDING_USAGE,
     })),
   };
+  const triage = {
+    name: "claude",
+    capabilities: { maxTokens: 4096, streaming: false, toolCalling: false, vision: false, systemPrompt: true },
+    chat: vi.fn(async () => ({
+      text: JSON.stringify([
+        { capabilities: ["code-gen"], preference: "quality" },
+        { capabilities: ["code-gen"], preference: "quality" },
+      ]),
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: TRIAGE_USAGE,
+    })),
+  };
   const decomposer = new GoalDecomposer(planner as never, 1, [0]);
   const brain = new SupervisorBrain({
     config: CONFIG,
     decomposer,
-    capabilityMatcher: new CapabilityMatcher(),
+    capabilityMatcher: new CapabilityMatcher(opts.triage ? (triage as never) : undefined),
     providerAssigner: new ProviderAssigner([
       { name: "worker", model: "w", scores: { reasoning: 0.9, vision: 0.9, "code-gen": 0.9, "tool-use": 0.9, "long-context": 0.9, speed: 0.5, cost: 0.4, quality: 0.9, creative: 0.8 } },
     ]),
@@ -147,7 +170,7 @@ async function runSupervisor(opts: Options = {}) {
     expect(planner.chat, "the supervisor never planned").toHaveBeenCalledTimes(1);
     expect(nodes.length, "no node was handed out").toBeGreaterThanOrEqual(1);
   }
-  return { decision, runBudget: runBudget!, nodes, vision };
+  return { decision, runBudget: runBudget!, nodes, vision, triage };
 }
 
 /** Every call the admission recorded had a run's Budget in scope. */
@@ -157,7 +180,12 @@ function expectNothingRecordedUnscoped(): void {
 }
 
 describe("a supervisor run's plan is debited from its run budget", () => {
+  beforeEach(() => {
+    // Bootstrap installs the process ledger the direct calls (billedChat) bill through; so does this.
+    installProviderUsageLedger(createProviderUsageLedger({ counters: {} }));
+  });
   afterEach(() => {
+    installProviderUsageLedger(undefined);
     vi.restoreAllMocks();
     log.warn.mockClear();
   });
@@ -195,6 +223,21 @@ describe("a supervisor run's plan is debited from its run budget", () => {
     expect(runBudget.spentOutputTokens(), "the grounding call's 500 output tokens never reached the supervisor's run budget").toBe(40_500);
     expect(runBudget.inputTokensSeen(), "the grounding call's input tokens never reached the supervisor's run budget").toBe(203_000);
     expect(nodes[0]!.slice?.costUsd, "the first node's slice was carved before the grounding call's cost came off").toBeCloseTo(
+      DAILY_LIMIT_USD - cost,
+      9,
+    );
+    expectNothingRecordedUnscoped();
+  });
+
+  it("the capability triage a run bills through the direct-call ledger is debited before the nodes are carved", async () => {
+    const { runBudget, nodes, triage } = await runSupervisor({ triage: true });
+    const calls = triage.chat.mock.calls.length;
+    const cost = (toBudgetUsage(PLAN_USAGE, "claude", undefined).costUsd ?? 0) + calls * (toBudgetUsage(TRIAGE_USAGE, "claude", undefined).costUsd ?? 0);
+
+    expect(calls, "the matcher never asked its triage model").toBeGreaterThanOrEqual(1);
+    expect(runBudget.spentOutputTokens(), "the triage call's output tokens never reached the supervisor's run budget").toBe(40_000 + calls * 150);
+    expect(runBudget.inputTokensSeen(), "the triage call's input tokens never reached the supervisor's run budget").toBe(200_000 + calls * 1_200);
+    expect(nodes[0]!.slice?.costUsd, "the first node's slice was carved from a ceiling that never saw the triage").toBeCloseTo(
       DAILY_LIMIT_USD - cost,
       9,
     );
