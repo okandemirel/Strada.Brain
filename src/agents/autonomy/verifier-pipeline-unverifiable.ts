@@ -33,7 +33,7 @@ import { isNodeScopedTask, selectNodeTools } from "./node-tool-offer.js";
 import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import { measureProjectChecks, type ProjectCheckRecord } from "./verifier-pipeline-project-checks.js";
 import type { CompletionReviewEvidence } from "./completion-review.js";
-import type { FailureAnswer, WriterAction } from "./completion-review-answers.js";
+import type { FailureAnswer } from "./completion-review-answers.js";
 import { detectSupervisorFeedbackLanguage, type SupervisorFeedbackLanguage } from "../../supervisor/supervisor-feedback.js";
 
 /** What the run's tool registry says about verification, and that it was the registry that said it. */
@@ -257,7 +257,7 @@ function howAnswered(answers: readonly FailureAnswer[]): string {
   const count = (kind: FailureAnswer["kind"]) => answers.filter((a) => a.kind === kind).length;
   const parts = [
     count("rerun") > 0 ? `${count("rerun")} run again with the same input` : "",
-    count("same-path") > 0 ? `${count("same-path")} whose path the same tool acted on later` : "",
+    count("same-path") > 0 ? `${count("same-path")} whose path the same writer wrote later` : "",
     count("same-name") > 0
       ? `${count("same-name")} whose path cannot exist (a directory of it is a file) and whose file name the same tool wrote later in another directory`
       : "",
@@ -268,7 +268,7 @@ function howAnswered(answers: readonly FailureAnswer[]): string {
 interface Words {
   readonly head: string;
   readonly rerun: (call: string, error: string) => string;
-  readonly samePath: (call: string, error: string, tool: string, path: string, action: WriterAction) => string;
+  readonly samePath: (call: string, error: string, tool: string, path: string) => string;
   readonly sameName: (call: string, error: string, tool: string, path: string, blockedBy: string) => string;
   readonly earlier: (n: number) => string;
   readonly nothing: (offered: number, shellOffered: boolean) => string;
@@ -281,8 +281,7 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
   en: {
     head: "Not verified:",
     rerun: (call, error) => `${call} failed (${error}), then the same call, with the same input, succeeded.`,
-    samePath: (call, error, tool, path, action) =>
-      `${call} failed (${error}), then ${tool} ${{ write: `wrote ${path} again`, edit: `edited ${path}`, delete: `deleted ${path}` }[action]}.`,
+    samePath: (call, error, tool, path) => `${call} failed (${error}), then ${tool} wrote ${path} again.`,
     sameName: (call, error, tool, path, blockedBy) =>
       `${call} failed (${error}): ${blockedBy} is a file, so that path cannot exist. Then ${tool} wrote ${path}, the same file name in another directory.`,
     earlier: (n) => `${n} earlier failed step(s) are not listed.`,
@@ -295,8 +294,7 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
   tr: {
     head: "Doğrulanmadı:",
     rerun: (call, error) => `${call} başarısız oldu (${error}); ardından aynı çağrı, aynı girdiyle, başarıyla koştu.`,
-    samePath: (call, error, tool, path, action) =>
-      `${call} başarısız oldu (${error}); ardından ${tool} ${path} yolunu ${{ write: "yeniden yazdı", edit: "düzenledi", delete: "sildi" }[action]}.`,
+    samePath: (call, error, tool, path) => `${call} başarısız oldu (${error}); ardından ${tool} ${path} yolunu yeniden yazdı.`,
     sameName: (call, error, tool, path, blockedBy) =>
       `${call} başarısız oldu (${error}): ${blockedBy} bir dosya, bu yüzden o yol var olamaz. Ardından ${tool} aynı adlı dosyayı başka bir dizine yazdı: ${path}.`,
     earlier: (n) => `Daha önceki ${n} başarısız adım listelenmedi.`,
@@ -315,7 +313,7 @@ function answerSentence(answer: FailureAnswer, words: Words): string {
   const call = answer.failedTarget ? `${answer.tool} ${clip(answer.failedTarget, 120)}` : answer.tool;
   const error = clip(answer.error, 160);
   const target = clip(answer.answerTarget ?? "", 120);
-  if (answer.kind === "same-path") return words.samePath(call, error, answer.tool, target, answer.action ?? "write");
+  if (answer.kind === "same-path") return words.samePath(call, error, answer.tool, target);
   if (answer.kind === "same-name") return words.sameName(call, error, answer.tool, target, clip(answer.blockedBy ?? "", 120));
   return words.rerun(call, error);
 }

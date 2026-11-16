@@ -14,12 +14,18 @@
  *   failed, packages/b/index.js was written; a deletion of services/a/config.json
  *   failed, services/b/config.json was deleted, and both read as answered.
  *
- * What is left: the same call run again (any tool); the same path acted on
- * again by the writer that names one path; and, for a writer that creates a
- * file, the same file name written elsewhere only when the failed path cannot
- * exist, measured now: one of its directories is a file (golden run 4:
- * README.md is a file, so README.md/kappa.txt cannot be written). Anything
- * that cannot be read or measured is not an answer.
+ * What is left, each read from the record or measured on disk:
+ * - any tool: the same call, tool and input, run again and succeeding;
+ * - a writer that creates a file (file_write, file_create): the same path
+ *   written later; or a file of the same name written later in another
+ *   directory, only when the failed path cannot exist, measured now: one of
+ *   its directories is a file in the project root (golden run 4: README.md is
+ *   a file, so README.md/kappa.txt cannot be written). The name alone answers
+ *   nothing (packages/a/index.js); the measurement alone does not either
+ *   (README.md/alpha.txt failed and only notes/beta.txt was written).
+ * Every other tool, the deletions, edits, renames and generators among the
+ * writers included, is answered only by the same call. Anything that cannot be
+ * read or measured is not an answer.
  */
 
 import { statSync } from "node:fs";
@@ -34,32 +40,21 @@ export interface FailureAnswer {
   readonly error: string;
   /**
    * `rerun`: the same call, tool and input, succeeded later. `same-path`: the
-   * same writer later acted on the path that failed. `same-name`: the path
-   * that failed cannot exist (`blockedBy`), and the same writer later wrote a
-   * file of that name in another directory.
+   * same file-creating writer later wrote the path that failed. `same-name`:
+   * the path that failed cannot exist (`blockedBy`), and the same writer later
+   * wrote a file of that name in another directory.
    */
   readonly kind: "rerun" | "same-path" | "same-name";
   /** The path the failed call named, when it named one. */
   readonly failedTarget?: string;
-  /** The path the answering call named (`same-path`, `same-name`). */
+  /** The path the answering write named (`same-path`, `same-name`). */
   readonly answerTarget?: string;
-  /** What the answering call did to that path (`same-path`, `same-name`). */
-  readonly action?: WriterAction;
   /** `same-name`: the failed path's directory that was measured to be a file, relative to the project root. */
   readonly blockedBy?: string;
 }
 
-/** What a writer that names one path does to it: the notice's verb. */
-export type WriterAction = "write" | "edit" | "delete";
-
-/** Writers whose call acts on the one path it names: a later success on that path answers a failure. */
-const SINGLE_PATH_WRITERS: ReadonlyMap<string, WriterAction> = new Map([
-  ["file_write", "write"],
-  ["file_create", "write"],
-  ["file_edit", "edit"],
-  ["file_delete", "delete"],
-  ["file_delete_directory", "delete"],
-]);
+/** Writers that create the file they name: the only tools a write of the path, or of its name, may answer. */
+const FILE_CREATING_WRITERS: ReadonlySet<string> = new Set(["file_write", "file_create"]);
 
 /**
  * Which later success answers `step`, if any. `projectRoot` is the root the
@@ -80,18 +75,16 @@ export function failureAnsweredBy(
   if (step.inputSignature !== undefined && sameTool.some((next) => next.inputSignature === step.inputSignature)) {
     return { ...base, kind: "rerun" };
   }
-  const action = SINGLE_PATH_WRITERS.get(step.toolName);
-  if (action === undefined || step.targetPath === undefined) return null;
+  if (!FILE_CREATING_WRITERS.has(step.toolName) || step.targetPath === undefined) return null;
   const failed = pathSpelling(step.targetPath);
   const samePath = sameTool.find((next) => next.targetPath !== undefined && pathSpelling(next.targetPath) === failed);
-  if (samePath) return { ...base, kind: "same-path", answerTarget: samePath.targetPath!, action };
-  if (action !== "write") return null;
+  if (samePath) return { ...base, kind: "same-path", answerTarget: samePath.targetPath! };
   const sameName = sameTool.find(
     (next) => next.targetPath !== undefined && posix.basename(pathSpelling(next.targetPath)) === posix.basename(failed),
   );
   if (!sameName) return null;
   const blockedBy = fileOnPath(projectRoot, step.targetPath);
-  return blockedBy === null ? null : { ...base, kind: "same-name", answerTarget: sameName.targetPath!, action, blockedBy };
+  return blockedBy === null ? null : { ...base, kind: "same-name", answerTarget: sameName.targetPath!, blockedBy };
 }
 
 /** One spelling for a path a tool was given: forward slashes, no "./", no "a/../". */

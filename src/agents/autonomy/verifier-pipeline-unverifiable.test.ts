@@ -316,7 +316,6 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
       kind: "same-name",
       failedTarget: FAILS_AT_RUN_TIME,
       answerTarget: "notes/lantern.txt",
-      action: "write",
       blockedBy: "README.md",
     }]);
     expect(rowOf(plan, "every open failure was answered by a later success")).toMatchObject({
@@ -334,7 +333,7 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     });
 
     expect(plan.evidence.recentFailureAnswers).toMatchObject([
-      { kind: "same-path", failedTarget: "notes/gamma.txt", answerTarget: "./notes/gamma.txt", action: "write" },
+      { kind: "same-path", failedTarget: "notes/gamma.txt", answerTarget: "./notes/gamma.txt" },
     ]);
     expect(plan.initialDecision).toBe("approve");
     expect(plan.evidence.unverifiableDecision?.notice).toMatch(
@@ -423,21 +422,17 @@ describe("the notice the run's answer carries", () => {
   });
 
   it.each([
-    ["file_delete", "delete", "en", "Not verified: file_delete services/a/config.json failed (EBUSY), then file_delete deleted services/a/config.json."],
-    ["file_edit", "edit", "en", "Not verified: file_edit notes/a.txt failed (old text not found), then file_edit edited notes/a.txt."],
-    ["file_delete", "delete", "tr", "Doğrulanmadı: file_delete services/a/config.json başarısız oldu (EBUSY); ardından file_delete services/a/config.json yolunu sildi."],
-  ] as const)("says what the answering %s did to the path (%s, %s)", (tool, action, language, head) => {
-    const path = tool === "file_delete" ? "services/a/config.json" : "notes/a.txt";
-    const error = tool === "file_delete" ? "EBUSY" : "old text not found";
+    ["en", "Not verified: file_write notes/a.txt failed (EACCES), then file_write wrote notes/a.txt again."],
+    ["tr", "Doğrulanmadı: file_write notes/a.txt başarısız oldu (EACCES); ardından file_write notes/a.txt yolunu yeniden yazdı."],
+  ] as const)("says the writer wrote the same path again (%s): only a writer answers by path", (language, head) => {
     const notice = unverifiedNotice(
-      [{ tool, error, kind: "same-path", failedTarget: path, answerTarget: path, action }],
+      [{ tool: "file_write", error: "EACCES", kind: "same-path", failedTarget: "notes/a.txt", answerTarget: "notes/a.txt" }],
       { offered: 3, shellOffered: false },
       false,
       language,
     );
 
     expect(notice.startsWith(`${head} `)).toBe(true);
-    expect(notice).not.toMatch(/\bwrote\b|yazdı/u);
   });
 
   it("lists the last three failures and counts the earlier ones", () => {
@@ -726,6 +721,21 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
+
+  it.each(["file_edit", "file_delete", "file_delete_directory", "file_manage", "strada_create_module", "unity_generate_sprite"])(
+    "%s failed, then succeeded on the same path with another input: only the same call answers a tool that does not create the file",
+    async (tool) => {
+      const state = await stateAfter([[tool, "notes/b.txt", { content: "Error: EBUSY", isError: true }], [tool, "notes/b.txt", { content: "Done" }]], TASK);
+      // The second call acted on notes/b.txt with another input: same tool, same target, another call.
+      const another = { ...state, stepResults: state.stepResults.map((step, i) => (i === 1 ? { ...step, inputSignature: "another-input" } : step)) };
+      const plan = planVerifierPipeline({ ...pipelineInputs(TASK, DONE, [...NO_CHECK_TOOLS, tool], project), state: another });
+
+      expect(another.stepResults.map((step) => step.targetPath)).toEqual(["notes/b.txt", "notes/b.txt"]);
+      expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+      expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+      expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    },
+  );
 
   it("a write under a file, followed by its file name elsewhere, with no project root to measure it in", async () => {
     const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS.filter((t) => t !== "shell_exec"), projectPath: null });
