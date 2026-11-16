@@ -29,6 +29,7 @@ import type { ConfidenceEstimator } from "../routing/confidence-estimator.js";
 import type { ClarificationContext } from "../../agents/orchestrator-clarification.js";
 import type { TaskManager } from "../../tasks/task-manager.js";
 import { userExplicitlyAskedForPlan, draftLooksLikeInternalPlanArtifact } from "../../agents/autonomy/index.js";
+import { takeUnverifiedNotice, withUnverifiedNotice } from "../../agents/autonomy/verifier-pipeline-unverifiable.js";
 import { applyVisibleResponseContract } from "../../agents/orchestrator-text-utils.js";
 import {
   handleInteractiveEndTurn,
@@ -384,7 +385,8 @@ export async function portDispatchReflection(
       // intervention extended the run — the spine must honor it over the parse-time verdict.
       return { agentState: action.newState, terminal: false, extendRequested: true };
     case "done": {
-      await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
+      const notice = takeUnverifiedNotice(chatId, runCtx.taskStartedAtMs);
+      await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore, notice);
       return { agentState: action.newState, terminal: true, reason: action.status ?? "done" };
     }
     case "blocked": {
@@ -407,6 +409,10 @@ export async function portDispatchReflection(
  * workers' internal answers to the user's chat. Off the interactive path the text is only
  * recorded, once: the background handlers append the answers they produce themselves, so the
  * boundary appends only when the handler recorded nothing.
+ *
+ * `notice` is the verifier's "Not verified: …" (verifier-pipeline-unverifiable.ts): the run
+ * ended over a failure nothing here could check, and the user reads that under the answer
+ * whatever the draft said. Every finished run passes here, so the notice cannot miss a path.
  */
 async function settleVisibleBoundary(
   deps: ReflectionDeps,
@@ -415,13 +421,31 @@ async function settleVisibleBoundary(
   session: Session,
   visibleText: string | undefined,
   transcriptLengthBefore: number,
+  notice?: string,
 ): Promise<{ text: string; marked: boolean }> {
-  if (mode === "interactive") return emitVisibleBoundary(deps, chatId, session, visibleText);
-  const safe = sanitizeBlockedVisibleText(deps, visibleText ?? "");
-  if (safe.text && deps.sessionManager.getVisibleTranscript(session).length === transcriptLengthBefore) {
+  const text = withUnverifiedNotice(visibleText, notice);
+  if (mode === "interactive") return emitVisibleBoundary(deps, chatId, session, text);
+  const handlerAppended = deps.sessionManager.getVisibleTranscript(session).length !== transcriptLengthBefore;
+  if (notice && handlerAppended) appendNoticeToLastAnswer(session, deps.sessionManager.getVisibleTranscript(session), notice);
+  const safe = sanitizeBlockedVisibleText(deps, text ?? "");
+  if (safe.text && !handlerAppended) {
     deps.sessionManager.appendVisibleAssistantMessage(session, safe.text);
   }
   return safe;
+}
+
+/**
+ * The handler appended its own answer: the notice goes into that message, because the
+ * run's final text is read back from the last visible assistant message (port.synthesizeFinal).
+ */
+function appendNoticeToLastAnswer(session: Session, visible: ConversationMessage[], notice: string): void {
+  const at = visible.map((m) => m.role).lastIndexOf("assistant");
+  const last = visible[at];
+  if (!last || last.role !== "assistant") return;
+  const replaced: ConversationMessage = { ...last, content: withUnverifiedNotice(last.content, notice) ?? last.content };
+  visible[at] = replaced;
+  const inHistory = session.messages.lastIndexOf(last);
+  if (inHistory >= 0) session.messages[inHistory] = replaced;
 }
 
 /**
@@ -498,7 +522,8 @@ export async function portDispatchEndTurn(
 
   switch (action.flow) {
     case "done": {
-      const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore);
+      const notice = takeUnverifiedNotice(chatId, runCtx.taskStartedAtMs);
+      const safe = await settleVisibleBoundary(deps, params.mode, chatId, runCtx.session, action.visibleText, transcriptLengthBefore, notice);
       return {
         agentState: action.newState,
         finalText: safe.text,

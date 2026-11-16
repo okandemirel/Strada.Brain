@@ -20,8 +20,8 @@
  *    is asked again at once without streaming and then on its next turn.
  * 4. A node's write fails at run time and its next write succeeds. No tool
  *    this run has can verify that, and the project declares no check for
- *    shell_exec to run, so the node is asked once to say the result is not
- *    verified, says so, and finishes: no block, no re-run.
+ *    shell_exec to run, so the node finishes at once: no ask, no block, no
+ *    re-run. The system itself puts "Not verified: …" under its answer.
  * 5. The same failure in a run whose registry holds a tool that runs a check.
  *    The failure waits for that verification whatever the draft says, the
  *    node is blocked, and the blocked goal is resumed without waiting for a
@@ -30,6 +30,10 @@
  *    starts, the chat reads only the answer however long the worker takes;
  *    with it on, the real heartbeat path sends the user a progress message
  *    before the answer.
+ * 7. A short request whose write fails and is redone, and whose worker says
+ *    it verified the work. Nothing ran a check: the worker is asked once to
+ *    report honestly, still claims it, and the chat reads its answer with
+ *    the system's "Not verified: …" under it.
  *
  * When a deliberate change alters the calls a run makes, the failure names
  * the step it expected and the call it got. Update that run's script in the
@@ -325,13 +329,19 @@ const KAPPA_DONE = "Wrote notes/kappa.txt.";
 const SIGMA_DONE = "Wrote notes/sigma.txt.";
 /** Inside the project, under a FILE: the guard lets it through, and the filesystem fails the write. */
 const UNDER_A_FILE = "README.md/kappa.txt";
-/** What the worker reports when it is told nothing here can verify the failed write. */
-const KAPPA_UNVERIFIED = "Wrote notes/kappa.txt. Not verified: this project has no build and no tests to run.";
-const RUNTIME_ANSWER = `${KAPPA_UNVERIFIED}\n\n${SIGMA_DONE}`;
-/** The gate kappa meets once: the run's tool registry holds no tool that runs a check. */
-const NO_VERIFICATION_TOOL =
-  "[NO VERIFICATION TOOL] Steps in this run failed, and each was answered by a later success " +
-  "(1 written again by the same tool, and the write succeeded):";
+/**
+ * What the system writes under an answer whose failed write was redone and
+ * that nothing here could check, built from the record (the error code and
+ * the tool count are the platform's and the registry's).
+ */
+const notVerifiedUnder = (answer: string, tail = ""): RegExp =>
+  new RegExp(
+    `^${escapeRegExp(answer)}\\n\\nNot verified: A step failed \\(file_write: Error: could not write file \\(E[A-Z]+\\)\\) ` +
+      "and was then redone \\(1 written again by the same tool, and the write succeeded\\), but nothing here could check " +
+      "the result: none of the \\d+ available tools runs a build or a test, and the project declares no build or test command\\." +
+      `${escapeRegExp(tail)}$`,
+  );
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const RUNTIME_SCRIPT: readonly Step[] = [
   decomposeStep("decompose", RUNTIME_REQUEST, twoNodes(NODE_KAPPA, NODE_SIGMA)),
@@ -341,24 +351,45 @@ const RUNTIME_SCRIPT: readonly Step[] = [
   actStep("kappa: act again, after reading the failure", NODE_KAPPA,
     [writeCall("call_kappa_fixed", "notes/kappa.txt", "KAPPA\n")],
     (call) => carriesResult(call, "call_kappa_fails")),
+  // The failed write was redone and worked, none of the tools this run was
+  // offered runs a check, and the project declares none: kappa ends here,
+  // and the system writes "Not verified: …" under its answer. Measured
+  // 2026-11-06, before the fix: the failure waited for a verification
+  // nothing here could run; the worker was asked six times, loop detection
+  // blocked kappa, the goal ran again from the start, and the re-run
+  // completed with no verification at all.
   reportStep("kappa: report", NODE_KAPPA, ["call_kappa_fixed"], KAPPA_DONE),
-  // The failed write was re-run and worked, and none of the tools this run
-  // was offered runs a check, so the gate asks once for an honest report and
-  // closes on it. Measured 2026-11-06, before the fix: the failure waited for
-  // a verification nothing here could run; the worker was asked six times,
-  // loop detection blocked kappa, the goal ran again from the start, and the
-  // re-run completed with no verification at all.
-  {
-    step: "kappa: told nothing here can verify it, reports it not verified",
-    check: (call) => requires([isWorkerOn(NODE_KAPPA)(call), lastSays(call, NO_VERIFICATION_TOOL)]),
-    reply: say(KAPPA_UNVERIFIED),
-  },
   planStep("sigma: plan", NODE_SIGMA),
   actStep("sigma: act", NODE_SIGMA, [writeCall("call_sigma", "notes/sigma.txt", "SIGMA\n")]),
   reportStep("sigma: report", NODE_SIGMA, ["call_sigma"], SIGMA_DONE),
-  // Cheapest node first (ResultAggregator): sigma answered in three calls, kappa in five.
+  // Cheapest node first (ResultAggregator): sigma answered in three calls, kappa in four.
   verifyStep("sigma", SIGMA_DONE),
-  verifyStep("kappa", KAPPA_UNVERIFIED),
+  // The node verifier reads kappa's answer with the notice under it.
+  verifyStep("kappa", `${KAPPA_DONE}\n\nNot verified: A step failed (file_write: Error: could not write file (E`),
+];
+
+// ─── Run 7: a short request, a redone write, and a worker that claims a check
+
+const THETA_REQUEST = "Create notes/theta.txt containing the word THETA.";
+const THETA_CLAIM = "Wrote notes/theta.txt and verified it works.";
+const CLAIM_ASK = "[NO VERIFICATION TOOL] Your report says a check passed, but no check ran in this run.";
+const CLAIMED_CHECK = " The report above mentions a check, but no check ran in this run.";
+
+const CLAIM_SCRIPT: readonly Step[] = [
+  planStep("theta: plan", THETA_REQUEST),
+  actStep("theta: act, on a path under a file", THETA_REQUEST,
+    [writeCall("call_theta_fails", "README.md/theta.txt", "THETA\n")]),
+  actStep("theta: act again, after reading the failure", THETA_REQUEST,
+    [writeCall("call_theta_fixed", "notes/theta.txt", "THETA\n")],
+    (call) => carriesResult(call, "call_theta_fails")),
+  reportStep("theta: report, claiming a check", THETA_REQUEST, ["call_theta_fixed"], THETA_CLAIM),
+  // The claim contradicts the record: asked once, and only once.
+  {
+    step: "theta: asked once for an honest report, claims the check again",
+    check: (call) => requires([isWorkerOn(THETA_REQUEST)(call), lastSays(call, CLAIM_ASK)]),
+    reply: say(THETA_CLAIM),
+  },
+  visibilityReviewStep("theta: review the draft", THETA_REQUEST, THETA_CLAIM),
 ];
 
 // ─── Run 5: the same failure, and the registry holds a check tool ───────────
@@ -625,7 +656,7 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
-  it("a node whose write failed at run time, in a run with no check tool, finishes once and says it is not verified", async () => {
+  it("a node whose write failed at run time, in a run with no check tool, finishes at once and the system says it is not verified", async () => {
     const run = await runGolden({
       name: "runtime-failure-unverifiable",
       request: RUNTIME_REQUEST,
@@ -652,14 +683,35 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
 
     // One task, completed on its first attempt: nothing blocked, nothing resumed.
     expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
-    expect(run.task?.result).toBe(RUNTIME_ANSWER);
+    const answer = notVerifiedUnder(KAPPA_DONE, `\n\n${SIGMA_DONE}`);
+    expect(run.task?.result).toMatch(answer);
 
-    // What the user read says the failed step is not verified; it does not
-    // read as a plain "done".
-    expect(texts(run)).toEqual([SYSTEM_STATUS, RUNTIME_ANSWER]);
-    expect(run.task?.result).toMatch(/^Wrote notes\/kappa\.txt\. Not verified: /);
+    // What the user read says the failed step is not verified, and why, in
+    // the system's words: the worker's draft said only "Wrote …".
+    expect(texts(run)).toEqual([SYSTEM_STATUS, expect.stringMatching(answer)]);
     expect(texts(run)).not.toContain(FALLBACK_NOTICE);
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("a worker that claims a check nothing ran is asked once, and the chat reads the system's notice under its answer", async () => {
+    const run = await runGolden({ name: "claimed-check", request: THETA_REQUEST, script: CLAIM_SCRIPT, settled: settledWhenAnswered });
+
+    expect(run.strayEntries, `the run wrote into ${GOLDEN_WORKING_DIR}`).toEqual([]);
+    expect(run.violations).toEqual([]);
+    expect(run.served).toEqual(CLAIM_SCRIPT.map((s) => s.step));
+    expect(run.toolResults.map((r) => ({ id: r.toolCallId, isError: r.isError }))).toEqual([
+      { id: "call_theta_fails", isError: true },
+      { id: "call_theta_fixed", isError: false },
+    ]);
+    expect(readFileSync(join(run.project, "notes", "theta.txt"), "utf8")).toBe("THETA\n");
+
+    // The chat reads the worker's words and, under them, that nothing was
+    // verified and that the claimed check never ran. (The interactive
+    // rendering of the notice is pinned in reflection.unverified-notice.test.ts.)
+    const answer = notVerifiedUnder(THETA_CLAIM, CLAIMED_CHECK);
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(run.task?.result).toMatch(answer);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, expect.stringMatching(answer)]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("the same failure in a run with a check tool waits for a verification: blocked, then resumed on its own", async () => {

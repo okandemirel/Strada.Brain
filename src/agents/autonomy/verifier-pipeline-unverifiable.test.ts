@@ -1,15 +1,17 @@
 /**
- * A failure nothing in the run can verify closes once the draft says so.
+ * A failure nothing in the run can verify: the exit opens on recorded facts
+ * alone, and the user is told by the system that the result is not verified.
  *
  * Measured 2026-11-06 (golden run 4): a write failed at run time, the next
  * write succeeded, and the project had no build and no tests. The failure
  * waited for a verification nothing could run: six asks, a block, a re-run
- * that completed unverified. Both directions are pinned here:
- * - the run's tool registry holds no check tool: the gate asks once for an
- *   honest report and closes on it, and the record names the registry;
- * - the registry holds one, or the offer was narrowed, or the failure was
- *   never re-run, or a check already ran: the gate stays as it was, whatever
- *   the draft says.
+ * that completed unverified. Both directions are pinned here, one input of
+ * the decision table at a time:
+ * - every input allows it: the exit opens whatever the draft says, the
+ *   record carries the table, and the run's answer carries the system's
+ *   "Not verified: …" (a draft claiming a check is asked once first);
+ * - any input keeps the gate, or cannot be read: the gate stays as it was,
+ *   whatever the draft says.
  *
  * The steps are made the way the loop makes them: the real file_write's
  * results, recorded by recordStepResultsAndCheckReflection.
@@ -26,7 +28,7 @@ import { FileWriteTool } from "../tools/file-write.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { NODE_SCOPE_MARKER } from "./node-tool-offer.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
-import { draftSaysNotVerified } from "./verifier-pipeline-unverifiable.js";
+import { draftClaimsCheckPassed, takeUnverifiedNotice, withUnverifiedNotice } from "./verifier-pipeline-unverifiable.js";
 
 const sandbox = mkdtempSync(join(tmpdir(), "unverifiable-failure-"));
 const project = join(sandbox, "project");
@@ -67,6 +69,19 @@ const FAILS_AT_RUN_TIME = "README.md/lantern.txt";
 /** A registry with no tool that runs a check. shell_exec is a shell, not a check. */
 const NO_CHECK_TOOLS = ["file_read", "file_write", "file_edit", "list_directory", "grep_search", "shell_exec", "git_status"];
 const NO_VERIFICATION_TOOL = "[NO VERIFICATION TOOL]";
+const CLAIM_ASK = "[NO VERIFICATION TOOL] Your report says a check passed, but no check ran in this run.";
+const CHAT = "chat-unverifiable";
+/** The notice for FAIL_THEN_FIX in the README-only project with NO_CHECK_TOOLS, as the system writes it. */
+const NOTICE_RE =
+  /^Not verified: A step failed \(file_write: Error: could not write file \(E[A-Z]+\)\) and was then redone \(1 written again by the same tool, and the write succeeded\), but nothing here could check the result: none of the 7 available tools runs a build or a test, and the project declares no build or test command\.$/;
+/** QA's drafts, 2026-11-16: each says "unverified" and claims a check at once. */
+const CLAIMING_DRAFTS = [
+  "Wrote notes/lantern.txt and verified it works; nothing is left unverified.",
+  "Done: all tests pass and no unverified assumptions remain.",
+  "Tamamlandı ve test edildi; doğrulanmamış bir şey kalmadı.",
+];
+const rowOf = (plan: { evidence: { unverifiableDecision?: { inputs: readonly { input: string; effect: string }[] } } }, input: string) =>
+  plan.evidence.unverifiableDecision?.inputs.find((row) => row.input === input);
 /** A program that crashed at run time, the same program running, and an unrelated command. */
 const CRASHED = { content: "TypeError: Cannot read properties of undefined (reading 'glow')\n    at main.js:3:14", isError: true };
 const RAN = { content: "lantern lit" };
@@ -122,6 +137,9 @@ async function verdictAfter(options: {
   logEntries?: readonly LogEntry[];
   /** The project root the manifests are read from; the README-only project by default. */
   projectPath?: string | null;
+  /** The run's start: two verdicts with the same start are the same run. */
+  startedAt?: number;
+  lastVerificationAt?: number | null;
 }) {
   const task = options.task ?? TASK;
   const state = await stateAfter(options.calls ?? FAIL_THEN_FIX, task);
@@ -132,6 +150,7 @@ async function verdictAfter(options: {
       options.tools,
       options.projectPath === null ? undefined : (options.projectPath ?? project),
       options.logEntries,
+      { startedAt: options.startedAt, lastVerificationAt: options.lastVerificationAt },
     ),
     state,
   });
@@ -143,6 +162,7 @@ function pipelineInputs(
   tools: readonly string[] | undefined,
   projectPath: string | undefined,
   logEntries: readonly LogEntry[] = [],
+  run: { readonly startedAt?: number; readonly lastVerificationAt?: number | null } = {},
 ): Omit<Parameters<typeof planVerifierPipeline>[0], "state"> {
   return {
     prompt: task,
@@ -153,13 +173,13 @@ function pipelineInputs(
       touchedFiles: new Set(["notes/lantern.txt"]),
       hasCompilableChanges: false,
       lastBuildOk: null,
-      lastVerificationAt: null,
+      lastVerificationAt: run.lastVerificationAt ?? null,
     },
     buildVerificationGate: null,
     conformanceGate: null,
     logEntries,
-    chatId: "chat-unverifiable",
-    taskStartedAtMs: Date.now() - 60_000,
+    chatId: CHAT,
+    taskStartedAtMs: run.startedAt ?? Date.now() - 60_000,
     buildToolsAvailable: true,
     availableToolNames: tools,
     projectPath,
@@ -167,20 +187,40 @@ function pipelineInputs(
 }
 
 describe("a re-run failure in a run whose registry holds no check tool", () => {
-  it("asks once for an honest report, and nothing else: no repro, no 'rerun the verification'", async () => {
+  it("opens on a draft that only says what it did: no ask, no repro, and the system writes the notice", async () => {
     const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS });
 
-    expect(plan.initialDecision).toBe("continue");
-    expect(plan.gate).toContain(NO_VERIFICATION_TOOL);
-    expect(plan.gate).toMatch(/file_write: Error: could not write file \(E[A-Z]+\)/);
-    expect(plan.gate).toContain(`none of the ${NO_CHECK_TOOLS.length} tools in the tool registry offered to this turn runs`);
-    expect(plan.gate).toContain("say in it\nplainly that the result is not verified");
-    expect(plan.gate).not.toContain("[TARGETED VERIFICATION REQUIRED]");
-    expect(plan.gate).not.toContain("[UNVERIFIED FAILURE]");
-    expect(plan.gate).not.toContain("rerun the relevant verification");
+    expect(plan.initialDecision).toBe("approve");
+    expect(plan.gate).toBeUndefined();
+    expect(plan.evidence.unverifiableDecision?.opens).toBe(true);
+    expect(plan.evidence.unverifiableDecision?.notice).toMatch(NOTICE_RE);
+    expect(plan.checks.find((c) => c.name === "targeted-repro")).toBeUndefined();
+    expect(plan.checks.find((c) => c.name === ("unverified-failure" as never))).toBeUndefined();
   });
 
-  it("closes when the draft says the result is not verified, and the record names the registry it read", async () => {
+  it("puts the whole decision table in the evidence: every input, its source, what was read, and what an unknown does", async () => {
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS });
+    const inputs = plan.evidence.unverifiableDecision?.inputs ?? [];
+
+    expect(inputs.map((row) => row.input)).toEqual([
+      "a tool that runs a check is offered",
+      "the project declares a check shell_exec could run",
+      "a check already ran in this run",
+      "every open failure was answered by a later success",
+      "no warn/error log entry is open",
+      "the draft does not report that the run failed",
+      "the draft claims a check passed",
+    ]);
+    for (const row of inputs) {
+      expect(row.source, row.input).not.toBe("");
+      expect(row.value, row.input).not.toBe("");
+      expect(row.whenUnknown, row.input).not.toBe("");
+    }
+    expect(inputs.slice(0, 6).map((row) => row.effect)).toEqual(Array(6).fill("allows"));
+    expect(inputs[6]?.effect).toBe("no effect");
+  });
+
+  it("opens the same way when the draft says it is not verified, and the record names the registry it read", async () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS });
 
     expect(plan.gate).toBeUndefined();
@@ -199,17 +239,22 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     const check = plan.checks.find((c) => c.name === "unverifiable-failure");
     expect(check?.status).toBe("issues");
     expect(check?.summary).toMatch(
-      /^Not verified: every failed step was answered by a later success \(1 written again by the same tool, and the write succeeded\), none of the 7 tools in the tool registry offered to this turn runs/,
+      /^Not verified: A step failed \(file_write: Error: could not write file \(E[A-Z]+\)\) and was then redone \(1 written again by the same tool, and the write succeeded\), but nothing here could check the result: none of the 7 available tools runs/,
     );
+    expect(check?.summary).toContain("(every input of the decision allowed the exit: evidence.unverifiableDecision)");
     expect(plan.checks.find((c) => c.name === "targeted-repro")).toBeUndefined();
   });
 
-  it("says in the ask that shell_exec has nothing to run, and how many manifests it looked for", async () => {
+  it("says in the record that shell_exec has nothing to run, and how many manifests it looked for", async () => {
     const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS });
     const looked = plan.evidence.verificationTooling?.projectChecks?.looked.length;
 
     expect(looked).toBeGreaterThan(20);
-    expect(plan.gate).toContain(`shell_exec has nothing to run: the project root declares no check (looked for ${looked} manifests`);
+    expect(rowOf(plan, "the project declares a check shell_exec could run")).toMatchObject({
+      value: `none of the ${looked} manifests looked for`,
+      effect: "allows",
+    });
+    expect(plan.evidence.unverifiableDecision?.notice).toContain("and the project declares no build or test command.");
   });
 
   it("opens over package.json's npm-init placeholder, which runs no test", async () => {
@@ -238,7 +283,7 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     expect(plan.evidence.recentFailureRetries).toEqual({ rerun: 1, rewritten: 0 });
     expect(plan.initialDecision).toBe("approve");
     expect(plan.checks.find((c) => c.name === "unverifiable-failure")?.summary).toMatch(
-      /^Not verified: every failed step was answered by a later success \(1 run again with the same input and succeeded\), /,
+      /^Not verified: A step failed \(shell_exec: TypeError: Cannot read properties of undefined \(reading 'glow'\)\) and was then redone \(1 run again with the same input and succeeded\), /,
     );
   });
 
@@ -248,6 +293,66 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     expect(plan.gate).toBeUndefined();
     expect(plan.initialDecision).toBe("approve");
   });
+
+  it.each([DONE, NOT_VERIFIED, "", "Yazdım.", ...CLAIMING_DRAFTS])("the draft does not decide whether it opens: %j", async (draft) => {
+    const plan = await verdictAfter({ draft, tools: NO_CHECK_TOOLS });
+
+    expect(plan.evidence.unverifiableDecision?.opens).toBe(true);
+  });
+});
+
+describe("a draft that claims a check nothing ran", () => {
+  it.each(CLAIMING_DRAFTS)("is asked once for an honest report, not approved: %j", async (draft) => {
+    const startedAt = Date.now() - 40_000 - CLAIMING_DRAFTS.indexOf(draft);
+    const plan = await verdictAfter({ draft, tools: NO_CHECK_TOOLS, startedAt });
+
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain(CLAIM_ASK);
+    expect(plan.gate).toMatch(/file_write: Error: could not write file \(E[A-Z]+\)/);
+    expect(plan.gate).toContain("Nothing here can verify that: none of the 7 available tools runs a build or a test");
+    expect(plan.gate).not.toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(rowOf(plan, "the draft claims a check passed")?.effect).toBe("asks once");
+    // The run goes on: nothing is recorded for its answer yet.
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("is asked only once in a run: the second claim is approved, and the notice says no check ran", async () => {
+    const startedAt = Date.now() - 30_000;
+    const first = await verdictAfter({ draft: CLAIMING_DRAFTS[0]!, tools: NO_CHECK_TOOLS, startedAt });
+    const second = await verdictAfter({ draft: CLAIMING_DRAFTS[0]!, tools: NO_CHECK_TOOLS, startedAt });
+
+    expect(first.gate).toContain(CLAIM_ASK);
+    expect(second.gate).toBeUndefined();
+    expect(second.initialDecision).toBe("approve");
+    expect(rowOf(second, "the draft claims a check passed")).toMatchObject({ value: "yes, and it was asked once already", effect: "no effect" });
+    expect(second.evidence.unverifiableDecision?.notice).toMatch(/ The report above mentions a check, but no check ran in this run\.$/);
+  });
+});
+
+describe("the notice the run's answer carries", () => {
+  it("is recorded by an approve with the exit open, and taken once", async () => {
+    const startedAt = Date.now() - 20_000;
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, startedAt });
+
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBe(plan.evidence.unverifiableDecision?.notice);
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("is cleared by a later verdict of the same run that does not open the exit", async () => {
+    const startedAt = Date.now() - 10_000;
+    await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, startedAt });
+    const later = await verdictAfter({ draft: DONE, tools: [...NO_CHECK_TOOLS, "dotnet_test"], startedAt });
+
+    expect(later.initialDecision).toBe("continue");
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("goes under the answer once, after a blank line", () => {
+    expect(withUnverifiedNotice("Wrote it.", "Not verified: x.")).toBe("Wrote it.\n\nNot verified: x.");
+    expect(withUnverifiedNotice("Wrote it.\n\nNot verified: x.", "Not verified: x.")).toBe("Wrote it.\n\nNot verified: x.");
+    expect(withUnverifiedNotice("", "Not verified: x.")).toBe("Not verified: x.");
+    expect(withUnverifiedNotice("Wrote it.", undefined)).toBe("Wrote it.");
+  });
 });
 
 describe("what still waits for a verification, whatever the draft says", () => {
@@ -255,6 +360,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: [...NO_CHECK_TOOLS, "unity_compile_status"] });
 
     expect(plan.evidence.verificationTooling?.checkTools).toEqual(["unity_compile_status"]);
+    expect(rowOf(plan, "a tool that runs a check is offered")?.effect).toBe("keeps the gate");
     expect(plan.initialDecision).toBe("continue");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).toContain("[UNVERIFIED FAILURE]");
@@ -295,6 +401,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: rootWith(files) });
 
     expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([found].flat());
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("keeps the gate");
     expect(plan.initialDecision).toBe("continue");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).toContain("[UNVERIFIED FAILURE]");
@@ -326,6 +433,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
       const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath });
 
       expect(plan.evidence.verificationTooling).toBeNull();
+      expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("unknown: keeps the gate");
       expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     }
   });
@@ -338,14 +446,36 @@ describe("what still waits for a verification, whatever the draft says", () => {
     });
 
     expect(plan.evidence.verificationStepCount).toBe(1);
+    expect(rowOf(plan, "a check already ran in this run")?.effect).toBe("keeps the gate");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+  });
+
+  it("a check ran earlier in this run, before the step window: the verification state remembers it", async () => {
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, lastVerificationAt: Date.now() - 120_000 });
+
+    expect(plan.evidence.verificationStepCount).toBe(0);
+    expect(rowOf(plan, "a check already ran in this run")?.effect).toBe("keeps the gate");
+    expect(plan.evidence.unverifiableDecision?.opens).toBe(false);
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
+  it("the draft reports that the run failed: that report's own exit applies, and no notice is recorded", async () => {
+    const startedAt = Date.now() - 50_000;
+    const plan = await verdictAfter({ draft: "I could not finish: the first write failed.", tools: NO_CHECK_TOOLS, startedAt });
+
+    expect(plan.evidence.hasTerminalFailureReport).toBe(true);
+    expect(rowOf(plan, "the draft does not report that the run failed")?.effect).toBe("keeps the gate");
+    expect(plan.evidence.unverifiableDecision?.opens).toBe(false);
+    expect(plan.checks.find((c) => c.name === "unverifiable-failure")).toBeUndefined();
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
   });
 
   it("the registry was not measured", async () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: undefined });
 
     expect(plan.evidence.verificationTooling).toBeNull();
+    expect(rowOf(plan, "a tool that runs a check is offered")).toMatchObject({ value: "no tool list was passed in", effect: "unknown: keeps the gate" });
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
 
@@ -353,6 +483,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: ["file_write", "file_edit"] });
 
     expect(plan.evidence.verificationTooling).toBeNull();
+    expect(rowOf(plan, "a tool that runs a check is offered")?.effect).toBe("unknown: keeps the gate");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
 
@@ -361,6 +492,8 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, task });
 
     expect(plan.evidence.verificationTooling).toBeNull();
+    expect(rowOf(plan, "a tool that runs a check is offered")?.effect).toBe("unknown: keeps the gate");
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("unknown: keeps the gate");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
 
@@ -374,6 +507,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(plan.evidence.recentFailures).toEqual([expect.stringMatching(/^shell_exec: TypeError/)]);
     expect(plan.evidence.recentFailuresRetriedOk).toBe(false);
     expect(plan.evidence.recentFailureRetries).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
     expect(plan.initialDecision).toBe("continue");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
@@ -385,6 +519,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = planVerifierPipeline({ ...pipelineInputs(TASK, NOT_VERIFIED, NO_CHECK_TOOLS, project), state: unsigned });
 
     expect(plan.evidence.recentFailuresRetriedOk).toBe(false);
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
 
@@ -419,12 +554,13 @@ describe("what still waits for a verification, whatever the draft says", () => {
       logEntries: [{ level: "error", message: "lantern service crashed", timestamp: new Date().toISOString(), meta: { chatId: "chat-unverifiable" } }],
     });
 
+    expect(rowOf(plan, "no warn/error log entry is open")?.effect).toBe("keeps the gate");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
   });
 });
 
-describe("draftSaysNotVerified", () => {
+describe("draftClaimsCheckPassed: what the one ask reads, and nothing else", () => {
   it.each([
     "Not verified: nothing here can check it.",
     "The result is unverified.",
@@ -432,14 +568,17 @@ describe("draftSaysNotVerified", () => {
     "I can't verify this here.",
     "Sonuç doğrulanmadı.",
     "Bu adım doğrulanamadı.",
-  ])("reads %j as saying it is not verified", (draft) => {
-    expect(draftSaysNotVerified(draft)).toBe(true);
+    "Wrote notes/lantern.txt.",
+    "This project has no build and no tests to run.",
+    "I did not run the tests; nothing was verified.",
+  ])("reads %j as claiming no check", (draft) => {
+    expect(draftClaimsCheckPassed(draft)).toBe(false);
   });
 
-  it.each(["Wrote notes/lantern.txt.", "Verified: all three tests pass.", "This project has no build and no tests to run."])(
-    "does not read %j as saying it",
+  it.each(["Verified: all three tests pass.", "The build passed and it compiles cleanly.", "Testler geçti.", ...CLAIMING_DRAFTS])(
+    "reads %j as claiming a check passed",
     (draft) => {
-      expect(draftSaysNotVerified(draft)).toBe(false);
+      expect(draftClaimsCheckPassed(draft)).toBe(true);
     },
   );
 });
