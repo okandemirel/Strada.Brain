@@ -178,35 +178,39 @@ describe("tripwire: no provider spend is recorded where the run's Budget cannot 
 /**
  * Every production `createBudget(` site, how many it has, and how the calls its Budget pays for
  * reach it: a scope opened around the work, or a child run opened on a Budget whose parent it is.
- * `evidence` must match in `where`; `proof` is the test that measures it end to end.
+ * Each `evidence` pattern must match in its file; `proof` is the test that measures it end to end.
  */
-const BUDGET_PRODUCERS: Record<string, { count: number; how: string; where: string; evidence: RegExp; proof: string }> = {
+const BUDGET_PRODUCERS: Record<string, { count: number; how: string; evidence: Array<[string, RegExp]>; proof: string }> = {
   "src/agent-core/control/control-plane.ts": {
     count: 2,
     how: "openRun's Budget: V2AgentRunner.run opens its scope around the whole run",
-    where: "src/agent-core/runner/v2-agent-runner.ts",
-    evidence: /withRunBudget\(opened\.budget, /,
+    evidence: [["src/agent-core/runner/v2-agent-runner.ts", /withRunBudget\(opened\.budget, /]],
     proof: "src/agent-core/runner/v2-agent-runner.run-budget.test.ts",
   },
-  "src/agents/orchestrator.ts": {
+  "src/agents/orchestrator-supervisor-budget.ts": {
     count: 1,
-    how: "the supervisor run's Budget: evaluateSupervisorAdmission opens its scope around SupervisorBrain.execute",
-    where: "src/agents/orchestrator.ts",
-    evidence: /withRunBudget\(runBudget, \(\) => brain\.execute\(/,
+    how: "the supervisor run's Budget: its scope is opened around SupervisorBrain.execute",
+    evidence: [
+      ["src/agents/orchestrator-supervisor-budget.ts", /withRunBudget\(runBudget, \(\) => execute\(runBudget\)\)/],
+      ["src/agents/orchestrator.ts", /withSupervisorRunBudget\([^\n]*\(runBudget\) => brain\.execute\(/],
+    ],
     proof: "src/agents/orchestrator-supervisor-run-budget.test.ts",
   },
   "src/agents/multi/delegation/delegation-manager.ts": {
     count: 1,
     how: "a delegation's slice spends nothing itself: the delegated V2 run opens its scope on a Budget whose parent it is",
-    where: "src/agents/multi/delegation/delegation-manager.ts",
-    evidence: /childBudget: runBudget\s*\?\s*\{ slice: runBudget\.carveChild\(1, 1\), parent: runBudget \}/,
+    evidence: [
+      [
+        "src/agents/multi/delegation/delegation-manager.ts",
+        /childBudget: runBudget\s*\?\s*\{ slice: runBudget\.carveChild\(1, 1\), parent: runBudget \}/,
+      ],
+    ],
     proof: "src/agent-core/runner/v2-agent-runner.run-budget.test.ts",
   },
   "src/agent-core/control/budget.ts": {
     count: 1,
     how: "a pool holder spends nothing itself: each node run opens its scope on a Budget whose parent it is",
-    where: "src/agent-core/control/budget.ts",
-    evidence: /childBudget: \{ slice, parent: holder \}/,
+    evidence: [["src/agent-core/control/budget.ts", /childBudget: \{ slice, parent: holder \}/]],
     proof: "src/agents/orchestrator-supervisor-run-budget.test.ts",
   },
 };
@@ -223,8 +227,9 @@ describe("tripwire: no run Budget is created where the calls it pays for cannot 
       ).toEqual(Object.fromEntries(Object.entries(BUDGET_PRODUCERS).map(([file, p]) => [file, p.count])));
       const root = join(SRC, "..");
       for (const [file, producer] of Object.entries(BUDGET_PRODUCERS)) {
-        const source = readFileSync(join(root, producer.where), "utf8");
-        expect(producer.evidence.test(source), `${file}: ${producer.how} — no longer true in ${producer.where}`).toBe(true);
+        for (const [where, pattern] of producer.evidence) {
+          expect(pattern.test(readFileSync(join(root, where), "utf8")), `${file}: ${producer.how} — no longer true in ${where}`).toBe(true);
+        }
         expect(statSync(join(root, producer.proof)).isFile(), `${file}: its proof ${producer.proof} is gone`).toBe(true);
       }
     },
