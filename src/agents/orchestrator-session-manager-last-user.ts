@@ -11,6 +11,9 @@
  *    answerFor; a TaskTurn follows the answer unfolded). Every result of such a turn is a placeholder;
  *    its other blocks are the person's.
  *  - a recall the run's ledger appended (recall-ledger.ts).
+ * And the system writes plain-text user turns of its own: the gates and the replan prompt. Those
+ * are marked where they are pushed (pushSystemTurn, orchestrator-session-manager-task-turn.ts) and
+ * hold nothing of the person's.
  *
  * There is one read, and it always passes over these, so the text and the content of the person's
  * last turn come from the same turn: a reader that took the raw turn saw a tool_result as rich
@@ -18,13 +21,13 @@
  *
  * Known limit (board proposal #69): when the follower that carries the result comes after an
  * unmarked user message, the normalizer folds both into one turn behind that recorded result, and
- * the user's words there read as the system's. A TaskTurn is never folded (board #58). Gate text pushed as a plain user turn of its own still
- * reads as the user's (board proposal #48).
+ * the user's words there read as the system's. A TaskTurn is never folded (board #58).
  */
 
 import { INTERRUPTED_TOOL_RESULT } from "./conversation-normalizer.js";
 import { withoutRecalledMemory } from "./recall-ledger.js";
 import type { ConversationMessage, MessageContent } from "./providers/provider-core.interface.js";
+import { isSystemTurn } from "./orchestrator-session-manager-task-turn.js";
 
 /** A user turn carrying at least one recorded tool result: its text is the system's. */
 export function isSystemToolResultTurn(msg: ConversationMessage): boolean {
@@ -33,12 +36,12 @@ export function isSystemToolResultTurn(msg: ConversationMessage): boolean {
 }
 
 /**
- * The person's part of a user turn, or null when the turn holds nothing of theirs (the system's
- * tool-result turn, a bare interrupted answer, a turn that held only a recall). A turn that is
+ * The person's part of a user turn, or null when the turn holds nothing of theirs (a gate or the
+ * replan prompt, the system's tool-result turn, a bare interrupted answer, a turn that held only a recall). A turn that is
  * empty of itself is returned as it is.
  */
 export function personsContent(msg: ConversationMessage): string | MessageContent[] | null {
-  if (isSystemToolResultTurn(msg)) return null;
+  if (isSystemTurn(msg) || isSystemToolResultTurn(msg)) return null;
   const raw = msg.content as string | MessageContent[] | null;
   const own = Array.isArray(raw) && raw.some((b) => b.type === "tool_result")
     ? raw.filter((b) => b.type !== "tool_result")

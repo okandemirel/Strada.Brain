@@ -29,6 +29,31 @@ export function isTaskTurn(message: ConversationMessage): boolean {
   return message.role === "user" && (message as Partial<TaskTurn>).taskTurn === true;
 }
 
+/**
+ * A user-role turn the system writes for the model: a gate (loop recovery, a
+ * verifier, clarification or visibility intervention, the max-tokens
+ * continuation) or the replan prompt. The model reads it like any user turn;
+ * the read of what the user last said passes over it (personsContent), and the
+ * normalizer never folds it into a tool answer, where it would lose the mark.
+ *
+ * The mark is a field, not text, so a new gate needs no pattern to be
+ * recognised. It stays off the wire: every provider adapter builds its request
+ * turns field by field. It survives a restart (serializeSession writes the
+ * whole message) and compaction (which keeps or spreads the turns it keeps).
+ */
+export type SystemTurn = UserMessage & { readonly systemTurn: true };
+
+/** Push `content` as a {@link SystemTurn}. Every gate and replan prompt goes through here. */
+export function pushSystemTurn(messages: { push(turn: SystemTurn): unknown }, content: string): void {
+  const turn: SystemTurn = { role: "user", content, systemTurn: true };
+  messages.push(turn);
+}
+
+/** A turn written by {@link pushSystemTurn}. */
+export function isSystemTurn(message: ConversationMessage): boolean {
+  return message.role === "user" && (message as Partial<SystemTurn>).systemTurn === true;
+}
+
 /** Index of the run's task: the newest {@link TaskTurn}, or -1 when the history holds none. */
 export function lastTaskTurnIndex(messages: readonly ConversationMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {

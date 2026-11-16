@@ -509,6 +509,7 @@ function settledAfterResume(): (tasks: readonly Task[], delivered: readonly stri
  */
 const HEARTBEAT_AFTER_MS = 300;
 const SLOW_WORKER_MS = 1_800;
+const SLOW_PROVIDER_CALL_MS = 1_300;
 const slowShortScript = (): Step[] =>
   SHORT_SCRIPT.map((step, index) => (index === 1 ? { ...step, delayMs: SLOW_WORKER_MS } : step));
 
@@ -659,6 +660,23 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     // and no fallback note in the task record.
     expect(texts(run)).not.toContain(FALLBACK_NOTICE);
     expect(progressOf(run).filter((m) => m.startsWith("Supervisor failed")), "no supervisor failed").toEqual([]);
+  }, GOLDEN_RUN_TIMEOUT_MS);
+
+  it("the same recovery run reads the same when every provider call takes 1.3 s", async () => {
+    // Measured 2026-11-16 (#85): with 1.2 s or more per call, the dropped calls' log lines fell in
+    // the review cutoff's floored second and the node worker was asked for a targeted repro
+    // instead of "beta: verify". The ordinary run is too fast to meet that clock.
+    const run = await runGolden({
+      name: "recovery-slow-provider",
+      request: RECOVERY_REQUEST,
+      script: RECOVERY_SCRIPT.map((step) => ({ ...step, delayMs: (step.delayMs ?? 0) + SLOW_PROVIDER_CALL_MS })),
+      settled: settledWhenAnswered,
+    });
+
+    expect(run.violations).toEqual([]);
+    expect(run.served).toEqual(RECOVERY_SCRIPT.map((s) => s.step));
+    expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
+    expect(texts(run)).toEqual([SYSTEM_STATUS, RECOVERY_ANSWER]);
   }, GOLDEN_RUN_TIMEOUT_MS);
 
   it("a node whose write failed at run time, in a run with no check tool, finishes at once and the system says it is not verified", async () => {
