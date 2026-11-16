@@ -404,7 +404,21 @@ function buildResponse(body) {
     });
   }
 
+  // The delegated sub-agent. It reads one directory first, so the delegated
+  // run makes a real tool call: that call is what must reach learning.db as an
+  // observation under the sub-agent's own `delegation-` session (the smoke
+  // checks it), then it answers.
   if (lastUserText.includes("Task: Summarize release risk in one sentence.")) {
+    if (!lastToolResult) {
+      return buildChatCompletion({
+        text: "Looking at the level folder before judging the risk.",
+        toolCalls: [
+          makeToolCall("tool-delegate-list", "list_directory", {
+            path: "Assets/Resources/Levels",
+          }),
+        ],
+      });
+    }
     return buildChatCompletion({
       text: "Sub-agent analysis: release risk looks low for this smoke scenario.",
     });
