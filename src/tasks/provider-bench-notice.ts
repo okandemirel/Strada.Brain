@@ -38,16 +38,20 @@ export function buildProviderBenchNotice(prompt: string, event: CredentialBenchE
   const language = detectSupervisorFeedbackLanguage(prompt);
   const length = span(event.benchedForMs, language);
   if (language === "tr") {
-    const next = event.continuingOn ? `iş ${event.continuingOn} ile sürüyor` : "işi sürdürecek başka sağlayıcı kalmadı";
+    const next = event.continuingOn === undefined ? ""
+      : event.continuingOn === null ? "işi sürdürecek başka sağlayıcı kalmadı"
+        : `iş ${event.continuingOn} ile sürüyor`;
     return {
-      sentence: `${event.provider} anahtarı reddedildi, bu oturum boyunca (${length}) devre dışı; ${next}.`,
-      note: `Sağlayıcı ${event.provider} anahtar reddi nedeniyle ${length} bekletildi; ${next}. Hata: ${event.reason}`,
+      sentence: `${event.provider} anahtarı reddedildi, bu oturum boyunca (${length}) devre dışı${next && `; ${next}`}.`,
+      note: `Sağlayıcı ${event.provider} anahtar reddi nedeniyle ${length} bekletildi${next && `; ${next}`}. Hata: ${event.reason}`,
     };
   }
-  const next = event.continuingOn ? `the work continues on ${event.continuingOn}` : "no other provider is left to continue the work";
+  const next = event.continuingOn === undefined ? ""
+    : event.continuingOn === null ? "no other provider is left to continue the work"
+      : `the work continues on ${event.continuingOn}`;
   return {
-    sentence: `${event.provider}'s key was refused, so it is set aside for this session (${length}); ${next}.`,
-    note: `Provider ${event.provider} benched for ${length} after its key was refused; ${next}. Error: ${event.reason}`,
+    sentence: `${event.provider}'s key was refused, so it is set aside for this session (${length})${next && `; ${next}`}.`,
+    note: `Provider ${event.provider} benched for ${length} after its key was refused${next && `; ${next}`}. Error: ${event.reason}`,
   };
 }
 
