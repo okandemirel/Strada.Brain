@@ -9,7 +9,7 @@ Experience replay and pattern learning system. Observes agent behavior, learns r
 ```
 Agent errors / outcomes
   → ErrorLearningHooks (captures observations)
-  → LearningPipeline (processes every 5 minutes)
+  → LearningPipeline (event-driven detection per tool result; evolution on boot + hourly)
     → PatternMatcher (matches against stored patterns)
     → ConfidenceScorer (hybrid weighted 5-factor + Elo + Wilson interval)
     → LearningStorage (SQLite persistence)
@@ -35,9 +35,9 @@ SQLite database (`learning.db`) with tables:
 
 ### LearningPipeline (`pipeline/learning-pipeline.ts`)
 
-Runs two periodic timers:
-- **Detection timer** (every 5 minutes): processes unprocessed observations, detects patterns, creates/updates instincts
-- **Evolution timer** (every 1 hour): checks instincts above the auto-evolve threshold (`> 0.95`) and materializes shadow runtime artifacts plus persisted evolution proposals
+Detection is event-driven (the former 5-minute detection timer was removed): each tool result is processed as it arrives, detecting patterns and creating/updating instincts, and `start()` drains leftover unprocessed observations once. Evolution runs once at boot and then on an hourly timer:
+- **Boot pass**: `start()` does not run evolution. Bootstrap calls `tickEvolution()` once in `initializeRuntimeStateStage` (`core/bootstrap-stages/stage-runtime.ts`), after `setProjectPath()` and `setPromotionThreshold()`. It is not in `start()` because `start()` runs earlier, before the project path is known: artifacts created then carry no project scope, count as general and bypass the D41 gate, so guidance learned in project A would leak into project B.
+- **Hourly pass** (timer set in `start()`): checks instincts above the auto-evolve threshold (`> 0.95`) and materializes shadow runtime artifacts plus persisted evolution proposals. The boot pass does the same work.
 
 ### RuntimeArtifactManager (`runtime-artifact-manager.ts`)
 

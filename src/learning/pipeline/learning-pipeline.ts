@@ -1056,8 +1056,7 @@ export class LearningPipeline {
       // Seed errors are non-fatal — conventions will be seeded on next boot
     });
 
-    // Detection timer removed -- event-driven processing via handleToolResult() replaces it.
-    // Drain any leftover unprocessed observations from previous sessions on startup.
+    // Detection is event-driven (handleToolResult); drain leftovers from previous sessions now.
     void this.runDetectionBatch().catch(() => { /* non-critical startup drain */ });
 
     this.evolutionTimer = setInterval(() => this.tickEvolution(), this.config.evolutionIntervalMs);
@@ -1073,8 +1072,9 @@ export class LearningPipeline {
    * Evolution tick with error isolation. An unguarded throw in a setInterval
    * callback escapes to the process and the global uncaughtException handler
    * shuts the whole daemon down, so swallow it (non-fatal; the next tick retries).
+   * Public: bootstrap runs the boot pass after setProjectPath (project-scoped artifacts).
    */
-  private tickEvolution(): void {
+  tickEvolution(): void {
     try {
       this.runEvolution();
     } catch {
