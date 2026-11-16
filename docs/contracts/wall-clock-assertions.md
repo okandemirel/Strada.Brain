@@ -7,7 +7,7 @@ keywords: ["wall clock", "Date.now", "performance.now", "hrtime", "clock taint",
 related: ["test-integrity", "dist-readers", "clean-checkout"]
 single_producer: {"file": "scripts/ci/gates.mjs", "exports": ["DETECTORS"]}
 rules:
-  [{"id": "no-new-wall-clock-bound", "severity": "error", "text": "No test file gains an ordering assertion whose target or bound is clock-tainted (expect(Date.now() - t).toBeLessThan(N), expect(until - Date.now()).toBeGreaterThan(K) and every other arrangement), whatever fake clock is around it, unless a '// wall-clock-frozen: <why>' line right above it gives the reason and the mark is pinned in WALL_CLOCK_FROZEN_MARKS; the count per file is pinned in WALL_CLOCK_BASELINE and only goes down.", "detector": {"kind": "vitest", "file": "src/tests/wall-clock-assertions.test.ts"}},
+  [{"id": "no-new-wall-clock-bound", "severity": "error", "text": "No test file gains an ordering assertion whose target or bound is clock-tainted (expect(Date.now() - t).toBeLessThan(N), expect(until - Date.now()).toBeGreaterThan(K) and every other arrangement), whatever fake clock is around it, unless a '// wall-clock-frozen: <why>' line right above it gives the reason and the mark is counted in WALL_CLOCK_FROZEN_MARKS; the bounds per file are pinned in WALL_CLOCK_BASELINE and the marks per file in WALL_CLOCK_FROZEN_MARKS, and a commit that raises or adds a line of either needs a Test-Weakened line.", "detector": {"kind": "vitest", "file": "src/tests/wall-clock-assertions.test.ts"}},
    {"id": "repo-scan-carries-its-limit", "severity": "error", "text": "A test of a contract detector listed in scripts/ci/gates.mjs DETECTORS that walks the repository inside its body carries its own time limit instead of vitest's 30 s default.", "detector": {"kind": "vitest", "file": "src/tests/wall-clock-assertions.test.ts"}}]
 ---
 # Wall-clock assertions: a busy machine is not a failing test
@@ -45,6 +45,13 @@ Each time an agent spent its turn on the machine instead of its change.
   `scripts/ci/check-test-integrity.mjs` lists it in `PINS`, so a commit that
   raises a line or adds one is a loosened pin and needs a `Test-Weakened:`
   line.
+- **The pinned marks:** `WALL_CLOCK_FROZEN_MARKS` in the same file, the
+  number of `// wall-clock-frozen:` marks per test file. A mark leaves a bound
+  uncounted, so it loosens the ratchet as much as a raised baseline line:
+  `PINS` lists this record too (direction `up`), and a commit that adds a
+  line or raises one needs a `Test-Weakened:` line saying why the clock
+  cannot move. In this repository no person reviews a push
+  (`check-test-integrity.mjs`), so that line is the review.
 - **The limit a repository scan carries:** 120 s, `REPO_SCAN_TIMEOUT_MS` in
   `dist-readers.test.ts` and in the detector, and `120_000` in
   `clean-checkout.test.ts`, `no-require-in-esm.test.ts` and
@@ -60,8 +67,9 @@ Each time an agent spent its turn on the machine instead of its change.
   still counts: the detector does not judge whether a fake clock holds still.
 - **When a clock truly cannot move, say why where the reviewer reads it.**
   Put `// wall-clock-frozen: <why>` on the line right above the assertion,
-  with a reason of 8 characters or more, and add `file: why` to
-  `WALL_CLOCK_FROZEN_MARKS` in the detector in the same change. Check the
+  with a reason of 8 characters or more, raise the file's line in
+  `WALL_CLOCK_FROZEN_MARKS` in the detector in the same change, and give the
+  commit a `Test-Weakened:` line that says why the clock cannot move. Check the
   reason against what the line reads: fake timers replace the global
   `Date`, `performance` and `process.hrtime`, not a `performance` imported
   from `node:perf_hooks` or an `hrtime` imported by name, and a
@@ -85,8 +93,8 @@ Each time an agent spent its turn on the machine instead of its change.
 - Move a bound into a helper module, a parameter or the code under test to
   get it past the detector.
 - Mark an assertion `wall-clock-frozen` whose clock can move, or to get a new
-  bound past the detector; the mark is a claim the reviewer checks, not a
-  waiver.
+  bound past the detector, or add or raise a WALL_CLOCK_FROZEN_MARKS line
+  without a Test-Weakened line; the mark is a loosened pin, not a waiver.
 - Change a bound's number to make it pass on a loaded machine. Raising
   `toBeLessThan(500)` to `toBeLessThan(5_000)` keeps a bound and weakens a
   test; replace it instead.
@@ -185,8 +193,12 @@ detector checks the marks too:
   assertion, and is pinned here" fails on a stray mark (a reason too short,
   a mark not on the line right above a clock-tainted ordering assertion, a
   mark above an assertion with no clock in it, a mark in a file the parse
-  skips) and on a mark that is not listed in `WALL_CLOCK_FROZEN_MARKS` as
-  `file: reason`, so every new mark shows up in the diff of the detector;
+  skips) and on marks per file that differ from `WALL_CLOCK_FROZEN_MARKS`,
+  naming every mark with its reason;
+- the commit layer (`scripts/ci/check-test-integrity.mjs`, in the pre-push
+  hook and CI) reads `WALL_CLOCK_FROZEN_MARKS` from `PINS`: a new line or a
+  raised one is a loosened pin, and the commit fails without a
+  `Test-Weakened:` line, exactly as for `WALL_CLOCK_BASELINE`;
 - a trailing comment on the assertion's own line is not a mark.
 
 The fixtures: "counts an assertion under a fake clock too" holds each fake
@@ -322,13 +334,20 @@ still let through, each real under vitest 4.1.11 with a fake clock in place:
 `hrtime` imported by name (87 ms), and `new Date().getTime()` under a
 `Date.now` spy (45 ms). Every round of the exclusion had found another such
 path, so the exclusion is gone: every tainted ordering assertion counts,
-under a fake clock too, and a frozen clock is claimed with a pinned mark a
-reviewer reads. The 17 assertions the freeze had left out now count (13 in
+under a fake clock too, and a frozen clock is claimed with a mark. The 17 assertions the freeze had left out now count (13 in
 `orchestrator.test.ts`, `message-queue.test.ts:212` and `:405`,
 `auto-tiering.test.ts:585` and `:586`, all under a top-level
 `beforeEach(() => { vi.useFakeTimers(); })`), so the baseline rose from 299
 to 316. Marking them would change those test files, which is outside this
-change; a later change that marks one lowers its line.
+change; a later change that marks one lowers its `WALL_CLOCK_BASELINE` line
+and raises its `WALL_CLOCK_FROZEN_MARKS` line, with a `Test-Weakened:` line.
+
+The sixth QA round (2026-11-16) showed the mark still left no trace in the
+commit layer: a new bound with a mark and a line in the (then `file:
+reason`) list passed every gate, and `check-test-integrity.mjs` named
+nothing, because the list was not a pin and nobody reads the detector's
+diff. The marks are now a record per file in `PINS`, so a mark costs a
+`Test-Weakened:` line like any other loosening.
 
 Between the measurements, `src/common/project-write-lock.test.ts` replaced
 its bound with a counted wait (5cfabf99) and `src/security/prompt-injection.test.ts`
@@ -374,6 +393,17 @@ Mutations, each made in the tree, run, and undone:
   red, on the mark two lines above its assertion.
 - A mark pinned that the repository does not hold (`WALL_CLOCK_FROZEN_MARKS`
   given one line): "every wall-clock-frozen mark …" red.
+- The sixth QA round's probe as a commit with no trailer: a bound that
+  really waits (`await new Promise((r) => setTimeout(r, 10))`) under
+  `// wall-clock-frozen: nothing advances the clock here` in
+  `src/common/path-containment.test.ts`, with its line in
+  `WALL_CLOCK_FROZEN_MARKS`. The detector is green, as QA found;
+  `check-test-integrity.mjs --base HEAD~1 --head HEAD` exits 1 and names
+  "WALL_CLOCK_FROZEN_MARKS gained src/common/path-containment.test.ts (1)".
+  With the `PINS` line taken out it exits 0. The probe commit was dropped.
+- `WALL_CLOCK_FROZEN_MARKS` taken out of `PINS`: "treats a new or raised
+  wall-clock-frozen mark like a raised wall-clock baseline line"
+  (`src/test-integrity.test.ts`) red.
 - The for-of variable, the property writes, and the callback parameter each
   not followed: the fixture test red, and "the baseline is lowered" red.
 - `.resolves` not accepted, and `hrtime` imported by name not read: the
