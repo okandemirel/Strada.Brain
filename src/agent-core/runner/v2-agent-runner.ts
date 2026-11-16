@@ -576,12 +576,22 @@ export class V2AgentRunner implements AgentRunner {
             // retried and empty again, a fall-over whose survivor also died)
             // hangs what it spent on the error; it is spend all the same
             // (Codex 2026-09-17 #5).
-            const spent = (outcome.error as { usage?: TokenUsage } | null)?.usage;
-            if (spent && (spent.inputTokens > 0 || spent.outputTokens > 0)) {
-              const served = prepared.currentAssignment;
-              budget.debit(toBudgetUsage(spent, served.providerName, served.modelId));
-              usageTotal = mergeUsage(usageTotal, served.providerName, spent);
-              port.recordProviderUsage(served.providerName, spent, served.modelId);
+            const err = outcome.error as {
+              usage?: TokenUsage;
+              usageBy?: ReadonlyArray<{ provider: string; model?: string; usage: TokenUsage }>;
+            } | null;
+            // Billed under the member that spent it, not the one assigned to the turn.
+            const parts = (err?.usageBy ?? []).filter((p) => p.usage.inputTokens > 0 || p.usage.outputTokens > 0);
+            const served = prepared.currentAssignment;
+            const bill = parts.length > 0
+              ? parts.map((p) => ({ provider: p.provider, model: p.model ?? served.modelId, usage: p.usage }))
+              : err?.usage && (err.usage.inputTokens > 0 || err.usage.outputTokens > 0)
+                ? [{ provider: served.providerName, model: served.modelId, usage: err.usage }]
+                : [];
+            for (const b of bill) {
+              budget.debit(toBudgetUsage(b.usage, b.provider, b.model));
+              usageTotal = mergeUsage(usageTotal, b.provider, b.usage);
+              port.recordProviderUsage(b.provider, b.usage, b.model);
             }
           }
           if (outcome.kind === "threw" || outcome.kind === "empty") {
