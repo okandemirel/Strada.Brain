@@ -95,7 +95,17 @@ in `.toBeLessThan`, `.toBeLessThanOrEqual`, `.not.toBeGreaterThan` or
   (`run.ms`, `bench().insertMs`, also a shorthand `{ insertMs }`), the
   `return` of a function the file declares (`timed(text)`), through `await`,
   `as`, `!` and parentheses, and inside `Math.abs`, `round`, `floor`, `ceil`
-  or `trunc`.
+  or `trunc`;
+- an elapsed time divided by anything (an average: `total / times.length`)
+  or multiplied by anything (a unit change). A count divided by an elapsed
+  time is a rate and is not counted;
+- an entry or fold of an array of elapsed times: `times.reduce(…)`,
+  `times.reduceRight(…)`, `times.at(i)`, `times[i]`, and `Math.max`/`Math.min`
+  over them, also spread (`Math.max(...times)`). An array holds what its
+  literal holds (spreads followed) and every value pushed onto it by name
+  (`times.push(performance.now() - s)`) in the file it was declared in. The
+  `hnsw-performance` average, `searchTimes.reduce(…) / searchTimes.length`
+  returned as `searchTimeMs`, is seen this way.
 
 The clock is the global `Date` (a parameter or variable named `Date` is not)
 or `performance`: global, imported from `node:perf_hooks` under any name
@@ -118,12 +128,19 @@ sits in a `describe` that has either.
 
 ## What it cannot see
 
-- **A duration the code under test measures.** `tracker.getTaskDurationMs()`,
-  `snap.timeSinceLastMutationMs` and `result.downtimeMs` come from production
-  code's own clock read. Today three such bounds exist and are not counted:
-  `src/agents/iteration-health-tracker.test.ts:159`,
-  `src/agents/autonomy/progress-assessment.test.ts:174` and
-  `src/identity/crash-recovery.test.ts:22`.
+- **A duration the code under test measures.** The clock read is in
+  production code, so the test's own expression holds none. Six such upper
+  bounds exist on main at 9f662581 and are not counted:
+  `src/agents/iteration-health-tracker.test.ts:159` (`getTaskDurationMs()`),
+  `src/agents/autonomy/progress-assessment.test.ts:174`
+  (`timeSinceLastMutationMs`), `src/identity/crash-recovery.test.ts:22`
+  (`downtimeMs`), `src/agents/memory-refresher.test.ts:698` (`durationMs`,
+  `Date.now() - start` in `memory-refresher.ts`),
+  `src/dashboard/metrics.test.ts:95` (`uptime`) and
+  `src/agent-core/runner/v2-agent-runner.test.ts:1304`
+  (`accumulatedSilentMs()`). The list comes from a scan (Calibration) of every
+  upper-bound `expect` whose target ends in a time-like name; a production
+  duration under another name would not be on it.
 - **A clock read or bound in another module.** Only functions the test file
   declares are followed. A timing helper imported from another module, or an
   `expect` inside a helper that takes the elapsed time as a parameter
@@ -145,9 +162,14 @@ sits in a `describe` that has either.
   name (`expect(x)["toBeLessThan"]`), and chai's `.below()`. None is used
   for a duration today.
 - **Other ways to carry a value:** array destructuring, a nested or rest
-  pattern, an element access (`run["ms"]`), a spread, a class field, and a
-  `Map` or array entry. A function is followed by its name in its own scope,
-  so a function passed as a value is not.
+  pattern, a property read by key (`run["ms"]`), an object spread, a class
+  field and a `Map` entry. An array filled other than by a literal or
+  `name.push(…)` (`.map(…)`, `concat`, `unshift`, `arr[i] = x`, or pushed
+  through an alias), folded other than as listed (`sort()[0]`, a loop that
+  sums with `total += x`), and the sum of two elapsed times written out
+  (`a + b`). A function is followed by its name in its own scope, so a
+  function passed as a value is not. The scan below found none of these
+  holding a duration today.
 - **An order of two clock reads,** `expect(firedAt).toBeLessThan(finishedAt)`
   (`framework-git-fallback.test.ts:132`), bounds no duration and is not
   counted.
@@ -171,28 +193,49 @@ sits in a `describe` that has either.
 
 ## Calibration
 
-Measured on 2026-11-11 on main at 78500e4b, with this change's detector:
-1,129 test files in vitest's include (1,130 with the detector); 60 wall-clock upper bounds in 41 files,
-all pinned in `WALL_CLOCK_BASELINE`. By form:
+Measured on 2026-11-16 on main at 9f662581, with this change's detector:
+63 wall-clock upper bounds in 41 files, all pinned in `WALL_CLOCK_BASELINE`.
+By form:
 
-- 26 written out as `expect(Date.now() - t)`, 3 as `expect(performance.now() - t)`;
+- 25 written out as `expect(Date.now() - t)`, 4 as `expect(performance.now() - t)`;
 - 17 through a name declared with the difference
-  (`const elapsed = Date.now() - t`; the discord and slack rate limiters,
+  (`const elapsed = Date.now() - t`; the discord rate limiter,
   `pattern-matcher-bounds`, `learning-queue`, `process-runner`,
   `canvas-generator`, `phase2.acceptance` with `performance` from
   `node:perf_hooks`, and others);
 - 4 destructured from a local timing function (`csharp-parser` 2,
   `search-glob-cost` 2), 5 read as a property of the object one returns
-  (`search-glob-cost` 2, `hnsw-performance` 3), 2 returned by one
-  (`campaign-intake`), 1 inside `Math.abs` (`task-manager`);
+  (`search-glob-cost` 2, `hnsw-performance` `insertTimeMs` 3), 3 as the
+  average of a pushed array returned as a property (`hnsw-performance`
+  `searchTimeMs`, the narrowest bounds in the tree at 10, 20 and 50 ms),
+  2 returned by a local function (`campaign-intake`), 1 inside `Math.abs`
+  (`task-manager`);
 - 2 "stamp minus start" (`claude-seat-review.test.ts:581`,
   `chain-detector.test.ts:166`).
 
+The first measurement (2026-11-11, main at 78500e4b) found 60 in 41 files.
+Between the two, `src/common/project-write-lock.test.ts` replaced its bound
+with a counted wait (5cfabf99), so its line is gone, and
+`src/security/prompt-injection.test.ts` gained
+`expect(performance.now() - started).toBeLessThan(100)` (fef425fd) before
+this rule was in force; it is pinned, and replacing it is separate work. QA
+then found the three `searchTimeMs` bounds the first detector missed; the
+array and division forms above were added for them.
+
 The orchestrator's census before this change counted 26 of the first form
-with a line search; the parse finds the other 34. Every upper-bound
-`expect` in a file with a clock read was listed by a looser name-taint probe
-and read by hand: the ones not counted are the production-measured,
-time-left, order and non-time bounds named above.
+with a line search; the parse finds the rest. Two scans checked what is not
+counted. The first listed every upper-bound `expect` in a file with a clock
+read by a looser name-taint probe, read by hand. The second parsed every
+test file that names an upper or lower matcher and listed each upper-bound
+`expect` the detector does not count whose target ends in a time-like name
+(`duration`, `elapsed`, `uptime`, `took`, `latency`, `since`, `ms`, `time`,
+`age`, `wait`, `delay`, `left`, `remaining`, `spent`, `cost`) or spells
+`now(`: 14 hits. Six are the production-measured durations above; the rest
+are a time left (`provider-outage.test.ts:55`,
+`quota-reset-from-message.test.ts:28`, `rate-limiter.test.ts:53`), a fake
+clock (`failure-ledger.incident-regression.test.ts:86`), an order of
+timestamps (`metrics.test.ts:250`, `server.test.ts:1166`) and money
+(`control-plane.test.ts:277`, `supervisor-brain.test.ts:1079`).
 
 The limit rule found two tests in DETECTORS that walked the repository with
 no limit: `src/no-require-in-esm.test.ts:30` (walks `src/`) and
@@ -219,6 +262,9 @@ Mutations, each made in the tree, run, and undone:
   red; restored, green.
 - The `120_000` taken off `no-require-in-esm.test.ts`: the limit rule red,
   naming `src/no-require-in-esm.test.ts:30`; restored, green.
+- The division and the array folds taken out of the detector: the fixture
+  test red, and "the baseline is lowered" red with
+  `hnsw-performance.test.ts: baseline 6, now 3`; restored, green.
 - `pinLoosening` of `scripts/ci/check-test-integrity.mjs` on a
   `WALL_CLOCK_BASELINE` with one line raised (2 → 3) and one file added
   names both; with a line lowered (2 → 1) it names nothing.
