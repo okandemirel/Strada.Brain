@@ -250,6 +250,45 @@ export async function judgeFixCommit({ repo = REPO, sha, run = runVitest, nodeMo
 
 /* ---- command line ------------------------------------------------------- */
 
+/**
+ * What clears a finding. Each fix commit is judged alone, by its own diff and
+ * its own message, so a test or a Fix-Unguarded: line in a LATER commit clears
+ * nothing: the fix commit itself has to carry it. The range is what is not on
+ * main yet, so that commit can still be rewritten before the push; the
+ * commands below need no editor. A branch already pushed is not force-pushed.
+ *
+ * @param {Array<{ sha: string; subject: string }>} unguarded
+ */
+export function remedy(unguarded) {
+  const lines = [
+    "A fix commit above has no test that fails without it. Each fix commit is judged alone, by its own",
+    "diff and its own message: a test or a Fix-Unguarded: line in a later commit clears nothing. These",
+    "commits are not on main yet, so put the test into the fix commit itself before you push. Stage the",
+    "test, then:",
+  ];
+  for (const { sha } of unguarded) {
+    lines.push(`  git commit --fixup=${sha.slice(0, 12)} && git rebase --autosquash ${sha.slice(0, 12)}~1`);
+  }
+  lines.push(
+    "When the fix truly cannot be tested, that commit's own message says why in a line",
+    "  Fix-Unguarded: <why no test can tell the fixed code from the old>",
+    "which you add with an amend! commit, whose body becomes the fix commit's whole message:",
+  );
+  for (const { sha } of unguarded) {
+    const at = sha.slice(0, 12);
+    lines.push(
+      `  { git log -1 --format='amend! %s%n%n%B' ${at}; echo 'Fix-Unguarded: <why>'; } > "$TMPDIR/msg" &&`,
+      `    git commit --allow-empty -F "$TMPDIR/msg" && git rebase --autosquash ${at}~1`,
+    );
+  }
+  lines.push(
+    "Never force-push a branch you already pushed: push the rewritten commits to a new branch.",
+    "docs/contracts/fix-needs-a-red-test.md",
+  );
+  return lines.join("\n");
+}
+
+
 function argValue(name) {
   const i = process.argv.indexOf(name);
   return i === -1 ? undefined : process.argv[i + 1];
@@ -280,8 +319,8 @@ if (isDirectExecution()) {
     shas = git(repo, ["rev-list", "--reverse", "--no-merges", `${base}..${head}`]).split("\n").filter(Boolean);
   }
   let fixes = 0;
-  let failed = 0;
   let seconds = 0;
+  const unguarded = [];
   for (const sha of shas) {
     const subject = git(repo, ["log", "-1", "--format=%s", sha]).trim();
     if (!FIX_SUBJECT.test(subject)) continue;
@@ -292,19 +331,13 @@ if (isDirectExecution()) {
     if (!verdict.judged) console.log(`    not judged: ${verdict.why}`);
     else if (verdict.findings.length === 0) console.log(`    guarded (${verdict.seconds}s)`);
     else {
-      failed++;
+      unguarded.push({ sha, subject });
       for (const f of verdict.findings) console.error(`    - ${f}`);
     }
   }
-  console.log(`check-fix-guarded: ${shas.length} commit(s), ${fixes} fix commit(s), ${failed} unguarded, ${seconds}s of test runs`);
-  if (failed > 0) {
-    console.error(
-      "A fix commit above has no test that fails without it. Write a test that turns red when the named\n" +
-        "file is put back as it was, in a new commit (a pushed commit is not amended). When the fix truly\n" +
-        "cannot be tested, say why in a line\n" +
-        "  Fix-Unguarded: <why no test can tell the fixed code from the old>\n" +
-        "of that commit's message. docs/contracts/fix-needs-a-red-test.md",
-    );
+  console.log(`check-fix-guarded: ${shas.length} commit(s), ${fixes} fix commit(s), ${unguarded.length} unguarded, ${seconds}s of test runs`);
+  if (unguarded.length > 0) {
+    console.error(remedy(unguarded));
     process.exitCode = 1;
   }
 }

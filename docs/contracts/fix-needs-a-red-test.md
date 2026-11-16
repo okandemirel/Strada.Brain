@@ -51,9 +51,10 @@ a gate that runs before the push.
 4. **The exemptions,** each a stated rule:
    - **No source code changed:** docs only, config only, tests only, or
      types and comments only. Nothing can be reverted.
-   - **`Fix-Unguarded: <a sentence>`** in the commit's message (ten or more
-     characters after the colon, like `Test-Weakened:`). The sentence is the
-     review: there is no other.
+   - **`Fix-Unguarded: <a sentence>`** in that fix commit's own message (ten
+     or more characters after the colon, like `Test-Weakened:`). The sentence
+     is the review: there is no other. The line in a later commit's message
+     does not count.
 5. **A test to run.** The commit must touch (add, change or rename) a test
    file vitest runs: `src/**/*.test.ts` or `tests/**/*.test.ts`. Without one
    it is a finding.
@@ -64,6 +65,11 @@ a gate that runs before the push.
    renamed one goes back to its old path), the same test files run, and the
    tree is restored. A file whose revert leaves them green is named. The
    worktree is removed afterwards.
+
+**Each fix commit is judged alone,** by its own diff and its own message. A
+test or a `Fix-Unguarded:` line that arrives in a later commit clears
+nothing: the fix commit is still a commit that, checked out on its own,
+fixes something no test of its own reaches.
 
 Only the test files the commit touched run: one vitest run, plus one per
 source file whose code changed, per fix commit. A branch without fix
@@ -81,8 +87,20 @@ commits costs nothing.
 - **When a fix truly cannot be tested** (a platform the machine does not
   have, a timing fix that only load shows), put
   `Fix-Unguarded: <why no test can tell the fixed code from the old>` in that
-  commit's message. A pushed commit is never amended: add the test in a new
-  commit, or revert and recommit with the line.
+  fix commit's own message.
+- **When the gate names a commit, rewrite that commit, not the branch's
+  future.** The gate judges `<base>..HEAD`, the commits that are not on main
+  yet, so the fix commit can still be rewritten before the push. The gate
+  prints the commands for each commit it names, and they need no editor:
+  - the test: stage it, then
+    `git commit --fixup=<sha> && git rebase --autosquash <sha>~1`;
+  - the line: an `amend!` commit whose body is the fix commit's message with
+    the line added, made from `git log -1 --format='amend! %s%n%n%B' <sha>`,
+    then the same rebase.
+
+  A follow-up commit with the test is not enough (a fixture pins this). A
+  commit already on main is never amended, and a branch already pushed is
+  never force-pushed: push the rewritten commits to a new branch.
 - **Do not call a non-fix a fix.** A refactor, a doc change or a feature is
   not judged; name it for what it is.
 
@@ -92,6 +110,7 @@ commits costs nothing.
 - Satisfy `Fix-Unguarded:` with a word. It needs a sentence a reviewer can
   check.
 - Rename a fix to `chore:` or `refactor:` to get past the gate.
+- Clear a finding with a later commit, or force-push a rewritten branch.
 - Push with `--no-verify` or skip the gate: `node scripts/ci/gates.mjs` runs
   it, and its summary is the evidence QA reads.
 
@@ -156,7 +175,7 @@ measurement, each a rule above and a fixture in the detector: a type-only edit
 averages between 6 and 128: a median of 15 s per guarded commit and 207 s
 for the largest (`7ee94099`, 36 files, 19 reverts). A branch without fix
 commits adds nothing to the "fix guarded" gate. The detector's own test runs
-eight child vitests on a fixture repository and adds 16–20 s to the "contract
+ten child vitests on a fixture repository and adds 16–20 s to the "contract
 detectors" gate.
 
 **Mutations**, each made in the script, run against the detector, and undone:
@@ -169,4 +188,9 @@ detectors" gate.
 - type-only changes not recognised: the exemption case and the command case red;
 - the first run with the fix in place skipped: "names a fix whose own test
   fails with the fix in place" red;
-- deleted files reverted: the deleted-file case red.
+- deleted files reverted: the deleted-file case red;
+- the remedy message of the first version put back ("in a new commit"): "judges
+  each fix commit by itself …" red (QA, 2026-11-16: that remedy could never
+  turn the gate green);
+- the printed fixup without its `rebase --autosquash`: the same case red, as
+  the fix commit stays unguarded.

@@ -94,6 +94,7 @@ beforeAll(() => {
       "src/left.ts": "export const left = (s: string): string => s;\n",
       "src/right.ts": "export const right = (s: string): string => s;\n",
       "src/broken.ts": "export const half = (n: number): number => n;\n",
+      "src/late.ts": "export const late = (n: number): number => n;\n",
     },
     "chore: the buggy start",
   );
@@ -148,6 +149,12 @@ beforeAll(() => {
     "fix(shout): back to plain\n\nFix-Unguarded: ok\n",
   );
   shas.notFix = commit({ "src/add.ts": "export const add = (a: number, b: number): number => a + b;\n" }, "feat(add): add is plain again");
+  // A fix with no test, then the test in a commit of its own: the fix commit is still judged alone.
+  shas.lateFix = commit({ "src/late.ts": "export const late = (n: number): number => n + 1;\n" }, "fix(late): late adds one");
+  shas.lateTest = commit(
+    { "src/late.test.ts": testOf(`import { late } from "./late.js";\nit("adds one", () => { expect(late(1)).toBe(2); });`) },
+    "test(late): late adds one",
+  );
 });
 
 afterAll(() => {
@@ -315,6 +322,56 @@ describe("a fix commit carries a test that turns red when the fix is undone (doc
     expect(green.status, green.stdout + green.stderr).toBe(0);
     expect(green.stdout).toContain("5 fix commit(s), 0 unguarded");
   });
+
+  it(
+    "judges each fix commit by itself: a test in a later commit clears nothing, and the rewrite the message prints does",
+    () => {
+      const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")));
+      const run = (base: string, head: string) =>
+        spawnSync(process.execPath, [SCRIPT, "--base", base, "--head", head], { cwd: fixture, env, encoding: "utf8" });
+      const before = `${shas.lateFix}~1`;
+      const red = run(before, shas.lateTest!);
+      expect(red.status).toBe(1);
+      expect(red.stderr).toContain("changes src/late.ts and touches no test file");
+      expect(red.stderr).toContain("a test or a Fix-Unguarded: line in a later commit clears nothing");
+      expect(red.stderr).not.toContain("in a new commit");
+
+      // Each remedy exactly as printed, with no editor.
+      const shell = (line: string) => {
+        const r = spawnSync("sh", ["-c", line], {
+          cwd: fixture,
+          encoding: "utf8",
+          env: {
+            ...env,
+            GIT_EDITOR: "false",
+            GIT_AUTHOR_NAME: "fixture",
+            GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+            GIT_COMMITTER_NAME: "fixture",
+            GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+          },
+        });
+        expect(r.status, `${line}\n${r.stderr}`).toBe(0);
+      };
+      const printed = red.stderr.split("\n").map((l) => l.trim());
+      const fixup = printed.find((l) => l.startsWith("git commit --fixup="))!;
+      git(fixture, ["checkout", "-q", "-B", "with-test", shas.lateTest!]);
+      git(fixture, ["reset", "-q", "--soft", "HEAD~1"]); // the test, staged
+      shell(fixup);
+      const tested = run(before, "HEAD");
+      expect(tested.status, tested.stdout + tested.stderr).toBe(0);
+      expect(tested.stdout).toContain("1 fix commit(s), 0 unguarded");
+
+      const amend = printed.findIndex((l) => l.startsWith("{ git log -1 --format='amend!"));
+      git(fixture, ["checkout", "-q", "-B", "with-line", shas.lateTest!]);
+      shell(`${printed[amend]} ${printed[amend + 1]}`.replace("<why>", "no machine here can tell the two apart, said for the fixture."));
+      const said = run(before, "HEAD");
+      expect(said.status, said.stdout + said.stderr).toBe(0);
+      expect(said.stdout).toContain("1 fix commit(s), 0 unguarded");
+      expect(git(fixture, ["log", "-1", "--format=%B", "HEAD~1"])).toMatch(/^fix\(late\): late adds one\n[\s\S]*^Fix-Unguarded: no machine/m);
+      git(fixture, ["checkout", "-q", "main"]);
+    },
+    CHILD_RUNS_TIMEOUT_MS,
+  );
 
   it("gates.mjs runs this script over the branch, and a change to the script is governed", async () => {
     const gates = readFileSync(join(REPO, "scripts/ci/gates.mjs"), "utf8");
