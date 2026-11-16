@@ -189,13 +189,6 @@ export interface InteractiveEndTurnContext extends EndTurnCoreContext {
   readonly profileLanguage: string | undefined;
   readonly progressAssessmentEnabled?: boolean;
   readonly controlLoopTracker?: ControlLoopTracker;
-  // Consensus-related — type-erased to avoid coupling to ProviderCapabilities/ConfidenceEstimator
-  readonly runTextConsensusIfCritical: (params: {
-    agentState: AgentState;
-    responseText: string;
-    prompt: string;
-    providerName: string;
-  }) => Promise<void>;
 }
 
 // ─── Private helper: applyBgLoopRecoveryResult ─────────────────────────────────
@@ -837,20 +830,6 @@ export async function handleInteractiveEndTurn(
     pushContinuationMessages(ctx, verifierIntervention.gate);
     logger.debug("Verifier pipeline triggered replan", { chatId: ctx.chatId });
     return { flow: "continue", newState };
-  }
-
-  // 3. Consensus for text-only responses on critical tasks
-  if (ctx.responseText) {
-    try {
-      await ctx.runTextConsensusIfCritical({
-        agentState,
-        responseText: ctx.responseText,
-        prompt: ctx.prompt,
-        providerName: ctx.currentAssignment.providerName,
-      });
-    } catch {
-      // Consensus failure is non-fatal
-    }
   }
 
   // 4. Visibility decision pipeline
