@@ -12,7 +12,7 @@
  * What counts is decided by the clock-taint analysis in
  * ./wall-clock-assertions-taint.ts: an ordering matcher whose target or bound
  * comes from a real clock read, except an order of two bare clock values and an
- * assertion under a fake clock. The repository already holds the bounds counted
+ * assertion whose every clock is proven frozen when it runs. The repository already holds the bounds counted
  * in WALL_CLOCK_BASELINE, file by file: this is a RATCHET. No file may gain
  * one, and a file whose count drops lowers its line here in the same change, so
  * the number only goes down. Raising a line is a loosened pin for
@@ -45,7 +45,7 @@ const { testFiles } = (await import(pathToFileURL(path.join(REPO, "scripts", "ci
 
 /**
  * Clock-tainted ordering assertions per test file, as this detector sees them. Measured
- * on main at 40e73868 (2026-11-16): 286 in 101 files. Lower a count when you
+ * on main at 1d0d374a (2026-11-16): 299 in 103 files. Lower a count when you
  * replace a bound with fake timers or a counted event; delete its line at
  * zero. Never raise one, never add one.
  */
@@ -83,7 +83,7 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/campaign/campaign-intake.test.ts": 2,
   "src/campaign/campaign-ledger-lifecycle.test.ts": 3,
   "src/campaign/campaign-manager-dispose.test.ts": 1,
-  "src/campaign/campaign-manager.test.ts": 37,
+  "src/campaign/campaign-manager.test.ts": 39,
   "src/campaign/scope-settle-manager.test.ts": 4,
   "src/channels/discord/rate-limiter.test.ts": 4,
   "src/channels/slack/__tests__/rate-limiter.test.ts": 3,
@@ -105,8 +105,8 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/identity/crash-recovery.test.ts": 2,
   "src/identity/identity-state.test.ts": 2,
   "src/intelligence/csharp-parser.test.ts": 2,
-  "src/intelligence/framework/framework-git-fallback.test.ts": 1,
-  "src/learning/chains/chain-detector.test.ts": 4,
+  "src/intelligence/framework/framework-git-fallback.test.ts": 2,
+  "src/learning/chains/chain-detector.test.ts": 6,
   "src/learning/chains/chain-parallel.test.ts": 2,
   "src/learning/exposure-coverage.test.ts": 1,
   "src/learning/exposure-time.test.ts": 3,
@@ -119,8 +119,9 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/learning/pipeline/learning-queue.test.ts": 1,
   "src/learning/scoring/confidence-scorer.test.ts": 15,
   "src/learning/storage/learning-storage.test.ts": 2,
+  "src/memory/unified/agentdb-adapter.test.ts": 1,
   "src/memory/unified/agentdb-decay-writes.test.ts": 2,
-  "src/memory/unified/agentdb-retrieval.test.ts": 10,
+  "src/memory/unified/agentdb-retrieval.test.ts": 16,
   "src/memory/unified/agentdb-tiering.test.ts": 6,
   "src/memory/unified/consolidation-engine.test.ts": 4,
   "src/rag/chunker.test.ts": 1,
@@ -146,6 +147,7 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/tasks/task-manager.test.ts": 1,
   "src/tasks/task-storage.test.ts": 1,
   "src/tests/integration/golden-run-failover.test.ts": 2,
+  "src/tests/integration/rag-search.test.ts": 1,
   "src/utils/process-runner.test.ts": 4,
   "src/vault/canvas-generator.test.ts": 1,
   "src/vault/glob-match.test.ts": 1,
@@ -351,12 +353,18 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
     want: entries.flatMap(([, form], i) => (form ? [`${i + 1} ${form}`] : [])),
   });
   const found = (root: string): string[] => wallClockBounds(root, testFiles(root)).map((b) => `${b.line} ${b.form}`);
+  const foundIn = (root: string): string[] =>
+    wallClockBounds(root, testFiles(root))
+      .map((b) => `${b.file}:${b.line} ${b.form}`)
+      .sort((x, y) => x.localeCompare(y, "en", { numeric: true }));
 
   it("counts an ordering assertion with a clock-tainted side, whatever its direction or arrangement", () => {
     const { body, want } = spec([
       ['import { performance as perf } from "node:perf_hooks";', null],
       ['import * as hooks from "node:perf_hooks";', null],
       ['import proc from "node:process";', null],
+      ['import { hrtime } from "node:process";', null],
+      ['import os from "node:os";', null],
       ["const t = Date.now();", null],
       ["expect(Date.now() - t).toBeLessThan(500);", "target"],
       ['expect(Date.now() - t, "late").toBeLessThanOrEqual(500);', "target"],
@@ -379,20 +387,39 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
       ["const times: number[] = [];", null],
       ["for (const q of queries) { const s = performance.now(); search(q); times.push(performance.now() - s); }", null],
       ["expect(times.reduce((a, b) => a + b, 0) / times.length).toBeLessThan(10);", "target"],
+      ["for (const ms of times) expect(ms).toBeLessThan(10);", "target"],
+      ["times.forEach((ms) => expect(ms).toBeLessThan(10));", "target"],
       ["async function measured() { const s = Date.now(); await work(); return { result: 1, ms: Date.now() - s }; }", null],
       ["const { ms } = await measured();", null],
       ["expect(ms).toBeLessThan(500);", "target"],
       ["const run = await measured();", null],
       ["expect(run.ms).toBeLessThan(500);", "target"],
       ['expect(run["ms"]).toBeLessThan(500);', "target"],
+      ["await expect(measured().then((r) => r.ms)).resolves.toBeLessThan(500);", "target"],
       ["let took = 0;", null],
       ["took = Date.now() - t;", null],
       ["expect(took).toBeLessThan(500);", "target"],
+      ["let lap = { ms: 0 };", null],
+      ["lap = { ms: Date.now() - t };", null],
+      ["expect(lap.ms).toBeLessThan(500);", "target"],
+      ["const stats = { elapsed: 0 };", null],
+      ["stats.elapsed = Date.now() - t;", null],
+      ["expect(stats.elapsed).toBeLessThan(500);", "target"],
+      ["const holder = { times: [] as number[] };", null],
+      ["const kept = holder.times;", null],
+      ["kept.push(Date.now() - t);", null],
+      ["expect(holder.times[0]).toBeLessThan(500);", "target"],
       ["const [first] = [Date.now() - t];", null],
       ["expect(first).toBeLessThan(500);", "target"],
+      ["const { inner: { ms: deep } } = { inner: { ms: Date.now() - t }, ms: 0 };", null],
+      ["expect(deep).toBeLessThan(500);", "target"],
       ["expect(msSinceFailure(t + 90_000)).toBeLessThan(95_000);", "target"],
       ["const start = proc.hrtime.bigint();", null],
       ["expect(process.hrtime.bigint() - start).toBeLessThan(5_000_000n);", "target"],
+      ["expect(hrtime.bigint() - start).toBeLessThan(5_000_000n);", "target"],
+      ["expect(hrtime()[1]).toBeLessThan(5);", "target"],
+      ["expect(process.uptime()).toBeLessThan(5);", "target"],
+      ["expect(os.uptime()).toBeGreaterThan(5);", "target"],
       ["expect(new Date().getTime() - t).toBeLessThan(500);", "target"],
       ["expect(+new Date() - t).toBeLessThan(500);", "target"],
       ["expect(Math.abs(Date.now() - DAY - since)).toBeLessThan(500);", "target"],
@@ -401,13 +428,69 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
       ['expect(laps.get("a")).toBeLessThan(500);', "target"],
       ["const end = Date.now();", null],
       ["expect(end).toBeLessThan(t + 500);", "both"],
-      ['it("fakes timeouts only", () => { vi.useFakeTimers({ toFake: ["setTimeout"] }); expect(Date.now() - t).toBeLessThan(500); });', "target"],
-      ['it("real again", () => { vi.useFakeTimers(); vi.useRealTimers(); expect(Date.now() - t).toBeLessThan(500); });', "target"],
     ]);
     expect(found(fixtureRoot({ "src/seen.test.ts": body }))).toEqual(want);
   });
 
-  it("leaves out an order of two bare clock values, an assertion under a fake clock, and one with no clock in it", () => {
+  it("counts an assertion whose clock is not proven frozen when it runs", () => {
+    const { body, want } = spec([
+      ['describe("a", () => { beforeEach(() => { vi.useFakeTimers(); }); it("real again", () => { vi.useRealTimers(); expect(Date.now() - 1).toBeLessThan(5); }); });', "target"],
+      ['it("spy passes through", () => { vi.spyOn(Date, "now"); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("advancing", () => { vi.useFakeTimers({ shouldAdvanceTime: true }); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("all restored", () => { vi.spyOn(Date, "now").mockReturnValue(5); vi.restoreAllMocks(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("spy restored", () => { const spy = vi.spyOn(Date, "now").mockReturnValue(5); spy.mockRestore(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("performance faked, Date read", () => { vi.useFakeTimers({ toFake: ["performance"] }); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("timeouts faked", () => { vi.useFakeTimers({ toFake: ["setTimeout"] }); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("Date faked, performance read", () => { vi.setSystemTime(5); expect(performance.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("once", () => { vi.spyOn(Date, "now").mockReturnValueOnce(5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("reads through", () => { vi.spyOn(Date, "now").mockImplementation(() => realNow() + 5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("ticking", () => { vi.useFakeTimers(); vi.setTimerTickMode("interval", 10); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ["function unfreeze() { vi.useRealTimers(); }", null],
+      ['it("undone by a helper", () => { vi.useFakeTimers(); unfreeze(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("maybe faked", () => { if (flag) vi.useFakeTimers(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("loop", () => { vi.useFakeTimers(); for (const n of [1, 2]) { expect(Date.now() - n).toBeLessThan(5); vi.useRealTimers(); } });', "target"],
+      ['it("callback", () => { vi.useFakeTimers(); later(() => expect(Date.now() - 1).toBeLessThan(5)); vi.useRealTimers(); });', "target"],
+      ['it("options unread", () => { vi.useFakeTimers(OPTIONS); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("set while advancing", () => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("uptime", () => { vi.useFakeTimers(); expect(process.uptime() - 1).toBeLessThan(5); });', "target"],
+    ]);
+    const inHook = spec([['beforeEach(() => { vi.useFakeTimers(); expect(Date.now() - 1).toBeLessThan(5); });', "target"]]);
+    const sibling = spec([
+      ['describe("held", () => {', null],
+      ["  beforeAll(() => { vi.useFakeTimers(); });", null],
+      ['  it("first", () => { vi.useRealTimers(); });', null],
+      ['  it("second", () => { expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ["});", null],
+    ]);
+    const afterEachUndoes = spec([
+      ['describe("held", () => {', null],
+      ["  beforeAll(() => { vi.useFakeTimers(); });", null],
+      ["  afterEach(() => { vi.useRealTimers(); });", null],
+      ['  it("x", () => { expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ["});", null],
+    ]);
+    const innerAfterAll = spec([
+      ["beforeAll(() => { vi.useFakeTimers(); });", null],
+      ['describe("inner", () => { afterAll(() => { vi.useRealTimers(); }); it("a", () => {}); });', null],
+      ['it("later", () => { expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+    ]);
+    const root = fixtureRoot({
+      "src/real.test.ts": body,
+      "src/sibling.test.ts": sibling.body,
+      "src/after-each.test.ts": afterEachUndoes.body,
+      "src/inner-after-all.test.ts": innerAfterAll.body,
+      "src/in-hook.test.ts": inHook.body,
+    });
+    expect(foundIn(root)).toEqual([
+      ...afterEachUndoes.want.map((w) => `src/after-each.test.ts:${w}`),
+      ...inHook.want.map((w) => `src/in-hook.test.ts:${w}`),
+      ...innerAfterAll.want.map((w) => `src/inner-after-all.test.ts:${w}`),
+      ...want.map((w) => `src/real.test.ts:${w}`),
+      ...sibling.want.map((w) => `src/sibling.test.ts:${w}`),
+    ]);
+  });
+
+  it("leaves out an order of two bare clock values, an assertion with every clock frozen, and one with no clock in it", () => {
     const root = fixtureRoot({
       "src/excluded.test.ts": [
         'import { performance as fake } from "./fake-clock.js";',
@@ -424,27 +507,46 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
         "expect(entry.cooldownUntil).toBeLessThan(time + HOUR);",
         "function f(Date: { now(): number }) { expect(Date.now() - 5).toBeLessThan(5); }",
         "expect(fake.now() - 5).toBeLessThan(5);",
-        'it("faked", () => { vi.useFakeTimers(); const t0 = Date.now(); expect(Date.now() - t0).toBeLessThan(5); });',
-        'it("set", () => { vi.setSystemTime(5); expect(Date.now() - 1).toBeLessThan(5); });',
-        'it("spied", () => { vi.spyOn(Date, "now").mockReturnValue(5); expect(Date.now() - 1).toBeLessThan(5); });',
-        'it("spied perf", () => { vi.spyOn(performance, "now").mockReturnValue(5); expect(performance.now() - 1).toBeLessThan(5); });',
-        'describe("hooked", () => { beforeEach(() => { vi.useFakeTimers(); }); it("x", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
-        'describe("plain", () => { vi.useFakeTimers(); it("y", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
       ].join("\n"),
+      "src/frozen.test.ts": [
+        'describe("hooked", () => { beforeEach(() => { vi.useFakeTimers(); }); it("x", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
+        'describe("arrow hook", () => { beforeEach(() => vi.useFakeTimers()); it("x", () => { expect(performance.now() - 1).toBeLessThan(5); }); });',
+        'describe("undone after", () => { beforeEach(() => { vi.useFakeTimers(); }); afterEach(() => { vi.useRealTimers(); }); it("a", () => { vi.useRealTimers(); }); it("b", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
+        'it("faked", () => { vi.useFakeTimers(); const t0 = Date.now(); expect(Date.now() - t0).toBeLessThan(5); vi.useRealTimers(); });',
+        'it("Date only", () => { vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: false }); expect(Date.now() - 1).toBeLessThan(5); });',
+        'it("hrtime", () => { vi.useFakeTimers(); expect(process.hrtime.bigint() - 1n).toBeLessThan(5n); });',
+        'it("set", () => { vi.setSystemTime(5); expect(Date.now() - 1).toBeLessThan(5); });',
+        'it("set on fake", () => { vi.useFakeTimers().setSystemTime(5); expect(performance.now() - 1).toBeLessThan(5); });',
+        'it("spied", () => { vi.spyOn(Date, "now").mockReturnValue(5); expect(Date.now() - 1).toBeLessThan(5); });',
+        'it("spied perf", () => { vi.spyOn(performance, "now").mockImplementation(() => clock); expect(performance.now() - 1).toBeLessThan(5); });',
+        'it("named spy", () => { const spy = vi.spyOn(Date, "now"); spy.mockReturnValue(5); expect(Date.now() - 1).toBeLessThan(5); });',
+        'it("manual ticks", () => { vi.useFakeTimers(); vi.setTimerTickMode("manual"); expect(Date.now() - 1).toBeLessThan(5); });',
+        'it("in a block", () => { vi.useFakeTimers(); try { expect(Date.now() - 1).toBeLessThan(5); } finally { vi.useRealTimers(); } });',
+      ].join("\n"),
+      "src/frozen-at-collection.test.ts":
+        'describe("plain", () => { vi.useFakeTimers(); it("y", () => { expect(Date.now() - 1).toBeLessThan(5); }); });\n',
+      "src/frozen-for-all.test.ts":
+        'describe("all", () => { beforeAll(() => { vi.useFakeTimers(); }); afterAll(() => { vi.useRealTimers(); }); it("z", () => { expect(Date.now() - 1).toBeLessThan(5); }); });\n',
     });
-    expect(found(root)).toEqual([]);
+    expect(foundIn(root)).toEqual([]);
   });
 
   it("cannot see a clock read through what the contract lists under 'What it cannot see'", () => {
     const root = fixtureRoot({
       "src/timing.ts": "export const timed = (run: () => void): number => { const s = Date.now(); run(); return Date.now() - s; };\n",
+      "src/unfreeze.ts": "export const unfreeze = (): void => { vi.useRealTimers(); };\n",
       "src/blind.test.ts": [
         'import { timed } from "./timing.js";',
+        'import { unfreeze } from "./unfreeze.js";',
         "expect(timed(work)).toBeLessThan(5);",
         "logCall(Date.now() - 160_000);",
         "expect(medianMs()).toBeLessThan(165_000);",
         "function fast(ms: number) { expect(ms).toBeLessThan(100); }",
         "fast(Date.now() - 5);",
+        "function fill(into: { ms: number }) { into.ms = Date.now() - 5; }",
+        "const box = { ms: 0 };",
+        "fill(box);",
+        "expect(box.ms).toBeLessThan(5);",
         "class Clock { start = Date.now(); took() { return Date.now() - this.start; } }",
         "const c = new Clock();",
         "expect(c.took()).toBeLessThan(5);",
@@ -457,6 +559,7 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
         "expect(Date.now() - 5).toSatisfy((ms: number) => ms < 500);",
         'expect(Date.now() - 5)["toBeLessThan"](500);',
         "expect(Date.now() - 5).to.be.below(500);",
+        'it("undone by an imported helper", () => { vi.useFakeTimers(); unfreeze(); expect(Date.now() - 1).toBeLessThan(5); });',
       ].join("\n"),
     });
     expect(found(root)).toEqual([]);
@@ -470,8 +573,20 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
       ['function freeze() { vi.spyOn(Date, "now").mockReturnValue(5); }', null],
       ['it("frozen by a helper", () => { freeze(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
       ["expect(items.filter((i) => i.at < Date.now()).length).toBeLessThan(3);", "target"],
+      ["const tasks = makeTasks(Date.now());", null],
+      ["const asked: string[] = [];", null],
+      ['vi.spyOn(tasks, "getStatus").mockImplementation((id: string) => { asked.push(id); return 1; });', null],
+      ['expect(asked.indexOf("a")).toBeLessThan(3);', "target"],
     ]);
-    expect(found(fixtureRoot({ "src/over.test.ts": body }))).toEqual(want);
+    const heldThenElsewhere = spec([
+      ['describe("a", () => { vi.useFakeTimers(); it("x", () => { expect(Date.now() - 1).toBeLessThan(5); }); });', "target"],
+      ['describe("b", () => { beforeEach(() => { vi.useFakeTimers(); }); });', null],
+    ]);
+    const root = fixtureRoot({ "src/over.test.ts": body, "src/over-held.test.ts": heldThenElsewhere.body });
+    expect(foundIn(root)).toEqual([
+      ...heldThenElsewhere.want.map((w) => `src/over-held.test.ts:${w}`),
+      ...want.map((w) => `src/over.test.ts:${w}`),
+    ]);
   });
 
   it("turns red on a new expect(Date.now() - t).toBeLessThan(500), and green once the baseline holds it", () => {
