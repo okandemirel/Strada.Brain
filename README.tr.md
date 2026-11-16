@@ -891,7 +891,7 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 |----------|------------|----------|
 | `ROUTING_PRESET` | `balanced` | Yonlendirme on ayari: `budget`, `balanced` veya `performance` |
 | `ROUTING_PHASE_SWITCHING` | `true` | Saglayicilar arasi PAOR faz gecisini etkinlestir |
-| `CONSENSUS_MODE` | `auto` | Konsensus modu: `auto`, `critical-only`, `always` veya `disabled` |
+| `CONSENSUS_MODE` | `auto` | Konsensus modu: `auto`, `critical-only`, `always` veya `disabled`. Not: görev sınıflandırıcı hiçbir isteği kritik işaretlemez; bu yüzden `auto` ve `critical-only` bugün ikinci sağlayıcıya danışmaz, yalnızca `always` danışır |
 | `CONSENSUS_THRESHOLD` | `0.5` | Konsensusu tetiklemek icin guven esigi |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Konsensus icin danisilan maksimum saglayici sayisi |
 | `MODEL_INTELLIGENCE_ENABLED` | `true` | Paylasilan canli model/saglayici katalog yenilemesini etkinlestir |

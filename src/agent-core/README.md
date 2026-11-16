@@ -110,7 +110,7 @@ to the production default instead of crash-looping the boot. Scoring/capability 
 | `AGENT_CORE_FLAG_SET` | `v2-all-routes+full-control-plane` | Active stage — a `LEGAL_FLAG_SETS` id (v2 ladder only). Unset → the production default. Deprecated v1-era ids alias to the default. Unknown id → reject-at-boot. |
 | `ROUTING_PRESET` | `balanced` | budget / balanced / performance |
 | `ROUTING_PHASE_SWITCHING` | `true` | Different providers per PAOR phase (orchestrator phases, not OODA) |
-| `CONSENSUS_MODE` | `auto` | auto / critical-only / always / disabled |
+| `CONSENSUS_MODE` | `auto` | auto / critical-only / always / disabled. Today only `always` consults a second provider: the classifier never marks a request critical, which `auto` and `critical-only` require |
 | `CONSENSUS_THRESHOLD` | `0.5` | Confidence below this triggers consensus |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Max providers consulted per decision |
 
