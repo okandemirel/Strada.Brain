@@ -449,8 +449,8 @@ const DELEGATE_EXEMPT: Record<string, string> = {
     "insights it gets are already in the prompt (0 tokens, 0 provider calls, same answer); its memory and RAG " +
     "refreshes need options a delegate does not have",
   goalDecomposer:
-    "measured: one extra LLM call per delegation (+2,562 tokens on a ~13,900-token run), of which the delegation's " +
-    "budget is charged 158 because the decomposer reports no usage; the answer is the same",
+    "measured: one extra LLM call per delegation (+2,562 tokens on a ~13,900-token run), all of it charged to the " +
+    "delegation's budget since its calls bill through the run's usage hook (task #67); the answer is the same",
   supervisorBrain:
     "measured: a delegated run never asks it (0 calls, with the complexity threshold at 'simple'): only the background " +
     "executor admits work to the supervisor, so passing it changes nothing today and would fan a sub-task out the day a " +
