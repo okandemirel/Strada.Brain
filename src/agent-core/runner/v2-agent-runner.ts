@@ -64,6 +64,7 @@ import type { ModelGateway } from "../model/model-gateway.js";
 import type { ModelCallResult } from "../model/model-gateway.js";
 import { estimateCostWithCache } from "../../budget/cost-model.js";
 import type { ProviderResponse, TokenUsage } from "../../agents/providers/provider-core.interface.js";
+import { reportFailedAttemptUsage } from "../../goals/decomposition-usage.js";
 import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { WorkerUsageEvent } from "../../agents/supervisor/supervisor-types.js";
 import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
@@ -572,27 +573,15 @@ export class V2AgentRunner implements AgentRunner {
 
           // ══ FAILURE / EMPTY → verdict GATE arbitrates (gauntlet #7,#10,#11) ═══════════════
           if (outcome.kind === "threw") {
-            // A chain that failed AFTER consuming tokens (an empty answer
-            // retried and empty again, a fall-over whose survivor also died)
-            // hangs what it spent on the error; it is spend all the same
-            // (Codex 2026-09-17 #5).
-            const err = outcome.error as {
-              usage?: TokenUsage;
-              usageBy?: ReadonlyArray<{ provider: string; model?: string; usage: TokenUsage }>;
-            } | null;
-            // Billed under the member that spent it, not the one assigned to the turn.
-            const parts = (err?.usageBy ?? []).filter((p) => p.usage.inputTokens > 0 || p.usage.outputTokens > 0);
+            // A chain that failed AFTER consuming tokens hangs the spend on the error
+            // (Codex 2026-09-17 #5), billed under the member that spent it (usageBy).
             const served = prepared.currentAssignment;
-            const bill = parts.length > 0
-              ? parts.map((p) => ({ provider: p.provider, model: p.model ?? served.modelId, usage: p.usage }))
-              : err?.usage && (err.usage.inputTokens > 0 || err.usage.outputTokens > 0)
-                ? [{ provider: served.providerName, model: served.modelId, usage: err.usage }]
-                : [];
-            for (const b of bill) {
-              budget.debit(toBudgetUsage(b.usage, b.provider, b.model));
+            reportFailedAttemptUsage((b) => {
+              const model = b.model ?? served.modelId;
+              budget.debit(toBudgetUsage(b.usage, b.provider, model));
               usageTotal = mergeUsage(usageTotal, b.provider, b.usage);
-              port.recordProviderUsage(b.provider, b.usage, b.model);
-            }
+              port.recordProviderUsage(b.provider, b.usage, model);
+            }, outcome.error, served.providerName);
           }
           if (outcome.kind === "threw" || outcome.kind === "empty") {
             // BENIGN USER-CANCEL short-circuit (v1 parity: the bg loop's `if (signal.aborted) throw`
