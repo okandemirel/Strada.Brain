@@ -33,6 +33,7 @@ import { MemoryRefresher } from "./memory-refresher.js";
 import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
+import { personsContent } from "./orchestrator-session-manager-last-user.js";
 import { conversationTranscript, messageTextPreview } from "./session-memory-transcript.js";
 import { withoutRecalledMemory } from "./recall-ledger.js";
 import { normalizeConversation } from "./conversation-normalizer.js";
@@ -1100,28 +1101,22 @@ export class SessionManager {
     this.ensureVisibleMessages(session).push(message);
   }
 
+  /** The person's last turn, past the system's (orchestrator-session-manager-last-user.ts). */
   extractLastUserContent(session: Session): string | MessageContent[] | null {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
-      // ORC-21: a provider-failure notice is not what the user last said (shell
-      // review and correction detection read this), nor is a recall (recall-ledger.ts).
-      if (msg.role === "user" && !isProviderFailureNotice(msg)) {
-        const content = withoutRecalledMemory([msg])[0]!.content as string | MessageContent[] | null;
-        // A turn that held nothing but a recall is one the ledger opened after an
-        // assistant turn (a decomposed task's visible plan): the user spoke before it.
-        const onlyRecall = content !== msg.content && (Array.isArray(content) ? content.length === 0 : !content?.trim());
-        if (onlyRecall) continue;
-        return content;
-      }
+      // ORC-21: a provider-failure notice is not what the user last said (shell review and
+      // correction detection read this); a turn that holds only a recall, a tool turn's text, neither.
+      if (msg.role !== "user" || isProviderFailureNotice(msg)) continue;
+      const content = personsContent(msg);
+      if (content !== null) return content;
     }
     return null;
   }
 
   extractLastUserMessage(session: Session): string {
     const content = this.extractLastUserContent(session);
-    if (typeof content === "string") {
-      return content;
-    }
+    if (typeof content === "string") return content;
     if (Array.isArray(content)) {
       const textParts = content
         .filter((b): b is { type: "text"; text: string } => b.type === "text")

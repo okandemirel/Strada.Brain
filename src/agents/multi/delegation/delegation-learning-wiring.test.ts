@@ -16,7 +16,10 @@
  * also counted in the root's dashboard counters, which a delegate was never
  * given (no tool call or token of a delegate reached /api/metrics), and in the
  * root's rate limiter, whose daily token quota and budget a delegate's spend
- * never reached (it ran, and the user kept chatting past the cap). The second block
+ * never reached (it ran, and the user kept chatting past the cap). A parent run
+ * that delegates through the real DelegationTool records the delegate's task
+ * metric as its own subtask in a real MetricsStorage; a delegation outside a run
+ * has no parent to record under and writes no row. The second block
  * is a textual tripwire over bootstrap's shared deps object, which is built
  * inside bootstrap() and cannot be run by a unit test.
  */
@@ -43,6 +46,12 @@ import type { InstinctRetriever } from "../../instinct-retriever.js";
 import type { ITool } from "../../tools/tool.interface.js";
 import { MetricsCollector } from "../../../dashboard/metrics.js";
 import { RateLimiter } from "../../../security/rate-limiter.js";
+import { MetricsStorage } from "../../../metrics/metrics-storage.js";
+import { MetricsRecorder } from "../../../metrics/metrics-recorder.js";
+import { Orchestrator } from "../../orchestrator.js";
+import { ProviderManager } from "../../providers/provider-manager.js";
+import { selectAgentRunner, type RunnerHostOrchestrator } from "../../../agent-core/runner/index.js";
+import { createDelegationTools } from "./delegation-tool.js";
 
 vi.mock("../../../utils/logger.js", () => {
   const noop = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -59,15 +68,39 @@ vi.mock("../../context/strada-knowledge.js", () => ({
   buildToolUsageHints: () => "",
 }));
 
-/** The delegate's model: read the station once, then answer. */
-const script = vi.hoisted(() => ({ systemPrompts: [] as string[], toolRan: false }));
+/**
+ * The delegate's model: read the station once, then answer. A parent run (the
+ * one model offered a delegate_ tool; a delegate never is) plans first, since a
+ * delegate tool declares that it writes and a write is refused while planning
+ * (phase-write-access.ts), then delegates once and answers with what came back.
+ */
+const script = vi.hoisted(() => ({
+  systemPrompts: [] as string[],
+  toolRan: false,
+  parentPlanned: false,
+  parentDelegated: false,
+}));
 
 const provider = vi.hoisted(() => ({
   name: "deepseek",
   capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true },
-  chat: async (systemPrompt: string) => {
-    script.systemPrompts.push(systemPrompt);
+  chat: async (systemPrompt: string, messages: unknown[], tools?: Array<{ name: string }>) => {
     const usage = { inputTokens: 5, outputTokens: 5, totalTokens: 10 };
+    if (tools?.some((tool) => tool.name === "delegate_code_review")) {
+      if (`${systemPrompt}\n${JSON.stringify(messages.at(-1) ?? "")}`.includes("## PLAN Phase")) {
+        script.parentPlanned = true;
+        return { text: "1. Delegate the north anemometer check to a reviewer.", toolCalls: [], stopReason: "end_turn", usage };
+      }
+      if (script.parentDelegated) return { text: "The reviewer read 12 knots.", toolCalls: [], stopReason: "end_turn", usage };
+      script.parentDelegated = true;
+      return {
+        text: "",
+        toolCalls: [{ id: "tc-parent", name: "delegate_code_review", input: { task: "Check the north anemometer reading" } }],
+        stopReason: "tool_use",
+        usage,
+      };
+    }
+    script.systemPrompts.push(systemPrompt);
     return script.toolRan
       ? { text: "The north anemometer reads 12 knots.", toolCalls: [], stopReason: "end_turn", usage }
       : {
@@ -125,6 +158,8 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
   beforeEach(() => {
     script.systemPrompts = [];
     script.toolRan = false;
+    script.parentPlanned = false;
+    script.parentDelegated = false;
     tmpDir = mkdtempSync(join(tmpdir(), "delegation-learning-"));
     mkdirSync(join(tmpDir, "weather-station"), { recursive: true });
     db = new Database(":memory:");
@@ -169,14 +204,14 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
   /** Bootstrap's shared deps with the learning side real and every other hook off. */
   function sharedDeps(
     retriever: ReturnType<typeof recordingRetriever>,
-    metrics?: MetricsCollector,
-    rateLimiter?: RateLimiter,
+    optional: { metrics?: MetricsCollector; rateLimiter?: RateLimiter; metricsRecorder?: MetricsRecorder } = {},
   ): SharedOrchestratorDeps {
     return {
       eventEmitter: bus,
       instinctRetriever: retriever as unknown as InstinctRetriever,
-      metrics,
-      rateLimiter,
+      metrics: optional.metrics,
+      rateLimiter: optional.rateLimiter,
+      metricsRecorder: optional.metricsRecorder,
       trajectoryReplayRetriever: undefined,
       learningPipeline: undefined,
       errorLearningHooks: undefined,
@@ -269,7 +304,7 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
 
   it("counts the delegated tool call and its tokens in the dashboard counters the root reports", async () => {
     const metrics = new MetricsCollector();
-    const manager = buildManager(sharedDeps(recordingRetriever(), metrics));
+    const manager = buildManager(sharedDeps(recordingRetriever(), { metrics }));
 
     await manager.delegate({
       type: "code_review",
@@ -288,7 +323,7 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
   it("spends the delegated tokens from the root's daily quota: the delegate finishes, the user's next message is refused", async () => {
     // RATE_LIMIT_TOKENS_PER_DAY=15: the scripted delegate reports 10 tokens a call over two calls.
     const rateLimiter = new RateLimiter({ tokensPerDay: 15 });
-    const manager = buildManager(sharedDeps(recordingRetriever(), undefined, rateLimiter));
+    const manager = buildManager(sharedDeps(recordingRetriever(), { rateLimiter }));
     expect(rateLimiter.checkMessageRate("owner").allowed).toBe(true);
 
     await manager.delegate({
@@ -305,6 +340,80 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
     const next = rateLimiter.checkMessageRate("owner");
     expect(next.allowed).toBe(false);
     expect(next.reason).toContain("Daily token quota exceeded");
+  });
+
+  /** A metrics store as bootstrap's knowledge stage opens one, and the recorder over it. */
+  function metricsStore(): { storage: MetricsStorage; recorder: MetricsRecorder } {
+    const storage = new MetricsStorage(join(tmpDir, "metrics.db"));
+    storage.initialize();
+    return { storage, recorder: new MetricsRecorder(storage) };
+  }
+
+  /** A root-shaped orchestrator over the same shared deps, running one turn that delegates. */
+  async function runParentThatDelegates(manager: DelegationManager, shared: SharedOrchestratorDeps): Promise<void> {
+    const parent = new Orchestrator({
+      ...shared,
+      providerManager: new ProviderManager({} as never) as never,
+      tools: createDelegationTools(CONFIG.types, manager, "parent-001" as AgentId, 0, CONFIG.maxDepth),
+      channel: { name: "cli", sendText: vi.fn(), sendMarkdown: vi.fn() } as never,
+      projectPath: join(tmpDir, "weather-station"),
+      readOnly: false,
+      requireConfirmation: false,
+      stradaDeps: { coreInstalled: false, corePath: null, modulesInstalled: false, modulesPath: null, warnings: [] } as never,
+    });
+    try {
+      await selectAgentRunner(parent as unknown as RunnerHostOrchestrator, "background").run(
+        { prompt: "Have a reviewer check the north anemometer.", chatId: "parent-chat", channelType: "cli", userId: "user-1", maxEpochs: 1 },
+        { mode: "background", onEvent: () => {}, deliverFinal: () => {} },
+      );
+    } finally {
+      await parent.dispose();
+    }
+  }
+
+  it("records the delegated run's task metric as a subtask of the run that delegated it", async () => {
+    const { storage, recorder } = metricsStore();
+    const shared = sharedDeps(recordingRetriever(), { metricsRecorder: recorder });
+    try {
+      await runParentThatDelegates(buildManager(shared), shared);
+
+      expect(script.parentPlanned, "the parent run never planned").toBe(true);
+      expect(script.parentDelegated, "the parent never called the delegate tool").toBe(true);
+      expect(script.toolRan, "the delegate never ran its tool").toBe(true);
+      const rows = storage.getTaskMetrics({});
+      const parent = rows.filter((row) => row.sessionId === "parent-chat");
+      expect(parent).toEqual([expect.objectContaining({ taskType: "background", parentTaskId: undefined })]);
+      // The parent's one delegation, its executing turn's delegate_code_review, is the only
+      // sub-agent this run starts: one 'subtask' row, under the parent's row.
+      const delegated = rows.filter((row) => row.sessionId.startsWith("delegation-"));
+      expect(delegated).toEqual([expect.objectContaining({ taskType: "subtask", parentTaskId: parent[0]!.id })]);
+      expect(rows).toHaveLength(2);
+      // The parent task is counted once; its subtask is counted apart.
+      expect(storage.getAggregation({}).totalTasks).toBe(1);
+      expect(storage.getAggregation({ taskType: "subtask" }).totalTasks).toBe(1);
+    } finally {
+      storage.close();
+    }
+  });
+
+  it("writes no task metric for a delegation that no run asked for, rather than a 'background' row", async () => {
+    const { storage, recorder } = metricsStore();
+    try {
+      const manager = buildManager(sharedDeps(recordingRetriever(), { metricsRecorder: recorder }));
+
+      await manager.delegate({
+        type: "code_review",
+        task: "Check the north anemometer reading",
+        parentAgentId: "parent-001" as AgentId,
+        depth: 0,
+        mode: "sync",
+      });
+
+      expect(script.toolRan, "the delegate never ran its tool").toBe(true);
+      expect(storage.getTaskMetrics({})).toEqual([]);
+    } finally {
+      storage.close();
+    }
   });
 
   it("asks the shared instinct retriever for the delegated task and puts its insight in the delegate's prompt", async () => {
@@ -349,8 +458,9 @@ describe("bootstrap's shared orchestrator deps (tripwire)", () => {
     expect(shared).toMatch(/\binstinctRetriever,/);
   });
 
-  it("hands every orchestrator the dashboard counters", () => {
+  it("hands every orchestrator the dashboard counters and the task-metric recorder", () => {
     expect(shared).toMatch(/^\s+metrics,$/m);
+    expect(shared).toMatch(/^\s+metricsRecorder,$/m);
   });
 
   it("hands every orchestrator the rate limiter", () => {
@@ -364,5 +474,6 @@ describe("bootstrap's shared orchestrator deps (tripwire)", () => {
     expect(root).not.toMatch(/\binstinctRetriever\b/);
     expect(root).not.toMatch(/^\s+metrics[,:]/m);
     expect(root).not.toMatch(/^\s+rateLimiter[,:]/m);
+    expect(root).not.toMatch(/^\s+metricsRecorder[,:]/m);
   });
 });

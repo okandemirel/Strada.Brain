@@ -92,7 +92,7 @@ export interface RetrievalAggregation {
 export interface MetricsFilter {
   /** Filter by session (chatId) */
   sessionId?: string;
-  /** Filter by task type */
+  /** Filter by task type. Unset, an aggregation counts top-level tasks only (no 'subtask' rows). */
   taskType?: TaskType;
   /** Filter by completion status */
   completionStatus?: CompletionStatus;

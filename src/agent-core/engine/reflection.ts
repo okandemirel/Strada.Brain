@@ -586,6 +586,8 @@ export async function portHandlePlanPhase(
     if (phase === AgentPhase.PLANNING && taskManager) {
       const goalBlock = parseGoalBlock(params.responseText ?? "");
       if (goalBlock && goalBlock.isGoal) {
+        // The same read as lastUserMessage: the person's last turn, never the tool-result turn,
+        // whose tool_result read as rich input here (no goal tree, the plan state handed off).
         const lastUserContent = deps.sessionManager.extractLastUserContent(runCtx.session);
         const lastUserHasRichInput =
           (runCtx.attachments?.length ?? 0) > 0 ||
