@@ -39,7 +39,15 @@ let roots = 0;
 function rootWith(files: Readonly<Record<string, string>>): string {
   const root = join(sandbox, `root-${roots++}`);
   mkdirSync(root);
-  for (const [name, content] of Object.entries(files)) writeFileSync(join(root, name), content);
+  for (const [name, content] of Object.entries(files)) {
+    // A name ending in "/" is a directory, with one file in it.
+    if (name.endsWith("/")) {
+      mkdirSync(join(root, name));
+      writeFileSync(join(root, name, "lantern-check.txt"), content);
+    } else {
+      writeFileSync(join(root, name), content);
+    }
+  }
   return root;
 }
 
@@ -59,8 +67,13 @@ const FAILS_AT_RUN_TIME = "README.md/lantern.txt";
 /** A registry with no tool that runs a check. shell_exec is a shell, not a check. */
 const NO_CHECK_TOOLS = ["file_read", "file_write", "file_edit", "list_directory", "grep_search", "shell_exec", "git_status"];
 const NO_VERIFICATION_TOOL = "[NO VERIFICATION TOOL]";
+/** A program that crashed at run time, the same program running, and an unrelated command. */
+const CRASHED = { content: "TypeError: Cannot read properties of undefined (reading 'glow')\n    at main.js:3:14", isError: true };
+const RAN = { content: "lantern lit" };
+const LISTED = { content: "README.md\nmain.js\nnotes" };
 
-type Call = readonly [tool: string, path: string];
+/** A tool, its path (or command for shell_exec), and what it reported when the call is not run for real. */
+type Call = readonly [tool: string, path: string, reported?: { readonly content: string; readonly isError?: boolean }];
 const FAIL_THEN_FIX: readonly Call[] = [["file_write", FAILS_AT_RUN_TIME], ["file_write", "notes/lantern.txt"]];
 
 /** Each call run for real, in order, and recorded as the loop records it. */
@@ -78,9 +91,11 @@ async function stateAfter(calls: readonly Call[], task: string): Promise<AgentSt
     learnedInsights: [],
   };
   const tool = new FileWriteTool();
-  for (const [index, [name, path]] of calls.entries()) {
+  for (const [index, [name, path, reported]] of calls.entries()) {
     const id = `call_${index}`;
-    const result = name === "file_write"
+    const result = reported
+      ? reported
+      : name === "file_write"
       ? await tool.execute({ path, content: "LANTERN\n" }, ctx)
       : name === "dotnet_test"
         ? { content: "Passed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3" }
@@ -111,9 +126,27 @@ async function verdictAfter(options: {
   const task = options.task ?? TASK;
   const state = await stateAfter(options.calls ?? FAIL_THEN_FIX, task);
   return planVerifierPipeline({
-    prompt: task,
-    draft: options.draft,
+    ...pipelineInputs(
+      task,
+      options.draft,
+      options.tools,
+      options.projectPath === null ? undefined : (options.projectPath ?? project),
+      options.logEntries,
+    ),
     state,
+  });
+}
+
+function pipelineInputs(
+  task: string,
+  draft: string,
+  tools: readonly string[] | undefined,
+  projectPath: string | undefined,
+  logEntries: readonly LogEntry[] = [],
+): Omit<Parameters<typeof planVerifierPipeline>[0], "state"> {
+  return {
+    prompt: task,
+    draft,
     task: { type: "implementation", complexity: "simple", criticality: "low" },
     verificationState: {
       pendingFiles: new Set(),
@@ -124,13 +157,13 @@ async function verdictAfter(options: {
     },
     buildVerificationGate: null,
     conformanceGate: null,
-    logEntries: options.logEntries ?? [],
+    logEntries,
     chatId: "chat-unverifiable",
     taskStartedAtMs: Date.now() - 60_000,
     buildToolsAvailable: true,
-    availableToolNames: options.tools,
-    projectPath: options.projectPath === null ? undefined : (options.projectPath ?? project),
-  });
+    availableToolNames: tools,
+    projectPath,
+  };
 }
 
 describe("a re-run failure in a run whose registry holds no check tool", () => {
@@ -165,7 +198,9 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     });
     const check = plan.checks.find((c) => c.name === "unverifiable-failure");
     expect(check?.status).toBe("issues");
-    expect(check?.summary).toMatch(/^Not verified: 1 failed step\(s\) were re-run successfully, none of the 7 tools in the tool registry offered to this turn runs/);
+    expect(check?.summary).toMatch(
+      /^Not verified: every failed step was answered by a later success \(1 written again by the same tool, and the write succeeded\), none of the 7 tools in the tool registry offered to this turn runs/,
+    );
     expect(plan.checks.find((c) => c.name === "targeted-repro")).toBeUndefined();
   });
 
@@ -191,6 +226,20 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
 
     expect(plan.evidence.verificationTooling?.projectChecks).toBeNull();
     expect(plan.initialDecision).toBe("approve");
+  });
+
+  it("closes over a command that crashed and was run again with the same input, and says it was run again", async () => {
+    const plan = await verdictAfter({
+      calls: [["shell_exec", "node main.js", CRASHED], ["file_write", "main.js"], ["shell_exec", "node main.js", RAN]],
+      draft: NOT_VERIFIED,
+      tools: NO_CHECK_TOOLS,
+    });
+
+    expect(plan.evidence.recentFailureRetries).toEqual({ rerun: 1, rewritten: 0 });
+    expect(plan.initialDecision).toBe("approve");
+    expect(plan.checks.find((c) => c.name === "unverifiable-failure")?.summary).toMatch(
+      /^Not verified: every failed step was answered by a later success \(1 run again with the same input and succeeded\), /,
+    );
   });
 
   it("closes on a Turkish report too", async () => {
@@ -221,14 +270,48 @@ describe("what still waits for a verification, whatever the draft says", () => {
     ["a Go module", { "go.mod": "module example.com/lantern\n" }, "go.mod"],
     ["a Rust crate", { "Cargo.toml": "[package]\nname = \"lantern\"\n" }, "Cargo.toml"],
     ["a C# project", { "Lantern.csproj": "<Project />\n" }, "*.sln / *.csproj"],
+    // What a runner finds with no script naming it (QA 2026-11-16).
+    ["a tsconfig.json beside a package.json with only a start script",
+      { "tsconfig.json": "{}\n", "package.json": JSON.stringify({ scripts: { start: "node dist/main.js" } }) }, "tsconfig.json"],
+    ["a conftest.py and a test file, no configuration", { "conftest.py": "", "test_app.py": "def test_lit(): pass\n" },
+      ["conftest.py", "test_app.py"]],
+    ["a Python test file alone", { "test_app.py": "def test_lit(): pass\n" }, "test_app.py"],
+    ["a Python test file named the other way", { "app_test.py": "def test_lit(): pass\n" }, "app_test.py"],
+    ["a Go test file", { "lantern_test.go": "package lantern\n" }, "lantern_test.go"],
+    ["a JavaScript test file", { "util.test.js": "test('lit', () => {});\n" }, "util.test.js"],
+    ["a TypeScript spec file", { "util.spec.ts": "it('lit', () => {});\n" }, "util.spec.ts"],
+    ["a tests/ directory", { "tests/": "" }, "tests/"],
+    ["a test/ directory", { "test/": "" }, "test/"],
+    ["a __tests__/ directory", { "__tests__/": "" }, "__tests__/"],
+    ["a spec/ directory", { "spec/": "" }, "spec/"],
+    ["vitest among the devDependencies, and a test file",
+      { "package.json": JSON.stringify({ devDependencies: { vitest: "^4.0.0" } }), "util.test.js": "" },
+      ["package.json devDependencies.vitest", "util.test.js"]],
+    ["typescript among the dependencies", { "package.json": JSON.stringify({ dependencies: { typescript: "^5.0.0" } }) },
+      "package.json dependencies.typescript"],
+    ["jest among the devDependencies", { "package.json": JSON.stringify({ devDependencies: { jest: "^30.0.0" } }) },
+      "package.json devDependencies.jest"],
   ])("shell_exec is offered and the project root declares a check: %s", async (_label, files, found) => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: rootWith(files) });
 
-    expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([found]);
+    expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([found].flat());
     expect(plan.initialDecision).toBe("continue");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(plan.gate).toContain("[UNVERIFIED FAILURE]");
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+  });
+
+  it("names that only look like tests, a file called tests, and packages that run no check do not count", async () => {
+    const root = rootWith({
+      "latest_news.py": "",
+      "contest.md": "",
+      tests: "not a directory\n",
+      "package.json": JSON.stringify({ dependencies: { express: "^5.0.0" }, devDependencies: { nodemon: "^3.0.0" } }),
+    });
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: root });
+
+    expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([]);
+    expect(plan.initialDecision).toBe("approve");
   });
 
   it("a Makefile whose targets are not checks does not count", async () => {
@@ -278,6 +361,30 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, task });
 
     expect(plan.evidence.verificationTooling).toBeNull();
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
+  it("a command that crashed and was never run again, though the same tool later succeeded with another command", async () => {
+    const plan = await verdictAfter({
+      calls: [["shell_exec", "node main.js", CRASHED], ["file_write", "main.js"], ["shell_exec", "ls", LISTED]],
+      draft: NOT_VERIFIED,
+      tools: NO_CHECK_TOOLS,
+    });
+
+    expect(plan.evidence.recentFailures).toEqual([expect.stringMatching(/^shell_exec: TypeError/)]);
+    expect(plan.evidence.recentFailuresRetriedOk).toBe(false);
+    expect(plan.evidence.recentFailureRetries).toBeUndefined();
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+  });
+
+  it("a step recorded without an input signature cannot be matched to a re-run", async () => {
+    const state = await stateAfter([["shell_exec", "node main.js", CRASHED], ["shell_exec", "node main.js", RAN]], TASK);
+    const unsigned = { ...state, stepResults: state.stepResults.map(({ inputSignature: _dropped, ...step }) => step) };
+    const plan = planVerifierPipeline({ ...pipelineInputs(TASK, NOT_VERIFIED, NO_CHECK_TOOLS, project), state: unsigned });
+
+    expect(plan.evidence.recentFailuresRetriedOk).toBe(false);
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
 

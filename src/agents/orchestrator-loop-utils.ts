@@ -1,4 +1,4 @@
-import { AgentPhase, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
+import { AgentPhase, stepInputSignature, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
 import type { ExecutionJournal } from "./autonomy/execution-journal.js";
 import {
   buildPlanningPrompt,
@@ -291,6 +291,7 @@ export function recordStepResultsAndCheckReflection(
       success: !isError,
       summary,
       timestamp: Date.now(),
+      inputSignature: stepInputSignature(tc.input),
       ...(isError ? { errorCategory: classifyStepErrorCategory(summary) } : {}),
     });
     consecutiveErrors = tr.isError ? consecutiveErrors + 1 : 0;

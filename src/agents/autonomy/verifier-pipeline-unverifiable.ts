@@ -17,8 +17,10 @@
  *   run (verifier-pipeline-project-checks.ts): a shell `npm test` counts as a
  *   verification here, so a project with a test script can be verified;
  * - no verification step ran in this run;
- * - every open failure was followed by a successful call of the same tool
- *   (the step was re-run and worked; only the verification is missing);
+ * - every open failure was answered by a later success: the same call run
+ *   again, or for a writer a later write by the same tool (completion-review's
+ *   failureAnsweredBy). A crashed `node main.js` followed by a successful
+ *   `ls` is not answered;
  * - no warn/error log entry is open.
  * Then the draft must say plainly that the result is not verified. Until it
  * does, the gate asks for exactly that, once per draft; when it does, the
@@ -122,11 +124,21 @@ export interface UnverifiableFailureCheck {
   readonly gate?: string;
 }
 
+/** "1 run again with the same input and succeeded, 1 written again by the same tool" */
+function howAnswered(retries: CompletionReviewEvidence["recentFailureRetries"]): string {
+  const parts = [
+    retries && retries.rerun > 0 ? `${retries.rerun} run again with the same input and succeeded` : "",
+    retries && retries.rewritten > 0 ? `${retries.rewritten} written again by the same tool, and the write succeeded` : "",
+  ].filter(Boolean);
+  return parts.join("; ");
+}
+
 export function unverifiableFailureCheck(
   outcome: UnverifiableFailureOutcome,
-  evidence: Pick<CompletionReviewEvidence, "recentFailures">,
+  evidence: Pick<CompletionReviewEvidence, "recentFailures" | "recentFailureRetries">,
   tooling: VerificationToolingRecord,
 ): UnverifiableFailureCheck {
+  const answered = howAnswered(evidence.recentFailureRetries);
   const failures = evidence.recentFailures.slice(-3).map((f) => `- ${sanitizePromptInjection(f)}`);
   const shell = tooling.projectChecks;
   const measured =
@@ -140,16 +152,16 @@ export function unverifiableFailureCheck(
       name: "unverifiable-failure",
       status: "issues",
       summary:
-        `Not verified: ${evidence.recentFailures.length} failed step(s) were re-run successfully, ` +
+        `Not verified: every failed step was answered by a later success (${answered}), ` +
         `${measured}, and the draft says the result is not verified.`,
     };
   }
   return {
     name: "unverifiable-failure",
     status: "issues",
-    summary: `A failed step was re-run successfully, ${measured}, and the draft does not say the result is not verified.`,
+    summary: `Every failed step was answered by a later success (${answered}), ${measured}, and the draft does not say the result is not verified.`,
     gate: [
-      "[NO VERIFICATION TOOL] Steps in this run failed, and the same tools then succeeded:",
+      `[NO VERIFICATION TOOL] Steps in this run failed, and each was answered by a later success (${answered}):`,
       ...failures,
       "",
       `Nothing here can verify that: ${measured}.`,

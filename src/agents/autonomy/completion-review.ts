@@ -9,11 +9,17 @@ export interface CompletionReviewEvidence {
   readonly touchedFiles: readonly string[];
   readonly recentFailures: readonly string[];
   /**
-   * Every open failure (not only the last five) was followed by a successful
-   * call of the same tool: the step was re-run and the re-run worked, so what
-   * is missing is a verification, not a repair. False when nothing failed.
+   * Every open failure (not only the last five) was answered by a later
+   * success (failureAnsweredBy): what is missing is a verification, not a
+   * repair. False when nothing failed.
    */
   readonly recentFailuresRetriedOk?: boolean;
+  /**
+   * How the open failures were answered, when all of them were: `rerun`, the
+   * same call (same tool, same input) succeeded later; `rewritten`, a writer
+   * failed and a later write by the same tool succeeded.
+   */
+  readonly recentFailureRetries?: { readonly rerun: number; readonly rewritten: number };
   readonly recentLogIssues: readonly LogEntry[];
   readonly recentSteps: readonly string[];
   readonly totalStepCount: number;
@@ -156,8 +162,11 @@ export function collectCompletionReviewEvidence(params: {
       ? [{ step, later: steps.slice(i + 1) }]
       : []);
   const recentFailures = openFailures.slice(-5).map(({ step }) => `${step.toolName}: ${step.summary}`);
-  const recentFailuresRetriedOk =
-    openFailures.length > 0 && openFailures.every(({ step, later }) => sameToolLaterSucceeded(step, later));
+  const answers = openFailures.map(({ step, later }) => failureAnsweredBy(step, later));
+  const recentFailuresRetriedOk = answers.length > 0 && answers.every((answer) => answer !== null);
+  const recentFailureRetries = recentFailuresRetriedOk
+    ? { rerun: answers.filter((a) => a === "rerun").length, rewritten: answers.filter((a) => a === "rewritten").length }
+    : undefined;
   const recentSteps = params.state.stepResults
     .slice(-8)
     .map((step) => `[${step.success ? "OK" : "FAIL"}] ${step.toolName}: ${step.summary}`);
@@ -172,6 +181,7 @@ export function collectCompletionReviewEvidence(params: {
     touchedFiles,
     recentFailures,
     recentFailuresRetriedOk,
+    ...(recentFailureRetries ? { recentFailureRetries } : {}),
     recentSteps,
     totalStepCount: params.state.stepResults.length,
     inspectionStepCount,
@@ -200,6 +210,25 @@ function refusalRetriedOk(step: StepResult, later: readonly StepResult[]): boole
 
 function sameToolLaterSucceeded(step: StepResult, later: readonly StepResult[]): boolean {
   return later.some((next) => next.success && next.toolName === step.toolName);
+}
+
+/**
+ * Which later success answers a failure, if any. A writer that failed is
+ * answered by a later write of the same tool: a write to a different target
+ * is the usual repair (the file under a file, written where it belongs). Any
+ * other tool runs something, and only the same call run again and succeeding
+ * answers it. Measured by QA 2026-11-15: `node main.js` crashed, a file was
+ * edited, `ls` succeeded, and the crash read as "re-run successfully". A
+ * step recorded without an input signature cannot be matched, so it is not
+ * answered.
+ */
+function failureAnsweredBy(step: StepResult, later: readonly StepResult[]): "rerun" | "rewritten" | null {
+  const rerun = step.inputSignature !== undefined &&
+    later.some((next) => next.success && next.toolName === step.toolName && next.inputSignature === step.inputSignature);
+  if (rerun) return "rerun";
+  return MUTATION_TOOL_NAMES.has(step.toolName) && sameToolLaterSucceeded(step, later)
+    ? "rewritten"
+    : null;
 }
 
 export function shouldRunCompletionReview(

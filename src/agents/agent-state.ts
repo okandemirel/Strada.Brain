@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export enum AgentPhase {
   PLANNING = "planning",
   EXECUTING = "executing",
@@ -13,6 +15,24 @@ export interface StepResult {
   readonly summary: string;
   readonly timestamp: number;
   readonly errorCategory?: import("./orchestrator-runtime-utils.js").StepErrorCategory;
+  /**
+   * The call's input as a short digest (stepInputSignature), so a later call
+   * can be told to be the same call run again: a failed `node main.js`
+   * followed by a successful `ls` is the same tool, not the same step.
+   * Absent on states recorded before it existed.
+   */
+  readonly inputSignature?: string;
+}
+
+/** Sorted-key JSON of a call's input, sha1, 16 hex: equal inputs give equal signatures whatever their key order. */
+export function stepInputSignature(input: unknown): string {
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(Object.keys(value).sort().map((k) => [k, canonical((value as Record<string, unknown>)[k])]))
+        : value;
+  return createHash("sha1").update(JSON.stringify(canonical(input ?? null)) ?? "null").digest("hex").slice(0, 16);
 }
 
 export interface AgentState {

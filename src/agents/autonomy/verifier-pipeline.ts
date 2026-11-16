@@ -104,7 +104,7 @@ export function planVerifierPipeline(params: {
     conformanceGate: params.conformanceGate,
   });
   const evidence: VerifierPipelineEvidence = { ...collected, verificationTooling: tooling };
-  // A failure re-run successfully in a run whose registry holds no check
+  // A failure answered by a later success in a run whose registry holds no check
   // tool: the draft must say it is not verified, and then it stops gating
   // (verifier-pipeline-unverifiable.ts says when, and why).
   const unverifiable = unverifiableFailureOutcome(evidence, tooling, params.draft);

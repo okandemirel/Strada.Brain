@@ -325,7 +325,9 @@ const UNDER_A_FILE = "README.md/kappa.txt";
 const KAPPA_UNVERIFIED = "Wrote notes/kappa.txt. Not verified: this project has no build and no tests to run.";
 const RUNTIME_ANSWER = `${KAPPA_UNVERIFIED}\n\n${SIGMA_DONE}`;
 /** The gate kappa meets once: the run's tool registry holds no tool that runs a check. */
-const NO_VERIFICATION_TOOL = "[NO VERIFICATION TOOL] Steps in this run failed, and the same tools then succeeded:";
+const NO_VERIFICATION_TOOL =
+  "[NO VERIFICATION TOOL] Steps in this run failed, and each was answered by a later success " +
+  "(1 written again by the same tool, and the write succeeded):";
 
 const RUNTIME_SCRIPT: readonly Step[] = [
   decomposeStep("decompose", RUNTIME_REQUEST, twoNodes(NODE_KAPPA, NODE_SIGMA)),
