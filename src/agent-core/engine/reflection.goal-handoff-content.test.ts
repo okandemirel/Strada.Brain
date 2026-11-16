@@ -95,15 +95,16 @@ describe("the interactive goal handoff after a tool turn", () => {
     expect(JSON.stringify(options)).not.toContain("Plan State");
   });
 
-  it("after a call that never answered: the person's words folded into its answer, and a goal tree", async () => {
-    // The normalizer answers the dangling call and folds the person's message into that answer.
+  it("after a call that never answered: the person's turn follows its answer as written, and a goal tree", async () => {
+    // The normalizer answers the dangling call; the person's turn (a TaskTurn) follows that answer
+    // unfolded, so the handoff gets their content exactly as they wrote it (board #58).
     const dangling = [
       { role: "user", content: "an earlier request" },
       { role: "assistant", content: "", tool_calls: [{ id: "t0", name: "file_read", input: {} }] },
     ] as never[];
     const { prompt, options } = await handoff(SAID, dangling, []);
     expect(prompt).toBe(SAID);
-    expect(options["userContent"]).toEqual([{ type: "text", text: SAID }]);
+    expect(options["userContent"]).toBe(SAID);
     expect(options["forceSharedPlanning"]).toBeUndefined();
     expect(options["goalTree"]).toBeDefined();
   });
