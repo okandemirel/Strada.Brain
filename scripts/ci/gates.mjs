@@ -54,6 +54,8 @@ export const DETECTORS = [
   "src/tests/clean-checkout.test.ts",
   "src/tests/dist-readers.test.ts",
   "src/tests/wall-clock-assertions.test.ts",
+  // provider-call-billing: parses src/ and imports none of it, so `vitest related` never selects it.
+  "src/agents/providers/billed-call-tripwire.test.ts",
   // Scans every script and src file, so `vitest related` never selects it.
   "src/tests/integration/entry-guard-symlink.test.ts",
 ];

@@ -1,6 +1,6 @@
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import { stripLeakedReasoning } from "../agents/leaked-reasoning.js";
-import { streamOrChatText } from "../agents/providers/provider.interface.js";
+import { billedStreamOrChatText } from "../agents/providers/billed-call.js";
 import { canonicalizeProviderName, providerRecordKey } from "../agents/providers/provider-identity.js";
 import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import { recordBareProviderOutcome } from "../agents/orchestrator-runtime-utils.js";
@@ -258,8 +258,9 @@ export function createSupervisorNodeVerifier(
       // deadline and aborts with "sent no response within Nms" before a long, silent think
       // completes. chatStream fires markActivity on the first SSE chunk → the timer clears →
       // the review is allowed to COMPLETE. Parsing is byte-identical (we parse response.text).
-      const response = await streamOrChatText(
+      const response = await billedStreamOrChatText(
         reviewer.provider,
+        { purpose: "supervisor-verification", run: { onUsage: context.onUsage } },
         "You are a verification agent. Review another worker's result for obvious issues and reply with strict JSON only.",
         buildVerificationPrompt(node),
         undefined,

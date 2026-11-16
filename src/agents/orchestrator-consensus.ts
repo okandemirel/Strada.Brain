@@ -23,7 +23,7 @@ export interface ConsensusVerificationParams {
   reviewAssignment: SupervisorAssignment | null | undefined;
   chatId?: string;
   identityKey: string;
-  /** Label for the warn log on disagreement (e.g. "background", "text-only, critical"). */
+  /** Label for the warn log on disagreement (e.g. "background"). */
   logLabel?: string;
   /** Where the reviewer's spend is booked; the reviewer's own calls were never accounted (audit 03.3 / D22). */
   onUsage?: (usage: TaskUsageEvent) => void;

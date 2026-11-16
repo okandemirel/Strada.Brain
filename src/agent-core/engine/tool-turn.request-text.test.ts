@@ -68,10 +68,11 @@ function setup() {
     emitPlainLoopStep: vi.fn(),
     currentSessionInstinctIds: new Map(),
     taskClassifier: {
-      classify: () => ({ type: "code-generation", complexity: "simple", criticality: "critical" }),
+      classifyToolCall: () => ({ type: "destructive-operation", complexity: "moderate", criticality: "critical" }),
     },
     confidenceEstimator: { estimate: () => 0.2 },
     consensusManager: {
+      mode: "always",
       shouldConsult: () => "review",
       verify: vi.fn(async (p: { prompt: string }) => {
         consensusPrompts.push(p.prompt);

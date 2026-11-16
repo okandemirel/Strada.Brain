@@ -17,7 +17,7 @@ const REPO = fileURLToPath(new URL("..", import.meta.url));
 const CONTRACTS_DIR = join(REPO, "docs", "contracts");
 
 /** Pinned: move these only in the same change that adds, retires or downgrades a rule. */
-const PINNED = { contracts: 9, active: 9, rules: 10, errorRules: 10 };
+const PINNED = { contracts: 10, active: 10, rules: 11, errorRules: 11 };
 
 interface Rule {
   id: string;
@@ -130,6 +130,23 @@ describe("contracts (docs/contracts/)", () => {
       }
     }
     expect(problems).toEqual([]);
+  });
+
+  // A detector the gates never run gates nothing before the push. The gates run
+  // `vitest related` on what changed plus the files in DETECTORS; a detector that
+  // scans the tree imports none of what it guards, so `related` never selects it.
+  // provider-call-billing's tripwire shipped outside DETECTORS (task #71).
+  it("every rule's detector is one the gates run (DETECTORS in scripts/ci/gates.mjs)", () => {
+    const gates = readFileSync(join(REPO, "scripts", "ci", "gates.mjs"), "utf8");
+    const list = /export const DETECTORS = \[([\s\S]*?)\];/.exec(gates);
+    expect(list, "scripts/ci/gates.mjs exports DETECTORS").not.toBeNull();
+    const detectors = new Set([...list![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!));
+    const missing = contracts.flatMap((c) =>
+      rulesOf(c)
+        .filter((rule) => rule.detector?.kind === "vitest" && !detectors.has(rule.detector.file))
+        .map((rule) => `${c.file}#${rule.id}: ${rule.detector.file} is not in DETECTORS`),
+    );
+    expect(missing).toEqual([]);
   });
 
   it("every declared single producer exists and exports what it promises", () => {
