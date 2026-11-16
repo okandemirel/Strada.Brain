@@ -36,3 +36,16 @@ export function lastTaskTurnIndex(messages: readonly ConversationMessage[]): num
   }
   return -1;
 }
+
+/**
+ * The history of a fresh per-run session (Orchestrator.buildFreshRunSession): it opens on the
+ * run's request as a {@link TaskTurn}, in the model's history and the visible transcript alike.
+ */
+export function freshRunSession(content: string | MessageContent[]): {
+  messages: ConversationMessage[];
+  visibleMessages: ConversationMessage[];
+  lastActivity: Date;
+} {
+  const turn = taskTurn(content);
+  return { messages: [turn], visibleMessages: [turn], lastActivity: new Date() };
+}
