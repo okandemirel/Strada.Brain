@@ -64,6 +64,7 @@ import { guardedSleep } from "../events/heartbeat-guard.js";
 import type { ModelGateway } from "../model/model-gateway.js";
 import type { ModelCallResult } from "../model/model-gateway.js";
 import type { ProviderResponse, TokenUsage } from "../../agents/providers/provider-core.interface.js";
+import { reportFailedAttemptUsage } from "../../goals/decomposition-usage.js";
 import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { WorkerUsageEvent } from "../../agents/supervisor/supervisor-types.js";
 import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
@@ -542,16 +543,15 @@ export class V2AgentRunner implements AgentRunner {
 
           // ══ FAILURE / EMPTY → verdict GATE arbitrates (gauntlet #7,#10,#11) ═══════════════
           if (outcome.kind === "threw") {
-            // A chain that failed AFTER consuming tokens (an empty answer
-            // retried and empty again, a fall-over whose survivor also died)
-            // hangs what it spent on the error; it is spend all the same
-            // (Codex 2026-09-17 #5).
-            const spent = (outcome.error as { usage?: TokenUsage } | null)?.usage;
-            if (spent && (spent.inputTokens > 0 || spent.outputTokens > 0)) {
-              const served = prepared.currentAssignment;
-              usageTotal = mergeUsage(usageTotal, served.providerName, spent);
-              port.recordProviderUsage(served.providerName, spent, served.modelId);
-            }
+            // A chain that failed AFTER consuming tokens hangs the spend on the error
+            // (Codex 2026-09-17 #5), billed under the member that spent it (usageBy). The port's
+            // record debits it from the run's Budget, like every other call (task #87).
+            const served = prepared.currentAssignment;
+            reportFailedAttemptUsage((b) => {
+              const model = b.model ?? served.modelId;
+              usageTotal = mergeUsage(usageTotal, b.provider, b.usage);
+              port.recordProviderUsage(b.provider, b.usage, model);
+            }, outcome.error, served.providerName);
           }
           if (outcome.kind === "threw" || outcome.kind === "empty") {
             // BENIGN USER-CANCEL short-circuit (v1 parity: the bg loop's `if (signal.aborted) throw`

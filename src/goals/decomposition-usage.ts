@@ -73,7 +73,15 @@ export function reportFailedAttemptUsage(
   err: unknown,
   providerName: string,
 ): boolean {
-  const spent = (err as { usage?: TokenUsage } | null)?.usage;
+  const e = err as { usage?: TokenUsage; usageBy?: ReadonlyArray<{ provider: string; model?: string; usage: TokenUsage }> } | null;
+  // Who spent it: each chain member's share is billed under that member's own
+  // name, so the cost model prices it at the right tariff.
+  const parts = (e?.usageBy ?? []).filter((p) => hasTokens(p.usage));
+  if (parts.length > 0) {
+    for (const p of parts) sink?.({ provider: p.provider, ...(p.model === undefined ? {} : { model: p.model }), usage: p.usage });
+    return true;
+  }
+  const spent = e?.usage;
   if (!hasTokens(spent)) return false;
   sink?.({ provider: providerName, usage: spent });
   return true;
