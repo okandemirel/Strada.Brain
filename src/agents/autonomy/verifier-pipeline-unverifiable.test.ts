@@ -28,6 +28,7 @@ import { FileWriteTool } from "../tools/file-write.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { NODE_SCOPE_MARKER } from "./node-tool-offer.js";
 import { fileOnPath } from "./completion-review-answers.js";
+import { measureProjectChecks } from "./verifier-pipeline-project-checks.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
 import { draftClaimsCheckPassed, takeUnverifiedNotice, unverifiedNotice, withUnverifiedNotice } from "./verifier-pipeline-unverifiable.js";
 
@@ -267,8 +268,11 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
 
   it("says in the record that shell_exec has nothing to run, and how many manifests it looked for", async () => {
     const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS });
-    const looked = plan.evidence.verificationTooling?.projectChecks?.looked.length;
+    // Counted from the manifests themselves, a source with no clock in it (the plan's run carries a start
+    // time, docs/contracts/wall-clock-assertions.md): the record must hold exactly that count.
+    const looked = measureProjectChecks(project)!.looked.length;
 
+    expect(plan.evidence.verificationTooling?.projectChecks?.looked.length).toBe(looked);
     expect(looked).toBeGreaterThan(20);
     expect(rowOf(plan, "the project declares a check shell_exec could run")).toMatchObject({
       value: `none of the ${looked} manifests looked for`,
