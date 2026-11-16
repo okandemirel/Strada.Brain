@@ -157,6 +157,8 @@ export function initializeRuntimeStateStage(
   if (params.learningResult.pipeline) {
     params.learningResult.pipeline.setProjectPath(params.config.unityProjectPath);
     params.learningResult.pipeline.setPromotionThreshold(params.config.crossSession.promotionThreshold);
+    // Boot evolution pass, after the project scope is set (a restart faster than hourly would never evolve).
+    params.learningResult.pipeline.tickEvolution();
   }
 
   return {
