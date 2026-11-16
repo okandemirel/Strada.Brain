@@ -48,8 +48,12 @@ describe("logger", () => {
     const { createLogger, getLogRingBuffer } = await import("./logger.js");
     const logger = createLogger("info", logFile);
 
+    // The stamp is the instant of the log call, not of the line reaching the
+    // ring buffer: a stream that delays the line (backpressure) would
+    // otherwise move a line logged before a cutoff to after it. The first
+    // clock read is the call's; every later one stands for a late arrival.
     const loggedAt = Date.parse("2026-03-18T10:00:10.000Z") + 789;
-    const now = vi.spyOn(Date, "now").mockReturnValue(loggedAt);
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(loggedAt).mockReturnValue(loggedAt + 5_000);
     try {
       logger.warn("ms-stamped", { chatId: "chat-1" });
     } finally {
