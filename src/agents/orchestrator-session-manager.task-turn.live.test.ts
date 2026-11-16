@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { DEFAULT_TASK_CONFIG } from "../config/config-types.js";
 import { createLogger } from "../utils/logger.js";
 import { Orchestrator } from "./orchestrator.js";
+import type { SessionManager } from "./orchestrator-session-manager.js";
 import type { ITool } from "./tools/tool.interface.js";
 import type { ConversationMessage } from "./providers/provider.interface.js";
 import { createMockProvider, createMockToolCall } from "../tests/helpers/mock-provider.js";
@@ -68,7 +69,12 @@ describe("task turn survives the history trim (real run path)", { timeout: 60_00
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("keeps the image task as the history head through a 60-call tool loop", async () => {
+  /**
+   * The old chat turn, then the image task and its 60 calls. With `interrupted`, the old turn's
+   * run was cut off mid-call first: its unanswered call sits right before the image task, so the
+   * live path's normalizeSessionForCall answers it before the task's first call.
+   */
+  async function runImageTask(interrupted: boolean): Promise<void> {
     tempDir = await mkdtemp(join(tmpdir(), "strada-task-turn-live-"));
     const provider = createMockProvider();
     (provider.capabilities as { vision: boolean }).vision = true;
@@ -93,6 +99,14 @@ describe("task turn survives the history trim (real run path)", { timeout: 60_00
     await channel.simulateIncomingMessage("chat-1", OLD_QUESTION);
     const callsBefore = provider.interactions.length;
     expect(callsBefore).toBeGreaterThan(0);
+    if (interrupted) {
+      const { sessionManager } = orchestrator as unknown as { sessionManager: SessionManager };
+      sessionManager.getOrCreateSession("chat-1").messages.push({
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "cut-1", name: "slot_lookup", input: { slot: 0 } }],
+      } as ConversationMessage);
+    }
 
     // Second message: the image task; the provider then asks for 60 distinct tool calls.
     let issued = 0;
@@ -126,7 +140,8 @@ describe("task turn survives the history trim (real run path)", { timeout: 60_00
     expect(firstTrimmed, "no call showed a trimmed history").toBeGreaterThan(0);
     // The hard cap (2x the recommended 40) is what cuts a run whose task is multimodal: the
     // history sent just before the cut was already one turn pair short of passing it.
-    expect(lengths[firstTrimmed - 1]! + 2).toBeGreaterThan(2 * 40);
+    // (After an interrupted call the soft trim cuts first; that run is checked at the end.)
+    if (!interrupted) expect(lengths[firstTrimmed - 1]! + 2).toBeGreaterThan(2 * 40);
 
     for (const [i, call] of calls.entries()) {
       const history = call.messages;
@@ -158,5 +173,24 @@ describe("task turn survives the history trim (real run path)", { timeout: 60_00
         }
       }
     }
+    if (interrupted) {
+      // The cut call was answered on the wire, and the task did not ride inside that answer.
+      const first = calls[0]!.messages;
+      const answerAt = first.findIndex((m) => blocksOf(m).some((b) => b.type === "tool_result" && b.tool_use_id === "cut-1"));
+      expect(answerAt, "the interrupted call is answered").toBeGreaterThan(0);
+      expect(textOf(first[answerAt]!), "the task is not folded into the answer").not.toContain(TASK_TEXT);
+      // The soft trim already cut the old turn and the answered call off at 41 (the task is then
+      // the first safe head); the hard cap still cuts later, with the task at the front.
+      const hardCut = lengths.findIndex((n, i) => i > 0 && lengths[i - 1]! + 2 > 2 * 40 && n < lengths[i - 1]!);
+      expect(hardCut, "a later call shows the hard-cap cut").toBeGreaterThan(firstTrimmed);
+    }
+  }
+
+  it("keeps the image task as the history head through a 60-call tool loop", async () => {
+    await runImageTask(false);
+  });
+
+  it("keeps it when the old turn's run was cut off mid-call before the task arrived", async () => {
+    await runImageTask(true);
   });
 });
