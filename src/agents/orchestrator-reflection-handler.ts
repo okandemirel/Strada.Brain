@@ -682,9 +682,6 @@ export function handleBgReflectionReplan(
     providerName: ctx.currentAssignment.providerName,
     modelId: ctx.currentAssignment.modelId,
   });
-  if (ctx.responseText) {
-    ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-  }
   ctx.recordPhaseOutcome({
     chatId: ctx.chatId,
     identityKey: ctx.identityKey,
@@ -699,7 +696,7 @@ export function handleBgReflectionReplan(
       failureReason: ctx.responseText,
     }),
   });
-  ctx.session.messages.push({ role: "user", content: "Please create a new plan." });
+  pushContinuationMessages(ctx, "Please create a new plan.");
   ctx.emitProgress(ctx.buildStructuredProgressSignal(
     ctx.prompt,
     ctx.progressTitle,
