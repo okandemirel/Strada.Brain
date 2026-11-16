@@ -16,6 +16,29 @@ import { createHash } from "node:crypto";
 
 import { providerRecordKey } from "./provider-identity.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
+
+/**
+ * A seat whose key was refused and which is now benched for the session.
+ * Told once per bench, so the user can learn the chain lost a member instead
+ * of the answer simply arriving from another one.
+ */
+export interface CredentialBenchEvent {
+  /** The seat that was benched, by the name the chain knows it under. */
+  readonly provider: string;
+  /** The refusal, first line, secrets masked. */
+  readonly reason: string;
+  /** How long the seat stays benched. */
+  readonly benchedForMs: number;
+  /**
+   * Who takes the work over. A name: that seat. `null`: the caller looked and
+   * no other seat is available. Absent: the caller cannot tell (a bare provider
+   * outside any chain), so nothing may be said about it either way.
+   */
+  readonly continuingOn?: string | null;
+}
+
+export type CredentialBenchListener = (event: CredentialBenchEvent) => void;
 
 export type ProviderHealthStatus = "healthy" | "degraded" | "down";
 
@@ -348,9 +371,11 @@ export class ProviderHealthRegistry {
    *
    * The cooldown is long because the fix is a human action, not a wait.
    */
-  recordCredentialRejected(providerName: string, error: string): void {
+  recordCredentialRejected(providerName: string, error: string, continuingOn?: string | null): void {
     const normalized = this.norm(providerName);
     const now = Date.now();
+    const previous = this.entries.get(normalized);
+    const alreadyBenched = previous?.status === "down" && previous.cooldownUntil > now;
     this.setEntry(normalized, this.holdActiveBench(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
@@ -358,6 +383,43 @@ export class ProviderHealthRegistry {
       lastError: error.slice(0, 200),
       cooldownUntil: now + CREDENTIAL_COOLDOWN_MS,
     }));
+    if (!alreadyBenched) {
+      this.announceCredentialBench({
+        provider: providerName,
+        reason: sanitizeSecrets(error).split("\n")[0]?.trim().slice(0, 200) ?? "",
+        benchedForMs: CREDENTIAL_COOLDOWN_MS,
+        ...(continuingOn === undefined ? {} : { continuingOn }),
+      });
+    }
+  }
+
+  /**
+   * The seat that takes the work over from `rejected`: the next available one
+   * after it in chain order, else any other available one; `null` when none is.
+   */
+  liveSuccessor(chain: readonly string[], rejected: string): string | null {
+    const at = chain.indexOf(rejected);
+    const others = at < 0 ? chain : [...chain.slice(at + 1), ...chain.slice(0, at)];
+    return others.find((name) => name !== rejected && this.isAvailable(name)) ?? null;
+  }
+
+  private readonly credentialBenchListeners = new Set<CredentialBenchListener>();
+
+  /** Hear every seat this process benches for a refused key. Returns the unsubscribe. */
+  onCredentialBench(listener: CredentialBenchListener): () => void {
+    this.credentialBenchListeners.add(listener);
+    return () => { this.credentialBenchListeners.delete(listener); };
+  }
+
+  /** A listener that throws never stops the chain from failing over. */
+  private announceCredentialBench(event: CredentialBenchEvent): void {
+    for (const listener of this.credentialBenchListeners) {
+      try {
+        listener(event);
+      } catch (err) {
+        getLoggerSafe().warn("A credential-bench listener threw", { error: String(err) });
+      }
+    }
   }
 
   /**

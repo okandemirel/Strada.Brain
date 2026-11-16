@@ -12,7 +12,11 @@
  * The first block drives the real DelegationManager -> real Orchestrator ->
  * real V2 runner. Only the provider is scripted. The learning side is the real
  * TypedEventBus and the real LearningPipeline over a real LearningStorage,
- * subscribed the way bootstrap's learning init subscribes it. The second block
+ * subscribed the way bootstrap's learning init subscribes it. The same run is
+ * also counted in the root's dashboard counters, which a delegate was never
+ * given (no tool call or token of a delegate reached /api/metrics), and in the
+ * root's rate limiter, whose daily token quota and budget a delegate's spend
+ * never reached (it ran, and the user kept chatting past the cap). The second block
  * is a textual tripwire over bootstrap's shared deps object, which is built
  * inside bootstrap() and cannot be run by a unit test.
  */
@@ -37,6 +41,8 @@ import { LearningStorage } from "../../../learning/storage/learning-storage.js";
 import { LearningPipeline } from "../../../learning/pipeline/learning-pipeline.js";
 import type { InstinctRetriever } from "../../instinct-retriever.js";
 import type { ITool } from "../../tools/tool.interface.js";
+import { MetricsCollector } from "../../../dashboard/metrics.js";
+import { RateLimiter } from "../../../security/rate-limiter.js";
 
 vi.mock("../../../utils/logger.js", () => {
   const noop = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -161,10 +167,16 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
   }
 
   /** Bootstrap's shared deps with the learning side real and every other hook off. */
-  function sharedDeps(retriever: ReturnType<typeof recordingRetriever>): SharedOrchestratorDeps {
+  function sharedDeps(
+    retriever: ReturnType<typeof recordingRetriever>,
+    metrics?: MetricsCollector,
+    rateLimiter?: RateLimiter,
+  ): SharedOrchestratorDeps {
     return {
       eventEmitter: bus,
       instinctRetriever: retriever as unknown as InstinctRetriever,
+      metrics,
+      rateLimiter,
       trajectoryReplayRetriever: undefined,
       learningPipeline: undefined,
       errorLearningHooks: undefined,
@@ -255,6 +267,46 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
     expect(observations).toEqual([{ session_id: delegated[0]!.sessionId, tool_name: "anemometer_read", type: "success" }]);
   });
 
+  it("counts the delegated tool call and its tokens in the dashboard counters the root reports", async () => {
+    const metrics = new MetricsCollector();
+    const manager = buildManager(sharedDeps(recordingRetriever(), metrics));
+
+    await manager.delegate({
+      type: "code_review",
+      task: "Check the north anemometer reading",
+      parentAgentId: "parent-001" as AgentId,
+      depth: 0,
+      mode: "sync",
+    });
+
+    expect(script.toolRan, "the delegate never ran its tool").toBe(true);
+    const snapshot = metrics.getSnapshot();
+    expect(snapshot.toolCallCounts).toEqual({ anemometer_read: 1 });
+    expect(snapshot.totalTokens.input).toBeGreaterThan(0);
+  });
+
+  it("spends the delegated tokens from the root's daily quota: the delegate finishes, the user's next message is refused", async () => {
+    // RATE_LIMIT_TOKENS_PER_DAY=15: the scripted delegate reports 10 tokens a call over two calls.
+    const rateLimiter = new RateLimiter({ tokensPerDay: 15 });
+    const manager = buildManager(sharedDeps(recordingRetriever(), undefined, rateLimiter));
+    expect(rateLimiter.checkMessageRate("owner").allowed).toBe(true);
+
+    await manager.delegate({
+      type: "code_review",
+      task: "Check the north anemometer reading",
+      parentAgentId: "parent-001" as AgentId,
+      depth: 0,
+      mode: "sync",
+    });
+
+    // The limiter gates messages, never a run in flight: the delegate still did its work.
+    expect(script.toolRan, "the delegate never ran its tool").toBe(true);
+    expect(rateLimiter.getSnapshot().tokensToday).toBe(20);
+    const next = rateLimiter.checkMessageRate("owner");
+    expect(next.allowed).toBe(false);
+    expect(next.reason).toContain("Daily token quota exceeded");
+  });
+
   it("asks the shared instinct retriever for the delegated task and puts its insight in the delegate's prompt", async () => {
     const retriever = recordingRetriever();
     const manager = buildManager(sharedDeps(retriever));
@@ -275,7 +327,7 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
 });
 
 // =============================================================================
-// Tripwire: bootstrap's shared deps carry the learning bus and the retriever
+// Tripwire: bootstrap's shared deps carry the learning bus, the retriever and the counters
 // =============================================================================
 
 /**
@@ -297,10 +349,20 @@ describe("bootstrap's shared orchestrator deps (tripwire)", () => {
     expect(shared).toMatch(/\binstinctRetriever,/);
   });
 
+  it("hands every orchestrator the dashboard counters", () => {
+    expect(shared).toMatch(/^\s+metrics,$/m);
+  });
+
+  it("hands every orchestrator the rate limiter", () => {
+    expect(shared).toMatch(/^\s+rateLimiter,$/m);
+  });
+
   it("gives the root no second copy that a delegate would not get", () => {
     expect(rootStart).toBeGreaterThan(sharedStart);
     expect(root).toContain("...sharedOrchestratorDeps,");
     expect(root).not.toMatch(/\beventEmitter:/);
     expect(root).not.toMatch(/\binstinctRetriever\b/);
+    expect(root).not.toMatch(/^\s+metrics[,:]/m);
+    expect(root).not.toMatch(/^\s+rateLimiter[,:]/m);
   });
 });
