@@ -21,6 +21,7 @@ import { FakeClock } from "../control/clock.js";
 import { createAgentRunEventBus, type AgentRunEventBus } from "../events/event-bus.js";
 import { openRunClock } from "../control/run-clock.js";
 import { createBudget } from "../control/budget.js";
+import { recordProviderUsage } from "../engine/accounting.js";
 import { createFailureLedger, type HealthCore } from "../control/failure-ledger.js";
 import { resolveRunBudgetPolicy, type PolicySeed, type RunMode } from "../control/policy.js";
 import { ModelGateway, type SilentStreamPort } from "../model/model-gateway.js";
@@ -299,7 +300,10 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     maybeCompactSession: () => {},
     trimContextWindow: () => {},
     recordExecutionTrace: () => {},
-    recordProviderUsage: () => {},
+    // The real port records a turn through engine/accounting.ts, which debits it from the run's
+    // Budget (task #87); the spine no longer debits a turn itself, so the mock records the same way.
+    recordProviderUsage: (providerName, usage, modelId) =>
+      recordProviderUsage({ getSupervisorRoutingContext: () => ({}) } as never, providerName, usage, undefined, modelId),
     saveBudgetExceededCheckpoint: async () => {},
     classifyFailureForVerdict: spies.classifyFailureForVerdict,
     recordHealthSuccess: spies.recordHealthSuccess,

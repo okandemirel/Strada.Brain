@@ -28,6 +28,7 @@ import type {
 } from "../routing/routing-types.js";
 import type { ClassifyFailureParams, FailureVerdictContribution } from "../runner/orchestrator-port.js";
 import type { EngineRunContext } from "./engine-deps.js";
+import { debitRunBudget } from "../control/budget-scope.js";
 
 /** The dependency slice the accounting functions read (grows only with this module). */
 export interface AccountingDeps {
@@ -125,6 +126,12 @@ export function consensusUsageSink(
   };
 }
 
+/**
+ * One of the two funnels every recorded provider call passes through (the other is
+ * recordAuxiliaryUsage): it debits the Budget of the run the call was made in (budget-scope.ts),
+ * then records it — metrics, the rate limiter's daily cost, the run's onUsage. A model turn, a
+ * goal decomposition and a consensus reviewer all arrive here, each once (task #87).
+ */
 export function recordProviderUsage(
   deps: AccountingDeps,
   providerName: string,
@@ -132,6 +139,7 @@ export function recordProviderUsage(
   onUsage?: (usage: TaskUsageEvent) => void,
   modelId?: string,
 ): void {
+  debitRunBudget(usage, providerName, modelId);
   recordProviderUsageHelper(deps.getSupervisorRoutingContext(), providerName, usage, onUsage, modelId);
 }
 
@@ -197,6 +205,8 @@ export function recordAuxiliaryUsage(
     return;
   }
 
+  // The run's Budget sees a reviewer's spend like a model turn's (task #87; see recordProviderUsage).
+  debitRunBudget(usage, provider, modelId);
   const cache = {
     ...(usage.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: usage.cacheCreationInputTokens }),
     ...(usage.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: usage.cacheReadInputTokens }),
