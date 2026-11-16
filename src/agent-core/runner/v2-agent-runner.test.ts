@@ -434,6 +434,31 @@ describe("V2AgentRunner — a superseded attempt's tokens are charged (audit 03.
     expect(recorded).toHaveBeenCalledWith("deepseek", expect.objectContaining({ inputTokens: 7000 }), "spender-model");
   });
 
+  it("a thrown error's spend is debited from the run's Budget once, through the port's record (task #87)", async () => {
+    const handles = mkPlane();
+    const budgets: ReturnType<typeof createBudget>[] = [];
+    const plane: ControlPlane = {
+      ...handles.plane,
+      openRun: (...args) => {
+        const opened = handles.plane.openRun(...args);
+        budgets.push(opened.budget);
+        return opened;
+      },
+    };
+    const failure = Object.assign(new Error("all failed"), {
+      usage: { inputTokens: 7000, outputTokens: 30, totalTokens: 7030 },
+      usageBy: [{ provider: "deepseek", model: "spender-model", usage: { inputTokens: 7000, outputTokens: 30, totalTokens: 7030 } }],
+    });
+    const gateway = new ModelGateway(scriptedStream([failure, mkResponse({ text: "done", stopReason: "end_turn" })]));
+    const runner = mkRunner(plane, gateway, mkPort(mkProvider()), handles.clock);
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+    expect(result.status).toBe("completed");
+    // 30 from the failed attempt, plus 5 per answered step: each call counted once, in the
+    // Budget as in the run's reported usage.
+    expect(budgets[0]!.spentOutputTokens(), "the failed attempt's spend was debited twice, or not at all").toBe(40);
+    expect(result.usage?.outputTokens).toBe(40);
+  });
+
   it("auxiliaryUsage on the served response is debited and reported with the run's usage", async () => {
     const handles = mkPlane();
     // Step 1 (PLANNING) answers cleanly; step 2's response carries the chain's
