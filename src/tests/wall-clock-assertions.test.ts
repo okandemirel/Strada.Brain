@@ -18,6 +18,8 @@
  * an elapsed time: a clock read minus anything (`Date.now() - t`,
  * `performance.now() - t`, `end - t` with `const end = Date.now()`), or a
  * stamp minus a name holding an earlier clock read (`cooldownUntil - before`);
+ * or any value under a bound that is such a name plus anything
+ * (`expect(expiresAt).toBeLessThanOrEqual(before + 5_000)`);
  * also as the value of a name (`const elapsed = Date.now() - t`), of a
  * destructured or object property (`const { ms } = await timed(…)`, `run.ms`),
  * of what a function the file declares returns, or inside Math.abs/round/….
@@ -51,7 +53,7 @@ const { testFiles } = (await import(pathToFileURL(path.join(REPO, "scripts", "ci
 
 /**
  * Wall-clock upper bounds per test file, as this detector sees them. Measured
- * on main at 9f662581 (2026-11-16): 63 in 41 files. Lower a count when you
+ * on main at 9f662581 (2026-11-16): 64 in 42 files. Lower a count when you
  * replace a bound with fake timers or a counted event; delete its line at
  * zero. Never raise one, never add one.
  */
@@ -91,6 +93,7 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/skills/project-files.test.ts": 1,
   "src/skills/skill-import-scan.test.ts": 1,
   "src/supervisor/__tests__/supervisor-dispatcher.test.ts": 2,
+  "src/tasks/command-handler.test.ts": 1,
   "src/tasks/task-manager.test.ts": 1,
   "src/utils/process-runner.test.ts": 3,
   "src/vault/canvas-generator.test.ts": 1,
@@ -376,7 +379,28 @@ function valueReader(checker: ts.TypeChecker) {
     return out;
   }
 
-  return { elapsedForm };
+  /**
+   * "stamp under start plus": the bound itself is an earlier clock read held
+   * in a name plus anything (`before + 36 * HOUR + 5_000`), directly or as the
+   * value of a name. `expect(stamp).toBeLessThanOrEqual(before + X)` is
+   * `stamp - before <= X` rearranged, and it grows with load the same way.
+   * A clock read written out in the bound (`Date.now() + X`) is read at the
+   * assertion, after the code ran, and load only widens it.
+   */
+  function boundForm(bound: ts.Expression): string | undefined {
+    const startPlus = (e: ts.Expression): boolean => {
+      for (const v of valuesOf(e)) {
+        if (!ts.isBinaryExpression(v) || v.operatorToken.kind !== ts.SyntaxKind.PlusToken) continue;
+        for (const side of [v.left, v.right]) {
+          if ((ts.isIdentifier(strip(side)) && isClockRead(side)) || startPlus(side)) return true;
+        }
+      }
+      return false;
+    };
+    return startPlus(bound) ? "stamp under start plus" : undefined;
+  }
+
+  return { elapsedForm, boundForm };
 }
 
 /** `expect(x, msg?)` or `expect.soft(x, msg?)` at the root of a matcher chain, and whether `.not` is on it. */
@@ -414,7 +438,7 @@ function wallClockBounds(root: string, rels: readonly string[]): Bound[] {
     relOf.set(file, rel);
   }
   const checker = program(texts);
-  const { elapsedForm } = valueReader(checker);
+  const { elapsedForm, boundForm } = valueReader(checker);
   const found: Bound[] = [];
   for (const file of texts.keys()) {
     const sf = checker.sourceOf(file);
@@ -422,7 +446,8 @@ function wallClockBounds(root: string, rels: readonly string[]): Bound[] {
       if (ts.isCallExpression(node)) {
         const e = expectTarget(node);
         const upper = e && (e.negated ? UPPER_NEGATED.has(e.matcher) : UPPER.has(e.matcher));
-        const form = e && upper ? elapsedForm(e.target) : undefined;
+        const bound = node.arguments[0];
+        const form = e && upper ? (elapsedForm(e.target) ?? (bound && boundForm(bound))) : undefined;
         if (e && form) {
           found.push({
             file: relOf.get(file)!,
@@ -690,6 +715,9 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
         "expect(((Date.now() - t) / 1000) * 1000).toBeLessThan(500);",
         "const laps = [Date.now() - t];",
         "expect(laps.reduce((a, b) => a + b, 0)).toBeLessThan(500);",
+        "expect(result.expiresAt).toBeLessThanOrEqual(t + 36 * HOUR + 5_000);",
+        "const latest = 5_000 + t;",
+        "expect(entry.cooldownUntil).not.toBeGreaterThan(latest);",
       ].join("\n"),
     });
     const bounds = wallClockBounds(root, testFiles(root));
@@ -716,6 +744,8 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
       "35 clock minus",
       "36 clock minus",
       "38 clock minus",
+      "39 stamp under start plus",
+      "41 stamp under start plus",
     ]);
   });
 
@@ -735,6 +765,12 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
         "const sizes: number[] = [];",
         "sizes.push(rows.length);",
         "expect(sizes.reduce((a, b) => a + b, 0)).toBeLessThan(5);",
+        "expect(x).toBeLessThanOrEqual(limit + 1);",
+        "expect(stamp).toBeLessThanOrEqual(Date.now() + 5_000);",
+        "const before = Date.now();",
+        "expect(stamp).toBeGreaterThanOrEqual(before + 1_000);",
+        "let time = 1_000_000;",
+        "expect(entry.cooldownUntil).toBeLessThan(time + HOUR);",
         "const now = () => 5;",
         "function f(Date: { now(): number }) { expect(Date.now() - t).toBeLessThan(5); }",
         'import { performance } from "./fake-clock.js";',
