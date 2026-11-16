@@ -24,6 +24,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
 import type { Task } from "../tasks/types.js";
 import { TaskStatus } from "../tasks/types.js";
+import { campaignBilling, VISUAL_CONFORMANCE_BILLING } from "./campaign-billing.js";
 
 /** The sprint "ran unity_playthrough before reporting": the suite refreshes the verdict on every completion. */
 let onTaskCompleted: (() => void) | undefined;
@@ -1809,6 +1810,31 @@ describe("CampaignManager", () => {
 
     // …and a genuinely green record still advances the ladder.
     runRecordOnSettle = { total: 42, passed: 42, failed: 0, skipped: 0, unfiltered: true };
+  });
+
+  it("the final sprint's vision judgement is made for its campaign: its call is booked to that campaign (task #73)", async () => {
+    const gdd = [
+      "# GDD", "## Look and feel",
+      "Hand-cut felt clouds drifting over a quilted valley, seen from a slow side-scrolling camera. ",
+      "Warm wool colours (cream, rose and sage) under a low evening light, with stitched outlines.",
+    ].join("\n");
+    const inScope: Array<string | undefined> = [];
+    visionChat = async () => {
+      inScope.push(campaignBilling(VISUAL_CONFORMANCE_BILLING).campaignId);
+      return { text: "Felt clouds over a quilted valley.\nMATCH: yes" };
+    };
+    const campaign = manager.startFromGdd(ctx, gdd, "docs/Game_GDD.md");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(1));
+    settleMilestone("sprint A done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(2));
+    settleMilestone("sprint B done");
+    await waitFor(() => expect(tasks.submitted).toHaveLength(3));
+    mkdirSync(join(projectRoot, "Recordings", "playthrough"), { recursive: true });
+    writeFileSync(join(projectRoot, "Recordings", "playthrough", "frame_00040.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+    tasks.verifications.set("task_3", { testsGreen: true, detail: "PlayMode verification passed: 83 of 83 tests passed (unfiltered — the whole PlayMode suite)", unfiltered: true });
+    tasks.emit("task:completed", "task_3", "green, shipping");
+    await waitFor(() => expect(inScope).toHaveLength(1));
+    expect(inScope).toEqual([campaign.id]);
   });
 
   it("a vision model's explicit NO bounces the final sprint once; a YES delivers with the match in the report (2026-09-10)", async () => {

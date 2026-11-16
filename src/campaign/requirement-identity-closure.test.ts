@@ -30,6 +30,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CampaignManager, requirementKey, restoreLegacyWordings } from "./campaign-manager.js";
 import { CampaignPlanner, closingFact, quotableFactsOf } from "./campaign-planner.js";
+import { campaignBilling, PLANNING_BILLING } from "./campaign-billing.js";
 import {
   contentFingerprint,
   encodeRequirement,
@@ -253,6 +254,25 @@ describe("#28 lineage is history; the current version is the identity for closur
       gdd: GDD_2,
     });
     expect(requirementKey(encoded[0]!)).toBe(requirementKey(encodeRequirement(before[0]!)));
+  });
+
+  it("the resolver is asked for the campaign: its calls are booked to that campaign (task #73)", async () => {
+    const { reopened } = levelCountPair();
+    const inScope: Array<string | undefined> = [];
+    const resolveCoverageGaps = vi.fn(async (_gdd: string, reqs: readonly string[]) => {
+      inScope.push(campaignBilling(PLANNING_BILLING).campaignId);
+      return { closed: [], open: [...reqs], unasked: [] };
+    });
+    const campaign = {
+      id: "c-73",
+      gddText: "# GDD",
+      milestones: [{ id: "mcov1", title: "Coverage completion 1.1 — Level count", prompt: "- Level count: 20 levels\n", coverageGap: reopened, status: "failed", attempts: 2 }],
+    } as unknown as Campaign;
+
+    await coveragePaths({ planner: { resolveCoverageGaps } }).openRequirements(campaign);
+
+    expect(resolveCoverageGaps).toHaveBeenCalled();
+    expect(inScope.every((id) => id === "c-73")).toBe(true);
   });
 
   it("closure asks about the wording the document asks for NOW, and closes only that one", async () => {
