@@ -848,6 +848,13 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
               { signal: AbortSignal.timeout(this.probeBudgetFor(provider)) },
             );
           } catch (probeErr) {
+            // billedChat has billed what the probe spent. The error goes on as this
+            // call's lastError and can leave the chain (a dead caller signal rethrows
+            // it); still carrying usage, the chain's caller would bill it a second time.
+            if (probeErr && typeof probeErr === "object") {
+              delete (probeErr as { usage?: unknown }).usage;
+              delete (probeErr as { usageBy?: unknown }).usageBy;
+            }
             const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
             // audited 2026-09-02: this used to be the generic recordFailure() for every
             // probe error, which replaced an expired 8h quota/credential bench with a

@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
+import { billedChat } from "./billed-call.js";
 import { installUsageLedgerHarness, scriptedProvider, usage, type UsageLedgerHarness } from "../../tests/helpers/usage-ledger-harness.js";
 
 const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
@@ -66,5 +67,28 @@ describe("FallbackChainProvider — the recovery probe bills as daemon spend (ta
 
     expect(reply.text).toBe("from the fallback");
     expect(ledger.counted()).toEqual({ input: 9, output: 0, dailyTokens: 9 });
+  });
+
+  it("a failed probe's spend is billed once, not again by the caller when the chain rethrows it (QA #72)", async () => {
+    // The orchestrator's stall watchdog aborts the caller's signal and leaves the
+    // external one live; the chain then rethrows the last error it held — here the
+    // probe's. Its usage was already billed as daemon spend; it must not ride out.
+    const caller = new AbortController();
+    const member = scriptedProvider("deepseek", [{ text: "unused" }]);
+    member.chat.mockImplementationOnce(async () => {
+      caller.abort();
+      throw Object.assign(new Error("upstream 500"), { usage: usage(9, 0) });
+    });
+    const fallback = scriptedProvider("kimi", [{ text: "never reached", usage: usage(50, 5) }]);
+    recovering("deepseek");
+    const chain = new FallbackChainProvider([member, fallback]);
+
+    await expect(
+      billedChat(chain, { purpose: "chat", ownerless: "chat" }, "sys", [{ role: "user", content: "hi" }], [], { signal: caller.signal }),
+    ).rejects.toThrow("upstream 500");
+
+    expect(fallback.calls).toHaveLength(0);
+    expect(ledger.counted()).toEqual({ input: 9, output: 0, dailyTokens: 9 });
+    expect(ledger.booked.map((b) => [b.source, b.metadata.tokensIn])).toEqual([["daemon", 9]]);
   });
 });
