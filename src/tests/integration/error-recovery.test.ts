@@ -26,14 +26,23 @@ import { join } from "node:path";
  * The flow under test is the recovery loop, scripted by the mock provider; no
  * assertion reads dotnet's output. The real tool spawned `dotnet build` in an
  * empty temp dir, and the first spawn on a cold Windows runner (dotnet's
- * first-run setup) outlasted the 30 s test timeout. Keep the real tool's name,
- * schema and argument handling, replace only the process it would spawn.
+ * first-run setup) outlasted the 30 s test timeout. Only the process spawn is
+ * replaced (runProcess answers with MSBuild's CS0246 output); the real tool's
+ * execute, argument handling and output parsing still run.
  */
-class StubbedDotnetBuildTool extends DotnetBuildTool {
-  override async execute(): Promise<{ content: string; isError: boolean }> {
-    return { content: "error CS0246: The type or namespace name could not be found", isError: true };
-  }
-}
+vi.mock("../../utils/process-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/process-runner.js")>()),
+  runProcess: vi.fn(async () => ({
+    stdout:
+      "Assets/Scripts/BrokenScript.cs(4,13): error CS0246: The type or namespace name 'GameObject' could not be found [/tmp/x.csproj]\n",
+    stderr: "",
+    exitCode: 1,
+    timedOut: false,
+    durationMs: 1,
+    stdoutDropped: 0,
+    stderrDropped: 0,
+  })),
+}));
 
 // Initialize logger before all tests
 beforeAll(() => {
@@ -53,7 +62,7 @@ describe("Error Recovery Flow Integration", () => {
     channel = createMockTelegramChannel({ autoConfirm: true });
     mockProvider = createMockProvider();
 
-    tools = [new FileWriteTool(), new FileEditTool(), new StubbedDotnetBuildTool()];
+    tools = [new FileWriteTool(), new FileEditTool(), new DotnetBuildTool()];
 
     orchestrator = new Orchestrator({
       providerManager: { getProvider: () => mockProvider, shutdown: vi.fn() } as any,
