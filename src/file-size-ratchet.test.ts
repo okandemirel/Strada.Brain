@@ -218,12 +218,45 @@ describe("the commit layer sees a baselined file grow under its line (scripts/ci
     };
     git("init", "-q");
     const base = commit("base", { [guard.SIZE_PIN.file]: pins(1650), "src/big.ts": linesOf(1631) });
-    const judge = (head: string) => {
-      const r = spawnSync(process.execPath, [GUARD_PATH, "--base", base, "--head", head], { cwd: dir, env, encoding: "utf8" });
+    const judge = (head: string, from: string = base) => {
+      const r = spawnSync(process.execPath, [GUARD_PATH, "--base", from, "--head", head], { cwd: dir, env, encoding: "utf8" });
       return { status: r.status, out: `${r.stdout}${r.stderr}` };
     };
-    return { dir, pins, commit, judge };
+    return { dir, base, git, pins, commit, judge };
   }
+
+  it("does not count a shrink on main, after the branch left it, as the branch's growth", () => {
+    // The gates run with --base origin/main. A branch behind main must be
+    // measured from where it left, not from main's newer, shorter file.
+    const h = history();
+    try {
+      h.git("checkout", "-q", "-b", "main-line");
+      const main = h.commit("refactor: extract on main", { "src/big.ts": linesOf(1620), "src/big-part.ts": linesOf(11) });
+      h.git("checkout", "-q", "-b", "branch", h.base);
+      const branch = h.commit("feat: elsewhere", { "src/other.ts": linesOf(5) });
+      const green = h.judge(branch, main);
+      expect(green.status, green.out).toBe(0);
+      expect(green.out).toContain("0 baselined file(s) grew");
+    } finally {
+      rmSync(h.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not take a Test-Weakened line on a commit that leaves the grown file alone as its reason", () => {
+    const h = history();
+    try {
+      h.commit("test: drop a dead case\n\nTest-Weakened: the helper it covered is gone from the codebase.", {
+        "src/other.ts": linesOf(5),
+      });
+      const head = h.commit("feat: one more line", { "src/big.ts": linesOf(1632) });
+      const red = h.judge(head);
+      expect(red.status, red.out).toBe(1);
+      expect(red.out).toContain("baselined file grew: src/big.ts 1631 -> 1632");
+      expect(red.out).toContain("1 baselined file(s) grew (0 justified)");
+    } finally {
+      rmSync(h.dir, { recursive: true, force: true });
+    }
+  });
 
   it("refuses one line added to a baselined file under its line, and passes it with a Test-Weakened line", () => {
     const h = history();

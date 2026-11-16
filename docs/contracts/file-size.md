@@ -63,6 +63,12 @@ and it holds the growth that the baseline cannot see.
   pushed first and the addition later, the second push is judged on its own
   and fails. This makes the check stricter, not blind. Push the extraction
   and the addition together.
+- **A revert of an extraction.** `git revert` of a commit that shrank a
+  baselined file brings its lines back, and the range check counts them as
+  growth. This is stricter, not blind: the file did grow. Without a
+  `Test-Weakened:` line in the revert's message it is red at pre-push and in
+  CI. The board's rollback after a red merge runs `git revert --no-edit`, so
+  that kind of revert needs its message written by hand.
 - **A renamed or moved baselined file.** It is missing at one end of the
   range, so the range check does not compare it. The tree check sees it, as a
   file over the limit that is not in the baseline.
