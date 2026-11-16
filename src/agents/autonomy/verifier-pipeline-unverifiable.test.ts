@@ -842,4 +842,11 @@ describe("fileOnPath: why a failed write's path cannot exist, measured in the pr
   it("finds nothing with no root", () => {
     expect(fileOnPath(undefined, "README.md/lantern.txt")).toBeNull();
   });
+
+  it("measures nothing outside the root, even a file there", () => {
+    writeFileSync(join(sandbox, "outside.txt"), "not the project's\n");
+
+    expect(fileOnPath(project, "../outside.txt/lantern.txt")).toBeNull();
+    expect(fileOnPath(project, join(sandbox, "outside.txt", "lantern.txt"))).toBeNull();
+  });
 });
