@@ -292,7 +292,7 @@ import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import { estimateTextTokens } from "../common/token-estimator.js";
 import { instinctScopeKey } from "../agent-core/engine/instinct-scope.js";
 import { phaseAllowsWrites, phaseWriteRefusalResult } from "../agent-core/engine/phase-write-access.js";
-import { withSupervisorRunBudget } from "./orchestrator-supervisor-budget.js";
+import { supervisorRunBudget } from "./orchestrator-supervisor-budget.js";
 import {
   isUnityEditorExclusiveTool,
   withUnityEditorLock,
@@ -1857,8 +1857,10 @@ export class Orchestrator {
     }
 
     let supervisorPlanningPrompt = coarsePlanningPrompt;
+    // One Budget for the admission: the grounding call, the plan and the nodes' slices (ACR-9, #87).
+    const admissionBudget = supervisorRunBudget(() => this.unifiedBudgetManager ?? null);
     if (shouldRegroundRichInput) {
-      const groundedPlanningPrompt = await this.resolveGroundedSupervisorPlanningPrompt(params, coarsePlanningPrompt);
+      const groundedPlanningPrompt = await admissionBudget.within(() => this.resolveGroundedSupervisorPlanningPrompt(params, coarsePlanningPrompt));
       if (!groundedPlanningPrompt) {
         return {
           path: fallbackPath,
@@ -1896,8 +1898,7 @@ export class Orchestrator {
         // Activation feedback is best-effort only.
       }
       const brain = this.supervisorBrain;
-      // One budget for the run, its own calls debited in it, its nodes carved from it (ACR-9, #87).
-      const result = await withSupervisorRunBudget(() => this.unifiedBudgetManager ?? null, (runBudget) => brain.execute(params.prompt, {
+      const result = await admissionBudget.within((runBudget) => brain.execute(params.prompt, {
         chatId: params.chatId,
         channelType: params.channelType,
         userId: params.userId,

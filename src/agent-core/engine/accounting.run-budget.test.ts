@@ -189,10 +189,11 @@ const BUDGET_PRODUCERS: Record<string, { count: number; how: string; evidence: A
   },
   "src/agents/orchestrator-supervisor-budget.ts": {
     count: 1,
-    how: "the supervisor run's Budget: its scope is opened around SupervisorBrain.execute",
+    how: "the supervisor admission's Budget: its scope is opened around the grounding call and SupervisorBrain.execute",
     evidence: [
-      ["src/agents/orchestrator-supervisor-budget.ts", /withRunBudget\(runBudget, \(\) => execute\(runBudget\)\)/],
-      ["src/agents/orchestrator.ts", /withSupervisorRunBudget\([^\n]*\(runBudget\) => brain\.execute\(/],
+      ["src/agents/orchestrator-supervisor-budget.ts", /withRunBudget\(runBudget, \(\) => work\(runBudget\)\)/],
+      ["src/agents/orchestrator.ts", /admissionBudget\.within\(\(\) => this\.resolveGroundedSupervisorPlanningPrompt\(/],
+      ["src/agents/orchestrator.ts", /admissionBudget\.within\(\(runBudget\) => brain\.execute\(/],
     ],
     proof: "src/agents/orchestrator-supervisor-run-budget.test.ts",
   },
