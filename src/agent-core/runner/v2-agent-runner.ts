@@ -394,6 +394,12 @@ export class V2AgentRunner implements AgentRunner {
         budgetStopSaved = true;
         await port.saveBudgetExceededCheckpoint(this.budgetCheckpoint(request, budget, touchedFiles));
       };
+      // A step that keeps the run going ends here: the phase move it made, if any, then step.completed.
+      const completeStep = (from: AgentPhase): void => {
+        const pc = phaseChangedEvent(from, state.phase);
+        if (pc) emit(pc);
+        emit({ type: "step.completed", step: stepNo, phase: state.phase });
+      };
       epochLoop: while (epoch < maxEpochs) {
         const iterLimit = isInteractive(mode)
           ? port.getInteractiveIterationLimit()
@@ -737,9 +743,7 @@ export class V2AgentRunner implements AgentRunner {
               }
             }
 
-            const pc = phaseChangedEvent(prevPhase, state.phase);
-            if (pc) emit(pc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevPhase);
             continue;
           }
 
@@ -824,9 +828,7 @@ export class V2AgentRunner implements AgentRunner {
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
             }
-            const pc = phaseChangedEvent(prevPhase, state.phase);
-            if (pc) emit(pc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevPhase);
             continue;
           }
 
@@ -848,9 +850,7 @@ export class V2AgentRunner implements AgentRunner {
             // tool turn returns the recordStepResultsAndCheckReflection-advanced state; when absent
             // (mock port returns only the trace) the canonical EXECUTING→REFLECTING move applies.
             state = advancedState ?? this.advanceAfterTools(state);
-            const pc = phaseChangedEvent(prevPhase, state.phase);
-            if (pc) emit(pc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevPhase);
             continue;
           }
 
@@ -869,9 +869,7 @@ export class V2AgentRunner implements AgentRunner {
           // end_turn into a continuation (verifier partial-closure / replan) and re-pushed the
           // gate onto the session — keep iterating instead of terminating.
           if (end.continueRun) {
-            const endPc = phaseChangedEvent(prevEndPhase, state.phase);
-            if (endPc) emit(endPc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevEndPhase);
             continue;
           }
           if (end.terminalStatus) {
