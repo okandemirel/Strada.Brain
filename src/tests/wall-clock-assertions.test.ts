@@ -11,8 +11,9 @@
  *
  * What counts is decided by the clock-taint analysis in
  * ./wall-clock-assertions-taint.ts: an ordering matcher whose target or bound
- * comes from a real clock read, except an order of two bare clock values and an
- * assertion whose every clock is proven frozen when it runs. The repository already holds the bounds counted
+ * comes from a real clock read, whatever the fake clocks around it; the one way
+ * out is a `// wall-clock-frozen: <why>` mark right above the assertion, pinned
+ * in WALL_CLOCK_FROZEN_MARKS. The repository already holds the bounds counted
  * in WALL_CLOCK_BASELINE, file by file: this is a RATCHET. No file may gain
  * one, and a file whose count drops lowers its line here in the same change, so
  * the number only goes down. Raising a line is a loosened pin for
@@ -35,7 +36,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
-import { type Bound, judgeBounds, wallClockBounds } from "./wall-clock-assertions-taint.js";
+import { type Bound, judgeBounds, measureWallClock, wallClockBounds } from "./wall-clock-assertions-taint.js";
 
 const REPO = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const SELF = "src/tests/wall-clock-assertions.test.ts";
@@ -45,9 +46,10 @@ const { testFiles } = (await import(pathToFileURL(path.join(REPO, "scripts", "ci
 
 /**
  * Clock-tainted ordering assertions per test file, as this detector sees them. Measured
- * on main at 1d0d374a (2026-11-16): 299 in 103 files. Lower a count when you
- * replace a bound with fake timers or a counted event; delete its line at
- * zero. Never raise one, never add one.
+ * on main at 36b00a01 (2026-11-16): 316 in 106 files. Lower a count when you
+ * replace a bound with a counted event, an injected clock or the order of
+ * events, or put a pinned wall-clock-frozen mark on one whose clock cannot
+ * move; delete its line at zero. Never raise one, never add one.
  */
 const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/agent-core/engine/tool-turn.guidance-exposure.test.ts": 3,
@@ -63,6 +65,7 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/agents/orchestrator-provider-failover.test.ts": 1,
   "src/agents/orchestrator-reflection-handler.test.ts": 1,
   "src/agents/orchestrator-session-manager.test.ts": 1,
+  "src/agents/orchestrator.test.ts": 13,
   "src/agents/provider-failure-notice.test.ts": 1,
   "src/agents/providers/claude-seat-review.test.ts": 3,
   "src/agents/providers/credential-rejected.test.ts": 1,
@@ -86,6 +89,7 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/campaign/campaign-manager.test.ts": 39,
   "src/campaign/scope-settle-manager.test.ts": 4,
   "src/channels/discord/rate-limiter.test.ts": 4,
+  "src/channels/message-queue.test.ts": 2,
   "src/channels/slack/__tests__/rate-limiter.test.ts": 3,
   "src/channels/slack/app.test.ts": 1,
   "src/common/fetch-with-retry.test.ts": 2,
@@ -123,6 +127,7 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/memory/unified/agentdb-decay-writes.test.ts": 2,
   "src/memory/unified/agentdb-retrieval.test.ts": 16,
   "src/memory/unified/agentdb-tiering.test.ts": 6,
+  "src/memory/unified/auto-tiering.test.ts": 2,
   "src/memory/unified/consolidation-engine.test.ts": 4,
   "src/rag/chunker.test.ts": 1,
   "src/rag/docs/composite-rag-pipeline.test.ts": 5,
@@ -155,6 +160,13 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "tests/vault/phase2.acceptance.test.ts": 1,
 };
 
+/**
+ * The `// wall-clock-frozen: <why>` marks in the repository, as `file: reason`.
+ * A mark leaves the assertion under it uncounted, so each one is pinned here
+ * where a reviewer reads its reason. None on main at 36b00a01.
+ */
+const WALL_CLOCK_FROZEN_MARKS: readonly string[] = [];
+
 /** The limit a test that scans the repository carries, as clean-checkout.test.ts and dist-readers.test.ts do. */
 const REPO_SCAN_TIMEOUT_MS = 120_000;
 
@@ -162,9 +174,11 @@ const NEW_BOUND_ADVICE =
   "A test gained an ordering assertion on a value from a real clock (docs/contracts/wall-clock-assertions.md): " +
   "an upper bound on time taken, a lower bound on time left, or the same inequality rearranged. On a machine " +
   "several agents share, such a bound turns red on unrelated changes. Assert the behaviour instead of the " +
-  "machine's speed: fake timers (vi.useFakeTimers / vi.advanceTimersByTime), an injected clock, a counted " +
-  "call or attempt, or the order of events. Do not move the bound into a helper or a property to hide it; " +
-  "raising WALL_CLOCK_BASELINE is a loosened pin and needs a Test-Weakened line.";
+  "machine's speed: an injected clock, a counted call or attempt, or the order of events. An assertion on a " +
+  "clock under fake timers still counts; if its clock truly cannot move, say why in a " +
+  "'// wall-clock-frozen: <why>' line right above it and pin that mark in WALL_CLOCK_FROZEN_MARKS. Do not " +
+  "move the bound into a helper or a property to hide it; raising WALL_CLOCK_BASELINE is a loosened pin " +
+  "and needs a Test-Weakened line.";
 
 // ---------------------------------------------------------------------------
 // Rule repo-scan-carries-its-limit
@@ -317,9 +331,9 @@ function unlimitedScans(root: string, detectors: readonly string[]): string[] {
 // The checks
 // ---------------------------------------------------------------------------
 
-let repoBounds: Bound[] | undefined;
+let repoMeasure: ReturnType<typeof measureWallClock> | undefined;
 /** The repository's own measurement, made once for the tests that read it. */
-const measureRepo = (): Bound[] => (repoBounds ??= wallClockBounds(REPO, testFiles(REPO)));
+const measureRepo = (): ReturnType<typeof measureWallClock> => (repoMeasure ??= measureWallClock(REPO, testFiles(REPO)));
 
 const temps: string[] = [];
 afterEach(() => {
@@ -338,13 +352,25 @@ function fixtureRoot(files: Record<string, string>): string {
 
 describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-assertions.md)", () => {
   it("no test file gained a wall-clock bound", () => {
-    const { added } = judgeBounds(measureRepo(), WALL_CLOCK_BASELINE);
+    const { added } = judgeBounds(measureRepo().bounds, WALL_CLOCK_BASELINE);
     expect(added, NEW_BOUND_ADVICE).toEqual([]);
   }, REPO_SCAN_TIMEOUT_MS);
 
   it("the baseline is lowered as soon as a bound goes away", () => {
-    const { stale } = judgeBounds(measureRepo(), WALL_CLOCK_BASELINE);
+    const { stale } = judgeBounds(measureRepo().bounds, WALL_CLOCK_BASELINE);
     expect(stale, `lower these lines in WALL_CLOCK_BASELINE in ${SELF} (delete at zero) so the ratchet holds`).toEqual([]);
+  }, REPO_SCAN_TIMEOUT_MS);
+
+  it("every wall-clock-frozen mark gives its reason, sits on a counted assertion, and is pinned here", () => {
+    const { marked, stray } = measureRepo();
+    expect(
+      stray.map((m) => `${m.file}:${m.line} ${m.reason}`),
+      "a // wall-clock-frozen: <why> mark goes on the line right above a clock-tainted ordering assertion and says why the clock cannot move (8 characters or more)",
+    ).toEqual([]);
+    expect(
+      marked.map((m) => `${m.file}: ${m.reason}`).sort(),
+      `a new wall-clock-frozen mark leaves a bound uncounted: pin it in WALL_CLOCK_FROZEN_MARKS in ${SELF} so the reviewer reads its reason`,
+    ).toEqual([...WALL_CLOCK_FROZEN_MARKS].sort());
   }, REPO_SCAN_TIMEOUT_MS);
 
   /** A fixture file from `[line, form]` pairs; returns the file and the `line:form` the detector must report. */
@@ -428,78 +454,47 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
       ['expect(laps.get("a")).toBeLessThan(500);', "target"],
       ["const end = Date.now();", null],
       ["expect(end).toBeLessThan(t + 500);", "both"],
+      ["expect(end).toBeGreaterThanOrEqual(t);", "both"],
+      ["const fast = performance.now() - t;", null],
+      ["const slow = performance.now() - end;", null],
+      ["expect(fast).toBeLessThan(slow);", "both"],
     ]);
     expect(found(fixtureRoot({ "src/seen.test.ts": body }))).toEqual(want);
   });
 
-  it("counts an assertion whose clock is not proven frozen when it runs", () => {
+  it("counts an assertion under a fake clock too, frozen or not: whether it holds still is not read from the source", () => {
     const { body, want } = spec([
+      ['import { performance as hooked } from "node:perf_hooks";', null],
+      ['import { hrtime } from "node:process";', null],
       ['describe("a", () => { beforeEach(() => { vi.useFakeTimers(); }); it("real again", () => { vi.useRealTimers(); expect(Date.now() - 1).toBeLessThan(5); }); });', "target"],
+      ['describe("b", () => { beforeEach(() => { vi.useFakeTimers(); }); it("x", () => { expect(Date.now() - 1).toBeLessThan(5); }); });', "target"],
+      ['describe("c", () => { beforeEach(() => vi.useFakeTimers()); it("x", () => { expect(performance.now() - 1).toBeLessThan(5); }); });', "target"],
+      ['describe("d", () => { beforeEach(() => { vi.useFakeTimers(); }); it("perf_hooks", () => { const s = hooked.now(); expect(hooked.now() - s).toBeLessThan(500); }); });', "target"],
+      ['describe("e", () => { beforeEach(() => { vi.useFakeTimers(); }); it("named hrtime", () => { const s = hrtime.bigint(); expect(hrtime.bigint() - s).toBeLessThan(500_000_000n); }); });', "target"],
+      ['describe("f", () => { beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(1000); }); it("new Date", () => { const s = new Date().getTime(); expect(new Date().getTime() - s).toBeLessThan(500); }); });', "target"],
+      ['describe("g", () => { beforeAll(() => { vi.useFakeTimers(); }); afterAll(() => { vi.useRealTimers(); }); it("z", () => { expect(Date.now() - 1).toBeLessThan(5); }); });', "target"],
+      ['describe("h", () => { vi.useFakeTimers(); it("y", () => { expect(Date.now() - 1).toBeLessThan(5); }); });', "target"],
       ['it("spy passes through", () => { vi.spyOn(Date, "now"); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
       ['it("advancing", () => { vi.useFakeTimers({ shouldAdvanceTime: true }); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("all restored", () => { vi.spyOn(Date, "now").mockReturnValue(5); vi.restoreAllMocks(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("spy restored", () => { const spy = vi.spyOn(Date, "now").mockReturnValue(5); spy.mockRestore(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("restored", () => { vi.spyOn(Date, "now").mockReturnValue(5); vi.restoreAllMocks(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
       ['it("performance faked, Date read", () => { vi.useFakeTimers({ toFake: ["performance"] }); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("timeouts faked", () => { vi.useFakeTimers({ toFake: ["setTimeout"] }); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("Date faked, performance read", () => { vi.setSystemTime(5); expect(performance.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("once", () => { vi.spyOn(Date, "now").mockReturnValueOnce(5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("reads through", () => { vi.spyOn(Date, "now").mockImplementation(() => realNow() + 5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("ticking", () => { vi.useFakeTimers(); vi.setTimerTickMode("interval", 10); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ["function unfreeze() { vi.useRealTimers(); }", null],
-      ['it("undone by a helper", () => { vi.useFakeTimers(); unfreeze(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("maybe faked", () => { if (flag) vi.useFakeTimers(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("loop", () => { vi.useFakeTimers(); for (const n of [1, 2]) { expect(Date.now() - n).toBeLessThan(5); vi.useRealTimers(); } });', "target"],
-      ['it("callback", () => { vi.useFakeTimers(); later(() => expect(Date.now() - 1).toBeLessThan(5)); vi.useRealTimers(); });', "target"],
-      ['it("options unread", () => { vi.useFakeTimers(OPTIONS); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ['it("set while advancing", () => { vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("faked", () => { vi.useFakeTimers(); const t0 = Date.now(); expect(Date.now() - t0).toBeLessThan(5); vi.useRealTimers(); });', "target"],
+      ['it("Date only", () => { vi.useFakeTimers({ toFake: ["Date"] }); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("set", () => { vi.setSystemTime(5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("spied", () => { vi.spyOn(Date, "now").mockReturnValue(5); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("spied perf", () => { vi.spyOn(performance, "now").mockImplementation(() => clock); expect(performance.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("manual ticks", () => { vi.useFakeTimers(); vi.setTimerTickMode("manual"); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("in a block", () => { vi.useFakeTimers(); try { expect(Date.now() - 1).toBeLessThan(5); } finally { vi.useRealTimers(); } });', "target"],
       ['it("uptime", () => { vi.useFakeTimers(); expect(process.uptime() - 1).toBeLessThan(5); });', "target"],
+      ['it("a retry stamp", () => { vi.useFakeTimers(); expect(entry.retryAfter).toBeGreaterThan(Date.now()); });', "bound"],
     ]);
-    const inHook = spec([['beforeEach(() => { vi.useFakeTimers(); expect(Date.now() - 1).toBeLessThan(5); });', "target"]]);
-    const sibling = spec([
-      ['describe("held", () => {', null],
-      ["  beforeAll(() => { vi.useFakeTimers(); });", null],
-      ['  it("first", () => { vi.useRealTimers(); });', null],
-      ['  it("second", () => { expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ["});", null],
-    ]);
-    const afterEachUndoes = spec([
-      ['describe("held", () => {', null],
-      ["  beforeAll(() => { vi.useFakeTimers(); });", null],
-      ["  afterEach(() => { vi.useRealTimers(); });", null],
-      ['  it("x", () => { expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-      ["});", null],
-    ]);
-    const innerAfterAll = spec([
-      ["beforeAll(() => { vi.useFakeTimers(); });", null],
-      ['describe("inner", () => { afterAll(() => { vi.useRealTimers(); }); it("a", () => {}); });', null],
-      ['it("later", () => { expect(Date.now() - 1).toBeLessThan(5); });', "target"],
-    ]);
-    const root = fixtureRoot({
-      "src/real.test.ts": body,
-      "src/sibling.test.ts": sibling.body,
-      "src/after-each.test.ts": afterEachUndoes.body,
-      "src/inner-after-all.test.ts": innerAfterAll.body,
-      "src/in-hook.test.ts": inHook.body,
-    });
-    expect(foundIn(root)).toEqual([
-      ...afterEachUndoes.want.map((w) => `src/after-each.test.ts:${w}`),
-      ...inHook.want.map((w) => `src/in-hook.test.ts:${w}`),
-      ...innerAfterAll.want.map((w) => `src/inner-after-all.test.ts:${w}`),
-      ...want.map((w) => `src/real.test.ts:${w}`),
-      ...sibling.want.map((w) => `src/sibling.test.ts:${w}`),
-    ]);
+    expect(found(fixtureRoot({ "src/faked.test.ts": body }))).toEqual(want);
   });
 
-  it("leaves out an order of two bare clock values, an assertion with every clock frozen, and one with no clock in it", () => {
+  it("leaves out an assertion with no clock in it, and one under a wall-clock-frozen mark that gives its reason", () => {
     const root = fixtureRoot({
       "src/excluded.test.ts": [
         'import { performance as fake } from "./fake-clock.js";',
-        "const a = Date.now();",
-        "const b = Date.now();",
-        "expect(b).toBeGreaterThanOrEqual(a);",
-        "const fast = performance.now() - a;",
-        "const slow = performance.now() - b;",
-        "expect(fast).toBeLessThan(slow);",
         "expect(rows.length).toBeLessThan(5);",
         "expect(x).toBeGreaterThan(limit + 1);",
         "let time = 1_000_000;",
@@ -508,36 +503,45 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
         "function f(Date: { now(): number }) { expect(Date.now() - 5).toBeLessThan(5); }",
         "expect(fake.now() - 5).toBeLessThan(5);",
       ].join("\n"),
-      "src/frozen.test.ts": [
-        'describe("hooked", () => { beforeEach(() => { vi.useFakeTimers(); }); it("x", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
-        'describe("arrow hook", () => { beforeEach(() => vi.useFakeTimers()); it("x", () => { expect(performance.now() - 1).toBeLessThan(5); }); });',
-        'describe("undone after", () => { beforeEach(() => { vi.useFakeTimers(); }); afterEach(() => { vi.useRealTimers(); }); it("a", () => { vi.useRealTimers(); }); it("b", () => { expect(Date.now() - 1).toBeLessThan(5); }); });',
-        'it("faked", () => { vi.useFakeTimers(); const t0 = Date.now(); expect(Date.now() - t0).toBeLessThan(5); vi.useRealTimers(); });',
-        'it("Date only", () => { vi.useFakeTimers({ toFake: ["Date"], shouldAdvanceTime: false }); expect(Date.now() - 1).toBeLessThan(5); });',
-        'it("hrtime", () => { vi.useFakeTimers(); expect(process.hrtime.bigint() - 1n).toBeLessThan(5n); });',
-        'it("set", () => { vi.setSystemTime(5); expect(Date.now() - 1).toBeLessThan(5); });',
-        'it("set on fake", () => { vi.useFakeTimers().setSystemTime(5); expect(performance.now() - 1).toBeLessThan(5); });',
-        'it("spied", () => { vi.spyOn(Date, "now").mockReturnValue(5); expect(Date.now() - 1).toBeLessThan(5); });',
-        'it("spied perf", () => { vi.spyOn(performance, "now").mockImplementation(() => clock); expect(performance.now() - 1).toBeLessThan(5); });',
-        'it("named spy", () => { const spy = vi.spyOn(Date, "now"); spy.mockReturnValue(5); expect(Date.now() - 1).toBeLessThan(5); });',
-        'it("manual ticks", () => { vi.useFakeTimers(); vi.setTimerTickMode("manual"); expect(Date.now() - 1).toBeLessThan(5); });',
-        'it("in a block", () => { vi.useFakeTimers(); try { expect(Date.now() - 1).toBeLessThan(5); } finally { vi.useRealTimers(); } });',
+      "src/marked.test.ts": [
+        'it("frozen", () => {',
+        "  vi.useFakeTimers();",
+        "  const t0 = Date.now();",
+        "  // wall-clock-frozen: fake timers installed two lines up, nothing advances them",
+        "  expect(Date.now() - t0).toBeLessThan(5);",
+        "  //wall-clock-frozen:   the spy answers 1000 on every call   ",
+        "  expect(entry.cooldownUntil - Date.now()).toBeGreaterThan(5);",
+        "  // wall-clock-frozen: short",
+        "  expect(Date.now() - t0).toBeLessThan(5);",
+        "  // wall-clock-frozen: a mark two lines above its assertion marks nothing",
+        "",
+        "  expect(Date.now() - t0).toBeLessThan(5);",
+        "  // wall-clock-frozen: a mark above an assertion with no clock in it",
+        "  expect(rows.length).toBeLessThan(5);",
+        "  expect(Date.now() - t0).toBeLessThan(5); // wall-clock-frozen: a trailing comment is not a mark",
+        "});",
       ].join("\n"),
-      "src/frozen-at-collection.test.ts":
-        'describe("plain", () => { vi.useFakeTimers(); it("y", () => { expect(Date.now() - 1).toBeLessThan(5); }); });\n',
-      "src/frozen-for-all.test.ts":
-        'describe("all", () => { beforeAll(() => { vi.useFakeTimers(); }); afterAll(() => { vi.useRealTimers(); }); it("z", () => { expect(Date.now() - 1).toBeLessThan(5); }); });\n',
+      "src/unparsed.test.ts": "// wall-clock-frozen: a mark in a file with no clock read\nexpect(rows).toEqual([]);\n",
     });
-    expect(foundIn(root)).toEqual([]);
+    const { bounds, marked, stray } = measureWallClock(root, testFiles(root));
+    expect(bounds.map((b) => `${b.file}:${b.line}`)).toEqual(["src/marked.test.ts:9", "src/marked.test.ts:12", "src/marked.test.ts:15"]);
+    expect(marked.map((m) => `${m.file}:${m.line} ${m.reason}`)).toEqual([
+      "src/marked.test.ts:5 fake timers installed two lines up, nothing advances them",
+      "src/marked.test.ts:7 the spy answers 1000 on every call",
+    ]);
+    expect(stray.map((m) => `${m.file}:${m.line} ${m.reason}`)).toEqual([
+      "src/marked.test.ts:8 short",
+      "src/marked.test.ts:10 a mark two lines above its assertion marks nothing",
+      "src/marked.test.ts:13 a mark above an assertion with no clock in it",
+      "src/unparsed.test.ts:1 a mark in a file with no clock read",
+    ]);
   });
 
   it("cannot see a clock read through what the contract lists under 'What it cannot see'", () => {
     const root = fixtureRoot({
       "src/timing.ts": "export const timed = (run: () => void): number => { const s = Date.now(); run(); return Date.now() - s; };\n",
-      "src/unfreeze.ts": "export const unfreeze = (): void => { vi.useRealTimers(); };\n",
       "src/blind.test.ts": [
         'import { timed } from "./timing.js";',
-        'import { unfreeze } from "./unfreeze.js";',
         "expect(timed(work)).toBeLessThan(5);",
         "logCall(Date.now() - 160_000);",
         "expect(medianMs()).toBeLessThan(165_000);",
@@ -559,7 +563,6 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
         "expect(Date.now() - 5).toSatisfy((ms: number) => ms < 500);",
         'expect(Date.now() - 5)["toBeLessThan"](500);',
         "expect(Date.now() - 5).to.be.below(500);",
-        'it("undone by an imported helper", () => { vi.useFakeTimers(); unfreeze(); expect(Date.now() - 1).toBeLessThan(5); });',
       ].join("\n"),
     });
     expect(found(root)).toEqual([]);
@@ -570,23 +573,14 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
       ["expect(deadline - Date.now()).toBeLessThan(60_000);", "target"],
       ["const after = Date.now();", null],
       ["expect(state.stamp).toBeLessThanOrEqual(after);", "bound"],
-      ['function freeze() { vi.spyOn(Date, "now").mockReturnValue(5); }', null],
-      ['it("frozen by a helper", () => { freeze(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
+      ['it("frozen", () => { vi.useFakeTimers(); expect(Date.now() - 1).toBeLessThan(5); });', "target"],
       ["expect(items.filter((i) => i.at < Date.now()).length).toBeLessThan(3);", "target"],
       ["const tasks = makeTasks(Date.now());", null],
       ["const asked: string[] = [];", null],
       ['vi.spyOn(tasks, "getStatus").mockImplementation((id: string) => { asked.push(id); return 1; });', null],
       ['expect(asked.indexOf("a")).toBeLessThan(3);', "target"],
     ]);
-    const heldThenElsewhere = spec([
-      ['describe("a", () => { vi.useFakeTimers(); it("x", () => { expect(Date.now() - 1).toBeLessThan(5); }); });', "target"],
-      ['describe("b", () => { beforeEach(() => { vi.useFakeTimers(); }); });', null],
-    ]);
-    const root = fixtureRoot({ "src/over.test.ts": body, "src/over-held.test.ts": heldThenElsewhere.body });
-    expect(foundIn(root)).toEqual([
-      ...heldThenElsewhere.want.map((w) => `src/over-held.test.ts:${w}`),
-      ...want.map((w) => `src/over.test.ts:${w}`),
-    ]);
+    expect(found(fixtureRoot({ "src/over.test.ts": body }))).toEqual(want);
   });
 
   it("turns red on a new expect(Date.now() - t).toBeLessThan(500), and green once the baseline holds it", () => {

@@ -21,16 +21,16 @@
  * `expect(x)` or `expect.soft(x)` counts when `x` or the bound it is compared
  * with is tainted. Which side, which direction and how the inequality is
  * arranged do not matter: every arrangement of "a later clock read minus an
- * earlier one is below K" holds a tainted side. Two cases are left out, each on
- * purpose:
- *
- * - an order of two bare clock values, with no constant, stamp or call on
- *   either side (`expect(b).toBeGreaterThan(a)` with both clock reads, or two
- *   elapsed times compared): it checks that the clock moved on, or which of two
- *   runs was faster, which load does not decide by itself;
- * - an assertion whose every clock is proven frozen when it runs (frozenAt
- *   below): a fake clock that is not advancing, for the clock the assertion
- *   reads, not undone on the way.
+ * earlier one is below K" holds a tainted side. Nothing is left out by
+ * inference: not an order of two clock values, not an assertion under a fake
+ * clock. Whether a fake clock holds still for the clock a line reads depends
+ * on which object the read reaches at run time (a `performance` imported from
+ * node:perf_hooks is not the global one fake timers replace), which a reading
+ * of the source cannot prove. The one way out is a mark the reviewer reads: a
+ * line comment `// wall-clock-frozen: <why>` on the line right above the
+ * assertion (MARK below). A marked assertion is reported as marked, not
+ * counted; a mark above no counted assertion, or with no reason, is reported
+ * as stray.
  *
  * When in doubt it counts: this is a ratchet, and counting too much only makes
  * the baseline larger, while counting too little lets a new bound through.
@@ -51,18 +51,11 @@ const ORDERING = new Set(["toBeLessThan", "toBeLessThanOrEqual", "toBeGreaterTha
 /** Links between `expect(x)` and the matcher that compare the same value (`.resolves` its settled value). */
 const CHAIN = new Set(["not", "resolves", "rejects"]);
 
-/** The clocks a value can come from. Vitest's fake timers can fake the first three; nothing fakes uptime. */
+/** The clocks a value can come from, as bits; any bit makes a value tainted. */
 const DATE = 1;
 const PERF = 2;
 const HRTIME = 4;
 const UPTIME = 8;
-/**
- * What `vi.useFakeTimers()` fakes without a `toFake`: in vitest 4 every timer
- * but nextTick and queueMicrotask, so Date, performance and hrtime
- * (vitest.config.ts sets no `fakeTimers`).
- */
-const FAKED_BY_DEFAULT = DATE | PERF | HRTIME;
-const TO_FAKE: Readonly<Record<string, number>> = { Date: DATE, performance: PERF, hrtime: HRTIME };
 
 const MODULES = {
   performance: new Set(["perf_hooks", "node:perf_hooks"]),
@@ -85,11 +78,12 @@ const ASSIGNMENTS = new Set([
 const SPELLS_CLOCK = /\bnow\b|\bhrtime\b|\buptime\b|new\s+Date\s*\(\s*\)/;
 const SPELLS_ORDERING = /\b(?:toBeLessThan|toBeGreaterThan)/;
 
-/** The calls that frame a test file: a test case, a group, a hook. */
-const STRUCTURE = new Set(["it", "test", "describe", "beforeEach", "beforeAll", "afterEach", "afterAll"]);
-const SPY_FREEZES = new Set(["mockReturnValue", "mockImplementation"]);
-const SPY_METHODS = /^mock(?:ReturnValue|Implementation|ResolvedValue|RejectedValue)/;
-const MOCK_RESETS = new Set(["restoreAllMocks", "resetAllMocks", "mockRestore", "mockReset"]);
+/**
+ * The mark that leaves one assertion out: `// wall-clock-frozen: <why>` on the
+ * line right above it. The reason must say something (8 characters or more).
+ */
+const MARK = /^\s*\/\/\s*wall-clock-frozen:(.*)$/;
+const MIN_REASON = 8;
 
 /** Parens, `as`, `!` and `satisfies` change nothing about the value. */
 function strip(node: ts.Expression): ts.Expression {
@@ -146,46 +140,7 @@ function expectTarget(call: ts.CallExpression): { target: ts.Expression; matcher
   return isExpect ? { target: obj.arguments[0]!, matcher, negated } : undefined;
 }
 
-/** The name a call chain starts from: `it` for `it.each(…)(…)`. */
-function headOf(call: ts.CallExpression): string {
-  let e: ts.Expression = call.expression;
-  while (ts.isPropertyAccessExpression(e) || ts.isCallExpression(e)) e = e.expression;
-  return ts.isIdentifier(e) ? e.text : "";
-}
-
-/** Which framing call (`it`, `describe`, a hook) `fn` is the callback of, if any. */
-function structural(fn: ts.Node): string | undefined {
-  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return undefined;
-  const call = fn.parent;
-  if (!ts.isCallExpression(call) || !call.arguments.some((a) => a === fn)) return undefined;
-  const head = headOf(call);
-  return STRUCTURE.has(head) ? head : undefined;
-}
-
-/** A `vi.<name>(…)` call. */
-const isVi = (call: ts.CallExpression, name: string): boolean =>
-  ts.isPropertyAccessExpression(call.expression) &&
-  call.expression.name.text === name &&
-  ts.isIdentifier(call.expression.expression) &&
-  call.expression.expression.text === "vi";
-
-/** The state of the clocks while a test runs, as far as the file spells it. */
-interface ClockState {
-  installed: boolean; // vi.useFakeTimers is in effect
-  timers: number; // the clocks the fake timers hold still
-  dateMock: boolean; // vi.setSystemTime without fake timers: Date is mocked and still
-  spies: number; // clocks whose `now` a spy answers without a real read
-}
-const real = (): ClockState => ({ installed: false, timers: 0, dateMock: false, spies: 0 });
-const stillIn = (s: ClockState): number => (s.installed ? s.timers : 0) | (s.dateMock ? DATE : 0) | s.spies;
-
-interface ClockEvent {
-  pos: number;
-  apply(s: ClockState): void;
-}
-const TO_REAL = (s: ClockState): void => void Object.assign(s, real());
-
-/** Taint and fake-clock reading for one program; every answer is kept per node or symbol. */
+/** Taint reading for one program; every answer is kept per node or symbol. */
 function analysis(checker: ts.TypeChecker) {
   const nodes = new Map<ts.Node, number>();
   const symbols = new Map<ts.Symbol, number>();
@@ -497,333 +452,44 @@ function analysis(checker: ts.TypeChecker) {
     return m;
   }
 
-  /**
-   * Whether a side is a bare clock value: a clock read, a `const` declared
-   * with one and never written again, or `+`, `-`, `*`, `/` of two bare clock
-   * values (an elapsed time `end - start` is one). Anything else, a constant,
-   * a stamp, a call or a property, is slack, and an unknown counts as slack.
-   */
-  function bare(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
-    const n = strip(node);
-    if (seen.has(n)) return false;
-    seen.add(n);
-    if (clockRead(n)) return true;
-    if (ts.isBinaryExpression(n)) {
-      const op = n.operatorToken.kind;
-      const arithmetic =
-        op === ts.SyntaxKind.PlusToken ||
-        op === ts.SyntaxKind.MinusToken ||
-        op === ts.SyntaxKind.AsteriskToken ||
-        op === ts.SyntaxKind.SlashToken;
-      return arithmetic && bare(n.left, seen) && bare(n.right, seen);
-    }
-    if (ts.isIdentifier(n)) {
-      const symbol = checker.getSymbolAtLocation(n);
-      const decl = symbol?.declarations?.[0];
-      if (!symbol || !decl || !ts.isVariableDeclaration(decl) || !decl.initializer) return false;
-      return writesOf(symbol, n).length === 0 && bare(decl.initializer, seen);
-    }
-    return false;
-  }
+  return { tainted };
+}
 
-  // -------------------------------------------------------------------------
-  // Fake clocks
-  // -------------------------------------------------------------------------
-
-  /** The clock whose `now` `vi.spyOn(obj, "now")` replaces, as a bit. */
-  function spiedClock(call: ts.CallExpression): number {
-    if (!isVi(call, "spyOn")) return 0;
-    const [obj, method] = call.arguments;
-    if (!obj || !method || !ts.isStringLiteralLike(method) || method.text !== "now") return 0;
-    return isClockObject(obj, "Date") ? DATE : isClockObject(obj, "performance") ? PERF : 0;
-  }
-
-  /** The calls of a chain `a(…).b(…).c(…)`, first one first. */
-  function chain(expr: ts.Expression): ts.CallExpression[] {
-    let e = strip(expr);
-    if (ts.isAwaitExpression(e)) e = strip(e.expression);
-    const calls: ts.CallExpression[] = [];
-    while (ts.isCallExpression(e)) {
-      calls.unshift(e);
-      const callee = strip(e.expression);
-      if (!ts.isPropertyAccessExpression(callee)) break;
-      e = strip(callee.expression);
-    }
-    return calls;
-  }
-
-  /** A name declared with a spy on a clock's `now` (`const spy = vi.spyOn(Date, "now")`), as the clock's bit. */
-  function spyName(e: ts.Expression): number {
-    const n = strip(e);
-    if (!ts.isIdentifier(n)) return 0;
-    const decl = declarationOf(n);
-    if (!decl || !ts.isVariableDeclaration(decl) || !decl.initializer) return 0;
-    return chain(decl.initializer).reduce((m, c) => m | spiedClock(c), 0);
-  }
-
-  /** A clock call the analysis cannot place as a freeze: what it does to the state when it runs. */
-  function clockCall(call: ts.CallExpression): ((s: ClockState) => void) | undefined {
-    if (isVi(call, "useRealTimers")) return TO_REAL;
-    if (isVi(call, "setTimerTickMode")) {
-      const [mode] = call.arguments;
-      if (mode && ts.isStringLiteralLike(mode) && mode.text === "manual") return undefined;
-      return (s) => void (s.timers = 0); // the fake clock now moves by itself
-    }
-    const callee = call.expression;
-    if (ts.isPropertyAccessExpression(callee) && MOCK_RESETS.has(callee.name.text)) {
-      return (s) => void (s.spies = 0);
-    }
-    if (isVi(call, "useFakeTimers") || isVi(call, "setSystemTime") || spiedClock(call)) return TO_REAL;
-    if (ts.isPropertyAccessExpression(callee) && SPY_METHODS.test(callee.name.text) && spyName(callee.expression)) return TO_REAL;
-    return undefined;
-  }
-
-  /** What a `vi.useFakeTimers(opts)` holds still, or undefined when the options cannot be read. */
-  function fakeTimersFreeze(call: ts.CallExpression): number | undefined {
-    const [opts] = call.arguments;
-    if (!opts) return FAKED_BY_DEFAULT;
-    if (!ts.isObjectLiteralExpression(opts)) return undefined;
-    let faked = FAKED_BY_DEFAULT;
-    for (const p of opts.properties) {
-      if (!ts.isPropertyAssignment(p) && !ts.isShorthandPropertyAssignment(p)) return undefined;
-      const name = p.name && ts.isIdentifier(p.name) ? p.name.text : undefined;
-      if (name === undefined) return undefined;
-      const value = ts.isPropertyAssignment(p) ? strip(p.initializer) : p.name;
-      if (name === "shouldAdvanceTime") {
-        if (value.kind !== ts.SyntaxKind.FalseKeyword) return 0; // the fake clock moves with real time
-      } else if (name === "toFake") {
-        if (!ts.isArrayLiteralExpression(value)) return undefined;
-        faked = 0;
-        for (const el of value.elements) {
-          if (!ts.isStringLiteralLike(el)) return undefined;
-          faked |= TO_FAKE[el.text] ?? 0;
-        }
-      }
-    }
-    return faked;
-  }
-
-  /**
-   * A statement (or an arrow's expression body) that freezes a clock when it
-   * runs: `vi.useFakeTimers(…)`, `vi.setSystemTime(…)`, or a spy on a clock's
-   * `now` given a fixed answer. Undefined when it is not one, or when any link
-   * of its chain does something the analysis does not follow.
-   */
-  function freezeOf(node: ts.Node): { calls: ts.CallExpression[]; apply(s: ClockState): void } | undefined {
-    const exprs = ts.isExpressionStatement(node)
-      ? [node.expression]
-      : ts.isVariableStatement(node)
-        ? node.declarationList.declarations.flatMap((d) => (d.initializer ? [d.initializer] : []))
-        : ts.isExpression(node)
-          ? [node]
-          : [];
-    if (exprs.length !== 1) return undefined;
-    const calls = chain(exprs[0]!);
-    if (calls.length === 0) return undefined;
-    const steps: ((s: ClockState) => void)[] = [];
-    let spied = 0;
-    for (const [i, call] of calls.entries()) {
-      const callee = call.expression;
-      const method = ts.isPropertyAccessExpression(callee) ? callee.name.text : "";
-      const onVi = isVi(call, method) || (i > 0 && steps.length > 0 && !spied); // vi.useFakeTimers() returns vi
-      if (onVi && method === "useFakeTimers") {
-        const still = fakeTimersFreeze(call);
-        if (still === undefined) return undefined;
-        steps.push((s) => Object.assign(s, { installed: true, timers: still, dateMock: false }));
-      } else if (onVi && method === "setSystemTime") {
-        steps.push((s) => {
-          if (!s.installed) s.dateMock = true;
-        });
-      } else if (spiedClock(call)) {
-        spied = spiedClock(call);
-      } else if (SPY_FREEZES.has(method) && (spied || (i === 0 && spyName((callee as ts.PropertyAccessExpression).expression)))) {
-        const clock = spied || spyName((callee as ts.PropertyAccessExpression).expression);
-        const impl = call.arguments[0];
-        if (method === "mockImplementation" && !fixedAnswer(impl)) return undefined;
-        steps.push((s) => void (s.spies |= clock));
-        spied = 0;
-      } else return undefined;
-    }
-    if (steps.length === 0 || spied) return undefined;
-    return { calls, apply: (s) => steps.forEach((step) => step(s)) };
-  }
-
-  /** An implementation that makes no call, so it cannot reach a real clock: `() => now`. */
-  function fixedAnswer(impl: ts.Expression | undefined): boolean {
-    if (!impl) return false;
-    const fn = strip(impl);
-    if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return false;
-    let calls = false;
-    const visit = (n: ts.Node): void => {
-      if (ts.isCallExpression(n) || ts.isNewExpression(n)) calls = true;
-      else ts.forEachChild(n, visit);
-    };
-    visit(fn.body);
-    return !calls;
-  }
-
-  /** Whether a function the file declares reaches a clock call, through the file's functions. */
-  const helperCache = new Map<ts.Node, boolean>();
-  function helperTouchesClock(call: ts.CallExpression): boolean {
-    const fn = declaredFunction(call.expression);
-    if (!fn?.body) return false;
-    const known = helperCache.get(fn);
-    if (known !== undefined) return known;
-    helperCache.set(fn, false);
-    let hit = false;
-    const visit = (n: ts.Node): void => {
-      if (hit) return;
-      if (ts.isCallExpression(n) && (clockCall(n) || helperTouchesClock(n))) hit = true;
-      else ts.forEachChild(n, visit);
-    };
-    visit(fn.body);
-    helperCache.set(fn, hit);
-    return hit;
-  }
-
-  /**
-   * The clock events of one region: freezes from the statements that run for
-   * sure, and every other clock call (or call of a file function that makes
-   * one) as what it does, at its position. Framing callbacks inside the region
-   * are skipped when `skipFraming` is set: they are regions of their own.
-   */
-  function regionEvents(root: ts.Node, sure: readonly ts.Node[], skipFraming: boolean): ClockEvent[] {
-    const events: ClockEvent[] = [];
-    const placed = new Set<ts.CallExpression>();
-    for (const st of sure) {
-      const f = freezeOf(st);
-      if (!f) continue;
-      f.calls.forEach((c) => placed.add(c));
-      events.push({ pos: st.getEnd(), apply: f.apply });
-    }
-    const visit = (n: ts.Node): void => {
-      if (skipFraming && n !== root && structural(n)) return;
-      if (ts.isCallExpression(n) && !placed.has(n)) {
-        const effect = clockCall(n) ?? (helperTouchesClock(n) ? TO_REAL : undefined);
-        if (effect) events.push({ pos: n.getStart(), apply: effect });
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(root);
-    return events.sort((a, b) => a.pos - b.pos);
-  }
-
-  const statementsOf = (fn: ts.Node): readonly ts.Node[] => {
-    if (ts.isSourceFile(fn)) return fn.statements;
-    if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return [];
-    return ts.isBlock(fn.body) ? fn.body.statements : [fn.body];
-  };
-
-  /** The top-level hooks `hook(fn)` of a scope (the file or a describe callback), their callbacks in order. */
-  const hooksOf = (scope: ts.Node, hook: string): ts.Node[] =>
-    statementsOf(scope).flatMap((st) => {
-      if (!ts.isExpressionStatement(st) || !ts.isCallExpression(st.expression) || headOf(st.expression) !== hook) return [];
-      return st.expression.arguments.filter((a) => structural(a) === hook);
-    });
-
-  /**
-   * The clocks still (frozen) when `assertion` runs, as bits, following what
-   * runs before it in vitest's order:
-   *
-   * 1. collection: the plain statements of the file and of each enclosing
-   *    `describe`, in source order;
-   * 2. the top-level `beforeAll` hooks of the enclosing scopes, outer first;
-   *    a freeze from 1 or 2 is held for every test, so any clock call
-   *    anywhere else in the file (another test, an `afterEach`, a hook that is
-   *    not a top-level statement of an enclosing scope) voids it;
-   * 3. the top-level `beforeEach` hooks of the enclosing scopes, outer first;
-   * 4. the test body before the assertion, or all of it when the assertion is
-   *    in a loop or a callback, whose order the analysis does not know.
-   *
-   * A freeze counts only from a statement that runs for sure (a top-level
-   * statement of a hook or scope, or of a block around the assertion). Every
-   * other clock call, a call of a file function that makes one, and a freeze
-   * whose options cannot be read, voids what it may undo. An assertion outside
-   * an `it`/`test` is not under any proven freeze.
-   */
-  function frozenAt(assertion: ts.Node): number {
-    let testFn: ts.Node | undefined;
-    let loose = false;
-    const scopes: ts.Node[] = [assertion.getSourceFile()];
-    const path: ts.Node[] = [];
-    for (let n: ts.Node | undefined = assertion; n; n = n.parent) {
-      const s = structural(n);
-      if (!testFn) {
-        path.push(n);
-        if (s === "it" || s === "test") testFn = n;
-        else if (s) return 0;
-        else if (n !== assertion && (ts.isFunctionLike(n) || ts.isIterationStatement(n, false))) loose = true;
-      } else if (s === "describe") scopes.splice(1, 0, n);
-      else if (s) return 0;
-    }
-    if (!testFn) return 0;
-    const enclosing = new Set(scopes);
-    const state = real();
-    const run = (events: readonly ClockEvent[]): void => events.forEach((e) => e.apply(state));
-
-    run(scopes.flatMap((scope) => regionEvents(scope, statementsOf(scope), true)).sort((a, b) => a.pos - b.pos));
-    for (const scope of scopes) for (const fn of hooksOf(scope, "beforeAll")) run(regionEvents(fn, statementsOf(fn), false));
-
-    /** Whether a clock event at `n` runs in one of the regions above, or after the test. */
-    const placedHere = (n: ts.Node): boolean => {
-      for (let p: ts.Node | undefined = n.parent; p; p = p.parent) {
-        const s = structural(p);
-        if (!s) continue;
-        if (p === testFn) return true;
-        if (s === "it" || s === "test") return false;
-        if (s === "describe") return enclosing.has(p);
-        const owner = p.parent.parent?.parent; // hook(fn) → ExpressionStatement → Block | SourceFile
-        const scope = owner && (ts.isSourceFile(owner) ? owner : owner.parent);
-        const topLevel = ts.isExpressionStatement(p.parent.parent!) && scope !== undefined && enclosing.has(scope);
-        return topLevel && s !== "afterEach";
-      }
-      return true;
-    };
-    let elsewhere = false;
-    const sweep = (n: ts.Node): void => {
-      if (elsewhere) return;
-      if (ts.isCallExpression(n) && (clockCall(n) || helperTouchesClock(n)) && !placedHere(n)) elsewhere = true;
-      else ts.forEachChild(n, sweep);
-    };
-    sweep(assertion.getSourceFile());
-    if (elsewhere) TO_REAL(state);
-
-    for (const scope of scopes) for (const fn of hooksOf(scope, "beforeEach")) run(regionEvents(fn, statementsOf(fn), false));
-
-    const sure: ts.Node[] = [];
-    for (let i = path.length - 1; i > 0; i--) {
-      const block = path[i]!;
-      const child = path[i - 1]!;
-      const statements = ts.isBlock(block) || ts.isSourceFile(block) ? block.statements : undefined;
-      if (statements) sure.push(...statements.slice(0, statements.indexOf(child as ts.Statement)));
-    }
-    const limit = assertion.getStart();
-    const body = (testFn as ts.ArrowFunction | ts.FunctionExpression).body;
-    run(regionEvents(body, sure, false).filter((e) => loose || e.pos <= limit));
-    return stillIn(state);
-  }
-
-  return { tainted, bare, frozenAt };
+/** A `// wall-clock-frozen: <why>` mark, where it is and the reason it gives. */
+export interface Mark {
+  file: string;
+  line: number;
+  reason: string;
 }
 
 /**
  * Every clock-tainted ordering assertion in the test files of `root`
- * (repo-relative names). A file that spells no clock read or no ordering
- * matcher holds nothing the analysis could count, so only the others are parsed.
+ * (repo-relative names), split into the counted ones and the ones under a
+ * mark, and every mark that sits above no counted assertion or gives no
+ * reason. A file that spells no clock read or no ordering matcher holds
+ * nothing the analysis could count, so only the others are parsed; marks are
+ * read in every file.
  */
-export function wallClockBounds(root: string, rels: readonly string[]): Bound[] {
+export function measureWallClock(root: string, rels: readonly string[]): { bounds: Bound[]; marked: (Bound & { reason: string })[]; stray: Mark[] } {
   const texts = new Map<string, string>();
   const relOf = new Map<string, string>();
+  const marks = new Map<string, Mark>(); // by `file:line` of the line it marks
   for (const rel of rels) {
     const file = path.resolve(root, rel);
     const text = readFileSync(file, "utf8");
+    text.split("\n").forEach((line, i) => {
+      const m = MARK.exec(line);
+      if (m) marks.set(`${rel}:${i + 2}`, { file: rel, line: i + 1, reason: m[1]!.trim() });
+    });
     if (!SPELLS_CLOCK.test(text) || !SPELLS_ORDERING.test(text)) continue;
     texts.set(file, text);
     relOf.set(file, rel);
   }
   const checker = program(root, texts);
-  const { tainted, bare, frozenAt } = analysis(checker);
-  const found: Bound[] = [];
+  const { tainted } = analysis(checker);
+  const bounds: Bound[] = [];
+  const marked: (Bound & { reason: string })[] = [];
+  const used = new Set<string>();
   for (const file of texts.keys()) {
     const sf = checker.sourceOf(file);
     const visit = (node: ts.Node): void => {
@@ -833,15 +499,19 @@ export function wallClockBounds(root: string, rels: readonly string[]): Bound[] 
         if (e && ORDERING.has(e.matcher)) {
           const inTarget = tainted(e.target);
           const inBound = bound !== undefined ? tainted(bound) : 0;
-          const clocks = inTarget | inBound;
-          const order = inTarget !== 0 && inBound !== 0 && bare(e.target) && bare(bound!);
-          if (clocks && !order && (clocks & ~frozenAt(node)) !== 0) {
-            found.push({
+          if (inTarget || inBound) {
+            const b: Bound = {
               file: relOf.get(file)!,
               line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
               text: node.getText(sf).replace(/\s+/g, " "),
               form: inTarget && inBound ? "both" : inTarget ? "target" : "bound",
-            });
+            };
+            const key = `${b.file}:${b.line}`;
+            const mark = marks.get(key);
+            if (mark && mark.reason.length >= MIN_REASON) {
+              used.add(key);
+              marked.push({ ...b, reason: mark.reason });
+            } else bounds.push(b);
           }
         }
       }
@@ -849,7 +519,13 @@ export function wallClockBounds(root: string, rels: readonly string[]): Bound[] 
     };
     visit(sf);
   }
-  return found;
+  const stray = [...marks].filter(([key]) => !used.has(key)).map(([, m]) => m);
+  return { bounds, marked, stray };
+}
+
+/** The counted bounds alone. */
+export function wallClockBounds(root: string, rels: readonly string[]): Bound[] {
+  return measureWallClock(root, rels).bounds;
 }
 
 export function countByFile(bounds: readonly Bound[]): Record<string, number> {
