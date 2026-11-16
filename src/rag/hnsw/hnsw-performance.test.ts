@@ -12,30 +12,62 @@ import { tmpdir } from "node:os";
 import { createHNSWVectorStore } from "./hnsw-vector-store.js";
 import type { VectorEntry, CodeChunk } from "../rag.interface.js";
 
+/**
+ * Work, not time. A millisecond ceiling on the search said how fast the machine
+ * was that day. What makes the search cheap is that it visits a few hundred
+ * nodes whatever the store holds, so the tests count that: hnswlib calls the
+ * search filter once for each node that enters its candidate set, and a scan
+ * (or an efSearch as large as the store) calls it for every vector. The count
+ * does not depend on the clock or the load: with a fixed seed and fixed vectors
+ * it is the same on every run. Measured 2026-11-16, 384 dimensions, M=16,
+ * efSearch=64: 2000 vectors ~235 calls, 4000 vectors ~250; efSearch=2000
+ * visits all 2000.
+ */
+function countSearchWork(store: { search: (q: number[], k: number) => Promise<unknown[]> }) {
+  const holder = store as unknown as {
+    hnswIndex: { searchKnn: (q: number[], k: number, filter?: (label: number) => boolean) => unknown };
+  };
+  const native = holder.hnswIndex;
+  let calls = 0;
+  holder.hnswIndex = new Proxy(native, {
+    get(target, prop) {
+      if (prop === "searchKnn") {
+        return (q: number[], k: number) =>
+          target.searchKnn(q, k, () => {
+            calls++;
+            return true;
+          });
+      }
+      const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+      return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+    },
+  });
+  return {
+    /** Search once and say how many nodes the index put into its candidate set. */
+    async visited(query: number[], topK: number): Promise<number> {
+      calls = 0;
+      await store.search(query, topK);
+      return calls;
+    },
+    restore(): void {
+      holder.hnswIndex = native;
+    },
+  };
+}
+
+/** A seeded random unit vector: the same stream gives the same index on every run. */
+function seededUnitVectors(count: number, dimensions: number, seed: number): number[][] {
+  let state = seed >>> 0;
+  const next = (): number => ((state = (state * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+  return Array.from({ length: count }, () => {
+    const vec = Array.from({ length: dimensions }, next);
+    const norm = Math.hypot(...vec);
+    return vec.map((v) => v / norm);
+  });
+}
+
 // This file is a benchmark-style suite and is too memory-intensive for the default test run.
 const runHnswPerfTests = !!process.env["HNSW_PERF_TESTS"];
-
-/**
- * What the search must be: sub-linear, not a scan. A millisecond ceiling on
- * the search says how fast the machine was that day. The speed-up over an
- * exact scan of the same vectors, measured in the same run, says whether the
- * index prunes: when the graph stops pruning (efSearch as large as the store,
- * a fallback to a scan) the speed-up falls to about 1 at any machine load,
- * and it grows with the store, so each size has its own floor. Measured
- * 2026-11-16, random 384-d vectors, 10K: about 9x with the real index. The
- * 100K and 1M floors are scaled down from that, not measured: those two
- * tests are skipped because they are too slow to run.
- */
-const MIN_SPEEDUP_OVER_SCAN = { "10K": 4, "100K": 10, "1M": 30 } as const;
-
-function exactTopK(entries: VectorEntry[], query: number[], topK: number): string[] {
-  const scored = entries.map((e) => {
-    let dot = 0;
-    for (let i = 0; i < query.length; i++) dot += query[i]! * e.vector[i]!;
-    return { id: e.id, dot };
-  });
-  return scored.sort((a, b) => b.dot - a.dot).slice(0, topK).map((r) => r.id);
-}
 
 describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
   const dimensions = 384; // MiniLM dimensions
@@ -46,8 +78,8 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
   ): Promise<{
     insertTimeMs: number;
     searchTimeMs: number;
-    /** Same queries answered by an exact scan of the same vectors, in the same run. */
-    scanTimeMs: number;
+    /** Nodes the index visited per search, averaged: the work, whatever the clock said. */
+    visitedPerSearch: number;
     vectorsPerSecond: number;
     searchesPerSecond: number;
   }> {
@@ -95,7 +127,8 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     // Benchmark search (average of 100 searches)
     const searchTimes: number[] = [];
-    const scanTimes: number[] = [];
+    const visitedCounts: number[] = [];
+    const work = countSearchWork(store);
     const numSearches = Math.min(100, vectorCount);
 
     for (let i = 0; i < numSearches; i++) {
@@ -104,21 +137,13 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
       const normalizedQuery = query.map((v) => v / (norm + 1e-10));
 
       const searchStart = performance.now();
-      await store.search(normalizedQuery, topK);
+      visitedCounts.push(await work.visited(normalizedQuery, topK));
       searchTimes.push(performance.now() - searchStart);
-
-      // The exact answer to the same query, timed back to back with the search
-      // so that machine load slows both alike. The first ten queries are enough
-      // to measure a scan; it costs vectorCount * dimensions each.
-      if (i < 10) {
-        const scanStart = performance.now();
-        exactTopK(entries, normalizedQuery, topK);
-        scanTimes.push(performance.now() - scanStart);
-      }
     }
 
     const avgSearchTimeMs = searchTimes.reduce((a, b) => a + b, 0) / searchTimes.length;
-    const avgScanTimeMs = scanTimes.reduce((a, b) => a + b, 0) / scanTimes.length;
+    const visitedPerSearch = visitedCounts.reduce((a, b) => a + b, 0) / visitedCounts.length;
+    work.restore();
 
     await store.shutdown();
     rmSync(tempDir, { recursive: true, force: true });
@@ -126,7 +151,7 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
     return {
       insertTimeMs,
       searchTimeMs: avgSearchTimeMs,
-      scanTimeMs: avgScanTimeMs,
+      visitedPerSearch,
       vectorsPerSecond: (vectorCount / insertTimeMs) * 1000,
       searchesPerSecond: (1 / avgSearchTimeMs) * 1000,
     };
@@ -138,12 +163,12 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     console.log("\n=== 10K Vectors Performance ===");
     console.log(`Insert time: ${results.insertTimeMs.toFixed(2)}ms`);
-    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms (exact scan ${results.scanTimeMs.toFixed(2)}ms)`);
+    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms, ${results.visitedPerSearch.toFixed(0)} nodes visited`);
     console.log(`Vectors/sec: ${results.vectorsPerSecond.toFixed(0)}`);
     console.log(`Searches/sec: ${results.searchesPerSecond.toFixed(0)}`);
 
     expect(results.insertTimeMs).toBeLessThan(30000); // Should insert in < 30s
-    expect(results.scanTimeMs / results.searchTimeMs).toBeGreaterThan(MIN_SPEEDUP_OVER_SCAN["10K"]);
+    expect(results.visitedPerSearch).toBeLessThan(10000 / 10); // visits a tenth of the store at most
   }, 60000);
 
   // Skip in CI — too slow for standard test runs
@@ -152,12 +177,12 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     console.log("\n=== 100K Vectors Performance ===");
     console.log(`Insert time: ${results.insertTimeMs.toFixed(2)}ms`);
-    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms (exact scan ${results.scanTimeMs.toFixed(2)}ms)`);
+    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms, ${results.visitedPerSearch.toFixed(0)} nodes visited`);
     console.log(`Vectors/sec: ${results.vectorsPerSecond.toFixed(0)}`);
     console.log(`Searches/sec: ${results.searchesPerSecond.toFixed(0)}`);
 
     expect(results.insertTimeMs).toBeLessThan(180000); // Should insert in < 3min
-    expect(results.scanTimeMs / results.searchTimeMs).toBeGreaterThan(MIN_SPEEDUP_OVER_SCAN["100K"]);
+    expect(results.visitedPerSearch).toBeLessThan(100000 / 10);
   }, 180000);
 
   // Skip 1M test in CI - too slow
@@ -166,13 +191,70 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
 
     console.log("\n=== 1M Vectors Performance ===");
     console.log(`Insert time: ${results.insertTimeMs.toFixed(2)}ms`);
-    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms (exact scan ${results.scanTimeMs.toFixed(2)}ms)`);
+    console.log(`Avg search time: ${results.searchTimeMs.toFixed(2)}ms, ${results.visitedPerSearch.toFixed(0)} nodes visited`);
     console.log(`Vectors/sec: ${results.vectorsPerSecond.toFixed(0)}`);
     console.log(`Searches/sec: ${results.searchesPerSecond.toFixed(0)}`);
 
     expect(results.insertTimeMs).toBeLessThan(600000); // Should insert in < 10min
-    expect(results.scanTimeMs / results.searchTimeMs).toBeGreaterThan(MIN_SPEEDUP_OVER_SCAN["1M"]);
+    expect(results.visitedPerSearch).toBeLessThan(1000000 / 10);
   }, 600000);
+});
+
+// Not gated: 6000 small inserts take seconds, and this is the proof that the
+// search stays cheap as the store grows, so the gates run it.
+describe("HNSWVectorStore search work", () => {
+  const dimensions = 384;
+  const efSearch = 64;
+  const topK = 10;
+
+  async function visitedAt(vectorCount: number, ef: number): Promise<number> {
+    const tempDir = mkdtempSync(join(tmpdir(), `hnsw-work-${vectorCount}-`));
+    const store = await createHNSWVectorStore(tempDir, {
+      dimensions,
+      maxElements: vectorCount + 10,
+      M: 16,
+      efConstruction: 100,
+      efSearch: ef,
+      metric: "cosine",
+      seed: 42,
+    });
+    try {
+      const vectors = seededUnitVectors(vectorCount + 3, dimensions, 12345);
+      await store.upsertBatch(
+        vectors.slice(0, vectorCount).map((vector, i) => ({
+          id: `w-${i}`,
+          vector,
+          chunk: {
+            id: `w-${i}`, filePath: "/test/w.cs", content: `w ${i}`, startLine: 1, endLine: 1,
+            kind: "class", contentHash: "w", indexedAt: 1, language: "csharp",
+          } as CodeChunk,
+          addedAt: 1,
+          accessCount: 0,
+        })),
+      );
+      const work = countSearchWork(store);
+      const counts: number[] = [];
+      for (const query of vectors.slice(vectorCount)) counts.push(await work.visited(query, topK));
+      return counts.reduce((a, b) => a + b, 0) / counts.length;
+    } finally {
+      await store.shutdown();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  it("visits a small fraction of the store, and little more when the store doubles", async () => {
+    const small = await visitedAt(2000, efSearch);
+    const doubled = await visitedAt(4000, efSearch);
+    expect(small).toBeGreaterThanOrEqual(topK);
+    expect(small).toBeLessThan(2000 / 4);
+    expect(doubled).toBeLessThan(4000 / 8);
+    // A scan doubles with the store; the graph search grows by about 6%.
+    expect(doubled).toBeLessThan(small * 1.5);
+  }, 120000);
+
+  it("is a scan when efSearch is as large as the store (what the test above guards against)", async () => {
+    expect(await visitedAt(2000, 2000)).toBeGreaterThanOrEqual(2000);
+  }, 120000);
 });
 
 describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Recall Accuracy", () => {
