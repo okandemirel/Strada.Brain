@@ -7,7 +7,7 @@ keywords: ["wall clock", "Date.now", "performance.now", "hrtime", "clock taint",
 related: ["test-integrity", "dist-readers", "clean-checkout"]
 single_producer: {"file": "scripts/ci/gates.mjs", "exports": ["DETECTORS"]}
 rules:
-  [{"id": "no-new-wall-clock-bound", "severity": "error", "text": "No test file gains an ordering assertion whose target or bound is clock-tainted (expect(Date.now() - t).toBeLessThan(N), expect(until - Date.now()).toBeGreaterThan(K) and every other arrangement), outside an order of two bare clock values and an assertion under a fake clock; the count per file is pinned in WALL_CLOCK_BASELINE and only goes down.", "detector": {"kind": "vitest", "file": "src/tests/wall-clock-assertions.test.ts"}},
+  [{"id": "no-new-wall-clock-bound", "severity": "error", "text": "No test file gains an ordering assertion whose target or bound is clock-tainted (expect(Date.now() - t).toBeLessThan(N), expect(until - Date.now()).toBeGreaterThan(K) and every other arrangement), outside an order of two bare clock values and an assertion whose every clock is proven frozen by a fake clock; the count per file is pinned in WALL_CLOCK_BASELINE and only goes down.", "detector": {"kind": "vitest", "file": "src/tests/wall-clock-assertions.test.ts"}},
    {"id": "repo-scan-carries-its-limit", "severity": "error", "text": "A test of a contract detector listed in scripts/ci/gates.mjs DETECTORS that walks the repository inside its body carries its own time limit instead of vitest's 30 s default.", "detector": {"kind": "vitest", "file": "src/tests/wall-clock-assertions.test.ts"}}]
 ---
 # Wall-clock assertions: a busy machine is not a failing test
@@ -113,14 +113,22 @@ clock-tainted when it comes from a real clock read:
   not); `performance.now()`, with `performance` global, imported from
   `node:perf_hooks` under any name, or read from a namespace or default import
   of it; `process.hrtime()` and `process.hrtime.bigint()`, with `process`
-  global or imported from `node:process`; and an argument-less `new Date()`,
-  so `new Date().getTime()` and `+new Date()` too.
+  global or imported from `node:process`, and `hrtime()` / `hrtime.bigint()`
+  imported by name from `node:process`; `process.uptime()` and `os.uptime()`
+  (also `uptime` imported from `node:process` or `node:os`); and an
+  argument-less `new Date()`, so `new Date().getTime()` and `+new Date()` too.
 
 The taint follows what the test file itself spells:
 
 - names, in their own scope, also when they are destructured
-  (`const { ms } = await timed(…)`, `const [first] = […]`) or written again
-  after their declaration (`let took = 0; took = Date.now() - t`);
+  (`const { ms } = await timed(…)`, `const [first] = […]`, nested patterns
+  through the whole value) or written again after their declaration
+  (`let took = 0; took = Date.now() - t`, and then a literal's property is not
+  read from the first literal);
+- the variable of a `for (const ms of times)` or `for … in` loop, which takes
+  the taint of what it walks;
+- the parameter of a callback handed to a method of a tainted object, or to a
+  call with another tainted argument (`times.forEach((ms) => …)`);
 - any expression with a tainted part: arithmetic, `Math.abs(…)`, a template,
   a callback;
 - a call whose arguments are tainted (`msSinceFailure(t + 90_000)`,
@@ -131,11 +139,15 @@ The taint follows what the test file itself spells:
   (`run.ms`, `run["ms"]`), precisely where the key is known and through the
   whole object otherwise;
 - what is pushed, unshifted, set or added onto a name (`times.push(…)`,
-  `laps.set("a", …)`).
+  `laps.set("a", …)`), and what is written into a property of a name after
+  its declaration (`stats.elapsed = Date.now() - t`, `stats.times.push(…)`),
+  by key, also through a `const` alias declared from it
+  (`const kept = holder.times; kept.push(…)` reaches `holder.times`).
 
 An `expect(x)` or `expect.soft(x)`, with or without a message, ending in
 `.toBeLessThan`, `.toBeLessThanOrEqual`, `.toBeGreaterThan` or
-`.toBeGreaterThanOrEqual`, with or without `.not`, counts when `x` or the
+`.toBeGreaterThanOrEqual`, with or without `.not`, `.resolves` or `.rejects`
+(`await expect(timed()).resolves.toBeLessThan(500)`), counts when `x` or the
 bound it is compared with is tainted.
 
 ### What is left out, on purpose
@@ -147,15 +159,60 @@ bound it is compared with is tainted.
   (`expect(fast).toBeLessThan(slow)`). It checks that the clock moved on, or
   which run was faster. A side with a constant, a stamp, a call or a property
   in it has slack, and the assertion counts.
-- **An assertion under a fake clock:** `vi.useFakeTimers()` (unless its
-  `toFake` leaves `Date` and `performance` out), `vi.setSystemTime()`, or
-  `vi.spyOn(Date, "now")` / `vi.spyOn(performance, "now")`, in the test case
-  before the assertion and not undone by `vi.useRealTimers()` in between, or
-  in a `beforeEach`/`beforeAll` or a plain statement of an enclosing
-  `describe` or of the file.
+- **An assertion whose every clock is proven frozen when it runs.** A fake
+  clock is left out only when the file proves it holds still for the clock
+  the assertion reads, at the moment it runs. Seeing a fake call is not
+  enough. The taint carries which clocks a side reads (Date, performance,
+  hrtime, uptime), and every one of them must be frozen. A freeze is one of:
+  - `vi.useFakeTimers()` with no options, which in vitest 4 fakes Date,
+    performance and hrtime (`vitest.config.ts` sets no `fakeTimers`), or with
+    an options literal that has no `shouldAdvanceTime` other than `false`;
+    a `toFake` list freezes only the clocks it names. Options the analysis
+    cannot read (a variable, a spread) prove nothing;
+  - `vi.setSystemTime()` with no fake timers installed, which mocks `Date`
+    only; on installed fake timers it changes no clock's state;
+  - `vi.spyOn(Date | performance, "now")` chained, or through the name it was
+    stored in, to `.mockReturnValue(…)` or to `.mockImplementation(fn)` whose
+    `fn` makes no call. A bare spy passes through to the real clock, a
+    `…Once` answers once, and an implementation that calls something may
+    read the real clock: none of these proves a freeze.
 
-Both are fixtures ("leaves out …"), each next to a counted twin
-(`toFake: ["setTimeout"]`, and fake timers undone before the assertion).
+  A freeze counts only from a statement that runs for sure: a top-level
+  statement of the test body or of a block around the assertion, of a hook,
+  or of a scope. The order is vitest's: collection (the plain statements of
+  the file and of each enclosing `describe`), the top-level `beforeAll` hooks
+  of the enclosing scopes, then their `beforeEach` hooks, outer first, then
+  the test body up to the assertion (all of it when the assertion sits in a
+  loop or a callback, whose order is not known). On the way, a freeze is
+  undone by `vi.useRealTimers()` (everything), `vi.setTimerTickMode(…)` with a
+  mode other than `"manual"` (the fake timers move by themselves),
+  `vi.restoreAllMocks()`, `vi.resetAllMocks()`, `.mockRestore()` or
+  `.mockReset()` (the spies), in any scope. So is any other clock call it
+  cannot place for sure (a fake behind an `if`, options it cannot read), and
+  a call of a function the file declares that makes a clock call. A freeze
+  made at collection or in a `beforeAll` holds across tests, so any clock call
+  anywhere else in the file (another test, an `afterEach`, a hook that is not
+  a top-level statement of an enclosing scope, an `afterAll` of an inner
+  `describe`) voids it. An assertion outside an `it`/`test` is under no
+  proven freeze.
+
+Both are fixtures. "leaves out …" holds the orders and every proven freeze:
+a `beforeEach`, an arrow-bodied `beforeEach`, `toFake: ["Date"]`,
+`shouldAdvanceTime: false`, `setSystemTime` with and without fake timers, a
+spy with `mockReturnValue` or a call-free `mockImplementation`, a stored spy,
+`setTimerTickMode("manual")`, a freeze at collection and in a `beforeAll`
+with an `afterAll`. "counts an assertion whose clock is not proven frozen"
+holds each way a fake clock still lets the real time through: fake timers
+undone in the body under a `beforeEach` freeze, a bare spy, `shouldAdvanceTime:
+true`, `restoreAllMocks`, `mockRestore`, `toFake: ["performance"]` read through
+`Date.now()`, `toFake: ["setTimeout"]`, `setSystemTime` read through
+`performance.now()`, `mockReturnValueOnce`, an implementation that calls
+through, `setTimerTickMode("interval")`, a file function that calls
+`useRealTimers`, a fake behind an `if`, a loop and a callback with
+`useRealTimers` after the assertion, unread options, `setSystemTime` on
+advancing timers, `process.uptime()` under fake timers, an assertion in a hook,
+and a `beforeAll` freeze undone by another test, by an `afterEach`, or by an
+inner `describe`'s `afterAll`.
 
 ### Where it counts too much
 
@@ -168,8 +225,13 @@ much …"):
 - a stamp under a clock read taken after it, `expect(stamp).toBeLessThanOrEqual(after)`;
 - a fake clock installed by a helper the test calls (`freeze()`), which the
   analysis does not follow;
+- a freeze made at collection, voided by a clock call in another `describe`
+  that runs only for that `describe`'s own tests;
 - a clock read that only decides a count
-  (`expect(items.filter((i) => i.at < Date.now()).length).toBeLessThan(3)`).
+  (`expect(items.filter((i) => i.at < Date.now()).length).toBeLessThan(3)`);
+- a callback parameter whose taint comes from an argument only loosely tied
+  to it: `vi.spyOn(tasks, "getStatus").mockImplementation((id) => …)` with
+  `tasks` built from `Date.now()` taints every `id` the spy records.
 
 Rule `repo-scan-carries-its-limit` reads the `DETECTORS` array of
 `scripts/ci/gates.mjs` and, in each of those files, the test cases (`it`,
@@ -199,8 +261,16 @@ leaves uncounted, so a change that starts to see one shows up there.
   (`uptime`) and `v2-agent-runner.test.ts:1304` (`accumulatedSilentMs()`).
   When the test hands the clock value to the call it asserts on, or to the
   constructor of the object it asserts on, the taint follows it.
-- **A parameter:** `function fast(ms: number) { expect(ms).toBeLessThan(100); }`
-  called with an elapsed time. A parameter is not followed to its callers.
+- **A parameter of a function the file declares:**
+  `function fast(ms: number) { expect(ms).toBeLessThan(100); }` called with
+  an elapsed time. Such a parameter is not followed to its callers (a
+  callback's parameter is, above). An object filled through such a parameter
+  is the same case: `function fill(into) { into.ms = Date.now() - 5 }` and then
+  `expect(box.ms)` after `fill(box)`.
+- **A fake clock undone by a helper from another module:** an imported
+  `unfreeze()` that calls `vi.useRealTimers()` is not read, so a freeze before
+  it still counts as held (`golden-run-harness.ts` calls `vi.restoreAllMocks()`
+  this way; no test that imports it puts a bound under a spy freeze today).
 - **A class field or method:** `this.start = Date.now()` read back through
   `c.took()`.
 - **An alias of the clock function or a clock reached another way:**
@@ -224,16 +294,19 @@ leaves uncounted, so a change that starts to see one shows up there.
 
 ## Calibration
 
-Measured on 2026-11-16 on main at 40e73868, with the clock-taint detector:
-1,140 test files in vitest's include; 245 spell a clock read and an ordering
-matcher and are parsed. They hold 290 ordering assertions with a tainted side.
-4 run under a fake clock (`message-queue.test.ts:212` and `:405`,
-`auto-tiering.test.ts:585` and `:586`) and none is an order of two bare clock
-values, so 286 count, in 101 files, all pinned in `WALL_CLOCK_BASELINE`:
+Measured on 2026-11-16 on main at 1d0d374a, with the clock-taint detector:
+1,140 test files in vitest's include; 246 spell a clock read and an ordering
+matcher and are parsed. They hold 316 ordering assertions with a tainted side.
+17 run with every clock they read proven frozen, all under a top-level
+`beforeEach(() => { vi.useFakeTimers(); })` (13 in `orchestrator.test.ts`,
+`message-queue.test.ts:212` and `:405`, `auto-tiering.test.ts:585` and
+`:586`), and none is an order of two bare clock values, so 299 count, in 103
+files, all pinned in `WALL_CLOCK_BASELINE`:
 
-- by the tainted side: 209 the target, 32 the bound, 45 both (with slack);
-- by matcher: 95 `toBeLessThan`, 30 `toBeLessThanOrEqual`, 107
-  `toBeGreaterThan`, 54 `toBeGreaterThanOrEqual`; none is written with `.not`.
+- by the tainted side: 220 the target, 30 the bound, 49 both (with slack);
+- by matcher: 97 `toBeLessThan`, 32 `toBeLessThanOrEqual`, 111
+  `toBeGreaterThan`, 59 `toBeGreaterThanOrEqual`; none is written with `.not`,
+  `.resolves` or `.rejects`.
 
 How it got here. The first detector (2026-11-11, main at 78500e4b) counted
 upper bounds on elapsed-time shapes and found 60 in 41 files. QA then found,
@@ -252,6 +325,22 @@ the test hands it (`progress-assessment.test.ts:174`,
 `iteration-health-tracker.test.ts:159`, `crash-recovery.test.ts:22`,
 `provider-outage.test.ts:91` and `:93`); the ones it cannot reach are the
 second item under "What it cannot see".
+
+The fourth QA round (2026-11-16) found two openings, neither a miscount on
+main but each a way for a new bound through. The fake-clock exclusion only
+looked for a fake call, so real time still passed under `beforeEach`
+fake timers undone in the body, a bare spy, `shouldAdvanceTime: true`, a
+restored spy, or `toFake: ["performance"]` read through `Date.now()`; it now
+needs a proven freeze for each clock read, as above. And five spellings of a
+named duration were not followed: a `for … of` variable, a property written
+after the declaration, a callback's parameter, `.resolves`, and `hrtime`
+imported by name or `uptime`. Following them adds 13 counts on main, all on
+values that come from a clock but are not durations (`chain-detector.test.ts`
+`for (const chain of results)`, `agentdb-retrieval.test.ts` scores of rows
+stamped with `Date.now()`, `campaign-manager.test.ts:7163` and `:7164` through
+a spy's callback parameter, among others): over-counting, which the ratchet
+accepts, so the baseline rose from 286 to 299. No proven freeze on main was
+lost: the 4 assertions excluded before are still excluded.
 
 Between the measurements, `src/common/project-write-lock.test.ts` replaced
 its bound with a counted wait (5cfabf99) and `src/security/prompt-injection.test.ts`
@@ -286,7 +375,17 @@ Mutations, each made in the tree, run, and undone:
   lowered" red.
 - The order exclusion taken out: "leaves out …" red.
 - The fake-clock exclusion taken out: "leaves out …" and "no test file
-  gained a wall-clock bound" red (the four fake-clock assertions above).
+  gained a wall-clock bound" red (the frozen assertions above).
+- Breakers ignored (`clockCall` answering nothing for `useRealTimers` and the
+  mock resets): "counts an assertion whose clock is not proven frozen" red.
+- Clock bits ignored (every freeze treated as freezing all clocks): the same
+  test red, on `toFake: ["performance"]` and `setSystemTime` read through
+  `performance.now()`.
+- `shouldAdvanceTime` not read: the same test red.
+- The for-of variable, the property writes, and the callback parameter each
+  not followed: the fixture test red, and "the baseline is lowered" red.
+- `.resolves` not accepted, and `hrtime` imported by name not read: the
+  fixture test red.
 - Writes after a declaration not followed: the fixture test and "the
   baseline is lowered" red.
 - One bound removed from `src/rag/file-pattern.test.ts` (attempt 1): "the
@@ -299,4 +398,4 @@ Mutations, each made in the tree, run, and undone:
   `WALL_CLOCK_BASELINE` with one line raised (2 → 3) and one file added
   names both; with a line lowered (2 → 1) it names nothing.
 
-Each was restored and the detector's 10 tests passed again.
+Each was restored and the detector's 11 tests passed again.
