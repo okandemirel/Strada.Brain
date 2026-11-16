@@ -29,6 +29,7 @@
 import type { IAIProvider } from "./provider.interface.js";
 import { streamOrChatText } from "./provider.interface.js";
 import type { ProviderResponse, TokenUsage } from "./provider-core.interface.js";
+import type { LostUsagePart } from "./lost-usage.js";
 import type { TaskUsageEvent } from "../../tasks/types.js";
 import type { BudgetSource } from "../../budget/budget-types.js";
 import { getLoggerSafe } from "../../utils/logger.js";
@@ -82,12 +83,20 @@ export function reportServedUsage(
 
 /**
  * Bill what a call that THREW had already spent. The chain hangs the tokens of
- * the attempts that consumed them on the error (fallback-chain.ts attachLost);
+ * the attempts that consumed them on the error (lost-usage.ts LostUsage.onError);
  * the worker's model turns bill that, and so does every direct call. Returns
  * whether anything was billed — false means the attempt's spend was not measured.
  */
 export function reportFailedCallUsage(sink: ServedUsageSink | undefined, err: unknown, providerName: string): boolean {
-  const spent = (err as { usage?: TokenUsage } | null)?.usage;
+  const e = err as { usage?: TokenUsage; usageBy?: readonly LostUsagePart[] } | null;
+  // Who spent it: each chain member's share is billed under that member's own
+  // name, so the cost model prices it at the right tariff (task #90).
+  const parts = (e?.usageBy ?? []).filter((p) => hasTokens(p.usage));
+  if (parts.length > 0) {
+    for (const p of parts) sink?.({ provider: p.provider, ...(p.model === undefined ? {} : { model: p.model }), usage: p.usage });
+    return true;
+  }
+  const spent = e?.usage;
   if (!hasTokens(spent)) return false;
   sink?.({ provider: providerName, usage: spent });
   return true;

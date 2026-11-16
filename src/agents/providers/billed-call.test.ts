@@ -182,6 +182,28 @@ describe("retries and failover count each spend exactly once (task #71)", () => 
     expect(harness.counted().dailyTokens).toBe(1430);
   });
 
+  it("a chain that threw with no member answering bills each member's spend under that member, once — never under the chain (task #90)", async () => {
+    const empty = (inputTokens: number) => ({ text: "", usage: usage(inputTokens, 0) });
+    const first = scriptedProvider("DeepSeek (display label)", [empty(2_000)]);
+    const second = scriptedProvider("OpenCode (display label)", [empty(3_000)]);
+    const chain = new FallbackChainProvider([first, second], {
+      attemptTimeoutMs: 5_000,
+      attemptMeta: [{ provider: "deepseek", model: "deepseek-chat" }, { provider: "opencode", model: "glm-5.3" }],
+    });
+    const run = harness.runSink();
+
+    const thrown = await billedChat(chain, RUN(run.onUsage), "s", MSG, []).then(() => undefined, (err: unknown) => err);
+    const spent = (thrown as { usage?: { inputTokens: number } } | undefined)?.usage?.inputTokens ?? 0;
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(spent).toBeGreaterThan(0);
+    // One event per member that spent, under its registry name and model; together they are the whole spend, once.
+    expect(run.events.map((e) => [e.provider, e.model])).toEqual([["deepseek", "deepseek-chat"], ["opencode", "glm-5.3"]]);
+    expect(run.events.reduce((n, e) => n + e.inputTokens, 0)).toBe(spent);
+    expect(run.events.some((e) => e.provider === chain.name)).toBe(false);
+    expect(harness.counted()).toEqual({ input: spent, output: 0, dailyTokens: spent });
+  });
+
   it("a call that threw with nothing recorded is logged as not measured, bills nothing, and rethrows", async () => {
     const failure = new Error("connect ECONNREFUSED");
     const provider = scriptedProvider("deepseek", [failure]);

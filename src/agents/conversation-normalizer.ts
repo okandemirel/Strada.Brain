@@ -21,7 +21,7 @@
  */
 
 import type { ConversationMessage, MessageContent, ToolCall } from "./providers/provider-core.interface.js";
-import { isTaskTurn } from "./orchestrator-session-manager-task-turn.js";
+import { isSystemTurn, isTaskTurn } from "./orchestrator-session-manager-task-turn.js";
 
 type ToolResultBlock = Extract<MessageContent, { type: "tool_result" }>;
 
@@ -74,7 +74,8 @@ function withoutOrphans(msg: ConversationMessage): ConversationMessage {
  * when there is one); later followers stay separate messages. A task turn the person wrote
  * (orchestrator-session-manager-task-turn.ts) is never folded: it follows the answer as it is,
  * so it keeps its mark and stays a valid head. Folded, it lost the mark and the history trim
- * kept an older request as the run's task (board #58).
+ * kept an older request as the run's task (board #58). A gate or replan prompt the system pushed
+ * (pushSystemTurn) follows unfolded too: folded, its text read as what the person said (board #48).
  */
 function answerFor(calls: readonly ToolCall[], followers: readonly ConversationMessage[]): {
   answer: ConversationMessage;
@@ -94,7 +95,7 @@ function answerFor(calls: readonly ToolCall[], followers: readonly ConversationM
   const after: ConversationMessage[] = [];
   for (const f of followers.slice(0, consumed)) {
     // A result of another call in it is an orphan here: withoutOrphans turns it into text.
-    if (isTaskTurn(f) && !blocksOf(f.content).some((b) => b.type === "tool_result" && ids.has(b.tool_use_id))) {
+    if ((isTaskTurn(f) || isSystemTurn(f)) && !blocksOf(f.content).some((b) => b.type === "tool_result" && ids.has(b.tool_use_id))) {
       if (blocksOf(f.content).length > 0) after.push(f); // an empty turn is dropped, as everywhere
       continue;
     }

@@ -416,6 +416,20 @@ describe("V2AgentRunner — a superseded attempt's tokens are charged (audit 03.
     expect(result.usage?.inputTokens).toBe(7020);
   });
 
+  it("a thrown error's usageBy is billed under the member that spent it, not the assigned provider (task #90)", async () => {
+    const handles = mkPlane();
+    const failure = Object.assign(new Error("all failed"), {
+      usage: { inputTokens: 7000, outputTokens: 0, totalTokens: 7000 },
+      usageBy: [{ provider: "deepseek", model: "spender-model", usage: { inputTokens: 7000, outputTokens: 0, totalTokens: 7000 } }],
+    });
+    const gateway = new ModelGateway(scriptedStream([failure, mkResponse({ text: "done", stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    const recorded = vi.spyOn(port, "recordProviderUsage");
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+    expect(recorded).toHaveBeenCalledWith("deepseek", expect.objectContaining({ inputTokens: 7000 }), "spender-model");
+  });
+
   it("auxiliaryUsage on the served response is debited and reported with the run's usage", async () => {
     const handles = mkPlane();
     // Step 1 (PLANNING) answers cleanly; step 2's response carries the chain's
