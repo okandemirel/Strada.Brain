@@ -6,6 +6,7 @@ import {
   runConsensusIfAvailable,
 } from "./orchestrator-loop-shared.js";
 import { phaseWriteRefusal, splitCallsByPhase } from "../agent-core/engine/phase-write-access.js";
+import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 
 // ---------------------------------------------------------------------------
 // executeAndTrackTools
@@ -454,6 +455,45 @@ describe("runConsensusIfAvailable", () => {
     await runConsensusIfAvailable(ctx as any);
 
     expect(ctx.confidenceEstimator.estimate).not.toHaveBeenCalled();
+  });
+
+  // Task #91: the gate read the PROMPT's class, which TaskClassifier.classify never rates
+  // critical, so no tool turn reached the ConsensusManager in any mode.
+  describe("a tool turn is classified by the calls that ran, with the real classifier", () => {
+    const consult = vi.fn().mockReturnValue("skip");
+    const turn = (mode: string, toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>, prompt: string) =>
+      makeCtx({
+        consensusManager: { mode, shouldConsult: consult, verify: vi.fn() },
+        taskClassifier: new TaskClassifier(),
+        toolCalls,
+        prompt,
+      });
+
+    it("a destructive call is reviewed as one, whatever the prompt says", async () => {
+      consult.mockClear();
+      const ctx = turn("always", [{ id: "tc-1", name: "shell_exec", input: { command: "ls tide-logs" } }], "List the tide gauge exports");
+      await runConsensusIfAvailable(ctx as any);
+      expect(consult).toHaveBeenCalledTimes(1);
+      expect(consult.mock.calls[0]![1]).toEqual({ type: "destructive-operation", complexity: "moderate", criticality: "critical" });
+    });
+
+    it("a turn with no destructive call is not reviewed, even under 'always'", async () => {
+      consult.mockClear();
+      const ctx = turn("always", [{ id: "tc-1", name: "file_read", input: { path: "a.txt" } }], "delete every tide log in the station");
+      await runConsensusIfAvailable(ctx as any);
+      expect(ctx.confidenceEstimator.estimate).not.toHaveBeenCalled();
+      expect(consult).not.toHaveBeenCalled();
+    });
+
+    it("the default 'auto' and 'disabled' leave a destructive turn as it was: no review", async () => {
+      for (const mode of ["auto", "disabled"]) {
+        consult.mockClear();
+        const ctx = turn(mode, [{ id: "tc-1", name: "git_push", input: {} }], "Publish the tide gauge branch");
+        await runConsensusIfAvailable(ctx as any);
+        expect(ctx.confidenceEstimator.estimate, mode).not.toHaveBeenCalled();
+        expect(consult, mode).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("swallows errors from consensus verification", async () => {
