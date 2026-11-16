@@ -429,23 +429,24 @@ describe("portExecuteToolTurn — a write refused while planning is not an execu
 
   it("the consensus review is not consulted for a batch in which nothing ran; it is for one in which a call ran", async () => {
     const consensus = (writeResult: (tc: ToolCall) => ToolResult) => {
-      const classify = vi.fn(() => ({ type: "implementation", complexity: "simple", criticality: "critical" }));
+      // A tool turn is classified by its calls (task #91), and reviewed only in a mode the owner opened.
+      const classifyToolCall = vi.fn(() => ({ type: "destructive-operation", complexity: "moderate", criticality: "critical" }));
       const deps = makeDeps({
         ...answering(writeResult),
-        consensusManager: { shouldConsult: vi.fn(() => "skip") },
+        consensusManager: { mode: "always", shouldConsult: vi.fn(() => "skip") },
         confidenceEstimator: { estimate: vi.fn(() => 0.1) },
         providerRouter: {},
-        taskClassifier: { classify },
+        taskClassifier: { classifyToolCall },
       } as never);
-      return { deps, classify };
+      return { deps, classifyToolCall };
     };
     const refused = consensus((tc) => phaseWriteRefusalResult(tc.id, AgentPhase.PLANNING));
     await portExecuteToolTurn(refused.deps, turnArgs([write], planning), makeRunCtx());
-    expect(refused.classify).not.toHaveBeenCalled();
+    expect(refused.classifyToolCall).not.toHaveBeenCalled();
 
     const ran = consensus((tc) => ({ toolCallId: tc.id, content: "File written: notes/a.txt", isError: false }));
     await portExecuteToolTurn(ran.deps, turnArgs([write], { ...planning, phase: AgentPhase.EXECUTING }), makeRunCtx());
-    expect(ran.classify).toHaveBeenCalled();
+    expect(ran.classifyToolCall).toHaveBeenCalled();
   });
 
   it("the session keeps every call the model made and answers each in its order, a refused one with its refusal", async () => {

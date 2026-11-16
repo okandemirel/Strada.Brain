@@ -95,7 +95,6 @@ const endTurnCtx = () =>
     ...core(),
     defaultLanguage: "en",
     profileLanguage: undefined,
-    runTextConsensusIfCritical: vi.fn(async () => {}),
   }) as unknown as InteractiveEndTurnContext;
 
 const reflecting = () =>

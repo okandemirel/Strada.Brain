@@ -8,6 +8,7 @@
  */
 
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
+import { billedChat, type OwnerlessBilling } from "../agents/providers/billed-call.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
@@ -22,6 +23,9 @@ import type { ActionDecision, AgentCoreConfig, BudgetTrackerRef, InstinctRetriev
 import { DEFAULT_AGENT_CORE_CONFIG } from "./agent-core-types.js";
 import type { ProviderRouter } from "./routing/provider-router.js";
 import { TaskClassifier } from "./routing/task-classifier.js";
+
+/** The autonomous loop's reasoning belongs to no run; the tasks it submits are origin "daemon", so its calls book there too. */
+const AGENT_CORE_REASONING_BILLING: OwnerlessBilling = { purpose: "agent-core-reasoning", ownerless: "daemon" };
 
 const FOREGROUND_DECISION_DEFER_MINUTES = 5;
 /**
@@ -255,7 +259,9 @@ export class AgentCore {
       }
 
       // Reasoning prompt goes as user message, not system prompt
-      const response = await activeProvider.chat(
+      const response = await billedChat(
+        activeProvider,
+        AGENT_CORE_REASONING_BILLING,
         "You are an autonomous agent that observes the environment and decides what to do.",
         [{ role: "user" as const, content: prompt }],
         [],

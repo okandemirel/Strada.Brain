@@ -8,7 +8,8 @@
  */
 
 import type { IAIProvider } from "../providers/provider.interface.js";
-import { streamOrChatText } from "../providers/provider.interface.js";
+import { billedStreamOrChatText } from "../providers/billed-call.js";
+import { STYLE_ANALYSIS_BILLING } from "../../campaign/campaign-billing.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import { stripLeakedReasoning } from "../leaked-reasoning.js";
 import { DEFAULT_OUTLINE_COLOR, familyDefaults, styleProfileSchema, STYLE_FAMILIES } from "./style-profile.js";
@@ -114,8 +115,9 @@ export class StyleAnalysis {
         // Same windowing as campaign planning: a hard head-slice cut the GDD
         // mid-document, and art direction typically lives mid-document.
         const { windowGdd, GDD_AUDIT_FULL_CHARS } = await import("../../campaign/campaign-planner.js");
-        const response = await streamOrChatText(
+        const response = await billedStreamOrChatText(
           this.provider,
+          STYLE_ANALYSIS_BILLING,
           ANALYSIS_SYSTEM,
           // The analysis runs once and needs exactly the mid-document PROSE
           // (palette words, mood, reference games) the planner's tight window

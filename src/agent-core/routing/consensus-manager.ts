@@ -175,6 +175,11 @@ export class ConsensusManager {
     this.config = { ...DEFAULT_CONSENSUS_CONFIG, ...config };
   }
 
+  /** The configured mode (CONSENSUS_MODE): a caller reads it to tell an owner's opt-in from the default. */
+  get mode(): ConsensusConfig["mode"] {
+    return this.config.mode;
+  }
+
   /**
    * Determine if consensus should be sought.
    */

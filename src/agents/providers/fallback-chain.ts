@@ -9,6 +9,7 @@ import type {
   ProviderCallOptions,
 } from "./provider.interface.js";
 import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
+import { LostUsage } from "./lost-usage.js";
 import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { usageFields } from "./provider-call-log.js";
@@ -261,21 +262,6 @@ interface AttemptControl {
  * immediately without trying subsequent providers.
  * Logs each attempt and failure for observability.
  */
-/** Sum two usages (the superseded attempt onto whatever is already carried). */
-function mergeTokenUsage(a: TokenUsage | undefined, b: TokenUsage): TokenUsage {
-  if (!a) return b;
-  const add = (x?: number, y?: number): number | undefined => (x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0));
-  const cw = add(a.cacheCreationInputTokens, b.cacheCreationInputTokens);
-  const cr = add(a.cacheReadInputTokens, b.cacheReadInputTokens);
-  return {
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    totalTokens: a.totalTokens + b.totalTokens,
-    ...(cw === undefined ? {} : { cacheCreationInputTokens: cw }),
-    ...(cr === undefined ? {} : { cacheReadInputTokens: cr }),
-  };
-}
-
 export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   readonly name: string;
   readonly capabilities: ProviderCapabilities;
@@ -785,10 +771,13 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     // response that fell over, a retry that failed. They ride on the
     // response that finally answers, or on the error when nothing does
     // (Codex 2026-09-17 #5).
-    let lostUsage: TokenUsage | undefined;
-    const withLost = (r: ProviderResponse): ProviderResponse =>
-      lostUsage ? { ...r, auxiliaryUsage: mergeTokenUsage(r.auxiliaryUsage, lostUsage) } : r;
-    const attachLost = <E>(err: E): E => (lostUsage && err && typeof err === "object" ? Object.assign(err, { usage: lostUsage }) : err);
+    const lost = new LostUsage(
+      // The registry key the cost model prices (servedBy's rule), not the display label.
+      (idx) => ({ provider: this.attemptMeta[idx]?.provider ?? this.providers[idx]!.name, model: this.attemptMeta[idx]?.model || undefined }),
+    );
+    const addLost = (idx: number, usage: TokenUsage): void => lost.add(idx, usage);
+    const withLost = (r: ProviderResponse): ProviderResponse => lost.onResponse(r);
+    const attachLost = <E>(err: E): E => lost.onError(err);
     let attempted = 0;
     // What was measured when nothing was attempted (audited 2026-09-02): a provider
     // skipped by a FAILED recovery probe or by a probe another call already had in
@@ -945,7 +934,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             .slice(i + 1)
             .some((p) => health.isAvailable(p.name));
           if (somewhereToFallTo) {
-            if (response.usage) lostUsage = mergeTokenUsage(lostUsage, response.usage);
+            if (response.usage) addLost(i, response.usage);
             throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
           }
 
@@ -957,12 +946,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           // counted BEFORE the retry, so a retry that throws does not lose
           // them (Codex 2026-09-17 #1 on 6b0d8d6f).
           const discarded = response.usage;
-          if (discarded) lostUsage = mergeTokenUsage(lostUsage, discarded);
+          if (discarded) addLost(i, discarded);
           response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
           if (holdsNoAnswer(response)) {
             // Twice running is not a blip; a provider with nothing to say twice
             // really has nothing to say.
-            if (response.usage) lostUsage = mergeTokenUsage(lostUsage, response.usage);
+            if (response.usage) addLost(i, response.usage);
             throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
           }
         }

@@ -9,7 +9,7 @@ beforeAll(() => {
 import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createHNSWVectorStore } from "./hnsw-vector-store.js";
+import { createHNSWVectorStore, isHnswAvailable } from "./hnsw-vector-store.js";
 import type { VectorEntry, CodeChunk } from "../rag.interface.js";
 
 /**
@@ -200,9 +200,12 @@ describe.skipIf(!runHnswPerfTests)("HNSWVectorStore Performance", () => {
   }, 600000);
 });
 
-// Not gated: 6000 small inserts take seconds, and this is the proof that the
-// search stays cheap as the store grows, so the gates run it.
-describe("HNSWVectorStore search work", () => {
+// Not behind HNSW_PERF_TESTS: 6000 small inserts take seconds, and this is the
+// proof that the search stays cheap as the store grows, so the gates run it.
+// It needs the native hnswlib-node: the exact fallback has no search filter to
+// count with, so it would count nothing. Where hnswlib-node is missing (the
+// Windows CI runner) the describe does not run; macOS and Linux runs carry it.
+describe.runIf(isHnswAvailable())("HNSWVectorStore search work", () => {
   const dimensions = 384;
   const efSearch = 64;
   const topK = 10;

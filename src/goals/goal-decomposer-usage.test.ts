@@ -252,3 +252,16 @@ describe("GoalDecomposer bills every served reply to the caller's sink (task #67
     );
   });
 });
+
+describe("a failed call is billed under the member that spent it (task #90)", () => {
+  it("bills each usageBy part under its own provider and model, not the chain's name", async () => {
+    const { reportFailedAttemptUsage } = await import("./decomposition-usage.js");
+    const records: DecompositionUsage[] = [];
+    const err = Object.assign(new Error("all failed"), {
+      usage: { inputTokens: 300, outputTokens: 0, totalTokens: 300 },
+      usageBy: [{ provider: "member-a", model: "model-a", usage: { inputTokens: 300, outputTokens: 0, totalTokens: 300 } }],
+    });
+    expect(reportFailedAttemptUsage((u) => records.push(u), err, "chain(a→b)")).toBe(true);
+    expect(records).toEqual([{ provider: "member-a", model: "model-a", usage: { inputTokens: 300, outputTokens: 0, totalTokens: 300 } }]);
+  });
+});
