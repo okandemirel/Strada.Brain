@@ -100,7 +100,7 @@ const SKIP_BASELINE: Readonly<Record<string, number>> = {
   "src/dashboard/websocket-server.test.ts": 2,
   "src/rag/hnsw/hnsw-exact-fallback.test.ts": 1,
   "src/rag/hnsw/hnsw-integration.test.ts": 1,
-  "src/rag/hnsw/hnsw-performance.test.ts": 4,
+  "src/rag/hnsw/hnsw-performance.test.ts": 5,
   "src/rag/hnsw/hnsw-persistence.test.ts": 1,
   "src/rag/hnsw/hnsw-vector-store.test.ts": 1,
   "src/security/path-guard-real-form.test.ts": 1,

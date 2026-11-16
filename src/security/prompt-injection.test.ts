@@ -101,13 +101,30 @@ describe("prompt-injection", () => {
       }
     });
 
-    it("stays linear on a long run of spaces after an opening bracket", () => {
-      // A bracket closer written `\[\s*\/?\s*` has two adjacent `\s*` and
-      // backtracks quadratically here: about 650 ms for this input. Linear: ~2 ms.
-      const hostile = ("[SYSTEM][" + " ".repeat(1990) + "z").repeat(200);
-      const started = performance.now();
-      sanitizePromptInjection(hostile);
-      expect(performance.now() - started).toBeLessThan(100);
+    it("has no two whitespace quantifiers a regex can split a run of spaces between", () => {
+      // A bracket closer written `\[\s*\/?\s*` backtracks quadratically on a long
+      // run of spaces: the engine tries every split between the two `\s*`. Step
+      // counts of a regex are not observable, and a stopwatch on it (the old
+      // 100 ms bound) measured the machine's load, so the test reads the
+      // pattern: a `\s*` or `\s+` followed by nothing but optional atoms and then
+      // another one is the shape that backtracks. `\s*(?:\/\s*)?` is not: the
+      // group starts with a character that is not whitespace.
+      const ambiguous = (source: string): string[] =>
+        [...source.matchAll(/\\[sS][*+](?:(?:\\.|\[[^\]]*\]|\((?:\?:)?[^()]*\))\?)*\\[sS][*+]/g)].map((m) => m[0]);
+      expect(ambiguous("\\[\\s*\\/?\\s*(?:SYSTEM)"), "the form that was fixed").toEqual(["\\s*\\/?\\s*"]);
+      expect(ambiguous("\\s*\\s+x")).toEqual(["\\s*\\s+"]);
+      expect(ambiguous("\\s*(?:\\/)?\\s*")).toEqual(["\\s*(?:\\/)?\\s*"]);
+      expect(ambiguous("\\[\\s*(?:\\/\\s*)?(?:SYSTEM)\\s*\\]"), "the form that replaced it").toEqual([]);
+
+      const found = Object.entries(DIRECTIVE_PATTERNS).flatMap(([category, patterns]) =>
+        patterns.flatMap((re) => ambiguous(re.source).map((hit) => `${category}: ${hit}`)),
+      );
+      expect(found).toEqual([]);
+
+      // And the rewrite still reads every spelling of the closer.
+      for (const closer of ["[/SYSTEM]", "[ / SYSTEM ]", "[SYSTEM]"]) {
+        expect(sanitizePromptInjection(`a [SYSTEM] XPAY ${closer} b`), closer).not.toContain("XPAY");
+      }
     });
 
     it("flags (but does not decode) long base64 blocks", () => {

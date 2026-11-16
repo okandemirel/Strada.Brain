@@ -22,6 +22,8 @@ import type {
 } from "../agent-core/routing/routing-types.js";
 import type { SupervisorAssignment, SupervisorExecutionStrategy } from "./orchestrator-supervisor-routing.js";
 import type { ConfidenceEstimator } from "../agent-core/routing/confidence-estimator.js";
+import type { ConsensusConfig } from "../agent-core/routing/consensus-manager.js";
+import type { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import type { MemoryRefresher } from "./memory-refresher.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
@@ -259,7 +261,7 @@ export interface ConsensusContext {
   consensusManager: ConsensusVerificationParams["consensusManager"];
   confidenceEstimator: ConfidenceEstimator;
   providerManager: { listAvailable(): unknown[] };
-  taskClassifier: { classify(prompt: string): TaskClassification };
+  taskClassifier: Pick<TaskClassifier, "classify" | "classifyToolCall">;
   prompt: string;
   responseText: string;
   toolCalls: readonly ToolCall[];
@@ -282,11 +284,32 @@ export interface ConsensusContext {
 }
 
 /**
- * Classifies the task, estimates confidence, and runs consensus verification
- * if the necessary services are available.
- *
- * This encapsulates the identical 20-line param-assembly + call pattern
- * that appears in both the BG and Interactive tool-execution paths.
+ * The consensus modes an owner turns on by name. "auto" is CONSENSUS_MODE's default
+ * (config-schema.ts), and under it a tool turn has never been reviewed: the gate below read the
+ * prompt's class, which is never critical. Opening it for "auto" would start a paid reviewer call
+ * on every low-confidence destructive turn of every default run, so the default stays as it was.
+ */
+const TOOL_TURN_CONSENSUS_MODES: ReadonlySet<ConsensusConfig["mode"]> = new Set(["always", "critical-only"]);
+
+/**
+ * What a tool turn is reviewed as: the first call that ran which the classifier rates critical
+ * (classifyToolCall: a destructive tool), or nothing. The PROMPT's class gated this before, and
+ * TaskClassifier.classify never rates a prompt critical — so no tool turn reached the
+ * ConsensusManager, in any mode. The call is what ran, in any language the prompt was written in.
+ */
+function criticalToolTurnClass(ctx: ConsensusContext): TaskClassification | undefined {
+  if (!TOOL_TURN_CONSENSUS_MODES.has(ctx.consensusManager.mode)) return undefined;
+  for (const tc of ctx.toolCalls) {
+    const callClass = ctx.taskClassifier.classifyToolCall(tc.name, tc.input);
+    if (callClass.criticality === "critical" || callClass.type === "destructive-operation") return callClass;
+  }
+  return undefined;
+}
+
+/**
+ * Classifies the step, estimates confidence, and runs consensus verification
+ * if the necessary services are available. A tool turn is classified by its
+ * calls (criticalToolTurnClass); a turn with no calls by its prompt.
  *
  * Non-fatal: any error is caught and swallowed.
  */
@@ -296,14 +319,8 @@ export async function runConsensusIfAvailable(
   if (!ctx.consensusManager || !ctx.confidenceEstimator) return undefined;
 
   try {
-    const taskClass = ctx.taskClassifier.classify(ctx.prompt);
-    if (
-      ctx.toolCalls.length > 0 &&
-      taskClass.criticality !== "critical" &&
-      taskClass.type !== "destructive-operation"
-    ) {
-      return undefined;
-    }
+    const taskClass = ctx.toolCalls.length > 0 ? criticalToolTurnClass(ctx) : ctx.taskClassifier.classify(ctx.prompt);
+    if (taskClass === undefined) return undefined;
     const confidence = ctx.confidenceEstimator.estimate({
       task: taskClass,
       providerName: ctx.currentAssignment.providerName,
