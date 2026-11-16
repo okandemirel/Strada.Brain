@@ -63,7 +63,7 @@ import type { TaskClassification } from "../routing/routing-types.js";
 import type { PolicySeed } from "../control/policy.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { GatewayToolDefinition } from "../model/model-gateway.js";
-import type { RunnerMode, TerminalStatus } from "./agent-runner.js";
+import type { ParentRunScope, RunnerMode, TerminalStatus } from "./agent-runner.js";
 import type { InstinctOwner } from "../engine/instinct-scope.js";
 
 /** The runner-facing mode the port keys its mode-dependent dispatch on. */
@@ -226,6 +226,8 @@ export interface DispatchReflectionParams {
   readonly responseText: string | undefined;
   readonly chatId: string;
   readonly session: unknown;
+  /** The run's scope, lent to a sub-agent the handler starts (loop recovery's delegate). */
+  readonly runScope?: ParentRunScope;
 }
 
 export interface ReflectionDispatchResult {
@@ -258,6 +260,8 @@ export interface DispatchEndTurnParams {
   readonly responseText: string | undefined;
   readonly chatId: string;
   readonly session: unknown;
+  /** The run's scope, lent to a sub-agent the handler starts (loop recovery's delegate). */
+  readonly runScope?: ParentRunScope;
 }
 
 export interface EndTurnDispatchResult {

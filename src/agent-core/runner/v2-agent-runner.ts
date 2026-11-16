@@ -47,9 +47,10 @@ import type {
   RunSetup,
 } from "./orchestrator-port.js";
 import { assembleStepContext } from "./assemble-step-context.js";
-import type { RunMode } from "../control/policy.js";
+import type { RunBudgetPolicy, RunMode } from "../control/policy.js";
 import { resolveRunBudgetPolicy } from "../control/policy.js";
-import type { Budget, ChildBudget, TokenUsage as BudgetTokenUsage } from "../control/budget.js";
+import type { Budget, ChildBudget } from "../control/budget.js";
+import { withRunBudget } from "../control/budget-scope.js";
 import type { RunClock, CallLimits } from "../control/run-clock.js";
 import type { RunClockView } from "../control/run-clock.js";
 import type { FailureLedger, RunVerdict, VerdictInput } from "../control/failure-ledger.js";
@@ -62,7 +63,6 @@ import type { AgentRunEventBus } from "../events/event-bus.js";
 import { guardedSleep } from "../events/heartbeat-guard.js";
 import type { ModelGateway } from "../model/model-gateway.js";
 import type { ModelCallResult } from "../model/model-gateway.js";
-import { estimateCostWithCache } from "../../budget/cost-model.js";
 import type { ProviderResponse, TokenUsage } from "../../agents/providers/provider-core.interface.js";
 import { reportFailedAttemptUsage } from "../../goals/decomposition-usage.js";
 import type { TaskProgressSignal } from "../../tasks/types.js";
@@ -156,41 +156,8 @@ export function stoppedStatus(
   return "failed";
 }
 
-/** Provider `TokenUsage` → control-plane `Budget` usage, with the turn's estimated USD cost.
- * The cost is an ESTIMATE (flat per-provider rate table) whose only consumer is the run-local
- * Budget gate seeded from the unified budget manager's remaining headroom — it never persists
- * anything (billing/recording stays with port.recordProviderUsage), so there is no double-count.
- * A provider with unknown/zero rates (e.g. ollama) simply gates on tokens alone.
- * audited 2026-09-02: the model id was not passed, so estimateCost could never apply its
- * "-free"/":free" → $0 rule and a free-tier model (opencode Zen, OpenRouter :free) was charged
- * its provider's paid table rate against the run's cost cap — money nobody was billed, spent out
- * of a live run's headroom. The model the turn was SERVED by is the one that priced it. */
-export function toBudgetUsage(
-  usage: TokenUsage | undefined,
-  providerName: string,
-  modelId: string | undefined,
-): BudgetTokenUsage {
-  const inputTokens = usage?.inputTokens ?? 0;
-  const outputTokens = usage?.outputTokens ?? 0;
-  // CACHE-AWARE, like the ledger. The gate priced every input token at the
-  // full rate while the ledger billed cache reads at a tenth: one million
-  // cache-read tokens debited $3.00 from the run's headroom against $0.30
-  // recorded — a run stopped on phantom cost (audit 03.2 / D21, 2026-09-13).
-  return {
-    inputTokens,
-    outputTokens,
-    costUsd: estimateCostWithCache(
-      {
-        inputTokens,
-        outputTokens,
-        ...(usage?.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: usage.cacheCreationInputTokens }),
-        ...(usage?.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: usage.cacheReadInputTokens }),
-        ...(modelId === undefined ? {} : { model: modelId }),
-      },
-      providerName,
-    ),
-  };
-}
+/** Moved beside the run's Budget scope (budget-scope.ts), which the accounting funnels debit through. */
+export { toBudgetUsage } from "../control/budget-scope.js";
 
 /** Accumulate provider usage into the run-total WorkerUsageEvent (the AgentRunResult.usage). */
 function mergeUsage(
@@ -284,27 +251,30 @@ export class V2AgentRunner implements AgentRunner {
     // (goal-decomposition taskRunId, artifact-eval identityKey) see the context v1 set inside
     // runBackgroundTask. the port owns the scope since the
     // spine cannot import the orchestrator's AsyncLocalStorage.
-    return await this.deps.orchestratorPort.withRunTaskContext(this.toSetupInput(request, io.mode), () =>
-      this.runInner(request, io),
-    );
+    return await this.deps.orchestratorPort.withRunTaskContext(this.toSetupInput(request, io.mode), () => {
+      const opened = this.openRun(request, io.mode);
+      // Every provider call the run makes is recorded through engine/accounting.ts, which debits the
+      // Budget of the run it runs inside: model turns, decomposition, reviews, consensus (task #87).
+      return withRunBudget(opened.budget, () => this.runInner(request, io, opened));
+    });
   }
 
-  private async runInner(request: AgentRunRequest, io: IOStrategy): Promise<AgentRunResult> {
+  /** PROLOGUE (once): the run's policy, and the clock, ledger and Budget the control plane opens for it. */
+  private openRun(request: AgentRunRequest, mode: RunnerMode): OpenRunResult & { policy: RunBudgetPolicy } {
+    const { policy, warnings } = resolveRunBudgetPolicy(mapMode(mode), this.deps.orchestratorPort.buildPolicySeed());
+    for (const w of warnings) getLoggerSafe().warn("[v2-run-budget-policy]", { warning: w }); // LOG, never throw
+    return { policy, ...this.deps.controlPlane.openRun(policy.mode, request.parentClockView, request.childBudget) };
+  }
+
+  private async runInner(
+    request: AgentRunRequest,
+    io: IOStrategy,
+    { policy, clock: runClock, ledger, budget }: OpenRunResult & { policy: RunBudgetPolicy },
+  ): Promise<AgentRunResult> {
     const { controlPlane, gateway, orchestratorPort: port, clock } = this.deps;
     const log = getLoggerSafe();
     const runId = request.taskRunId ?? newRunId();
     const mode = io.mode;
-
-    // ─── PROLOGUE (once) ──────────────────────────────────────────────────────────────
-    const seed = port.buildPolicySeed();
-    const { policy, warnings } = resolveRunBudgetPolicy(mapMode(mode), seed);
-    for (const w of warnings) log.warn("[v2-run-budget-policy]", { warning: w }); // LOG, never throw
-
-    const { clock: runClock, ledger, budget } = controlPlane.openRun(
-      policy.mode,
-      request.parentClockView,
-      request.childBudget,
-    );
     const bus = controlPlane.openBus(runId, io, request.parentClockView ? runId : undefined);
     const emit = (e: Parameters<AgentRunEventBus["emit"]>[0]): number => bus.emit(e);
 
@@ -423,6 +393,12 @@ export class V2AgentRunner implements AgentRunner {
         if (budgetStopSaved) return;
         budgetStopSaved = true;
         await port.saveBudgetExceededCheckpoint(this.budgetCheckpoint(request, budget, touchedFiles));
+      };
+      // A step that keeps the run going ends here: the phase move it made, if any, then step.completed.
+      const completeStep = (from: AgentPhase): void => {
+        const pc = phaseChangedEvent(from, state.phase);
+        if (pc) emit(pc);
+        emit({ type: "step.completed", step: stepNo, phase: state.phase });
       };
       epochLoop: while (epoch < maxEpochs) {
         const iterLimit = isInteractive(mode)
@@ -544,7 +520,9 @@ export class V2AgentRunner implements AgentRunner {
             call.leave(); // commits this call's silent contribution to the task accumulator
           }
 
-          // ══ Accounting (gauntlet #8,#9): budget.debit + execution trace ══════════════════
+          // ══ Accounting (gauntlet #8,#9): usage + execution trace ═════════════════════════
+          // port.recordProviderUsage records a turn AND debits it from the run's Budget, once
+          // (engine/accounting.ts, budget-scope.ts) — the path every other call of the run takes.
           if (outcome.kind !== "threw") {
             // audited 2026-09-02: bill and attribute the member that ANSWERED. The
             // resilient chain skips a cooled pick and serves from a sibling; keying
@@ -553,13 +531,11 @@ export class V2AgentRunner implements AgentRunner {
             // the pick with work it never did.
             const served = resolveServedIdentity(prepared.currentAssignment, outcome.response.servedBy);
             port.noteServedBy?.(outcome.response.servedBy);
-            budget.debit(toBudgetUsage(outcome.response.usage, served.provider, served.model));
             usageTotal = mergeUsage(usageTotal, served.provider, outcome.response.usage);
             port.recordProviderUsage(served.provider, outcome.response.usage, served.model);
             // …and the attempt the chain superseded on the way (an empty answer
             // retried): its tokens were consumed and never charged (audit 03.4).
             if (outcome.response.auxiliaryUsage) {
-              budget.debit(toBudgetUsage(outcome.response.auxiliaryUsage, served.provider, served.model));
               usageTotal = mergeUsage(usageTotal, served.provider, outcome.response.auxiliaryUsage);
               port.recordProviderUsage(served.provider, outcome.response.auxiliaryUsage, served.model);
             }
@@ -574,11 +550,11 @@ export class V2AgentRunner implements AgentRunner {
           // ══ FAILURE / EMPTY → verdict GATE arbitrates (gauntlet #7,#10,#11) ═══════════════
           if (outcome.kind === "threw") {
             // A chain that failed AFTER consuming tokens hangs the spend on the error
-            // (Codex 2026-09-17 #5), billed under the member that spent it (usageBy).
+            // (Codex 2026-09-17 #5), billed under the member that spent it (usageBy). The port's
+            // record debits it from the run's Budget, like every other call (task #87).
             const served = prepared.currentAssignment;
             reportFailedAttemptUsage((b) => {
               const model = b.model ?? served.modelId;
-              budget.debit(toBudgetUsage(b.usage, b.provider, model));
               usageTotal = mergeUsage(usageTotal, b.provider, b.usage);
               port.recordProviderUsage(b.provider, b.usage, model);
             }, outcome.error, served.providerName);
@@ -767,9 +743,7 @@ export class V2AgentRunner implements AgentRunner {
               }
             }
 
-            const pc = phaseChangedEvent(prevPhase, state.phase);
-            if (pc) emit(pc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevPhase);
             continue;
           }
 
@@ -810,6 +784,7 @@ export class V2AgentRunner implements AgentRunner {
               responseText,
               chatId: request.chatId,
               session: setup.session,
+              runScope,
             });
             state = refl.agentState;
             // step5-parity: the dispatched handler runs the verifier/visibility interventions and
@@ -853,9 +828,7 @@ export class V2AgentRunner implements AgentRunner {
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
             }
-            const pc = phaseChangedEvent(prevPhase, state.phase);
-            if (pc) emit(pc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevPhase);
             continue;
           }
 
@@ -877,9 +850,7 @@ export class V2AgentRunner implements AgentRunner {
             // tool turn returns the recordStepResultsAndCheckReflection-advanced state; when absent
             // (mock port returns only the trace) the canonical EXECUTING→REFLECTING move applies.
             state = advancedState ?? this.advanceAfterTools(state);
-            const pc = phaseChangedEvent(prevPhase, state.phase);
-            if (pc) emit(pc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevPhase);
             continue;
           }
 
@@ -890,6 +861,7 @@ export class V2AgentRunner implements AgentRunner {
             responseText,
             chatId: request.chatId,
             session: setup.session,
+            runScope,
           });
           const prevEndPhase = state.phase;
           state = end.agentState;
@@ -897,9 +869,7 @@ export class V2AgentRunner implements AgentRunner {
           // end_turn into a continuation (verifier partial-closure / replan) and re-pushed the
           // gate onto the session — keep iterating instead of terminating.
           if (end.continueRun) {
-            const endPc = phaseChangedEvent(prevEndPhase, state.phase);
-            if (endPc) emit(endPc);
-            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            completeStep(prevEndPhase);
             continue;
           }
           if (end.terminalStatus) {

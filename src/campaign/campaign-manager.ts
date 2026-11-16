@@ -37,14 +37,14 @@ import type { TaskCommand, TaskId } from "../tasks/types.js";
 import { ACTIVE_STATUSES, TaskStatus } from "../tasks/types.js";
 import { stripRetryMachinery } from "../tasks/auto-resume.js";
 import type { CampaignPlanner } from "./campaign-planner.js";
-import { COVERAGE_ASK_WINDOW, quoteIsAbout } from "./campaign-planner.js";
+import { COVERAGE_ASK_WINDOW, GDD_AUDIT_FULL_CHARS, quoteIsAbout } from "./campaign-planner.js";
 import {
   contentFingerprint,
   decodeRequirement,
   requirementText,
   requirementTexts,
 } from "./requirement-identity.js";
-import { GDD_AUDIT_FULL_CHARS } from "./campaign-planner.js";
+import { forCampaign } from "./campaign-billing.js";
 import type { CampaignStorage } from "./campaign-storage.js";
 import { detectCampaignIntent } from "./campaign-intake.js";
 import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "../agents/tools/document-text.js";
@@ -2878,7 +2878,7 @@ export class CampaignManager {
       if (this.styleAnalysis) {
         try {
           const { saveStyleProfile } = await import("../agents/style/style-profile.js");
-          const { profile, source } = await this.styleAnalysis.analyze(textForPlanning);
+          const { profile, source } = await forCampaign(campaign.id, () => this.styleAnalysis!.analyze(textForPlanning));
           saveStyleProfile(this.projectRoot, profile);
           styleSummary =
             `\nStyle (${source === "llm" ? "GDD-derived" : "keyword-derived, review it"}): ` +
@@ -2892,13 +2892,13 @@ export class CampaignManager {
         }
       }
 
-      const ladder = await this.planner.planMilestones(
+      const ladder = await forCampaign(campaign.id, () => this.planner.planMilestones(
         textForPlanning,
         campaign.gddPath,
         styleSummary.trim() || undefined,
         // The gate's own mode, so the prompts it plans name only checks that exist.
         { scopeGate: this.scopeGateMode },
-      );
+      ));
       campaign.milestones = ladder.milestones.map((m, i) => ({
         id: `m${i + 1}`,
         title: m.title,
@@ -5025,7 +5025,7 @@ export class CampaignManager {
             campaign.gddText ?? (campaign.gddPath ? readGddFile(this.projectRoot, campaign.gddPath) : undefined);
           const look = extractLookDescription(gddForLook ?? "");
           const frame = selectGameplayFrame(this.projectRoot, this.sprintStartMs(milestone));
-          const verdict = await judgeVisualConformance({ look, frame, visionProvider: this.visionProvider });
+          const verdict = await forCampaign(campaign.id, () => judgeVisualConformance({ look, frame, visionProvider: this.visionProvider }));
           // VISUAL FITNESS IS ITS OWN VERDICT (plan 6.12). "done" implied the
           // delivery also LOOKS right and nothing measured that: this block
           // wrote a paragraph, and when it could not run it wrote nothing at
@@ -6076,7 +6076,7 @@ export class CampaignManager {
     for (const ask of asks) {
       let written: AcceptanceWriteResult;
       try {
-        written = await ask.call();
+        written = await forCampaign(campaign.id, ask.call);
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err);
         for (const row of ask.rows) faults.set(row.rid, { reasonClass: "unmeasurable", detail: `the acceptance test writer failed: ${why.slice(0, 200)}` });
@@ -6614,7 +6614,7 @@ export class CampaignManager {
     const answers: AcceptanceWriteResult[] = [];
     const ask = async (call: () => Promise<AcceptanceWriteResult>): Promise<void> => {
       try {
-        answers.push(await call());
+        answers.push(await forCampaign(campaign.id, call));
       } catch (err) {
         getLoggerSafe().warn("An acceptance check repair call failed", { id: campaign.id, milestone: milestone.id, error: err instanceof Error ? err.message : String(err) });
       }
@@ -8480,7 +8480,7 @@ export class CampaignManager {
     const pass = await completeLedgerByModel(
       ledger,
       text,
-      (system, user) => planner.complete!.call(this.planner, system, user),
+      (system, user) => forCampaign(campaign.id, () => planner.complete!.call(this.planner, system, user)),
       campaign.milestones,
       this.ledgerOptions(campaign),
     );
@@ -8959,9 +8959,9 @@ export class CampaignManager {
         // …AND THE TREE IT IS JUDGED ON. Carried evidence (plan 6.2) is only
         // evidence while the tree it was measured on is the tree in front of
         // us; the resolver cannot know that by itself (round 13 #31).
-        const answer = await this.planner.resolveCoverageGaps(gddForGaps, names, campaign.milestones, {
+        const answer = await forCampaign(campaign.id, () => this.planner.resolveCoverageGaps(gddForGaps, names, campaign.milestones, {
           revision: revisionForClosure,
-        });
+        }));
         asked.push(...names);
         judged.closed.push(...answer.closed);
         judged.open.push(...answer.open);
@@ -9166,7 +9166,7 @@ export class CampaignManager {
       // for one of those is a second requirement, scheduled again with a fresh
       // repair budget (round 13 #29). Both halves are held to the campaign's
       // own strings, in this one pass, before anything schedules by identity.
-      const missing = restoreLegacyWordings(campaign, await this.planner.auditCoverage(gddText, campaign.milestones, {
+      const missing = restoreLegacyWordings(campaign, await forCampaign(campaign.id, () => this.planner.auditCoverage(gddText, campaign.milestones, {
         // Plan 6.2: every named requirement gets a stable id plus the GDD
         // revision it was read from, so a rewording is a reworded requirement
         // and not a brand new one.
@@ -9174,7 +9174,7 @@ export class CampaignManager {
         ...(campaign.gddSha256 ? { gddSha256: campaign.gddSha256 } : {}),
         ...(campaign.gddRevision === undefined ? {} : { gddRevision: campaign.gddRevision }),
         ...(treeRevision === "" ? {} : { treeRevision }),
-      }));
+      })));
       // THE AUDIT RAN, so the requirements are established again: whatever it
       // found replaces the queue nobody could read. The flag is a column now
       // (Codex 2026-09-13 AF#2), so it would otherwise outlive its cause.

@@ -121,6 +121,8 @@ export interface OwnerlessBilling {
   /** What the call is for; recorded as the ledger row's trigger ("session-summary"). */
   readonly purpose: string;
   readonly ownerless: BudgetSource;
+  /** The campaign the call is for, written on its ledger row (sumBudgetForCampaign counts it; task #73). */
+  readonly campaignId?: string;
 }
 
 export type ProviderCallBilling = RunBilling | OwnerlessBilling;
