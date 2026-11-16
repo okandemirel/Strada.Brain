@@ -55,7 +55,7 @@ export interface VerifierPipelineEvidence extends CompletionReviewEvidence {
   readonly conformanceRequired: boolean;
   readonly consecutiveSameErrors: number;
   readonly repeatedErrorSignature: string | null;
-  /** What the run's tool registry said about verification; null when it was not measured. */
+  /** What the run's tool registry said about verification; null when it could not be measured, absent when no failure was open. */
   readonly verificationTooling?: VerificationToolingRecord | null;
   /** Every input of the unverifiable-failure exit, what was read and what it decided; set when a failure is open. */
   readonly unverifiableDecision?: UnverifiableDecision;
@@ -114,7 +114,6 @@ function planVerifierChecks(params: {
   /** The project root, whose manifests say whether shell_exec has a check to run. */
   projectPath?: string;
 }): VerifierPipelinePlan {
-  const tooling = measureVerificationTooling(params.availableToolNames, params.state.taskDescription, params.projectPath);
   const collected = collectVerifierPipelineEvidence({
     state: params.state,
     task: params.task,
@@ -128,9 +127,13 @@ function planVerifierChecks(params: {
   });
   // A failure answered by a later success in a run where nothing can check
   // it: decided from the record, one row per input, the draft never opening it
-  // (verifier-pipeline-unverifiable.ts says when, and why).
+  // (verifier-pipeline-unverifiable.ts says when, and why). The project tree
+  // is scanned only then: a verdict with no open failure needs none of it.
   const runKey = unverifiableRunKey(params.chatId, params.taskStartedAtMs);
-  const decision = collected.recentFailures.length > 0
+  const tooling = collected.recentFailures.length > 0
+    ? measureVerificationTooling(params.availableToolNames, params.state.taskDescription, params.projectPath, params.state.stepResults)
+    : undefined;
+  const decision = tooling !== undefined
     ? decideUnverifiableExit({
       evidence: collected,
       tooling,
@@ -145,7 +148,7 @@ function planVerifierChecks(params: {
     : undefined;
   const evidence: VerifierPipelineEvidence = {
     ...collected,
-    verificationTooling: tooling,
+    ...(tooling !== undefined ? { verificationTooling: tooling } : {}),
     ...(decision ? { unverifiableDecision: decision } : {}),
   };
   const unverifiable = decision?.opens === true ? decision : null;

@@ -18,7 +18,7 @@
  */
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AgentPhase, type AgentState } from "../agent-state.js";
@@ -28,7 +28,8 @@ import { FileWriteTool } from "../tools/file-write.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { NODE_SCOPE_MARKER } from "./node-tool-offer.js";
 import { fileOnPath } from "./completion-review-answers.js";
-import { SCAN_LIMITS, SKIPPED_DIRS, measureProjectChecks } from "./verifier-pipeline-project-checks.js";
+import { BRAIN_STORE_DIR, INERT_KINDS, SCAN_LIMITS, SKIPPED_DIRS, inertKind, measureProjectChecks } from "./verifier-pipeline-project-checks.js";
+import { PROJECT_DATA_DIR } from "../../core/database-backup.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
 import { draftClaimsCheckPassed, takeUnverifiedNotice, unverifiedNotice, withUnverifiedNotice } from "./verifier-pipeline-unverifiable.js";
 
@@ -83,7 +84,7 @@ const CHAT = "chat-unverifiable";
  * its target, and why nothing could check.
  */
 const NOTICE_RE =
-  /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\): README\.md is a file, so that path cannot exist\. Then file_write wrote notes\/lantern\.txt, the same file name in another directory\. Nothing here could check the result: none of the 7 available tools runs a build or a test, and a search of the whole project for \d+ kinds of build or test manifest found none \(\d+ directories read, up to 20000 entries and 12 levels deep\)\.$/;
+  /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\): README\.md is a file, so that path cannot exist\. Then file_write wrote notes\/lantern\.txt, the same file name in another directory\. Nothing here could check the result: none of the 7 available tools runs a build or a test, and the project holds nothing a check could run on: its \d+ files, in \d+ directories, are all \.md or \.txt files \(the whole tree was read, up to 20000 entries and 12 levels deep\)\.$/;
 /** QA's drafts, 2026-11-16: each says "unverified" and claims a check at once. */
 const CLAIMING_DRAFTS = [
   "Wrote notes/lantern.txt and verified it works; nothing is left unverified.",
@@ -98,6 +99,9 @@ const rowOf = (plan: { evidence: { unverifiableDecision?: { inputs: readonly { i
 const CRASHED = { content: "TypeError: Cannot read properties of undefined (reading 'glow')\n    at main.js:3:14", isError: true };
 const RAN = { content: "lantern lit" };
 const LISTED = { content: "README.md\nmain.js\nnotes" };
+/** A command over a document that failed at run time, and the same command once the document is there. */
+const MISSING = { content: "cat: notes/lantern.txt: No such file or directory", isError: true };
+const READ_BACK = { content: "LANTERN" };
 
 /**
  * A tool, its path (or command for shell_exec), what it reported when the call is not run for real, and
@@ -250,15 +254,21 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
       source: "tool registry offered to this turn",
       offered: NO_CHECK_TOOLS.length,
       checkTools: [],
-      // shell_exec is offered, so the project's own manifests were read too, in the whole tree, and named.
+      // shell_exec is offered, so the project tree was read too, whole: its manifests, and the kind of every file.
       projectChecks: {
-        source: "project tree manifests",
+        source: "project tree",
         root: project,
         directoriesRead: expect.any(Number),
+        filesRead: expect.any(Number),
         limits: SCAN_LIMITS,
-        skipped: SKIPPED_DIRS,
+        skipped: [...SKIPPED_DIRS, ".strada/ at the root"],
+        notEntered: [],
         looked: expect.arrayContaining(["package.json (test/build/check/lint scripts)", "Makefile (test/build/check targets)", "pyproject.toml", "go.mod"]),
         found: [],
+        inertKinds: INERT_KINDS,
+        kindsSeen: [".md", ".txt"],
+        otherFiles: [],
+        otherWrites: [],
       },
     });
     const check = plan.checks.find((c) => c.name === "unverifiable-failure");
@@ -270,30 +280,55 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     expect(plan.checks.find((c) => c.name === "targeted-repro")).toBeUndefined();
   });
 
-  it("says in the record that shell_exec has nothing to run, and how many manifests it looked for", async () => {
+  it("says in the record and the notice what the scan read: every file, each of a kind that carries no check", async () => {
     const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS });
-    // Counted from the manifests themselves, a source with no clock in it (the plan's run carries a start
-    // time, docs/contracts/wall-clock-assertions.md): the record must hold exactly that count.
-    const looked = measureProjectChecks(project)!.looked.length;
+    // Counted from the project tree itself, a source with no clock in it (the plan's run carries a start
+    // time, docs/contracts/wall-clock-assertions.md): the record must hold exactly those counts.
+    const measured = measureProjectChecks(project)!;
+    const looked = measured.looked.length;
 
     expect(plan.evidence.verificationTooling?.projectChecks?.looked.length).toBe(looked);
     expect(looked).toBeGreaterThan(20);
-    const directories = plan.evidence.verificationTooling?.projectChecks?.directoriesRead;
+    expect(plan.evidence.verificationTooling?.projectChecks?.filesRead).toBe(measured.filesRead);
+    expect(plan.evidence.verificationTooling?.projectChecks?.directoriesRead).toBe(measured.directoriesRead);
     expect(rowOf(plan, "the project declares a check shell_exec could run")).toMatchObject({
-      value: `none of the ${looked} manifest kinds looked for, in all ${directories} directories (limits: 20000 entries, 12 levels)`,
+      value: `all ${measured.filesRead} files, in all ${measured.directoriesRead} directories, are of kinds that carry no check ` +
+        "(.md, .txt); not entered: nothing (limits: 20000 entries, 12 levels)",
       effect: "allows",
     });
     expect(plan.evidence.unverifiableDecision?.notice).toContain(
-      `and a search of the whole project for ${looked} kinds of build or test manifest found none (${directories} directories read, up to 20000 entries and 12 levels deep).`,
+      `and the project holds nothing a check could run on: its ${measured.filesRead} files, in ${measured.directoriesRead} directories, ` +
+        "are all .md or .txt files (the whole tree was read, up to 20000 entries and 12 levels deep).",
     );
   });
 
-  it("opens over package.json's npm-init placeholder, which runs no test", async () => {
-    const root = rootWith({ "package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1', start: "node index.js" } }) });
-    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: root });
+  it("does not enter a version-control store, and the record and the notice say which was not read", async () => {
+    const root = rootWith({ ".git/config": "[core]\n", ".git/hooks/pre-commit": "#!/bin/sh\nnpm test\n" });
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, projectPath: root });
 
-    expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([]);
+    expect(plan.evidence.verificationTooling?.projectChecks).toMatchObject({ notEntered: [".git"], otherFiles: [], found: [] });
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.value).toContain("; not entered: .git (limits:");
     expect(plan.initialDecision).toBe("approve");
+    expect(plan.evidence.unverifiableDecision?.notice).toContain("; not read: .git, which is version control).");
+  });
+
+  it("does not enter this assistant's own store at the root, the folder its vault and databases live in", async () => {
+    const root = rootWith({ ".strada/vault/index.db": "SQLite format 3\n", ".git/config": "[core]\n" });
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, projectPath: root });
+
+    expect(BRAIN_STORE_DIR).toBe(PROJECT_DATA_DIR);
+    expect(plan.evidence.verificationTooling?.projectChecks?.notEntered).toEqual([".git", ".strada"]);
+    expect(plan.initialDecision).toBe("approve");
+    expect(plan.evidence.unverifiableDecision?.notice).toMatch(
+      /; not read: \.git, which is version control and \.strada, which is Strada\.Brain's own store\)\.$/,
+    );
+  });
+
+  it("enters a folder of that name below the root: only the root's is this assistant's", async () => {
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS, projectPath: rootWith({ "app/.strada/run.js": "console.log(1);\n" }) });
+
+    expect(plan.evidence.verificationTooling?.projectChecks).toMatchObject({ notEntered: [], otherFiles: ["app/.strada/run.js"] });
+    expect(plan.initialDecision).toBe("continue");
   });
 
   it("does not read the manifests when shell_exec is not offered: nothing could run them", async () => {
@@ -304,17 +339,19 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     expect(plan.initialDecision).toBe("approve");
   });
 
-  it("closes over a command that crashed and was run again with the same input, and says it was run again", async () => {
+  it("closes over a command that failed at run time and was run again with the same input, and says it was run again", async () => {
+    // A command over documents only: the tree stays one that nothing can check (a crashed program does not, below).
     const plan = await verdictAfter({
-      calls: [["shell_exec", "node main.js", CRASHED], ["file_write", "main.js"], ["shell_exec", "node main.js", RAN]],
+      calls: [["shell_exec", "cat notes/lantern.txt", MISSING], ["file_write", "notes/lantern.txt"], ["shell_exec", "cat notes/lantern.txt", READ_BACK]],
       draft: NOT_VERIFIED,
       tools: NO_CHECK_TOOLS,
+      projectPath: rootWith({}),
     });
 
     expect(plan.evidence.recentFailureRetries).toEqual({ rerun: 1, rewritten: 0 });
     expect(plan.initialDecision).toBe("approve");
     expect(plan.checks.find((c) => c.name === "unverifiable-failure")?.summary).toMatch(
-      /^Not verified: shell_exec failed \(TypeError: Cannot read properties of undefined \(reading 'glow'\)\), then the same call, with the same input, succeeded\. Nothing here could check/,
+      /^Not verified: shell_exec failed \(cat: notes\/lantern\.txt: No such file or directory\), then the same call, with the same input, succeeded\. Nothing here could check/,
     );
   });
 
@@ -428,7 +465,7 @@ describe("the notice the run's answer carries", () => {
 
     expect(plan.initialDecision).toBe("approve");
     expect(plan.evidence.unverifiableDecision?.notice).toMatch(
-      /^Doğrulanmadı: file_write README\.md\/lantern\.txt başarısız oldu \(Error: could not write file \(E[A-Z]+\)\): README\.md bir dosya, bu yüzden o yol var olamaz\. Ardından file_write aynı adlı dosyayı başka bir dizine yazdı: notes\/lantern\.txt\. Sonucu burada hiçbir şey denetleyemedi: sunulan 7 aracın hiçbiri derleme ya da test çalıştırmıyor ve projenin tamamında \d+ türde derleme ya da test bildirgesi arandı, hiçbiri bulunamadı \(\d+ dizin okundu, en çok 20000 girdi ve 12 düzey derinliğe kadar\)\.$/,
+      /^Doğrulanmadı: file_write README\.md\/lantern\.txt başarısız oldu \(Error: could not write file \(E[A-Z]+\)\): README\.md bir dosya, bu yüzden o yol var olamaz\. Ardından file_write aynı adlı dosyayı başka bir dizine yazdı: notes\/lantern\.txt\. Sonucu burada hiçbir şey denetleyemedi: sunulan 7 aracın hiçbiri derleme ya da test çalıştırmıyor ve projede bir denetimin üzerinde koşabileceği hiçbir şey yok: \d+ dizindeki \d+ dosyanın hepsi \.md ya da \.txt dosyası \(ağacın tamamı okundu, en çok 20000 girdi ve 12 düzey derinliğe kadar\)\.$/,
     );
   });
 
@@ -444,6 +481,19 @@ describe("the notice the run's answer carries", () => {
     );
 
     expect(notice.startsWith(`${head} `)).toBe(true);
+  });
+
+  it.each([
+    ["en", "and the project holds nothing a check could run on: its one file, in one directory, is a .md file " +
+      "(the whole tree was read, up to 20000 entries and 12 levels deep; not read: .strada, which is Strada.Brain's own store)."],
+    ["tr", "ve projede bir denetimin üzerinde koşabileceği hiçbir şey yok: 1 dizindeki tek dosya bir .md dosyası " +
+      "(ağacın tamamı okundu, en çok 20000 girdi ve 12 düzey derinliğe kadar; Strada.Brain'in kendi deposu olan .strada okunmadı)."],
+  ] as const)("says what the scan read, and what it did not enter (%s)", (language, tail) => {
+    const scan = measureProjectChecks(rootWith({ ".strada/vault/index.db": "SQLite format 3\n" }))!;
+    const answer = { tool: "shell_exec", error: "exit 1", kind: "rerun" as const };
+
+    expect(scan).toMatchObject({ filesRead: 1, directoriesRead: 1, notEntered: [".strada"] });
+    expect(unverifiedNotice([answer], { offered: 7, shellOffered: true, scan }, false, language).endsWith(` ${tail}`)).toBe(true);
   });
 
   it("lists the last three failures and counts the earlier ones", () => {
@@ -519,7 +569,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
   });
 
-  it("names that only look like tests, a file called tests, and packages that run no check do not count", async () => {
+  it("names that only look like tests declare no check, but a Python file, a file called tests and a package.json are not documents", async () => {
     const root = rootWith({
       "latest_news.py": "",
       "contest.md": "",
@@ -529,14 +579,102 @@ describe("what still waits for a verification, whatever the draft says", () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: root });
 
     expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([]);
-    expect(plan.initialDecision).toBe("approve");
+    expect(plan.evidence.verificationTooling?.projectChecks?.otherFiles).toEqual(expect.arrayContaining(["latest_news.py", "tests", "package.json"]));
+    expect(plan.evidence.verificationTooling?.projectChecks?.otherFiles).not.toContain("contest.md");
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("keeps the gate");
+    expect(plan.initialDecision).toBe("continue");
   });
 
-  it("a Makefile whose targets are not checks does not count", async () => {
+  it("the npm-init placeholder declares no check, but a package.json is not a kind that carries none (QA 2026-11-16)", async () => {
+    const root = rootWith({ "package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1', start: "node index.js" } }) });
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: root });
+
+    expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([]);
+    expect(plan.evidence.verificationTooling?.projectChecks?.otherFiles).toEqual(["package.json"]);
+    expect(plan.initialDecision).toBe("continue");
+  });
+
+  it("a Makefile whose targets are not checks declares none, but a Makefile is not a document (QA 2026-11-16)", async () => {
     const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: rootWith({ Makefile: "install:\n\tcp a b\n" }) });
 
     expect(plan.evidence.verificationTooling?.projectChecks?.found).toEqual([]);
-    expect(plan.initialDecision).toBe("approve");
+    expect(plan.evidence.verificationTooling?.projectChecks?.otherFiles).toEqual(["Makefile"]);
+    expect(plan.initialDecision).toBe("continue");
+  });
+
+  it.each([
+    ["a default Django project", {
+      "manage.py": "import sys\n", "requirements.txt": "Django>=5.0\n",
+      "shop/__init__.py": "", "shop/tests.py": "from django.test import TestCase\n", "shop/views.py": "",
+    }, "manage.py"],
+    ["a unittest tests.py at the root", { "tests.py": "import unittest\n" }, "tests.py"],
+    ["a test.py at the root", { "test.py": "import unittest\n" }, "test.py"],
+    ["pytest named in requirements.txt", { "requirements.txt": "pytest\n" }, "requirements.txt"],
+    ["requirements in a folder of their own", { "requirements/dev.txt": "pytest\n" }, "requirements/dev.txt"],
+    ["a doctest file pytest collects with no configuration", { "docs/test_usage.txt": ">>> 1 + 1\n2\n" }, "docs/test_usage.txt"],
+    ["a test.sh", { "test.sh": "#!/bin/sh\n" }, "test.sh"],
+    ["a test script in a folder", { "scripts/run_tests.sh": "#!/bin/sh\n" }, "scripts/run_tests.sh"],
+    ["a Swift package", { "Package.swift": "// swift-tools-version:5.9\n" }, "Package.swift"],
+    ["a Dart package", { "pubspec.yaml": "name: lantern\n" }, "pubspec.yaml"],
+    ["an sbt build", { "build.sbt": "name := \"lantern\"\n" }, "build.sbt"],
+    ["a PHPUnit configuration", { "phpunit.xml": "<phpunit/>\n" }, "phpunit.xml"],
+    ["a program node --check reads", { "main.js": "console.log('lit');\n" }, "main.js"],
+    ["a file with no extension", { lantern: "#!/usr/bin/env node\n" }, "lantern"],
+  ])("shell_exec is offered and the tree holds a file that is not a document or an image: %s (QA 2026-11-16)", async (_label, files, named) => {
+    const startedAt = Date.now() - 54_000 - named.length;
+    const plan = await verdictAfter({ draft: NOT_VERIFIED, tools: NO_CHECK_TOOLS, projectPath: rootWith(files), startedAt });
+
+    expect(plan.evidence.verificationTooling?.projectChecks?.otherFiles).toContain(named);
+    expect(rowOf(plan, "the project declares a check shell_exec could run")).toMatchObject({
+      value: expect.stringContaining(named),
+      effect: "keeps the gate",
+    });
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a program that crashed and was run again: the program is a file a check reads (node --check), so the gate stays", async () => {
+    const startedAt = Date.now() - 55_000;
+    const plan = await verdictAfter({
+      calls: [["shell_exec", "node main.js", CRASHED], ["file_write", "main.js"], ["shell_exec", "node main.js", RAN]],
+      draft: NOT_VERIFIED,
+      tools: NO_CHECK_TOOLS,
+      projectPath: rootWith({}),
+      startedAt,
+    });
+
+    expect(plan.evidence.recentFailureRetries).toEqual({ rerun: 1, rewritten: 0 });
+    expect(plan.evidence.verificationTooling?.projectChecks).toMatchObject({ otherFiles: ["main.js"], otherWrites: ["main.js"] });
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("keeps the gate");
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a file this run wrote that the root read does not hold (a lease) is judged by its kind too", async () => {
+    const plan = await verdictAfter({
+      calls: [["file_write", "tools/main.js", { content: "Wrote tools/main.js" }], ...FAIL_THEN_FIX],
+      draft: DONE,
+      tools: NO_CHECK_TOOLS,
+      projectPath: rootWith({}),
+    });
+
+    expect(plan.evidence.verificationTooling?.projectChecks).toMatchObject({ otherFiles: [], otherWrites: ["tools/main.js"] });
+    expect(rowOf(plan, "the project declares a check shell_exec could run")).toMatchObject({
+      value: "holds files of a kind that may carry a check: tools/main.js (written by this run)",
+      effect: "keeps the gate",
+    });
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
+  it("a verdict with no open failure does not scan the project tree", async () => {
+    const plan = await verdictAfter({ calls: [["file_write", "notes/lantern.txt"]], draft: DONE, tools: NO_CHECK_TOOLS, projectPath: rootWith({}) });
+
+    expect(plan.evidence.recentFailures).toEqual([]);
+    expect(plan.evidence.verificationTooling).toBeUndefined();
+    expect(plan.evidence.unverifiableDecision).toBeUndefined();
   });
 
   it.each([
@@ -548,6 +686,10 @@ describe("what still waits for a verification, whatever the draft says", () => {
     ["a workspaces monorepo whose test lives in a package",
       { "package.json": JSON.stringify({ workspaces: ["packages/*"] }), "packages/a/package.json": JSON.stringify({ scripts: { test: "vitest run" } }) },
       ["packages/a/package.json scripts.test"]],
+    // A folder name that is a cache in one project and the project in another is entered (QA 2026-11-16).
+    ["a C# project in a folder named Library, with no .sln at the root", { "Library/Library.csproj": "<Project />\n" }, ["Library/*.sln / *.csproj"]],
+    ["a package under tools/build", { "tools/build/package.json": JSON.stringify({ scripts: { test: "vitest run" } }) },
+      ["tools/build/package.json scripts.test"]],
   ])("shell_exec is offered and a directory under the root declares a check: %s (QA 2026-11-16)", async (_label, files, found) => {
     const startedAt = Date.now() - 49_000 - found[0]!.length;
     const plan = await verdictAfter({
@@ -590,16 +732,17 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
 
-  it("a check inside a dependency folder is not the project's: the scan skips it and the exit opens", async () => {
+  it("a dependency folder is entered: only the version-control stores are skipped (QA 2026-11-16)", async () => {
     const plan = await verdictAfter({
       draft: DONE,
       tools: NO_CHECK_TOOLS,
       projectPath: rootWith({ "node_modules/left-pad/package.json": JSON.stringify({ scripts: { test: "tape test.js" } }) }),
     });
 
-    expect(plan.evidence.verificationTooling?.projectChecks).toMatchObject({ found: [], skipped: expect.arrayContaining(["node_modules"]) });
+    expect(plan.evidence.verificationTooling?.projectChecks).toMatchObject({ found: ["node_modules/left-pad/package.json scripts.test"] });
+    expect(plan.evidence.verificationTooling?.projectChecks?.skipped).not.toContain("node_modules");
     expect(plan.evidence.verificationTooling?.projectChecks?.incomplete).toBeUndefined();
-    expect(plan.initialDecision).toBe("approve");
+    expect(plan.initialDecision).toBe("continue");
   });
 
   it("shell_exec is offered and the project root is unknown or unreadable", async () => {
@@ -676,6 +819,7 @@ describe("what still waits for a verification, whatever the draft says", () => {
       calls: [["shell_exec", "node main.js", CRASHED], ["file_write", "main.js"], ["shell_exec", "ls", LISTED]],
       draft: NOT_VERIFIED,
       tools: NO_CHECK_TOOLS,
+      projectPath: rootWith({}),
     });
 
     expect(plan.evidence.recentFailures).toEqual([expect.stringMatching(/^shell_exec: TypeError/)]);
@@ -756,6 +900,45 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
     expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
     expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("the run made the blocker through the root's real spelling: the record still names it (QA 2026-11-16)", async () => {
+    const real = rootWith({});
+    const linked = join(sandbox, `linked-root-${roots++}`);
+    symlinkSync(real, linked, "junction");
+    const plan = await verdictAfter({
+      task: "Write the kappa note into the notes folder",
+      calls: [["file_write", join(realpathSync(linked), "notes")], ["file_write", "notes/kappa.txt"], ["file_write", "docs/kappa.txt"]],
+      draft: "Wrote the kappa note.",
+      tools: NO_CHECK_TOOLS,
+      projectPath: linked,
+    });
+
+    expect(plan.evidence.recentFailures).toEqual([expect.stringMatching(/^file_write: Error: could not write file/)]);
+    expect(existsSync(join(real, "notes", "kappa.txt"))).toBe(false);
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
+  it("a writer named a path outside both spellings of the root: the record cannot place it, so the blocker may be the run's", async () => {
+    const root = rootWith({ notes: "a file the project had before the run\n" });
+    const plan = await verdictAfter({
+      task: "Write the kappa note into the notes folder",
+      calls: [
+        ["file_write", join(sandbox, "elsewhere", "notes"), { content: "Wrote it" }],
+        ["file_write", "notes/kappa.txt"],
+        ["file_write", "docs/kappa.txt"],
+      ],
+      draft: "Wrote the kappa note.",
+      tools: NO_CHECK_TOOLS,
+      projectPath: root,
+    });
+
+    expect(plan.evidence.recentFailures).toEqual([expect.stringMatching(/^file_write: Error: could not write file/)]);
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
   });
 
   it("a writer that names no path ran in the run (shell_exec): it may have made the blocker, so the record cannot tell", async () => {
@@ -988,6 +1171,24 @@ describe("fileOnPath: why a failed write's path cannot exist, measured in the pr
 
     expect(fileOnPath(project, "../outside.txt/lantern.txt")).toBeNull();
     expect(fileOnPath(project, join(sandbox, "outside.txt", "lantern.txt"))).toBeNull();
+  });
+});
+
+describe("inertKind: the closed set of kinds that carry no check", () => {
+  it.each(["README.md", "notes/kappa.txt", "docs/Guide.MARKDOWN", "art/logo.png", "LICENSE", ".gitignore", "contest.md", "latest.txt"])(
+    "reads %j as a kind that carries no check",
+    (path) => {
+      expect(inertKind(path)).not.toBeNull();
+    },
+  );
+
+  it.each([
+    "main.js", "manage.py", "package.json", "Makefile", "test.sh", "notes", "logo.svg", "data.csv",
+    // Names of a document kind that a tool reads: CMake's and pip's inputs, pytest's default doctest glob.
+    "CMakeLists.txt", "requirements.txt", "dev-requirements.txt", "requirements/base.txt", "constraints.txt",
+    "test_usage.txt", "docs/tests.md", "docs/spec.md",
+  ])("reads %j as a kind that may carry one", (path) => {
+    expect(inertKind(path)).toBeNull();
   });
 });
 

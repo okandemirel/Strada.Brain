@@ -28,10 +28,11 @@
  * records the alternatives.
  */
 
-import { PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
+import { MUTATION_TOOLS, PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
+import type { StepResult } from "../agent-state.js";
 import { isNodeScopedTask, selectNodeTools } from "./node-tool-offer.js";
 import { sanitizePromptInjection } from "../../security/prompt-injection.js";
-import { measureProjectChecks, type ProjectCheckRecord } from "./verifier-pipeline-project-checks.js";
+import { measureProjectChecks, notEnteredAs, type ProjectCheckRecord } from "./verifier-pipeline-project-checks.js";
 import type { CompletionReviewEvidence } from "./completion-review.js";
 import type { FailureAnswer } from "./completion-review-answers.js";
 import { detectSupervisorFeedbackLanguage, type SupervisorFeedbackLanguage } from "../../supervisor/supervisor-feedback.js";
@@ -43,7 +44,7 @@ export interface VerificationToolingRecord {
   readonly offered: number;
   /** Those that run a check: a build, tests, the game. */
   readonly checkTools: readonly string[];
-  /** What the project declares for shell_exec to run; null when shell_exec is not offered. */
+  /** What the project tree holds for shell_exec to check; null when shell_exec is not offered. */
   readonly projectChecks: ProjectCheckRecord | null;
 }
 
@@ -65,16 +66,26 @@ export function offerUnknownBecause(toolNames: readonly string[] | undefined, ta
   return null;
 }
 
-/** Null when the offer or, with shell_exec offered, the project root cannot be read: the ordinary gates apply. */
+/** Writers whose target is a path they leave behind; a deletion leaves nothing. */
+const LEAVES_A_FILE = (tool: string): boolean => MUTATION_TOOLS.has(tool) && tool !== "file_delete" && tool !== "file_delete_directory";
+
+/**
+ * Null when the offer or, with shell_exec offered, the project root cannot be
+ * read: the ordinary gates apply. The paths this run's writers wrote (the
+ * steps' target paths) are judged by kind with the tree: a lease the tools
+ * write in may not be the root that is read.
+ */
 export function measureVerificationTooling(
   toolNames: readonly string[] | undefined,
   taskDescription: string,
   projectPath?: string,
+  steps: readonly StepResult[] = [],
 ): VerificationToolingRecord | null {
   if (!toolNames || offerUnknownBecause(toolNames, taskDescription) !== null) return null;
   let projectChecks: ProjectCheckRecord | null = null;
   if (toolNames.includes("shell_exec")) {
-    projectChecks = projectPath ? measureProjectChecks(projectPath) : null;
+    const writes = steps.flatMap((s) => (s.success && s.targetPath !== undefined && LEAVES_A_FILE(s.toolName) ? [s.targetPath] : []));
+    projectChecks = projectPath ? measureProjectChecks(projectPath, undefined, undefined, writes) : null;
     if (!projectChecks) return null;
   }
   return {
@@ -161,24 +172,30 @@ function projectRow(
 ): DecisionInput {
   const base = {
     input: "the project declares a check shell_exec could run",
-    source: "the project tree's manifests (measureProjectChecks: every directory but SKIPPED_DIRS, within SCAN_LIMITS)",
+    source:
+      "the project tree (measureProjectChecks: every directory but the version-control stores in SKIPPED_DIRS, within SCAN_LIMITS): " +
+      "its manifests, and the kind of every file it holds and every file this run wrote; it allows only when each file is of a kind in INERT_KINDS",
     whenUnknown: "no root, an unreadable root, or an incomplete scan (a limit reached, a directory unreadable, a linked directory) keeps the gate",
   };
   if (offerUnknownBecause(toolNames, taskDescription)) return { ...base, value: "not read: the offer itself is unknown", effect: KEEPS };
   if (!toolNames?.includes("shell_exec")) return { ...base, value: "shell_exec is not offered: nothing could run one", effect: "allows" };
   const checks = tooling?.projectChecks;
   if (!checks) return { ...base, value: projectPath ? "the project root could not be read" : "no project root was passed in", effect: KEEPS };
+  if (checks.found.length > 0) return { ...base, value: `declares ${checks.found.join(", ")}`, effect: "keeps the gate" };
+  const others = [...checks.otherFiles, ...checks.otherWrites.map((path) => `${path} (written by this run)`)];
+  if (others.length > 0) {
+    return { ...base, value: `holds files of a kind that may carry a check: ${others.join(", ")}`, effect: "keeps the gate" };
+  }
   if (checks.incomplete) {
     return { ...base, value: `the scan is incomplete after ${checks.directoriesRead} directories: ${checks.incomplete}`, effect: KEEPS };
   }
-  return checks.found.length > 0
-    ? { ...base, value: `declares ${checks.found.join(", ")}`, effect: "keeps the gate" }
-    : {
-      ...base,
-      value: `none of the ${checks.looked.length} manifest kinds looked for, in all ${checks.directoriesRead} directories ` +
-        `(limits: ${checks.limits.entries} entries, ${checks.limits.depth} levels)`,
-      effect: "allows",
-    };
+  return {
+    ...base,
+    value: `all ${checks.filesRead} files, in all ${checks.directoriesRead} directories, are of kinds that carry no check ` +
+      `(${checks.kindsSeen.join(", ") || "none"}); not entered: ${checks.notEntered.join(", ") || "nothing"} ` +
+      `(limits: ${checks.limits.entries} entries, ${checks.limits.depth} levels)`,
+    effect: "allows",
+  };
 }
 
 /**
@@ -301,8 +318,18 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
     nothing: (offered, shellOffered, scan) =>
       `none of the ${offered} available tools runs a build or a test` +
       (shellOffered && scan
-        ? `, and a search of the whole project for ${scan.looked.length} kinds of build or test manifest found none ` +
-          `(${scan.directoriesRead} directories read, up to ${scan.limits.entries} entries and ${scan.limits.depth} levels deep)`
+        ? ", and the project holds nothing a check could run on: " +
+          (scan.filesRead === 0
+            ? "it holds no file"
+            : scan.filesRead === 1
+              ? `its one file, in ${count(scan.directoriesRead, "directory", "directories")}, is a ${listOf(scan.kindsSeen, "or")} file`
+              : `its ${scan.filesRead} files, in ${count(scan.directoriesRead, "directory", "directories")}, are all ` +
+                `${listOf(scan.kindsSeen, "or")} files`) +
+          ` (the whole tree was read, up to ${scan.limits.entries} entries and ${scan.limits.depth} levels deep` +
+          (scan.notEntered.length > 0
+            ? `; not read: ${listOf(scan.notEntered.map((path) =>
+              `${path}, which is ${notEnteredAs(path) === "version control" ? "version control" : "Strada.Brain's own store"}`), "and")})`
+            : ")")
         : ""),
     why: (nothing) => `Nothing here could check the result: ${nothing}.`,
     claim: "The report above mentions a check, but no check ran in this run.",
@@ -317,8 +344,17 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
     nothing: (offered, shellOffered, scan) =>
       `sunulan ${offered} aracın hiçbiri derleme ya da test çalıştırmıyor` +
       (shellOffered && scan
-        ? ` ve projenin tamamında ${scan.looked.length} türde derleme ya da test bildirgesi arandı, hiçbiri bulunamadı ` +
-          `(${scan.directoriesRead} dizin okundu, en çok ${scan.limits.entries} girdi ve ${scan.limits.depth} düzey derinliğe kadar)`
+        ? " ve projede bir denetimin üzerinde koşabileceği hiçbir şey yok: " +
+          (scan.filesRead === 0
+            ? "projede hiç dosya yok"
+            : scan.filesRead === 1
+              ? `${scan.directoriesRead} dizindeki tek dosya bir ${listOf(scan.kindsSeen, "ya da")} dosyası`
+              : `${scan.directoriesRead} dizindeki ${scan.filesRead} dosyanın hepsi ${listOf(scan.kindsSeen, "ya da")} dosyası`) +
+          ` (ağacın tamamı okundu, en çok ${scan.limits.entries} girdi ve ${scan.limits.depth} düzey derinliğe kadar` +
+          (scan.notEntered.length > 0
+            ? `; ${listOf(scan.notEntered.map((path) =>
+              `${notEnteredAs(path) === "version control" ? "sürüm denetimi" : "Strada.Brain'in kendi deposu"} olan ${path}`), "ve")} okunmadı)`
+            : ")")
         : ""),
     why: (nothing) => `Sonucu burada hiçbir şey denetleyemedi: ${nothing}.`,
     claim: "Yukarıdaki rapor bir denetimden söz ediyor, ama bu çalışmada hiçbir denetim koşmadı.",
@@ -326,6 +362,16 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
 };
 
 const clip = (text: string, max: number): string => sanitizePromptInjection(text).slice(0, max);
+
+/** 1 → "one directory", 3 → "3 directories". */
+function count(n: number, one: string, many: string): string {
+  return n === 1 ? `one ${one}` : `${n} ${many}`;
+}
+
+/** ".md", ".txt" → ".md or .txt"; three or more take commas before the last word. */
+function listOf(items: readonly string[], word: string): string {
+  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} ${word} ${items.at(-1)}`;
+}
 
 /** One failure and what answered it, as recorded: the failed call's target, its error, and the answering call's target. */
 function answerSentence(answer: FailureAnswer, words: Words): string {

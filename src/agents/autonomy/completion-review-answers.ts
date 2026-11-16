@@ -27,8 +27,10 @@
  *   impossible before the run touched it, or that the task wanted only one
  *   file of that name (QA of #41 and #88, 2026-11-16):
  *   - the blocking file was not made by this run: no successful step named
- *     it, and no successful writer ran that names no path (shell_exec may
- *     make any file), since then the record cannot tell;
+ *     it, in the root's typed or real spelling; no successful writer ran
+ *     that names no path (shell_exec may make any file); and no successful
+ *     writer named a path outside both spellings of the root, since then the
+ *     record cannot tell;
  *   - the task names no other path with that file name that no step wrote
  *     ("Create notes/alpha.txt and docs/alpha.txt": docs/alpha.txt written
  *     answers nothing for notes/alpha.txt).
@@ -39,7 +41,8 @@
 
 import { statSync } from "node:fs";
 import { dirname, posix, relative, resolve } from "node:path";
-import { isStrictlyInside } from "../../common/path-containment.js";
+import { isAtOrInside, isStrictlyInside } from "../../common/path-containment.js";
+import { canonicalVaultPath } from "../../vault/path-policy.js";
 import type { StepResult } from "../agent-state.js";
 import { MUTATION_TOOLS } from "./constants.js";
 
@@ -106,20 +109,33 @@ export function failureAnsweredBy(
   return { ...base, kind: "same-name", answerTarget: sameName.targetPath!, blockedBy };
 }
 
-/** The same file under `root`, however each side was spelled. */
+/**
+ * The same file under `root`, however each side was spelled: as typed, or as
+ * the filesystem spells it. A run that wrote the blocker through the root's
+ * real path (/private/var for /var on macOS) named the same file (QA of #41,
+ * 2026-11-16).
+ */
 function samePlace(root: string, a: string, b: string): boolean {
-  return resolve(root, pathSpelling(a)) === resolve(root, pathSpelling(b));
+  const [first, second] = [resolve(root, pathSpelling(a)), resolve(root, pathSpelling(b))];
+  return first === second || canonicalVaultPath(first) === canonicalVaultPath(second);
+}
+
+/** Inside `root` in neither of its spellings, typed or real: the record cannot say what that path is in the project. */
+function outsideBothSpellings(root: string, path: string): boolean {
+  const typed = resolve(root, pathSpelling(path));
+  return !isAtOrInside(resolve(root), typed) && !isAtOrInside(canonicalVaultPath(root), canonicalVaultPath(typed));
 }
 
 /**
- * The run may have made `blocker`: a successful step named it, or a
- * successful writer that names no path ran (shell_exec), so the record
- * cannot tell.
+ * The run may have made `blocker`: a successful step named it, a successful
+ * writer that names no path ran (shell_exec), or a successful writer named a
+ * path outside both spellings of the root. In the last two the record cannot
+ * tell.
  */
 function madeByTheRun(blocker: string, steps: readonly StepResult[], root: string): boolean {
   return steps.some((s) => s.success && (s.targetPath === undefined
     ? MUTATION_TOOLS.has(s.toolName)
-    : samePlace(root, s.targetPath, blocker)));
+    : samePlace(root, s.targetPath, blocker) || (MUTATION_TOOLS.has(s.toolName) && outsideBothSpellings(root, s.targetPath))));
 }
 
 /** Paths the task text names: a token with a file extension, with or without directories. */

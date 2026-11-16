@@ -19,8 +19,8 @@
  *    path and finishes; the provider drops two calls of the next node, which
  *    is asked again at once without streaming and then on its next turn.
  * 4. A node's write fails at run time and its next write succeeds. No tool
- *    this run has can verify that, and the project declares no check for
- *    shell_exec to run, so the node finishes at once: no ask, no block, no
+ *    this run has can verify that, and the project holds only documents, so
+ *    shell_exec has nothing to check: the node finishes at once: no ask, no block, no
  *    re-run. The system itself puts "Not verified: …" under its answer.
  * 5. The same failure in a run whose registry holds a tool that runs a check.
  *    The failure waits for that verification whatever the draft says, the
@@ -334,16 +334,18 @@ const UNDER_A_FILE = "README.md/kappa.txt";
  * was answered by a write of the same file name under notes/, and that
  * nothing here could check. Built from the record: both targets, the error
  * (its code is the platform's), README.md measured to be a file in the
- * project, the tool count (the registry's), and the scan of the project tree
- * that found no manifest (its directory count is the run's).
+ * project, the tool count (the registry's), and the scan of the project tree:
+ * the project root holds README.md alone (the notes are in the worker's lease,
+ * and were recorded as .txt writes), and the vault's .strada/ is not entered.
  */
 const notVerifiedUnder = (answer: string, name: string, tail = ""): RegExp =>
   new RegExp(
     `^${escapeRegExp(answer)}\\n\\nNot verified: file_write README\\.md/${escapeRegExp(name)} failed ` +
       "\\(Error: could not write file \\(E[A-Z]+\\)\\): README\\.md is a file, so that path cannot exist\\. " +
       `Then file_write wrote notes/${escapeRegExp(name)}, the same file name in another directory\\. Nothing here could check ` +
-      "the result: none of the \\d+ available tools runs a build or a test, and a search of the whole project for \\d+ kinds of build or test " +
-      "manifest found none \\(\\d+ directories read, up to 20000 entries and 12 levels deep\\)\\." +
+      "the result: none of the \\d+ available tools runs a build or a test, and the project holds nothing a check could run on: " +
+      "its one file, in one directory, is a \\.md file \\(the whole tree was read, up to 20000 entries and 12 levels deep; " +
+      "not read: \\.strada, which is Strada\\.Brain's own store\\)\\." +
       `${escapeRegExp(tail)}$`,
   );
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
