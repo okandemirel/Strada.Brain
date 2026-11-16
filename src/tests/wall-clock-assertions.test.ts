@@ -12,8 +12,8 @@
  * What counts is decided by the clock-taint analysis in
  * ./wall-clock-assertions-taint.ts: an ordering matcher whose target or bound
  * comes from a real clock read, whatever the fake clocks around it; the one way
- * out is a `// wall-clock-frozen: <why>` mark right above the assertion, pinned
- * in WALL_CLOCK_FROZEN_MARKS. The repository already holds the bounds counted
+ * out is a `// wall-clock-frozen: <why>` mark right above the assertion, counted
+ * in WALL_CLOCK_FROZEN_MARKS, which the commit layer pins like the baseline. The repository already holds the bounds counted
  * in WALL_CLOCK_BASELINE, file by file: this is a RATCHET. No file may gain
  * one, and a file whose count drops lowers its line here in the same change, so
  * the number only goes down. Raising a line is a loosened pin for
@@ -36,7 +36,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
-import { type Bound, judgeBounds, measureWallClock, wallClockBounds } from "./wall-clock-assertions-taint.js";
+import { type Bound, countByFile, judgeBounds, measureWallClock, wallClockBounds } from "./wall-clock-assertions-taint.js";
 
 const REPO = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const SELF = "src/tests/wall-clock-assertions.test.ts";
@@ -161,11 +161,15 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
 };
 
 /**
- * The `// wall-clock-frozen: <why>` marks in the repository, as `file: reason`.
- * A mark leaves the assertion under it uncounted, so each one is pinned here
- * where a reviewer reads its reason. None on main at 36b00a01.
+ * The `// wall-clock-frozen: <why>` marks per test file. A mark leaves the
+ * assertion under it uncounted, so it loosens the ratchet the way a raised
+ * WALL_CLOCK_BASELINE line does: scripts/ci/check-test-integrity.mjs lists
+ * this record in PINS, and a commit that adds a line or raises one needs a
+ * Test-Weakened line saying why the clock cannot move. The reason itself
+ * stays in the mark. Lower a line when a mark goes away; delete it at zero.
+ * None on main at 36b00a01.
  */
-const WALL_CLOCK_FROZEN_MARKS: readonly string[] = [];
+const WALL_CLOCK_FROZEN_MARKS: Readonly<Record<string, number>> = {};
 
 /** The limit a test that scans the repository carries, as clean-checkout.test.ts and dist-readers.test.ts do. */
 const REPO_SCAN_TIMEOUT_MS = 120_000;
@@ -176,7 +180,8 @@ const NEW_BOUND_ADVICE =
   "several agents share, such a bound turns red on unrelated changes. Assert the behaviour instead of the " +
   "machine's speed: an injected clock, a counted call or attempt, or the order of events. An assertion on a " +
   "clock under fake timers still counts; if its clock truly cannot move, say why in a " +
-  "'// wall-clock-frozen: <why>' line right above it and pin that mark in WALL_CLOCK_FROZEN_MARKS. Do not " +
+  "'// wall-clock-frozen: <why>' line right above it and count it in WALL_CLOCK_FROZEN_MARKS, which is a pin " +
+  "like the baseline: the commit needs a Test-Weakened line. Do not " +
   "move the bound into a helper or a property to hide it; raising WALL_CLOCK_BASELINE is a loosened pin " +
   "and needs a Test-Weakened line.";
 
@@ -367,10 +372,13 @@ describe("wall-clock bounds in tests only go down (docs/contracts/wall-clock-ass
       stray.map((m) => `${m.file}:${m.line} ${m.reason}`),
       "a // wall-clock-frozen: <why> mark goes on the line right above a clock-tainted ordering assertion and says why the clock cannot move (8 characters or more)",
     ).toEqual([]);
+    const reasons = marked.map((m) => `  ${m.file}:${m.line}  ${m.reason}`).join("\n");
     expect(
-      marked.map((m) => `${m.file}: ${m.reason}`).sort(),
-      `a new wall-clock-frozen mark leaves a bound uncounted: pin it in WALL_CLOCK_FROZEN_MARKS in ${SELF} so the reviewer reads its reason`,
-    ).toEqual([...WALL_CLOCK_FROZEN_MARKS].sort());
+      countByFile(marked),
+      `the wall-clock-frozen marks per file must equal WALL_CLOCK_FROZEN_MARKS in ${SELF}. A new or raised line ` +
+        "leaves a bound uncounted, like a raised WALL_CLOCK_BASELINE line: the commit needs a Test-Weakened line " +
+        `saying why the clock cannot move. Marks now:\n${reasons}`,
+    ).toEqual(WALL_CLOCK_FROZEN_MARKS);
   }, REPO_SCAN_TIMEOUT_MS);
 
   /** A fixture file from `[line, form]` pairs; returns the file and the `line:form` the detector must report. */
