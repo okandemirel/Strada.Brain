@@ -32,7 +32,8 @@ import { PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
 import { isNodeScopedTask, selectNodeTools } from "./node-tool-offer.js";
 import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import { measureProjectChecks, type ProjectCheckRecord } from "./verifier-pipeline-project-checks.js";
-import type { CompletionReviewEvidence, FailureAnswer } from "./completion-review.js";
+import type { CompletionReviewEvidence } from "./completion-review.js";
+import type { FailureAnswer, WriterAction } from "./completion-review-answers.js";
 import { detectSupervisorFeedbackLanguage, type SupervisorFeedbackLanguage } from "../../supervisor/supervisor-feedback.js";
 
 /** What the run's tool registry says about verification, and that it was the registry that said it. */
@@ -203,13 +204,14 @@ export function decideUnverifiableExit(params: {
     },
     {
       input: "every open failure was answered by a later success",
-      source: "the run's step results: input signatures, and the paths writers named (failureAnsweredBy)",
+      source: "the run's step results: input signatures and the paths writers named; for a same-name write, the project root (failureAnsweredBy)",
       value: failures === 0
         ? "no failure is open: there is nothing for this exit to close"
         : answered
           ? howAnswered(evidence.recentFailureAnswers ?? [])
           : "no: a failed call was not run again, and no write of its path or file name followed it",
-      whenUnknown: "a step without an input signature, or a writer without a path, is not answered: keeps the gate",
+      whenUnknown:
+        "a step without an input signature, a writer without a path, or a same-name write whose failed path is not measured to be impossible, is not answered: keeps the gate",
       effect: failures > 0 && answered ? "allows" : "keeps the gate",
     },
     {
@@ -255,8 +257,10 @@ function howAnswered(answers: readonly FailureAnswer[]): string {
   const count = (kind: FailureAnswer["kind"]) => answers.filter((a) => a.kind === kind).length;
   const parts = [
     count("rerun") > 0 ? `${count("rerun")} run again with the same input` : "",
-    count("same-path") > 0 ? `${count("same-path")} whose path the same tool wrote later` : "",
-    count("same-name") > 0 ? `${count("same-name")} whose file name the same tool wrote later in another directory` : "",
+    count("same-path") > 0 ? `${count("same-path")} whose path the same tool acted on later` : "",
+    count("same-name") > 0
+      ? `${count("same-name")} whose path cannot exist (a directory of it is a file) and whose file name the same tool wrote later in another directory`
+      : "",
   ].filter(Boolean);
   return `yes: ${parts.join("; ")}`;
 }
@@ -264,8 +268,8 @@ function howAnswered(answers: readonly FailureAnswer[]): string {
 interface Words {
   readonly head: string;
   readonly rerun: (call: string, error: string) => string;
-  readonly samePath: (call: string, error: string, tool: string, path: string) => string;
-  readonly sameName: (call: string, error: string, tool: string, path: string) => string;
+  readonly samePath: (call: string, error: string, tool: string, path: string, action: WriterAction) => string;
+  readonly sameName: (call: string, error: string, tool: string, path: string, blockedBy: string) => string;
   readonly earlier: (n: number) => string;
   readonly nothing: (offered: number, shellOffered: boolean) => string;
   readonly why: (nothing: string) => string;
@@ -277,9 +281,10 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
   en: {
     head: "Not verified:",
     rerun: (call, error) => `${call} failed (${error}), then the same call, with the same input, succeeded.`,
-    samePath: (call, error, tool, path) => `${call} failed (${error}), then ${tool} wrote ${path} again.`,
-    sameName: (call, error, tool, path) =>
-      `${call} failed (${error}), then ${tool} wrote ${path} (the same file name, in another directory).`,
+    samePath: (call, error, tool, path, action) =>
+      `${call} failed (${error}), then ${tool} ${{ write: `wrote ${path} again`, edit: `edited ${path}`, delete: `deleted ${path}` }[action]}.`,
+    sameName: (call, error, tool, path, blockedBy) =>
+      `${call} failed (${error}): ${blockedBy} is a file, so that path cannot exist. Then ${tool} wrote ${path}, the same file name in another directory.`,
     earlier: (n) => `${n} earlier failed step(s) are not listed.`,
     nothing: (offered, shellOffered) =>
       `none of the ${offered} available tools runs a build or a test` +
@@ -290,9 +295,10 @@ const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
   tr: {
     head: "Doğrulanmadı:",
     rerun: (call, error) => `${call} başarısız oldu (${error}); ardından aynı çağrı, aynı girdiyle, başarıyla koştu.`,
-    samePath: (call, error, tool, path) => `${call} başarısız oldu (${error}); ardından ${tool} ${path} yolunu yeniden yazdı.`,
-    sameName: (call, error, tool, path) =>
-      `${call} başarısız oldu (${error}); ardından ${tool} ${path} dosyasını yazdı (aynı dosya adı, başka bir dizinde).`,
+    samePath: (call, error, tool, path, action) =>
+      `${call} başarısız oldu (${error}); ardından ${tool} ${path} yolunu ${{ write: "yeniden yazdı", edit: "düzenledi", delete: "sildi" }[action]}.`,
+    sameName: (call, error, tool, path, blockedBy) =>
+      `${call} başarısız oldu (${error}): ${blockedBy} bir dosya, bu yüzden o yol var olamaz. Ardından ${tool} aynı adlı dosyayı başka bir dizine yazdı: ${path}.`,
     earlier: (n) => `Daha önceki ${n} başarısız adım listelenmedi.`,
     nothing: (offered, shellOffered) =>
       `sunulan ${offered} aracın hiçbiri derleme ya da test çalıştırmıyor` +
@@ -309,8 +315,8 @@ function answerSentence(answer: FailureAnswer, words: Words): string {
   const call = answer.failedTarget ? `${answer.tool} ${clip(answer.failedTarget, 120)}` : answer.tool;
   const error = clip(answer.error, 160);
   const target = clip(answer.answerTarget ?? "", 120);
-  if (answer.kind === "same-path") return words.samePath(call, error, answer.tool, target);
-  if (answer.kind === "same-name") return words.sameName(call, error, answer.tool, target);
+  if (answer.kind === "same-path") return words.samePath(call, error, answer.tool, target, answer.action ?? "write");
+  if (answer.kind === "same-name") return words.sameName(call, error, answer.tool, target, clip(answer.blockedBy ?? "", 120));
   return words.rerun(call, error);
 }
 

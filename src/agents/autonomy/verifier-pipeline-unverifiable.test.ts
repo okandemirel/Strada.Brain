@@ -27,6 +27,7 @@ import type { ToolResult } from "../providers/provider-core.interface.js";
 import { FileWriteTool } from "../tools/file-write.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { NODE_SCOPE_MARKER } from "./node-tool-offer.js";
+import { fileOnPath } from "./completion-review-answers.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
 import { draftClaimsCheckPassed, takeUnverifiedNotice, unverifiedNotice, withUnverifiedNotice } from "./verifier-pipeline-unverifiable.js";
 
@@ -34,13 +35,16 @@ const sandbox = mkdtempSync(join(tmpdir(), "unverifiable-failure-"));
 const project = join(sandbox, "project");
 mkdirSync(project);
 writeFileSync(join(project, "README.md"), "# a project with no build and no tests\n");
-const ctx = { projectPath: project, workingDirectory: project, readOnly: false };
 
-/** A second project root, holding only the given files: what the verdict reads the manifests from. */
+/**
+ * Another project root: a README.md and the given files. The calls run in it
+ * and the verdict reads it, as the run's tools and the verifier share one root.
+ */
 let roots = 0;
 function rootWith(files: Readonly<Record<string, string>>): string {
   const root = join(sandbox, `root-${roots++}`);
   mkdirSync(root);
+  writeFileSync(join(root, "README.md"), "# another project\n");
   for (const [name, content] of Object.entries(files)) {
     // A name ending in "/" is a directory, with one file in it.
     if (name.endsWith("/")) {
@@ -73,10 +77,11 @@ const CLAIM_ASK = "[NO VERIFICATION TOOL] Your report says a check passed, but n
 const CHAT = "chat-unverifiable";
 /**
  * The notice for FAIL_THEN_FIX in the README-only project with NO_CHECK_TOOLS, as the system writes it:
- * the failed call's target and error, the call that answered it and its target, and why nothing could check.
+ * the failed call's target and error, why that path cannot exist (measured), the call that answered it and
+ * its target, and why nothing could check.
  */
 const NOTICE_RE =
-  /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\), then file_write wrote notes\/lantern\.txt \(the same file name, in another directory\)\. Nothing here could check the result: none of the 7 available tools runs a build or a test, and the project declares no build or test command\.$/;
+  /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\): README\.md is a file, so that path cannot exist\. Then file_write wrote notes\/lantern\.txt, the same file name in another directory\. Nothing here could check the result: none of the 7 available tools runs a build or a test, and the project declares no build or test command\.$/;
 /** QA's drafts, 2026-11-16: each says "unverified" and claims a check at once. */
 const CLAIMING_DRAFTS = [
   "Wrote notes/lantern.txt and verified it works; nothing is left unverified.",
@@ -99,8 +104,9 @@ const LISTED = { content: "README.md\nmain.js\nnotes" };
 type Call = readonly [tool: string, path: string, reported?: { readonly content: string; readonly isError?: boolean }, content?: string];
 const FAIL_THEN_FIX: readonly Call[] = [["file_write", FAILS_AT_RUN_TIME], ["file_write", "notes/lantern.txt"]];
 
-/** Each call run for real, in order, and recorded as the loop records it. */
-async function stateAfter(calls: readonly Call[], task: string): Promise<AgentState> {
+/** Each call run for real in `root`, in order, and recorded as the loop records it. */
+async function stateAfter(calls: readonly Call[], task: string, root = project): Promise<AgentState> {
+  const ctx = { projectPath: root, workingDirectory: root, readOnly: false };
   let agentState: AgentState = {
     phase: AgentPhase.EXECUTING,
     taskDescription: task,
@@ -143,14 +149,19 @@ async function verdictAfter(options: {
   tools: readonly string[] | undefined;
   task?: string;
   logEntries?: readonly LogEntry[];
-  /** The project root the manifests are read from; the README-only project by default. */
+  /**
+   * The project root the calls run in and the verdict reads; the README-only
+   * project by default. null passes none, and a root that does not exist is
+   * passed as it is: the calls then run in the README-only project.
+   */
   projectPath?: string | null;
   /** The run's start: two verdicts with the same start are the same run. */
   startedAt?: number;
   lastVerificationAt?: number | null;
 }) {
   const task = options.task ?? TASK;
-  const state = await stateAfter(options.calls ?? FAIL_THEN_FIX, task);
+  const root = options.projectPath && existsSync(options.projectPath) ? options.projectPath : project;
+  const state = await stateAfter(options.calls ?? FAIL_THEN_FIX, task, root);
   return planVerifierPipeline({
     ...pipelineInputs(
       task,
@@ -240,6 +251,7 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
       // shell_exec is offered, so the project's own manifests were read too, and named.
       projectChecks: {
         source: "project root manifests",
+        root: project,
         looked: expect.arrayContaining(["package.json (test/build/check/lint scripts)", "Makefile (test/build/check targets)", "pyproject.toml", "go.mod"]),
         found: [],
       },
@@ -247,7 +259,7 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     const check = plan.checks.find((c) => c.name === "unverifiable-failure");
     expect(check?.status).toBe("issues");
     expect(check?.summary).toMatch(
-      /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\), then file_write wrote notes\/lantern\.txt \(the same file name, in another directory\)\. Nothing here could check the result: none of the 7 available tools runs/,
+      /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\): README\.md is a file, so that path cannot exist\. Then file_write wrote notes\/lantern\.txt, the same file name in another directory\. Nothing here could check the result: none of the 7 available tools runs/,
     );
     expect(check?.summary).toContain("(every input of the decision allowed the exit: evidence.unverifiableDecision)");
     expect(plan.checks.find((c) => c.name === "targeted-repro")).toBeUndefined();
@@ -304,9 +316,11 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
       kind: "same-name",
       failedTarget: FAILS_AT_RUN_TIME,
       answerTarget: "notes/lantern.txt",
+      action: "write",
+      blockedBy: "README.md",
     }]);
     expect(rowOf(plan, "every open failure was answered by a later success")).toMatchObject({
-      value: "yes: 1 whose file name the same tool wrote later in another directory",
+      value: "yes: 1 whose path cannot exist (a directory of it is a file) and whose file name the same tool wrote later in another directory",
       effect: "allows",
     });
   });
@@ -319,7 +333,9 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
       tools: NO_CHECK_TOOLS,
     });
 
-    expect(plan.evidence.recentFailureAnswers).toMatchObject([{ kind: "same-path", failedTarget: "notes/gamma.txt", answerTarget: "./notes/gamma.txt" }]);
+    expect(plan.evidence.recentFailureAnswers).toMatchObject([
+      { kind: "same-path", failedTarget: "notes/gamma.txt", answerTarget: "./notes/gamma.txt", action: "write" },
+    ]);
     expect(plan.initialDecision).toBe("approve");
     expect(plan.evidence.unverifiableDecision?.notice).toMatch(
       /^Not verified: file_write notes\/gamma\.txt failed \(Error: could not write file \(EACCES\)\), then file_write wrote \.\/notes\/gamma\.txt again\. Nothing here could check/,
@@ -402,8 +418,26 @@ describe("the notice the run's answer carries", () => {
 
     expect(plan.initialDecision).toBe("approve");
     expect(plan.evidence.unverifiableDecision?.notice).toMatch(
-      /^Doğrulanmadı: file_write README\.md\/lantern\.txt başarısız oldu \(Error: could not write file \(E[A-Z]+\)\); ardından file_write notes\/lantern\.txt dosyasını yazdı \(aynı dosya adı, başka bir dizinde\)\. Sonucu burada hiçbir şey denetleyemedi: sunulan 7 aracın hiçbiri derleme ya da test çalıştırmıyor ve proje hiçbir derleme ya da test komutu bildirmiyor\.$/,
+      /^Doğrulanmadı: file_write README\.md\/lantern\.txt başarısız oldu \(Error: could not write file \(E[A-Z]+\)\): README\.md bir dosya, bu yüzden o yol var olamaz\. Ardından file_write aynı adlı dosyayı başka bir dizine yazdı: notes\/lantern\.txt\. Sonucu burada hiçbir şey denetleyemedi: sunulan 7 aracın hiçbiri derleme ya da test çalıştırmıyor ve proje hiçbir derleme ya da test komutu bildirmiyor\.$/,
     );
+  });
+
+  it.each([
+    ["file_delete", "delete", "en", "Not verified: file_delete services/a/config.json failed (EBUSY), then file_delete deleted services/a/config.json."],
+    ["file_edit", "edit", "en", "Not verified: file_edit notes/a.txt failed (old text not found), then file_edit edited notes/a.txt."],
+    ["file_delete", "delete", "tr", "Doğrulanmadı: file_delete services/a/config.json başarısız oldu (EBUSY); ardından file_delete services/a/config.json yolunu sildi."],
+  ] as const)("says what the answering %s did to the path (%s, %s)", (tool, action, language, head) => {
+    const path = tool === "file_delete" ? "services/a/config.json" : "notes/a.txt";
+    const error = tool === "file_delete" ? "EBUSY" : "old text not found";
+    const notice = unverifiedNotice(
+      [{ tool, error, kind: "same-path", failedTarget: path, answerTarget: path, action }],
+      { offered: 3, shellOffered: false },
+      false,
+      language,
+    );
+
+    expect(notice.startsWith(`${head} `)).toBe(true);
+    expect(notice).not.toMatch(/\bwrote\b|yazdı/u);
   });
 
   it("lists the last three failures and counts the earlier ones", () => {
@@ -607,6 +641,66 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
   });
 
+  it.each([
+    ["two index.js files", "Create packages/a/index.js and packages/b/index.js", "packages/a/index.js", "packages/b/index.js"],
+    ["two __init__.py files", "Create src/foo/__init__.py and src/bar/__init__.py", "src/foo/__init__.py", "src/bar/__init__.py"],
+  ])("a write that failed, followed by a write of another file with the same name: %s (QA 2026-11-16)", async (_label, task, failed, written) => {
+    const startedAt = Date.now() - 46_000 - failed.length;
+    const root = rootWith({});
+    const denied = { content: "Error: could not write file (EACCES)", isError: true };
+    const plan = await verdictAfter({
+      task,
+      calls: [["file_write", failed, denied], ["file_write", written]],
+      draft: `Created ${failed} and ${written}.`,
+      tools: NO_CHECK_TOOLS,
+      projectPath: root,
+      startedAt,
+    });
+
+    // Nothing makes the failed path impossible: its directory is missing, not a file.
+    expect(existsSync(join(root, failed))).toBe(false);
+    expect(existsSync(join(root, written))).toBe(true);
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a deletion that failed, followed by a deletion of another file with the same name (QA 2026-11-16)", async () => {
+    const startedAt = Date.now() - 47_000;
+    const root = rootWith({ "services/": "" });
+    mkdirSync(join(root, "services", "a"));
+    mkdirSync(join(root, "services", "b"));
+    writeFileSync(join(root, "services", "a", "config.json"), "{}\n");
+    const busy = { content: "Error: EBUSY: resource busy or locked", isError: true };
+    const plan = await verdictAfter({
+      task: "Delete services/a/config.json and services/b/config.json",
+      calls: [["file_delete", "services/a/config.json", busy], ["file_delete", "services/b/config.json", { content: "Deleted services/b/config.json" }]],
+      draft: "Deleted both config files.",
+      tools: [...NO_CHECK_TOOLS, "file_delete"],
+      projectPath: root,
+      startedAt,
+    });
+
+    expect(existsSync(join(root, "services", "a", "config.json"))).toBe(true);
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a write under a file, followed by its file name elsewhere, with no project root to measure it in", async () => {
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS.filter((t) => t !== "shell_exec"), projectPath: null });
+
+    expect(rowOf(plan, "the project declares a check shell_exec could run")?.effect).toBe("allows");
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
   it("a writer recorded without a target path cannot be matched to another write", async () => {
     const state = await stateAfter(FAIL_THEN_FIX, TASK);
     const unnamed = { ...state, stepResults: state.stepResults.map(({ targetPath: _dropped, ...step }) => step) };
@@ -694,4 +788,23 @@ describe("draftClaimsCheckPassed: what the one ask reads, and nothing else", () 
       expect(draftClaimsCheckPassed(draft)).toBe(true);
     },
   );
+});
+
+describe("fileOnPath: why a failed write's path cannot exist, measured in the project root", () => {
+  it("names the directory of the path that is a file", () => {
+    expect(fileOnPath(project, "README.md/lantern.txt")).toBe("README.md");
+    expect(fileOnPath(project, "README.md/deeper/lantern.txt")).toBe("README.md");
+  });
+
+  it.each([
+    ["the directories exist", "notes/lantern.txt"],
+    ["a directory is missing", "packages/a/index.js"],
+    ["the path is outside the root", "../elsewhere/lantern.txt"],
+  ])("finds nothing when %s", (_label, target) => {
+    expect(fileOnPath(project, target)).toBeNull();
+  });
+
+  it("finds nothing with no root", () => {
+    expect(fileOnPath(undefined, "README.md/lantern.txt")).toBeNull();
+  });
 });

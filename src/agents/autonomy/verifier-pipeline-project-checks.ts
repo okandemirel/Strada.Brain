@@ -26,6 +26,13 @@ import { hasDotnetProjectFile } from "../dotnet-project-presence.js";
 /** What the project root holds that shell_exec could run as a check, and what was looked for. */
 export interface ProjectCheckRecord {
   readonly source: "project root manifests";
+  /**
+   * The root read: the orchestrator's project root (InterventionDeps.projectPath;
+   * for a delegated run, its workspace lease). When a run's tools write into a
+   * lease cut from that root, the lease is a copy: the two differ only in a
+   * manifest the run itself changed there.
+   */
+  readonly root: string;
   /** Every manifest looked for, in order. */
   readonly looked: readonly string[];
   /** Those present that declare a check: "package.json scripts.test", "Makefile test:", "go.mod". */
@@ -139,5 +146,5 @@ export function measureProjectChecks(root: string): ProjectCheckRecord | null {
     ...TEST_DIRS.filter((d) => entries.has(d) && isDirectory(join(root, d))).map((d) => `${d}/`),
     ...[...entries].filter((name) => TEST_FILE_RE.test(name)).sort(),
   ];
-  return { source: "project root manifests", looked, found };
+  return { source: "project root manifests", root, looked, found };
 }

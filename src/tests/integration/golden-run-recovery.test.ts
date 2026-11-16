@@ -333,13 +333,14 @@ const UNDER_A_FILE = "README.md/kappa.txt";
  * What the system writes under an answer whose write under README.md failed,
  * was answered by a write of the same file name under notes/, and that
  * nothing here could check. Built from the record: both targets, the error
- * (its code is the platform's) and the tool count (the registry's).
+ * (its code is the platform's), README.md measured to be a file in the
+ * project, and the tool count (the registry's).
  */
 const notVerifiedUnder = (answer: string, name: string, tail = ""): RegExp =>
   new RegExp(
     `^${escapeRegExp(answer)}\\n\\nNot verified: file_write README\\.md/${escapeRegExp(name)} failed ` +
-      `\\(Error: could not write file \\(E[A-Z]+\\)\\), then file_write wrote notes/${escapeRegExp(name)} ` +
-      "\\(the same file name, in another directory\\)\\. Nothing here could check " +
+      "\\(Error: could not write file \\(E[A-Z]+\\)\\): README\\.md is a file, so that path cannot exist\\. " +
+      `Then file_write wrote notes/${escapeRegExp(name)}, the same file name in another directory\\. Nothing here could check ` +
       "the result: none of the \\d+ available tools runs a build or a test, and the project declares no build or test command\\." +
       `${escapeRegExp(tail)}$`,
   );

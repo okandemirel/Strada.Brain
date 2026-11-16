@@ -46,7 +46,7 @@ import {
 
 const STARTED_AT = 1_700_000_000_000;
 const NOTICE =
-  "Not verified: file_write README.md/lantern.txt failed (Error: could not write file (ENOTDIR)), then file_write wrote notes/lantern.txt (the same file name, in another directory).";
+  "Not verified: file_write README.md/lantern.txt failed (Error: could not write file (ENOTDIR)): README.md is a file, so that path cannot exist. Then file_write wrote notes/lantern.txt, the same file name in another directory.";
 const ANSWER = "Wrote notes/lantern.txt.";
 
 interface Session {

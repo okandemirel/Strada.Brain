@@ -1,5 +1,5 @@
-import { posix } from "node:path";
 import type { AgentState, StepResult } from "../agent-state.js";
+import { failureAnsweredBy, type FailureAnswer } from "./completion-review-answers.js";
 import { verifierOutputVerdict, type VerificationState } from "./self-verification.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { analyzePromptTargets } from "../prompt-targets.js";
@@ -18,8 +18,9 @@ export interface CompletionReviewEvidence {
   /**
    * How the open failures were answered, when all of them were: `rerun`, the
    * same call (same tool, same input) succeeded later; `rewritten`, a writer
-   * failed and the same tool later wrote that path, or that file name in
-   * another directory.
+   * failed and the same tool later acted on that path, or wrote that file name
+   * in another directory because the failed path cannot exist
+   * (completion-review-answers.ts).
    */
   readonly recentFailureRetries?: { readonly rerun: number; readonly rewritten: number };
   /** Each open failure and the success that answered it, oldest first, when all of them were answered. */
@@ -31,23 +32,6 @@ export interface CompletionReviewEvidence {
   readonly verificationStepCount: number;
   readonly mutationStepCount: number;
   readonly verificationState: VerificationState;
-}
-
-/** A failed step and the later success that answered it, as recorded (failureAnsweredBy). */
-export interface FailureAnswer {
-  readonly tool: string;
-  /** The first line of what the failed step reported. */
-  readonly error: string;
-  /**
-   * `rerun`: the same call, tool and input, succeeded later. `same-path`: the
-   * same writer later wrote the path that failed. `same-name`: it later wrote
-   * a file of that name in another directory.
-   */
-  readonly kind: "rerun" | "same-path" | "same-name";
-  /** The path the failed call named, when it named one. */
-  readonly failedTarget?: string;
-  /** The path the answering write named (`same-path`, `same-name`). */
-  readonly answerTarget?: string;
 }
 
 export interface CompletionReviewDecision {
@@ -172,6 +156,8 @@ export function collectCompletionReviewEvidence(params: {
   logEntries: readonly LogEntry[];
   chatId: string;
   taskStartedAtMs: number;
+  /** The root the run's tools write in: where a write's failure is measured (completion-review-answers.ts). */
+  projectPath?: string;
 }): CompletionReviewEvidence {
   const touchedFiles = [...params.verificationState.touchedFiles].sort();
   const reviewCutoff = Math.max(
@@ -183,7 +169,7 @@ export function collectCompletionReviewEvidence(params: {
       ? [{ step, later: steps.slice(i + 1) }]
       : []);
   const recentFailures = openFailures.slice(-5).map(({ step }) => `${step.toolName}: ${step.summary}`);
-  const answers = openFailures.map(({ step, later }) => failureAnsweredBy(step, later));
+  const answers = openFailures.map(({ step, later }) => failureAnsweredBy(step, later, params.projectPath));
   const recentFailureAnswers = answers.length > 0 && answers.every((answer) => answer !== null)
     ? answers as readonly FailureAnswer[]
     : undefined;
@@ -232,49 +218,7 @@ export function collectCompletionReviewEvidence(params: {
  * and failed has a failing path to re-run.
  */
 function refusalRetriedOk(step: StepResult, later: readonly StepResult[]): boolean {
-  return isPathTargetRefusal(step.summary) && sameToolLaterSucceeded(step, later);
-}
-
-function sameToolLaterSucceeded(step: StepResult, later: readonly StepResult[]): boolean {
-  return later.some((next) => next.success && next.toolName === step.toolName);
-}
-
-/**
- * Which later success answers a failure, if any. The same call, tool and
- * input, run again and succeeding answers any failure. Measured by QA
- * 2026-11-15: `node main.js` crashed, a file was edited, `ls` succeeded, and
- * the crash read as "re-run successfully". A writer that failed is answered
- * too by the same tool writing the same path, or a file of the same name in
- * another directory: the file under a file, written where it belongs (golden
- * run 4). A write to some other file answers nothing. Measured by QA
- * 2026-11-16: notes/alpha.txt failed, notes/beta.txt was written, and alpha,
- * never written, read as "redone". A step recorded without an input
- * signature, or a writer without a target path, cannot be matched, so it is
- * not answered.
- */
-function failureAnsweredBy(step: StepResult, later: readonly StepResult[]): FailureAnswer | null {
-  const base = {
-    tool: step.toolName,
-    error: step.summary.split("\n")[0]!.trim(),
-    ...(step.targetPath !== undefined ? { failedTarget: step.targetPath } : {}),
-  };
-  const sameTool = later.filter((next) => next.success && next.toolName === step.toolName);
-  if (step.inputSignature !== undefined && sameTool.some((next) => next.inputSignature === step.inputSignature)) {
-    return { ...base, kind: "rerun" };
-  }
-  if (!MUTATION_TOOL_NAMES.has(step.toolName) || step.targetPath === undefined) return null;
-  const failed = pathSpelling(step.targetPath);
-  const samePath = sameTool.find((next) => next.targetPath !== undefined && pathSpelling(next.targetPath) === failed);
-  if (samePath) return { ...base, kind: "same-path", answerTarget: samePath.targetPath! };
-  const sameName = sameTool.find(
-    (next) => next.targetPath !== undefined && posix.basename(pathSpelling(next.targetPath)) === posix.basename(failed),
-  );
-  return sameName ? { ...base, kind: "same-name", answerTarget: sameName.targetPath! } : null;
-}
-
-/** One spelling for a path a tool was given: forward slashes, no "./", no "a/../". */
-function pathSpelling(path: string): string {
-  return posix.normalize(path.trim().replace(/\\/g, "/"));
+  return isPathTargetRefusal(step.summary) && later.some((next) => next.success && next.toolName === step.toolName);
 }
 
 export function shouldRunCompletionReview(

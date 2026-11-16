@@ -124,6 +124,7 @@ function planVerifierChecks(params: {
     taskStartedAtMs: params.taskStartedAtMs,
     draft: params.draft,
     conformanceGate: params.conformanceGate,
+    projectPath: params.projectPath,
   });
   // A failure answered by a later success in a run where nothing can check
   // it: decided from the record, one row per input, the draft never opening it
@@ -486,6 +487,8 @@ export function collectVerifierPipelineEvidence(params: {
   taskStartedAtMs: number;
   draft: string;
   conformanceGate: string | null;
+  /** The root the run's tools write in: where a failed write is measured. */
+  projectPath?: string;
 }): VerifierPipelineEvidence {
   // Detect consecutive same errors — SINCE THE LAST REPAIR. Successful steps
   // were filtered out before the streak was counted, so three identical
@@ -531,6 +534,7 @@ export function collectVerifierPipelineEvidence(params: {
       logEntries: params.logEntries,
       chatId: params.chatId,
       taskStartedAtMs: params.taskStartedAtMs,
+      projectPath: params.projectPath,
     }),
     task: params.task,
     hasTerminalFailureReport: isTerminalFailureReport(params.draft),
