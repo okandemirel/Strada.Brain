@@ -16,32 +16,53 @@
  *
  * A delegated run opens its own scope, inside its parent's. Its Budget passes each debit on to the
  * parent (createBudget's `parent`), so the parent counts the child's spend once, through that link.
+ *
+ * A call recorded with no run's Budget in scope is logged: no token or cost gate sees it, which is
+ * the defect this module exists to end (QA 2026-11-16 found the supervisor's grounding call there).
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { estimateCostWithCache } from "../../budget/cost-model.js";
 import type { TokenUsage as ProviderTokenUsage } from "../../agents/providers/provider-core.interface.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 import type { Budget, TokenUsage } from "./budget.js";
 
-const current = new AsyncLocalStorage<Budget>();
+/** The log line of a call recorded with no run's Budget in scope (tests look for it). */
+export const UNSCOPED_DEBIT_LOG = "[run-budget] provider usage recorded outside any run's Budget: no token or cost gate sees it";
 
-/** Runs `fn` with `budget` as the Budget of every provider call recorded inside it. */
-export function withRunBudget<T>(budget: Budget, fn: () => T): T {
+const current = new AsyncLocalStorage<Budget | null>();
+
+/**
+ * Runs `fn` with `budget` as the Budget of every provider call recorded inside it. `null` says the
+ * work belongs to no run of its own, so it does not spend from whatever run happened to start it
+ * (a task submitted from inside another one; learning/run-provenance.ts does the same).
+ */
+export function withRunBudget<T>(budget: Budget | null, fn: () => T): T {
   return current.run(budget, fn);
 }
 
 /** The Budget of the run this code runs inside, or undefined outside one. */
 export function runBudget(): Budget | undefined {
-  return current.getStore();
+  return current.getStore() ?? undefined;
 }
 
-/** Debits one served call from the running run's Budget; outside a run it debits nothing. */
+/** Debits one served call from the running run's Budget; outside a run it debits nothing, and says so. */
 export function debitRunBudget(
   usage: ProviderTokenUsage | undefined,
   providerName: string,
   modelId: string | undefined,
 ): void {
-  current.getStore()?.debit(toBudgetUsage(usage, providerName, modelId));
+  const budget = runBudget();
+  if (budget) {
+    budget.debit(toBudgetUsage(usage, providerName, modelId));
+  } else if ((usage?.inputTokens ?? 0) > 0 || (usage?.outputTokens ?? 0) > 0) {
+    getLoggerSafe().warn(UNSCOPED_DEBIT_LOG, {
+      provider: providerName,
+      model: modelId,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+    });
+  }
 }
 
 /** Provider `TokenUsage` → control-plane `Budget` usage, with the call's estimated USD cost.
