@@ -42,9 +42,20 @@ describe("buildProviderBenchNotice", () => {
       .toBe("Alpha anahtarı reddedildi, bu oturum boyunca (8 saat) devre dışı; iş Beta ile sürüyor.");
   });
 
-  it("says plainly that no provider is left when none carries on", () => {
-    const { continuingOn: _gone, ...bare } = EVENT;
-    expect(buildProviderBenchNotice(EN_PROMPT, bare).sentence).toContain("no other provider is left");
+  it("says plainly that no provider is left only when the caller knows none is", () => {
+    expect(buildProviderBenchNotice(EN_PROMPT, { ...EVENT, continuingOn: null }).sentence)
+      .toBe("Alpha's key was refused, so it is set aside for this session (8 h); no other provider is left to continue the work.");
+    expect(buildProviderBenchNotice(TR_PROMPT, { ...EVENT, continuingOn: null }).sentence).toContain("başka sağlayıcı kalmadı");
+  });
+
+  it("says nothing about who carries on when the caller cannot tell", () => {
+    const { continuingOn: _unknown, ...unknown } = EVENT;
+    expect(buildProviderBenchNotice(EN_PROMPT, unknown)).toEqual({
+      sentence: "Alpha's key was refused, so it is set aside for this session (8 h).",
+      note: "Provider Alpha benched for 8 h after its key was refused. Error: 401 invalid key",
+    });
+    expect(buildProviderBenchNotice(TR_PROMPT, unknown).sentence)
+      .toBe("Alpha anahtarı reddedildi, bu oturum boyunca (8 saat) devre dışı.");
   });
 });
 

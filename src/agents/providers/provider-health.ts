@@ -30,8 +30,12 @@ export interface CredentialBenchEvent {
   readonly reason: string;
   /** How long the seat stays benched. */
   readonly benchedForMs: number;
-  /** The first seat still available to take the work over; undefined when none is. */
-  readonly continuingOn?: string;
+  /**
+   * Who takes the work over. A name: that seat. `null`: the caller looked and
+   * no other seat is available. Absent: the caller cannot tell (a bare provider
+   * outside any chain), so nothing may be said about it either way.
+   */
+  readonly continuingOn?: string | null;
 }
 
 export type CredentialBenchListener = (event: CredentialBenchEvent) => void;
@@ -367,7 +371,7 @@ export class ProviderHealthRegistry {
    *
    * The cooldown is long because the fix is a human action, not a wait.
    */
-  recordCredentialRejected(providerName: string, error: string, continuingOn?: string): void {
+  recordCredentialRejected(providerName: string, error: string, continuingOn?: string | null): void {
     const normalized = this.norm(providerName);
     const now = Date.now();
     const previous = this.entries.get(normalized);
@@ -387,6 +391,16 @@ export class ProviderHealthRegistry {
         ...(continuingOn === undefined ? {} : { continuingOn }),
       });
     }
+  }
+
+  /**
+   * The seat that takes the work over from `rejected`: the next available one
+   * after it in chain order, else any other available one; `null` when none is.
+   */
+  liveSuccessor(chain: readonly string[], rejected: string): string | null {
+    const at = chain.indexOf(rejected);
+    const others = at < 0 ? chain : [...chain.slice(at + 1), ...chain.slice(0, at)];
+    return others.find((name) => name !== rejected && this.isAvailable(name)) ?? null;
   }
 
   private readonly credentialBenchListeners = new Set<CredentialBenchListener>();
