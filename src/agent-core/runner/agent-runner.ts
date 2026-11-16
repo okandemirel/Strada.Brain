@@ -37,7 +37,7 @@ import type { InstinctOwner } from "../engine/instinct-scope.js";
  * it), its live Budget (a child is carved a slice of it and debits its spend back to it), and a
  * read-only view of its wall clock. And its task-metric id, so a sub-agent's metric row is
  * recorded as this run's subtask; absent when the run records no metric. It also names whose
- * user-scoped instincts the run retrieved (`instinctUserIdOf` of its request), so a sub-agent
+ * user-scoped instincts the run's setup retrieved (RunSetup.instinctUserId), so a sub-agent
  * is given that person's learning and no one else's; absent, shared learning only.
  */
 export interface ParentRunScope {

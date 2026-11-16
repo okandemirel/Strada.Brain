@@ -610,6 +610,7 @@ export async function setupAgentCoreRun(
       metricId: metricId ?? "",
       enableGoalDetection: deps.taskManager() != null,
       learnedInsights,
+      instinctUserId,
     };
 
     // The join is the LAST setup step (no throwing awaits remain) — see the derivation comment
