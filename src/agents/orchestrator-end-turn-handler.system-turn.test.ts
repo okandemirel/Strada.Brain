@@ -59,7 +59,6 @@ function context(session: InteractiveEndTurnContext["session"]): InteractiveEndT
     systemPrompt: "sys",
     defaultLanguage: "en",
     profileLanguage: undefined,
-    runTextConsensusIfCritical: vi.fn(async () => {}),
   } as InteractiveEndTurnContext;
 }
 
