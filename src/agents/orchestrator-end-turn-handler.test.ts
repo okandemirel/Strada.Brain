@@ -273,6 +273,7 @@ describe("handleBgEndTurn", () => {
     expect((ctx.session as any).messages).toContainEqual({
       role: "user",
       content: "[VISIBILITY LOOP] Continue internally.",
+      systemTurn: true,
     });
 
     vi.restoreAllMocks();
