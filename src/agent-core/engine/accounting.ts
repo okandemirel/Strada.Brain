@@ -130,10 +130,11 @@ export function consensusUsageSink(
 }
 
 /**
- * One of the two funnels every recorded provider call passes through (the other is
- * recordAuxiliaryUsage): it debits the Budget of the run the call was made in (budget-scope.ts),
- * then records it — metrics, the rate limiter's daily cost, the run's onUsage. A model turn, a
- * goal decomposition and a consensus reviewer all arrive here, each once (task #87).
+ * One of the three entry points a served call is recorded through, all in this file: this funnel,
+ * recordAuxiliaryUsage, and the direct-call ledger's record (createProviderUsageLedger). Through
+ * recordServedCall it debits the Budget of the run the call was made in (budget-scope.ts), then
+ * records it — metrics, the rate limiter's daily cost, the run's onUsage. A model turn, a goal
+ * decomposition and a consensus reviewer all arrive here, each once (task #87).
  */
 export function recordProviderUsage(
   deps: AccountingDeps,

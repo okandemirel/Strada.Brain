@@ -3,15 +3,21 @@
  * consensus calls were recorded (metrics, the rate limiter, the run's onUsage) and never debited,
  * so the run's token and cost gates judged "budget-exhausted" on a short count.
  *
- * Every recorded call passes through accounting.ts's two funnels, and they now debit the Budget of
- * the run they run inside (control/budget-scope.ts). This file pins that, and the tripwire that
- * keeps it true: provider usage reaches the metrics and rate-limiter counters only through those
- * two funnels. A new writer of the counters, or a second call of the shared recorder, records spend
- * that no run's Budget sees — the fifth time this class was found (#67, #71, #72, #73, #87).
+ * A served call is recorded through one of accounting.ts's three entry points: the engine's funnels
+ * recordProviderUsage and recordAuxiliaryUsage, and the direct-call ledger's record
+ * (createProviderUsageLedger, task #71). The two funnels and the ledger's run-billed call debit the
+ * Budget of the run they run inside (control/budget-scope.ts), once. An ownerless call debits no
+ * run's Budget and logs no warning (createProviderUsageLedger says why); a run-billed call recorded
+ * with no Budget in scope logs one. This file pins that, and the tripwires that keep it true:
+ * provider usage reaches the metrics and rate-limiter counters only through recordAuxiliaryUsage
+ * and the shared recorder, which recordServedCall alone calls, after the debit. A new writer of the
+ * counters, or a second call of the shared recorder, records spend that no run's Budget sees — the
+ * fifth time this class was found (#67, #71, #72, #73, #87).
  *
- * A funnel debits only the Budget whose scope is open around it. QA found the supervisor run's
- * Budget opened with no scope, so its plan call was recorded and debited nowhere: the last
- * tripwire pins every place that creates a run Budget and how the work it pays for reaches it.
+ * An entry point debits only the Budget whose scope is open around it. QA found the supervisor
+ * run's Budget opened with no scope, so its plan call was recorded and debited nowhere: a further
+ * tripwire pins every place that creates a run Budget and how the work it pays for reaches it, and
+ * the last pins every production call of the entry points with the scope it runs in.
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -155,7 +161,7 @@ describe("the direct-call ledger (billedChat, task #71) debits a call its run pa
   });
 });
 
-// ─── Tripwire: provider usage is recorded through the two funnels only ───────────────────────
+// ─── Tripwire: provider usage reaches the counters through accounting.ts's entry points only ─
 
 const SRC = fileURLToPath(new URL("../../", import.meta.url));
 const ACCOUNTING = "src/agent-core/engine/accounting.ts";

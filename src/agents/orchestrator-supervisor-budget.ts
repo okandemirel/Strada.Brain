@@ -5,9 +5,10 @@
  * they share the global headroom other in-flight work has not reserved. The output-token cap stays
  * per node run (its own policy), so only cost is shared.
  *
- * The supervisor's own calls are recorded through the accounting funnels, which debit the Budget
- * whose scope is open around them: the grounding call that summarises an image for the planner,
- * the plan, and whatever the brain asks a model while it runs. Each node's run opens its own scope
+ * The supervisor's own calls are recorded through engine/accounting.ts — its funnels, or the
+ * direct-call ledger for a run-billed direct call — which debit the Budget whose scope is open
+ * around them: the grounding call that summarises an image for the planner, the plan, and what the
+ * brain asks a model while it runs (capability triage, node verification). Each node's run opens its own scope
  * on its slice (node → pool holder → this Budget), so nothing is counted twice. Without a scope
  * the plan's debit went nowhere (QA 2026-11-16), and so did the grounding call's (QA, attempt 3).
  *

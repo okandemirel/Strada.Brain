@@ -4,21 +4,26 @@
  * The v2 runner debited its model turns into the run's Budget and nothing else. A run's other
  * provider calls — goal decomposition, reviewer calls, consensus verification — were recorded
  * (metrics, the rate limiter, the run's onUsage) and never debited, so the token and cost gates
- * judged "budget-exhausted" on a short count. Every recorded call passes through the two
- * accounting funnels (engine/accounting.ts: recordProviderUsage, recordAuxiliaryUsage); they debit
- * the Budget of the run they run inside, model turns included, so each call is counted once.
+ * judged "budget-exhausted" on a short count. A served call is recorded through one of three entry
+ * points in engine/accounting.ts: the engine's funnels recordProviderUsage and recordAuxiliaryUsage,
+ * and the direct-call ledger's record (createProviderUsageLedger, behind billed-call.ts, task #71).
+ * The two funnels and the ledger's run-billed call debit the Budget of the run they run inside,
+ * model turns included, so each call is counted once. An ownerless call (OwnerlessBilling) debits
+ * no run's Budget, even inside one: its cost is booked to the cost ledger under the source it
+ * names (createProviderUsageLedger says why).
  *
  * Ambient rather than threaded, like the run's provenance (learning/run-provenance.ts) and the
- * chat scope (agents/providers/chat-scope.ts): a run's calls reach the funnels through the engine,
- * the intervention pipeline, the decomposer and the consensus manager, and none of those is handed
- * the run. The run's onUsage cannot carry it: a sink that is always set would end the shell
+ * chat scope (agents/providers/chat-scope.ts): a run's calls reach accounting.ts through the
+ * engine, the intervention pipeline, the decomposer, the consensus manager and billed-call.ts, and
+ * none of those is handed the run's Budget. The run's onUsage cannot carry it: a sink that is always set would end the shell
  * review's fallback to the Orchestrator's own sink on a run that has none (review.ts).
  *
  * A delegated run opens its own scope, inside its parent's. Its Budget passes each debit on to the
  * parent (createBudget's `parent`), so the parent counts the child's spend once, through that link.
  *
- * A call recorded with no run's Budget in scope is logged: no token or cost gate sees it, which is
- * the defect this module exists to end (QA 2026-11-16 found the supervisor's grounding call there).
+ * A call a run pays for, recorded with no run's Budget in scope, is logged: no token or cost gate
+ * sees it, which is the defect this module exists to end (QA 2026-11-16 found the supervisor's
+ * grounding call there). An ownerless call is not logged: its payer is named and its cost booked.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
