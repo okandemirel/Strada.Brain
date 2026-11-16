@@ -213,6 +213,7 @@ function ownerlessUsageSink(
       tokensIn: usage.inputTokens,
       tokensOut: usage.outputTokens,
       triggerName: billing.purpose,
+      campaignId: billing.campaignId,
     });
   };
 }

@@ -32,7 +32,7 @@ import { billedStreamOrChatText } from "../agents/providers/billed-call.js";
 import type { IAIProvider, ProviderResponse } from "../agents/providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
 import { detectInputInjection, harnessApiDoc, lintAcceptanceBody, publicSurfaceDigest, systemAssertsRow } from "./acceptance-files.js";
-import { ACCEPTANCE_AUTHOR_BILLING } from "./campaign-billing.js";
+import { ACCEPTANCE_AUTHOR_BILLING, campaignBilling } from "./campaign-billing.js";
 import { requirementTokens } from "./campaign-planner.js";
 import { modelId, samePath } from "./scope-verdict.js";
 import type {
@@ -532,7 +532,7 @@ export class AcceptanceAuthor implements AcceptanceAuthorLike {
         try {
           response = await billedStreamOrChatText(
             picked.provider,
-            ACCEPTANCE_AUTHOR_BILLING,
+            campaignBilling(ACCEPTANCE_AUTHOR_BILLING),
             WRITER_SYSTEM,
             writerPrompt(instruction, ctx.harnessDoc, surface, batch),
             { maxTokens: WRITER_MAX_OUTPUT_TOKENS },

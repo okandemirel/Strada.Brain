@@ -38,6 +38,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import { deriveTestVerdict } from "../tasks/test-verdict.js";
 import type { RunIntegrity, TerminalKey } from "../agents/autonomy/terminal-key.js";
 import { createLogger } from "../utils/logger.js";
+import { campaignBilling, PLANNING_BILLING } from "./campaign-billing.js";
 
 beforeAll(() => {
   createLogger("error", "test.log");
@@ -1328,4 +1329,42 @@ describe("the final milestone's missing proofs (W09)", () => {
     expect(UNMEASURABLE_PROOF_RE.test("the acceptance run was not admitted: no acceptance runner is configured")).toBe(true);
     expect(UNMEASURABLE_PROOF_RE.test("2 GDD row(s) not passing on abcdef12: EF-1")).toBe(false);
   });
+});
+
+describe("the campaign's own calls are made for their campaign (task #73)", () => {
+  it("the writer's write and repair calls and the planner's ledger and coverage calls run in the campaign's billing scope", async () => {
+    // Who is in scope when each call starts: the campaign a ledger row would name.
+    const seen: Array<{ call: string; campaignId: string | undefined }> = [];
+    const scoped = <A extends unknown[], R>(call: string, fn: (...args: A) => R) => (...args: A): R => {
+      seen.push({ call, campaignId: campaignBilling(PLANNING_BILLING).campaignId });
+      return fn(...args);
+    };
+    const inner = fakeAuthor();
+    const author: AcceptanceAuthorLike = {
+      ...inner.author,
+      write: scoped("write", inner.author.write),
+      regenerate: scoped("regenerate", inner.author.regenerate),
+    };
+    const planner = {
+      planMilestones: scoped("planMilestones", async () => ({ milestones: [{ title: "Sprint A — Everything", prompt: "build the ferry game", coveredSections: ["Crossing Law", "Screens"] }] })),
+      complete: scoped("complete", async () => JSON.stringify({ rows: [] })),
+      auditCoverage: scoped("auditCoverage", async () => []),
+      resolveCoverageGaps: scoped("resolveCoverageGaps", async () => ({ open: [], closed: [] })),
+    } as unknown as CampaignPlanner;
+    const h = build("on", {
+      planner,
+      acceptanceAuthor: author,
+      failing: (label) => label === "EF-1" && (inner.author.regenerate as ReturnType<typeof vi.fn>).mock.calls.length === 0,
+      message: () => "[strada-acceptance:no-service] IFerryDock is not registered",
+    });
+    const campaign = await start(h);
+    // The one rung is the final one, its delivery bounces spent: the delivery gate decides on this settle.
+    const c = h.storage.get(campaign.id)!;
+    Object.assign(c.milestones[0]!, { deliveryVerificationBounces: 2, sceneHygieneBounces: 2, visualMismatchBounces: 1 });
+    h.storage.save(c);
+    completeSprint(h);
+    await vi.waitFor(() => expect(h.storage.get(campaign.id)!.state).toBe("failed"), { timeout: 30_000 });
+    expect(seen.map((s) => s.call)).toEqual(["planMilestones", "complete", "write", "regenerate", "auditCoverage"]);
+    expect(seen.every((s) => s.campaignId === campaign.id)).toBe(true);
+  }, 60_000);
 });

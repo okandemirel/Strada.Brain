@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcceptanceAuthor, WRITER_BATCH_ROWS, type WriterProviderSource } from "./acceptance-author.js";
 import { harnessApiDoc } from "./acceptance-files.js";
+import { forCampaign } from "./campaign-billing.js";
 import type { AcceptanceCheckBody, AcceptanceWriteContext, RequirementRow } from "./scope-types.js";
 import { installUsageLedgerHarness, scriptedProvider, usage, type ScriptedProvider, type UsageLedgerHarness } from "../tests/helpers/usage-ledger-harness.js";
 import { expectBilledAsCampaignWork, UNMEASURED_WARNING } from "../tests/helpers/campaign-billing-assertions.js";
@@ -88,6 +89,15 @@ describe("the acceptance writer bills the campaign's spend", () => {
     expect(result.checks).toHaveLength(2);
     expect(provider.calls).toHaveLength(1);
     expectBilledAsCampaignWork(harness, { purpose: PURPOSE, provider: PROVIDER, calls: [{ inputTokens: 2100, outputTokens: 640 }] });
+  });
+
+  it("a batch written for a campaign books its row to that campaign (task #73)", async () => {
+    const provider = scriptedProvider(PROVIDER, [{ text: "", usage: usage(2100, 640) }]);
+
+    await forCampaign("cmp_glow", () => writerOver(provider, false).write(rows(2), ctx()));
+
+    expect(harness.booked).toHaveLength(1);
+    expect(harness.booked[0]!.metadata).toMatchObject({ triggerName: PURPOSE, campaignId: "cmp_glow" });
   });
 
   it("with streaming off the chat() path bills the same way", async () => {
