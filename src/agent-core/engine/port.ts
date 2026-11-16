@@ -34,6 +34,7 @@ import type { ModelGateway } from "../model/model-gateway.js";
 import type { PolicySeed } from "../control/policy.js";
 import type { HealthCore } from "../control/failure-ledger.js";
 import { isBenign, type CancelReason } from "../control/index.js";
+import { runBudget } from "../control/budget-scope.js";
 import type { TerminalStatus } from "../runner/index.js";
 import type {
   OrchestratorPort,
@@ -396,7 +397,13 @@ export function createAgentCorePort(
         deps.portOnEpochRollover(continued, epoch, agentState, ctx()),
       getLiveInteractiveTokenBudget: () => engine.getLiveInteractiveTokenBudget(),
       getLiveOutputTokenCap: () => engine.getLiveOutputTokenCap(),
-      renderInteractiveBudgetExceeded: () => engine.portRenderInteractiveBudgetExceeded(ctx()),
+      renderInteractiveBudgetExceeded: () => {
+        // The gate stopped on the run's Budget, which every call of the run debits — decomposition,
+        // reviews and consensus as well as model turns (task #87): the notice reports that spend.
+        const c = ctx();
+        c.cumulativeOutputTokens = runBudget()?.spentOutputTokens() ?? c.cumulativeOutputTokens;
+        return engine.portRenderInteractiveBudgetExceeded(c);
+      },
       // Mid-task /token raise: bridge the run to UnifiedBudgetManager config changes (no-op when unwired).
       onBudgetConfigChanged: (listener) =>
         deps.unifiedBudgetManager()?.onConfigUpdated?.(listener) ?? (() => {}),
