@@ -51,6 +51,14 @@ export interface MemoryRefresherDeps {
   readonly eventBus?: IEventEmitter;
 }
 
+/**
+ * Who the run a refresher serves belongs to (item 3.9 / audit 05.cap / 13F4 /
+ * D66): in-run re-retrieval is automatic recall, so it must be scoped to the
+ * person and the project, not to the chat alone. `instinctOwner` names whose
+ * instincts it re-retrieves when that is not `userId`'s (a delegate's caller).
+ */
+export type RefresherIdentity = Pick<MemoryRefresherDeps, "userId" | "instinctOwner" | "projectId">;
+
 /** Reason for re-retrieval decision */
 export type RefreshReason = "periodic" | "topic_shift" | "budget_exhausted" | "none" | "skipped";
 

@@ -29,8 +29,7 @@ import { appendWarningFooter, type ResponseAttribution } from "../learning/feedb
 import { mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { MemoryRefresher } from "./memory-refresher.js";
-import type { InstinctOwner } from "../agent-core/engine/instinct-scope.js";
+import { MemoryRefresher, type RefresherIdentity } from "./memory-refresher.js";
 import { redactSensitiveText } from "../security/api-key-redaction.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
@@ -1316,12 +1315,7 @@ export class SessionManager {
   createMemoryRefresher(
     initialContentHashes: string[],
     chatId?: string,
-    /**
-     * Who the run belongs to (item 3.9 / audit 05.cap / 13F4 / D66): in-run
-     * re-retrieval is automatic recall, so it must be scoped to the person and
-     * the project, not to the chat alone.
-     */
-    identity?: { readonly userId?: string; readonly instinctOwner?: InstinctOwner; readonly projectId?: string },
+    identity?: RefresherIdentity,
   ): MemoryRefresher | null {
     if (!this.deps.reRetrievalConfig?.enabled) return null;
     const refresher = new MemoryRefresher(this.deps.reRetrievalConfig, {
