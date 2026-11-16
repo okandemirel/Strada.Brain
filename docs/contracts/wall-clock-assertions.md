@@ -107,6 +107,19 @@ in `.toBeLessThan`, `.toBeLessThanOrEqual`, `.not.toBeGreaterThan` or
   `hnsw-performance` average, `searchTimes.reduce(…) / searchTimes.length`
   returned as `searchTimeMs`, is seen this way.
 
+It also counts the same bound written the other way round:
+
+- **stamp under start plus:** any `x` under a bound that is a name holding an
+  earlier clock read plus anything, directly or as the value of a name:
+  `expect(result.expiresAt).toBeLessThanOrEqual(before + 36 * HOUR + 5_000)`
+  with `const before = Date.now()` is `expiresAt - before <= 36 h + 5 s`
+  rearranged, and fails the same way when the call took longer than 5 s.
+  A clock read written out in the bound (`Date.now() + 5_000`) is read after
+  the code ran, so load only widens it; a bound with no clock read
+  (`limit + 1`) is not counted; nor is a start that is a counter the test
+  keeps (`let time = 1_000_000` under a mocked `Date.now`, as in
+  `provider-health.test.ts:540`), because no clock read is in it.
+
 The clock is the global `Date` (a parameter or variable named `Date` is not)
 or `performance`: global, imported from `node:perf_hooks` under any name
 (`import { performance as perf }`), or a namespace or default import of that
@@ -129,18 +142,28 @@ sits in a `describe` that has either.
 ## What it cannot see
 
 - **A duration the code under test measures.** The clock read is in
-  production code, so the test's own expression holds none. Six such upper
-  bounds exist on main at 9f662581 and are not counted:
-  `src/agents/iteration-health-tracker.test.ts:159` (`getTaskDurationMs()`),
-  `src/agents/autonomy/progress-assessment.test.ts:174`
-  (`timeSinceLastMutationMs`), `src/identity/crash-recovery.test.ts:22`
-  (`downtimeMs`), `src/agents/memory-refresher.test.ts:698` (`durationMs`,
-  `Date.now() - start` in `memory-refresher.ts`),
-  `src/dashboard/metrics.test.ts:95` (`uptime`) and
-  `src/agent-core/runner/v2-agent-runner.test.ts:1304`
-  (`accumulatedSilentMs()`). The list comes from a scan (Calibration) of every
-  upper-bound `expect` whose target ends in a time-like name; a production
-  duration under another name would not be on it.
+  production code, so the test's own expression holds none, even when the
+  test hands production its start (`logProviderCall(…, Date.now() - 160_000)`).
+  Nine such upper bounds exist on main at 9f662581 and are not counted:
+  - `src/agents/iteration-health-tracker.test.ts:159` (`getTaskDurationMs()`);
+  - `src/agents/autonomy/progress-assessment.test.ts:174` (`timeSinceLastMutationMs`);
+  - `src/identity/crash-recovery.test.ts:22` (`downtimeMs`);
+  - `src/agents/memory-refresher.test.ts:698` (`durationMs`, `Date.now() - start`
+    in `memory-refresher.ts`);
+  - `src/dashboard/metrics.test.ts:95` (`uptime`);
+  - `src/agent-core/runner/v2-agent-runner.test.ts:1304` (`accumulatedSilentMs()`);
+  - `src/agents/providers/provider-call-log.test.ts:93` (`median`, under
+    165 000 ms for a call logged 160 000 ms back: `ms = Date.now() - startedAt`
+    in `provider-call-log.ts`);
+  - `src/agents/providers/provider-outage.test.ts:91` and `:93`
+    (`msSinceNewestProviderFailure(t + 90_000) < 95_000` with `t = Date.now()`
+    read after `recordFailure`).
+
+  The list is what two scans found (Calibration): one by a time-like name on
+  the target, one by a clock read anywhere in the enclosing test case. A
+  production duration whose test case reads no clock and whose target has no
+  time-like name would be on neither; `metrics.test.ts:95` is found only by
+  its name.
 - **A clock read or bound in another module.** Only functions the test file
   declares are followed. A timing helper imported from another module, or an
   `expect` inside a helper that takes the elapsed time as a parameter
@@ -194,7 +217,7 @@ sits in a `describe` that has either.
 ## Calibration
 
 Measured on 2026-11-16 on main at 9f662581, with this change's detector:
-63 wall-clock upper bounds in 41 files, all pinned in `WALL_CLOCK_BASELINE`.
+64 wall-clock upper bounds in 42 files, all pinned in `WALL_CLOCK_BASELINE`.
 By form:
 
 - 25 written out as `expect(Date.now() - t)`, 4 as `expect(performance.now() - t)`;
@@ -211,7 +234,9 @@ By form:
   2 returned by a local function (`campaign-intake`), 1 inside `Math.abs`
   (`task-manager`);
 - 2 "stamp minus start" (`claude-seat-review.test.ts:581`,
-  `chain-detector.test.ts:166`).
+  `chain-detector.test.ts:166`);
+- 1 "stamp under start plus" (`command-handler.test.ts:446`, an `expiresAt`
+  production stamps from its own `Date.now()`, under `before + 36 h + 5 s`).
 
 The first measurement (2026-11-11, main at 78500e4b) found 60 in 41 files.
 Between the two, `src/common/project-write-lock.test.ts` replaced its bound
@@ -220,22 +245,38 @@ with a counted wait (5cfabf99), so its line is gone, and
 `expect(performance.now() - started).toBeLessThan(100)` (fef425fd) before
 this rule was in force; it is pinned, and replacing it is separate work. QA
 then found the three `searchTimeMs` bounds the first detector missed; the
-array and division forms above were added for them.
+array and division forms above were added for them. A second QA found
+`command-handler.test.ts:446`; "stamp under start plus" was added for it,
+which made 63 in 41 files 64 in 42.
 
 The orchestrator's census before this change counted 26 of the first form
-with a line search; the parse finds the rest. Two scans checked what is not
-counted. The first listed every upper-bound `expect` in a file with a clock
-read by a looser name-taint probe, read by hand. The second parsed every
-test file that names an upper or lower matcher and listed each upper-bound
-`expect` the detector does not count whose target ends in a time-like name
-(`duration`, `elapsed`, `uptime`, `took`, `latency`, `since`, `ms`, `time`,
-`age`, `wait`, `delay`, `left`, `remaining`, `spent`, `cost`) or spells
-`now(`: 14 hits. Six are the production-measured durations above; the rest
-are a time left (`provider-outage.test.ts:55`,
-`quota-reset-from-message.test.ts:28`, `rate-limiter.test.ts:53`), a fake
-clock (`failure-ledger.incident-regression.test.ts:86`), an order of
-timestamps (`metrics.test.ts:250`, `server.test.ts:1166`) and money
-(`control-plane.test.ts:277`, `supervisor-brain.test.ts:1079`).
+with a line search; the parse finds the rest. Three scans checked what is
+not counted:
+
+1. A looser name-taint probe listed every upper-bound `expect` in a file with
+   a clock read; each was read by hand.
+2. Every test file naming an upper or lower matcher was parsed (433
+   upper-bound `expect`s, 64 of them counted). Each uncounted one was listed
+   when its target ends in a time-like name (`duration`, `elapsed`, `uptime`,
+   `took`, `latency`, `since`, `ms`, `time`, `age`, `wait`, `delay`, `left`,
+   `remaining`, `spent`, `cost`).
+3. The same parse listed each uncounted one whose enclosing `it`/`test` body
+   reads `Date.now()` or `performance.now()` anywhere, with no name filter:
+   this found `provider-call-log.test.ts:93` and the two `provider-outage`
+   bounds, which scan 2 missed.
+
+Scans 2 and 3 together listed 46 uncounted bounds. Nine are the
+production-measured durations above. The rest are not durations the test or
+the code under test measured: a time left (`free-tier-limit.test.ts:24`,
+`provider-outage.test.ts:55`, `quota-reset-from-message.test.ts:28`,
+`rate-limiter.test.ts:53`); an order of two stamps (`exposedAt < processedAt`
+in `tool-turn.guidance-exposure` and `v2-agent-runner.integration`, and
+`metrics.test.ts:250`, `server.test.ts:1166`, `identity-state.test.ts:81`,
+`exposure-time.test.ts:251`, `chunker.test.ts:312`,
+`canvas-routes.test.ts:266`, `unified-budget-manager.adversarial.test.ts:711`,
+`framework-git-fallback.test.ts:132`); money (`control-plane.test.ts:277`,
+`supervisor-brain.test.ts:1079`); and scores, confidences, lengths, counts
+and bytes (the other 21).
 
 The limit rule found two tests in DETECTORS that walked the repository with
 no limit: `src/no-require-in-esm.test.ts:30` (walks `src/`) and
@@ -265,6 +306,9 @@ Mutations, each made in the tree, run, and undone:
 - The division and the array folds taken out of the detector: the fixture
   test red, and "the baseline is lowered" red with
   `hnsw-performance.test.ts: baseline 6, now 3`; restored, green.
+- "stamp under start plus" taken out of the detector: the fixture test red,
+  and "the baseline is lowered" red with
+  `command-handler.test.ts: baseline 1, now 0`; restored, green.
 - `pinLoosening` of `scripts/ci/check-test-integrity.mjs` on a
   `WALL_CLOCK_BASELINE` with one line raised (2 → 3) and one file added
   names both; with a line lowered (2 → 1) it names nothing.
