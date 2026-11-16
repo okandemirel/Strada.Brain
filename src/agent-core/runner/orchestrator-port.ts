@@ -102,6 +102,8 @@ export interface RunSetup {
    *  initial AgentState so the PLANNING prompt's "### Learned Patterns" block renders them (v1 parity:
    *  runBackgroundTask :3381). Absent/empty ⇒ no insights this run. */
   readonly learnedInsights?: readonly string[];
+  /** Whose user-scoped instincts setup retrieved (instinctUserIdOf); lent to the run's sub-agents. */
+  readonly instinctUserId?: string;
 }
 
 // ── The verdict-bridge contribution type (the load-bearing one) ────────────────────────

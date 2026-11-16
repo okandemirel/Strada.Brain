@@ -71,11 +71,14 @@ const NESTED_TASK = `${TRIGGER} at the south station`;
 
 /**
  * Each call is recorded with the run it belongs to (its first user turn). The
- * root run delegates once; a delegated run reads the anemometer once; every
- * run answers after its first tool call.
+ * root run plans first, since a delegate tool declares that it writes and a
+ * write is refused while planning (phase-write-access.ts), then delegates once;
+ * a delegated run reads the anemometer once; every run answers after its first
+ * tool call.
  */
 const script = vi.hoisted(() => ({
   calls: [] as Array<{ systemPrompt: string; firstTurn: string }>,
+  rootPlanned: false,
 }));
 
 const provider = vi.hoisted(() => {
@@ -98,6 +101,10 @@ const provider = vi.hoisted(() => {
       const calledATool = messages.some((m) => m.role === "assistant" && (m.tool_calls?.length ?? 0) > 0);
       if (calledATool) return { text: "Done.", toolCalls: [], stopReason: "end_turn", usage };
       const isRoot = firstTurn.startsWith("Survey the harbour weather stations");
+      if (isRoot && `${systemPrompt}\n${JSON.stringify(messages.at(-1) ?? "")}`.includes("## PLAN Phase")) {
+        script.rootPlanned = true;
+        return { text: "1. Delegate the north anemometer calibration to a station check.", toolCalls: [], stopReason: "end_turn", usage };
+      }
       return {
         text: "",
         toolCalls: isRoot
@@ -169,6 +176,7 @@ describe("a delegated run retrieves instincts for its caller's person (#60)", ()
 
   beforeEach(() => {
     script.calls = [];
+    script.rootPlanned = false;
     readContexts = [];
     nestFrom = undefined;
     failRead = false;
@@ -338,6 +346,8 @@ describe("a delegated run retrieves instincts for its caller's person (#60)", ()
       { prompt: ROOT_TASK, chatId: "harbour-chat", channelType: "cli", userId, maxEpochs: 1 },
       { mode: "background", onEvent: () => {}, deliverFinal: () => {} },
     );
+    // The path a real run takes: plan, then delegate from the executing turn.
+    expect(script.rootPlanned, "the root run never planned").toBe(true);
   }
 
   /** The system prompt of the first model call of the run whose first turn names `task`. */
