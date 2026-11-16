@@ -287,6 +287,17 @@ describe("FallbackChainProvider", () => {
     expect((thrown as { usage?: { inputTokens: number } }).usage?.inputTokens).toBe(10_000);
   });
 
+  it("the error names the member that spent the lost tokens, not just the total (task #90)", async () => {
+    const p1 = { ...createMockProvider(), name: "spender" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({ text: "", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 5000, outputTokens: 0, totalTokens: 5000 } });
+    const chain = new FallbackChainProvider([p1], { attemptMeta: [{ provider: "spender", model: "spender-model" }] });
+    let thrown: unknown;
+    try { await chain.chat("sys", [], []); } catch (err) { thrown = err; }
+    expect((thrown as { usageBy?: unknown }).usageBy).toEqual([
+      expect.objectContaining({ provider: "spender", model: "spender-model", usage: expect.objectContaining({ inputTokens: 10_000 }) }),
+    ]);
+  });
+
   it("falls over to the next provider when a provider returns an empty response", async () => {
     const p1 = { ...createMockProvider(), name: "empty-provider" };
     (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({
