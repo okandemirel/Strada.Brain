@@ -411,6 +411,12 @@ function buildResponse(body) {
   }
 
   if (normalizedUserText.includes("release-risk analysis")) {
+    // A delegate tool declares that it writes, so the planning turn plans and the next delegates.
+    if (normalizedPhaseText.includes("## plan phase")) {
+      return buildChatCompletion({
+        text: "1. Delegate the release-risk analysis to a sub-agent.",
+      });
+    }
     if (!lastToolResult) {
       return buildChatCompletion({
         text: "Delegating the release-risk analysis now.",
@@ -498,6 +504,9 @@ function buildResponse(body) {
       });
     }
 
+    // A write called in the replanning turn is refused (src/agent-core/engine/
+    // phase-write-access.ts): the replan answers with the plan, and the
+    // executing turn after it writes the proof.
     if (normalizedPhaseText.includes("## replanning phase") && !proofWritten) {
       return buildChatCompletion({
         text: [
@@ -505,6 +514,12 @@ function buildResponse(body) {
           "2. Create Assets/paor-proof.txt directly with the requested content.",
           `3. Verify the proof file with \`${PAOR_VERIFY_COMMAND}\` before concluding.`,
         ].join("\n"),
+      });
+    }
+
+    if (conversationText.includes("please create a new plan.") && !proofWritten) {
+      return buildChatCompletion({
+        text: "Creating the proof file as the new plan says.",
         toolCalls: [
           makeToolCall("tool-paor-write", "file_write", {
             path: "Assets/paor-proof.txt",
@@ -557,6 +572,12 @@ function buildResponse(body) {
   }
 
   if (normalizedUserText.includes("autonomy-proof.txt") && normalizedUserText.includes("file_write")) {
+    // The first turn plans: a write called while planning is refused.
+    if (normalizedPhaseText.includes("## plan phase")) {
+      return buildChatCompletion({
+        text: "1. Create Assets/autonomy-proof.txt with file_write.",
+      });
+    }
     if (!lastToolResult) {
       return buildChatCompletion({
         text: "Creating the smoke file now.",

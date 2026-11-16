@@ -22,6 +22,7 @@ import type {
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import { markSystemInterruption, SHUTDOWN_ABORT_REASON } from "./interruption.js";
+import { announceBlockedOnce } from "./block-announcement.js";
 import { judgePublication, type LeaseCommitResult } from "./publication.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -85,7 +86,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
-import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery, withGoalResume, type GoalResumeNext } from "./auto-resume.js";
+import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery, withGoalResume, submitPromisedResume, type GoalResumeNext } from "./auto-resume.js";
 
 // Shared outage measurement (also used by goal auto-resume and campaign
 // self-revival); re-exported so existing importers keep their path.
@@ -3297,25 +3298,22 @@ export class BackgroundExecutor {
       return;
     }
 
-    // An ask_user block is a QUESTION awaiting a person, and neither replay nor
-    // replan can answer it — the same prompt re-asks the same question into the
-    // void. Worse, a replan mints a FRESH goal root, and the budget below is
-    // keyed on rootId, so each replan resets the 3-resume/2-replan budget: the
-    // loop becomes unbounded. Measured 2026-08-26: 35 blocked tasks at a ~23s
-    // cadence on one goal lineage, burning provider calls until BOTH providers
-    // sat in cooldown. The mission keep-alive has always refused to retry
-    // ask_user for exactly this reason; the goal level now matches it.
+    // An ask_user block is a QUESTION awaiting a person: neither replay nor replan
+    // can answer it, and a replan resets the budget below (measured 2026-08-26:
+    // 35 blocked tasks at ~23s cadence). Block + question go out as ONE message.
     if (nodeOutcomes.some((outcome) => /ask_user/i.test(outcome))) {
-      block();
+      announceBlockedOnce(this.taskManager, task.id, () => {
+        block();
+        try {
+          this.taskManager?.appendTaskNotice(
+            task.id,
+            "Paused on a question for you. Reply here with your answer and the work continues from that exact point.",
+          );
+        } catch { /* visibility is best-effort */ }
+      });
       getLogger().warn("Goal paused on a question for the user — auto-resume skipped", {
         goalRootId: rootId,
       });
-      try {
-        this.taskManager.appendTaskNotice(
-          task.id,
-          "Paused on a question for you. Reply here with your answer and the work continues from that exact point.",
-        );
-      } catch { /* visibility is best-effort */ }
       return;
     }
 
@@ -3362,7 +3360,6 @@ export class BackgroundExecutor {
     const decision = decideAutoResume(state, progressed);
 
     if (decision.action === "stop") {
-      block();
       getLogger().warn("Blocked goal left for a person", {
         goalRootId: rootId,
         attempts: state.attempts,
@@ -3370,21 +3367,24 @@ export class BackgroundExecutor {
         reason: decision.reason,
       });
       this.autoResumeState.delete(budgetKey);
-      // Tree-level retries are spent — escalate to MISSION level, which keeps
-      // feeding the original prompt back in on the slow clock until success,
-      // budget, or cap. The channel hears every step either way.
-      if (this.scheduleMissionKeepAlive(task, decision.reason)) {
-        return;
-      }
-      try {
-        this.taskManager.appendTaskNotice(
-          task.id,
-          `Goal stopped after ${state.attempts} resume(s) and ${state.replans} replan(s): ${decision.reason}. ` +
-            `This needs you — send instructions fixing the blocker.`,
-        );
-      } catch {
-        // Visibility is best-effort; the task stays blocked either way.
-      }
+      announceBlockedOnce(this.taskManager, task.id, () => {
+        block();
+        // Tree-level retries are spent — escalate to MISSION level, which keeps
+        // feeding the original prompt back in on the slow clock until success,
+        // budget, or cap. The channel hears every step either way.
+        if (this.scheduleMissionKeepAlive(task, decision.reason)) {
+          return;
+        }
+        try {
+          this.taskManager?.appendTaskNotice(
+            task.id,
+            `Goal stopped after ${state.attempts} resume(s) and ${state.replans} replan(s): ${decision.reason}. ` +
+              `This needs you — send instructions fixing the blocker.`,
+          );
+        } catch {
+          // Visibility is best-effort; the task stays blocked either way.
+        }
+      });
       return;
     }
 
@@ -3406,19 +3406,16 @@ export class BackgroundExecutor {
       },
     );
     block(next);
-    try {
-      if (replanning) {
-        this.taskManager.replanGoalRoot(rootId, nodeOutcomes);
-      } else {
-        this.taskManager.retryGoalRoot(rootId);
-      }
-    } catch (error) {
-      getLogger().error("Automatic resume failed to resubmit the goal", {
+    const taskManager = this.taskManager;
+    submitPromisedResume(
+      () => (replanning ? taskManager.replanGoalRoot(rootId, nodeOutcomes) : taskManager.retryGoalRoot(rootId)),
+      (notice) => taskManager.appendTaskNotice(task.id, notice),
+      (error) => getLogger().error("Automatic resume failed to resubmit the goal", {
         goalRootId: rootId,
         action: decision.action,
         error: error instanceof Error ? error.message : String(error),
-      });
-    }
+      }),
+    );
   }
 
 

@@ -51,7 +51,7 @@ const SIZE_BASELINE: Readonly<Record<string, number>> = {
   "src/agents/providers/openai.ts": 1718,
   "src/campaign/requirement-rows.ts": 1689,
   "src/core/terminal-wizard.ts": 1672,
-  "src/agents/orchestrator-session-manager.ts": 1650,
+  "src/agents/orchestrator-session-manager.ts": 1541,
   "src/agents/multi/delegation/delegation-manager.ts": 1642,
   "src/core/strada-mcp-tool-loader.ts": 1580,
   "src/channels/discord/bot.ts": 1521,

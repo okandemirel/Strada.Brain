@@ -29,6 +29,11 @@ export interface ITaskManager {
    * decision must reach the person waiting, not only the log file.
    */
   appendTaskNotice(id: string, notice: string): void;
+  /**
+   * Run a synchronous block + notice sequence and announce the block once, with
+   * the notice in it. Optional: a manager without it announces each write.
+   */
+  announceBlockedOnce?<T>(id: string, fn: () => T): T;
   attachGoalRoot(taskId: string, goalRootId: string): void;
   /**
    * Resubmit a blocked goal tree, keeping every completed node and replaying

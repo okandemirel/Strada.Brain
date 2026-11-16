@@ -590,9 +590,12 @@ describe("FrameworkPromptGenerator", () => {
     // Measured 2026-09-08 05:43: a bridge-only name read from this catalog was
     // called five times while the bridge was down.
     expect(result).toContain("Only the tools in THIS request's tool list can be called");
-    // Review 2026-09-08: in PLANNING/REFLECTING every write tool is absent by
-    // phase, so "needs a bridge" alone was false there.
-    expect(result).toContain("the current phase allows read-only tools only");
+    // Since task 28 the tool list is the same in every phase and a write the
+    // phase forbids is refused where it runs, so the only reason a name is
+    // missing from the list is the absent bridge; the phase rule is in the turn
+    // context and must not be restated (wrongly) here.
+    expect(result).toContain("it needs a live Unity Editor bridge;");
+    expect(result).not.toContain("phase");
     expect(result).not.toContain("Create a new entity in the Unity scene");
     expect(result).not.toContain("Params:");
     expect(result).not.toContain("Execute an editor command");

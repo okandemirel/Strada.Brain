@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const afterNextRename: { run?: () => void } = {};
 /** Makes the next rename fail with this errno code (a Windows handle holder). */
 const failNextRename: { code?: string } = {};
+/** Makes the next rename block for this many ms (a slow disk or a busy volume). */
+const slowNextRename: { ms?: number } = {};
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:fs")>();
   return {
@@ -20,6 +22,9 @@ vi.mock("node:fs", async (importOriginal) => {
       const failWith = failNextRename.code;
       failNextRename.code = undefined;
       if (failWith) throw Object.assign(new Error(`${failWith}: operation not permitted, rename`), { code: failWith });
+      const slowMs = slowNextRename.ms;
+      slowNextRename.ms = undefined;
+      if (slowMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, slowMs);
       const hook = afterNextRename.run;
       afterNextRename.run = undefined;
       const out = real.renameSync(from, to);
@@ -30,6 +35,39 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import { acquireProjectWriteLock, holderIsAlive } from "./project-write-lock.js";
+
+/** The acquire loop's poll interval (project-write-lock.ts POLL_MS). */
+const POLL_MS = 250;
+/**
+ * "At once" is judged by how many polls an acquire waited, never by the wall
+ * clock (a slow Windows runner stretched 'a few ms' to 673 ms). A dead lock
+ * costs one poll after the break, and a busy rename (antivirus, indexer) may
+ * cost a few more; a lock judged ALIVE waits ~240 polls for the 60 s timeout.
+ */
+const MAX_POLLS_FOR_A_DEAD_LOCK = 4;
+
+/**
+ * Acquires with a generous timeout while counting the poll waits. Past the
+ * bound the wait throws, so a lock wrongly judged alive fails the test at once
+ * instead of after the timeout.
+ */
+async function acquireCountingPolls(root_: string): Promise<{ taken: Awaited<ReturnType<typeof acquireProjectWriteLock>>; polls: number }> {
+  let polls = 0;
+  const realSetTimeout = globalThis.setTimeout;
+  const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    if (ms === POLL_MS) {
+      polls += 1;
+      if (polls > MAX_POLLS_FOR_A_DEAD_LOCK) throw new Error(`the acquire waited more than ${MAX_POLLS_FOR_A_DEAD_LOCK} polls: the dead lock was not broken`);
+    }
+    return realSetTimeout(fn, ms, ...rest);
+  }) as typeof setTimeout);
+  try {
+    const taken = await acquireProjectWriteLock(root_, { timeoutMs: 60_000, staleMs: 10 * 60_000 });
+    return { taken, polls };
+  } finally {
+    spy.mockRestore();
+  }
+}
 
 /**
  * Measured live 2026-09-11 21:16:24: the daemon had restarted five minutes
@@ -61,6 +99,21 @@ describe("the project write lock", () => {
     expect(taken.acquired).toBe(true);
     expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).pid).toBe(process.pid);
     taken.release();
+  });
+
+  it("a writer that breaks a dead holder's lock as its time runs out takes it, not writes unlocked", async () => {
+    mkdirSync(lockDir(), { recursive: true });
+    writeFileSync(join(lockDir(), "owner"), JSON.stringify({ pid: 2 ** 30, host: hostname(), token: "dead", at: new Date().toISOString() }));
+    // The reclaim's rename outlasts the whole timeout: the path is vacated
+    // only after the deadline has passed.
+    slowNextRename.ms = 300;
+
+    const taken = await acquireProjectWriteLock(root, { timeoutMs: 200, staleMs: 10 * 60_000 });
+
+    expect(taken.acquired).toBe(true);
+    expect(JSON.parse(readFileSync(join(lockDir(), "owner"), "utf8")).pid).toBe(process.pid);
+    taken.release();
+    expect(existsSync(lockDir())).toBe(false);
   });
 
   it("leaves a LIVE holder's lock alone however long it has been held", async () => {
@@ -113,12 +166,31 @@ describe("the project write lock", () => {
       JSON.stringify({ pid: process.pid, host: hostname(), token: "dead", at: new Date().toISOString(), incarnation: "an-earlier-process" }),
     );
 
-    const started = Date.now();
-    const taken = await acquireProjectWriteLock(root, { timeoutMs: 1_000, staleMs: 10 * 60_000 });
+    const { taken, polls } = await acquireCountingPolls(root);
 
     expect(taken.acquired).toBe(true);
-    expect(Date.now() - started).toBeLessThan(900);
+    expect(polls).toBeLessThanOrEqual(MAX_POLLS_FOR_A_DEAD_LOCK);
     taken.release();
+  });
+
+  it("a dead lock is still broken, one poll later, when the first break loses to a busy rename (a Windows scanner)", async () => {
+    mkdirSync(lockDir(), { recursive: true });
+    writeFileSync(
+      join(lockDir(), "owner"),
+      JSON.stringify({ pid: process.pid, host: hostname(), token: "dead", at: new Date().toISOString(), incarnation: "an-earlier-process" }),
+    );
+    failNextRename.code = "EPERM"; // the reclaim reads "contended" and the next poll retries it
+
+    try {
+      const { taken, polls } = await acquireCountingPolls(root);
+
+      expect(taken.acquired).toBe(true);
+      expect(polls).toBeGreaterThanOrEqual(2); // the retry really took the second poll
+      expect(polls).toBeLessThanOrEqual(MAX_POLLS_FOR_A_DEAD_LOCK);
+      taken.release();
+    } finally {
+      failNextRename.code = undefined;
+    }
   });
 
   it("still sees its own held lock as alive", async () => {

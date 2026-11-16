@@ -87,6 +87,35 @@ function skippedBecause(result: NodeResult, language: SupervisorFeedbackLanguage
 }
 
 /**
+ * Names a step by its task text; a step whose text is unknown is named by its
+ * position. The one place a step gets its name: no goal id is ever printed.
+ */
+export function stepNamer(
+  plan: StoppedPlan | undefined,
+  language: SupervisorFeedbackLanguage,
+): (result: NodeResult, index: number) => string {
+  const tr = language === "tr";
+  const taskOf = new Map<string, string>();
+  for (const node of plan?.nodes ?? []) taskOf.set(String(node.id), node.task);
+  return (result, index) => {
+    const task = taskOf.get(String(result.nodeId))?.trim();
+    if (task) return tr ? `"${clip(task, MAX_STEP_NAME)}" adımı` : `"${clip(task, MAX_STEP_NAME)}"`;
+    return tr ? `${index + 1}. adım` : `step ${index + 1}`;
+  };
+}
+
+/** The per-step lines of a resume re-verification that did not pass, each step named by its task. */
+export function describeUnapprovedSteps(results: readonly NodeResult[], plan: StoppedPlan): string {
+  const nameOf = stepNamer(plan, detectSupervisorFeedbackLanguage(plan.request));
+  return results
+    .map((r, i) => ({ r, line: `- ${nameOf(r, i)}: ${r.output.slice(0, 200) || r.status}` }))
+    .filter(({ r }) => r.status !== "ok" || r.output.length > 0)
+    .map(({ line }) => line)
+    .slice(0, 8)
+    .join("\n");
+}
+
+/**
  * The summary of a run that stopped with work left: how many steps finished,
  * what each finished step reported, and why each other step did not finish.
  * Steps keep their plan order. No goal id is ever printed: a step whose task
@@ -95,13 +124,7 @@ function skippedBecause(result: NodeResult, language: SupervisorFeedbackLanguage
 export function describeStoppedPlan(results: readonly NodeResult[], plan?: StoppedPlan): string {
   const language: SupervisorFeedbackLanguage = plan ? detectSupervisorFeedbackLanguage(plan.request) : "en";
   const tr = language === "tr";
-  const taskOf = new Map<string, string>();
-  for (const node of plan?.nodes ?? []) taskOf.set(String(node.id), node.task);
-  const nameOf = (result: NodeResult, index: number): string => {
-    const task = taskOf.get(String(result.nodeId))?.trim();
-    if (task) return tr ? `"${clip(task, MAX_STEP_NAME)}" adımı` : `"${clip(task, MAX_STEP_NAME)}"`;
-    return tr ? `${index + 1}. adım` : `step ${index + 1}`;
-  };
+  const nameOf = stepNamer(plan, language);
 
   const ok = results.filter((r) => r.status === "ok").length;
   const sections = [tr ? `Tamamlanan adımlar: ${ok}/${results.length}.` : `Steps finished: ${ok} of ${results.length}.`];

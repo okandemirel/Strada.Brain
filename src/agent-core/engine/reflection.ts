@@ -591,7 +591,9 @@ export async function portHandlePlanPhase(
     // presents the plan; the user approves on the next message (cleared upstream by
     // interactionPolicy.noteUserMessage in processMessage, so this gate won't re-trigger).
     if (
-      params.toolCallCount === 0 && // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only
+      // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only. The count is of the
+      // calls that run: a write the phase refuses is not one (PlanPhaseParams.toolCallCount).
+      params.toolCallCount === 0 &&
       userExplicitlyAskedForPlan(lastUserMessage) &&
       draftLooksLikeInternalPlanArtifact(params.responseText ?? "", { toolNames: runCtx.lastToolNames }) &&
       !deps.dmPolicy?.isAutonomousActive(chatId, runCtx.userId)
