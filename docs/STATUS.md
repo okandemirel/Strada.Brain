@@ -36,7 +36,9 @@ daemon autonomy is now DEFAULT-ON on every channel (the "mode" is gone;
 the reviewer's objection into the next iteration instead of warn-logging;
 `ROUTING_PHASE_SWITCHING` is wired; BuildStateObserver is registered via a
 process-wide build-state publication. Still open: FileWatch/TestResult
-observers, per-node lease parallelism, reflection-path (text) consensus.
+observers, per-node lease parallelism. A reply made of text only never goes to the
+second seat (the text-only consensus path was removed 2026-11-16: it waited
+for a prompt class no prompt receives); only tool calls are judged.
 
 README was corrected the same day to match (observation surface, advisory
 consensus, artifact-production status, lease serialization, hash-vector
