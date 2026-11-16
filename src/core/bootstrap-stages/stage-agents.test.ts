@@ -12,6 +12,13 @@ import {
   initializeMemoryConsolidationStage,
   initializeDeploymentStage,
 } from "./stage-agents.js";
+import { installUsageLedgerHarness } from "../../tests/helpers/usage-ledger-harness.js";
+
+// The real rate limiter (usage-ledger harness) logs through the process logger.
+vi.mock("../../utils/logger.js", () => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return { getLogger: () => log, getLoggerSafe: () => log };
+});
 
 // =============================================================================
 // SHARED HELPERS
@@ -633,22 +640,29 @@ describe("initializeMemoryConsolidationStage — what a summary costs and which 
   }
 
   it("prices each summary and books it as daemon spend, instead of reporting $0", async () => {
-    const recordCost = vi.fn();
-    const summarize = await summarizerFor({
-      unifiedBudgetManager: { recordCost } as unknown as StageParams["unifiedBudgetManager"],
-    });
+    // The real process ledger (task #72): the summary used to book the cost
+    // ledger itself and reach neither /api/metrics nor the rate limiter's wall.
+    const ledger = installUsageLedgerHarness();
+    try {
+      const summarize = await summarizerFor({});
 
-    const result = await summarize(["a", "b"]);
+      const result = await summarize(["a", "b"]);
 
-    // deepseek: $0.14 in / $0.28 out per 1M tokens.
-    const expected = (200_000 * 0.14 + 50_000 * 0.28) / 1_000_000;
-    expect(result.cost).toBeCloseTo(expected, 10);
-    expect(result.model).toBe("deepseek-chat");
-    expect(recordCost).toHaveBeenCalledWith(
-      result.cost,
-      "daemon",
-      expect.objectContaining({ model: "deepseek-chat", tokensIn: 200_000, tokensOut: 50_000 }),
-    );
+      // deepseek: $0.14 in / $0.28 out per 1M tokens.
+      const expected = (200_000 * 0.14 + 50_000 * 0.28) / 1_000_000;
+      expect(result.cost).toBeCloseTo(expected, 10);
+      expect(result.model).toBe("deepseek-chat");
+      // Once each: metrics, the rate limiter's daily total, the cost ledger.
+      expect(ledger.counted()).toEqual({ input: 200_000, output: 50_000, dailyTokens: 250_000 });
+      expect(ledger.booked).toHaveLength(1);
+      expect(ledger.booked[0]!.amount).toBeCloseTo(result.cost, 10);
+      expect(ledger.booked[0]).toMatchObject({
+        source: "daemon",
+        metadata: { model: "deepseek-chat", tokensIn: 200_000, tokensOut: 50_000, triggerName: "memory-consolidation" },
+      });
+    } finally {
+      ledger.uninstall();
+    }
   });
 
   it("summarizes on the provider MEMORY_CONSOLIDATION_MODEL_TIER names in the tier map", async () => {

@@ -66,7 +66,7 @@ The billing rules live in the producer, not in the callers:
   | --- | --- |
   | supervisor node verification, capability triage | the supervisor run (`SupervisorContext.onUsage`) |
   | campaign planning, acceptance writer, visual conformance, style analysis | `chat`: the campaign's own tasks are origin "user", which books as chat |
-  | session summary, chain synthesis, agent-core reasoning | `daemon`: background work no run awaits (memory consolidation books there too) |
+  | session summary, chain synthesis, agent-core reasoning, memory consolidation, the fallback chain's recovery probe | `daemon`: background work no run awaits |
   | vault symbol summary | `chat`: a user asks for it from the dashboard |
 
 - **Keep the engine's paths where they are.** Model turns, review, reviewer
@@ -92,7 +92,6 @@ The billing rules live in the producer, not in the callers:
 - A call through a wrapper defined in an allowlisted file and used elsewhere.
 - Other paid endpoints: embeddings and image generation.
 - Code outside `src/`, and the test helpers under `src/tests/`.
-- Two known residues stay allowlisted with their reason until their
-  follow-ups land. Memory consolidation (`stage-agents.ts`) books the cost
-  ledger but neither the rate limiter nor metrics. The fallback chain's
-  health probe is unbilled.
+- The two residues task #71 left allowlisted bill through `billedChat` since
+  task #72: memory consolidation (`stage-agents.ts`) and the fallback chain's
+  recovery health probe, both as `daemon` spend.

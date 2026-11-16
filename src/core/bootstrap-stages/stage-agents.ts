@@ -29,10 +29,10 @@ import type { WorkspaceLeaseManager } from "../../agents/multi/workspace-lease-m
 import { createWorkspaceLeaseManager } from "./workspace-lease-setup.js";
 import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
-import type { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
 import type { TierRouter } from "../../agents/multi/delegation/tier-router.js";
 import type { ModelTier } from "../../agents/multi/delegation/delegation-types.js";
 import { estimateCostWithCache } from "../../budget/cost-model.js";
+import { billedChat } from "../../agents/providers/billed-call.js";
 import type {
   MultiAgentDelegationStageDeps,
   MultiAgentDelegationStageResult,
@@ -356,8 +356,6 @@ export async function initializeMemoryConsolidationStage(
     learningEventBus?: IEventBus<LearningEventMap>;
     heartbeatLoop: Pick<HeartbeatLoop, "setConsolidationEngine">;
     daemonContext: import("../../daemon/daemon-cli.js").DaemonContext;
-    /** Books each summary's spend against the daemon's allowance. */
-    unifiedBudgetManager?: Pick<UnifiedBudgetManager, "recordCost">;
     /** Resolves memory.consolidation.modelTier to a "provider:model" spec. */
     tierRouter?: Pick<TierRouter, "resolveProviderSpec">;
     /** Receives a startup notice the operator must act on. */
@@ -423,26 +421,22 @@ export async function initializeMemoryConsolidationStage(
     const summarizeWithLLM = async (texts: string[]): Promise<{ summary: string; cost: number; model: string }> => {
       const provider = summarizer();
       const prompt = `Summarize the following related memory entries into a single concise entry that preserves key information:\n\n${texts.map((t, i) => `[${i + 1}] ${t}`).join("\n\n")}`;
-      const response = await provider.chat(
+      // Billed as daemon spend through the one billing path: metrics, the rate
+      // limiter's daily wall and the cost ledger, once each. It used to book
+      // the ledger itself and reach neither counter (task #72).
+      const response = await billedChat(
+        provider,
+        { purpose: "memory-consolidation", ownerless: "daemon" },
         "You are a memory consolidation engine. Produce a concise summary preserving key facts.",
         [{ role: "user", content: prompt }],
         [],
       );
-      // Priced and booked as daemon spend: this returned cost 0, so the budget
-      // walls, the portal and consolidation_log never saw a dollar of it.
+      // The price is what consolidation_log records; the ledger was booked above.
       const servedProvider = response.servedBy?.provider ?? provider.name;
       const servedModel = response.servedBy?.model;
       const cost = response.usage
         ? estimateCostWithCache({ ...response.usage, model: servedModel }, servedProvider)
         : 0;
-      if (cost > 0) {
-        params.unifiedBudgetManager?.recordCost(cost, "daemon", {
-          model: servedModel ?? servedProvider,
-          tokensIn: response.usage.inputTokens,
-          tokensOut: response.usage.outputTokens,
-          triggerName: "memory-consolidation",
-        });
-      }
       return {
         summary: response.text,
         cost,

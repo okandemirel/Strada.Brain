@@ -11,6 +11,7 @@ import type {
 import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
 import { LostUsage } from "./lost-usage.js";
 import { supportsStreaming } from "./provider.interface.js";
+import { billedChat } from "./billed-call.js";
 import { getLogger } from "../../utils/logger.js";
 import { usageFields } from "./provider-call-log.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
@@ -841,8 +842,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // hand the waiters a failure the provider never made.
         const probe = (async () => {
           try {
-            await provider.chat(
-              "Reply with OK",
+            await billedChat(provider, { purpose: "provider-health-probe", ownerless: "daemon" }, "Reply with OK",
               [{ role: "user", content: "health check" }] as ConversationMessage[],
               [], // no tools
               { signal: AbortSignal.timeout(this.probeBudgetFor(provider)) },

@@ -16,7 +16,7 @@
  * The matcher's own cases ("counts …", "does not count …", "cannot see …")
  * pin each spelling.
  * A file may make such calls only if it is listed below with its exact count
- * and the reason its calls are billed (or, for known residue, why not yet).
+ * and the reason its calls are billed.
  * Everything else bills through billedChat / billedStreamOrChatText, which
  * this test does not count.
  *
@@ -45,9 +45,9 @@ const ALLOWED: Readonly<Record<string, { readonly calls: number; readonly why: s
   "agents/providers/billed-call.ts": { calls: 2, why: "the choke point: billedChat and billedStreamOrChatText make the call they bill" },
   "agents/providers/provider.interface.ts": { calls: 2, why: "streamOrChatText's own body: the unbilled primitive billed-call.ts wraps" },
   "agents/providers/fallback-chain.ts": {
-    calls: 4,
+    calls: 3,
     why: "a chain calling its members: the consumer bills the chain's reply (servedBy, auxiliaryUsage, error.usage); " +
-      "the 4th is the recovering-member health probe (\"Reply with OK\", a handful of tokens) — known residue, unbilled",
+      "the recovering-member health probe bills through billedChat (task #72)",
   },
   // ── engine paths that bill through recordProviderUsage / recordAuxiliaryUsage themselves ──
   "agents/orchestrator.ts": { calls: 6, why: "model turns, the supervisor planning call and the two synthesis calls: each bills recordProviderUsage on its reply" },
@@ -56,16 +56,14 @@ const ALLOWED: Readonly<Record<string, { readonly calls: number; readonly why: s
   "agent-core/engine/review.ts": { calls: 2, why: "review and verify calls billed with recordAuxiliaryUsage" },
   "agent-core/routing/consensus-manager.ts": { calls: 2, why: "reviewer spend collected per call (usageEntryOf / error.usage) and billed through consensusUsageSink" },
   "goals/goal-decomposer.ts": { calls: 1, why: "each reply billed through DecomposeOptions.onUsage → Orchestrator.recordProviderUsage (task #67)" },
-  // ── known residue: partially billed ──
-  "core/bootstrap-stages/stage-agents.ts": {
-    calls: 1,
-    why: "memory consolidation books its cost to the cost ledger (daemon) itself but reaches neither the rate limiter nor " +
-      "/api/metrics — known residue, follow-up proposed under task #71",
-  },
 };
 
-/** The call sites task #71 moved onto billed-call.ts (each bills a run or a named budget source). */
+/** The call sites tasks #71 and #72 moved onto billed-call.ts (each bills a run or a named budget source). */
 const MOVED_TO_CHOKE_POINT = new Set([
+  // task #72: the two residues #71 left allowlisted
+  "core/bootstrap-stages/stage-agents.ts",
+  "agents/providers/fallback-chain.ts",
+  // task #71
   "supervisor/supervisor-verification.ts",
   "supervisor/capability-matcher.ts",
   "campaign/campaign-planner.ts",
@@ -260,7 +258,7 @@ describe("direct provider calls go through the billing path (task #71)", { timeo
       .filter((s) => s.billed.length > 0 && s.selfBilled.length > 0)
       .map((s) => `src/${s.file}: billed ${s.billed.map((b) => `:${b.line}`).join(",")} and self-billed ${s.selfBilled.map((b) => `:${b.line}`).join(",")}`);
     expect(both).toEqual([]);
-    // The ten call sites task #71 moved onto the choke point are all still on it.
+    // The call sites tasks #71 and #72 moved onto the choke point are all still on it.
     const onChokePoint = new Set(scanned().filter((s) => s.billed.length > 0).map((s) => s.file));
     expect([...MOVED_TO_CHOKE_POINT].filter((f) => !onChokePoint.has(f))).toEqual([]);
   });
