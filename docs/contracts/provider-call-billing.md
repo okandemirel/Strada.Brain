@@ -85,7 +85,10 @@ The billing rules live in the producer, not in the callers:
 
 ## What it cannot see
 
-- A provider method taken into a variable (`const f = provider.chat; f()`).
+- A provider method taken into a variable (`const f = provider.chat; f()`)
+  or destructured (`const { chat } = provider; chat()`). The tripwire's
+  "cannot see" cases pin both at zero. A parenthesized, cast or `!` callee
+  and `ns.streamOrChatText(` through a namespace import are seen.
 - A call through a wrapper defined in an allowlisted file and used elsewhere.
 - Other paid endpoints: embeddings and image generation.
 - Code outside `src/`, and the test helpers under `src/tests/`.
