@@ -772,7 +772,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     // response that finally answers, or on the error when nothing does
     // (Codex 2026-09-17 #5).
     const lost = new LostUsage(
-      (idx) => ({ provider: this.providers[idx]!.name, model: this.attemptMeta[idx]?.model }),
+      // The registry key the cost model prices (servedBy's rule), not the display label.
+      (idx) => ({ provider: this.attemptMeta[idx]?.provider ?? this.providers[idx]!.name, model: this.attemptMeta[idx]?.model || undefined }),
     );
     const addLost = (idx: number, usage: TokenUsage): void => lost.add(idx, usage);
     const withLost = (r: ProviderResponse): ProviderResponse => lost.onResponse(r);
