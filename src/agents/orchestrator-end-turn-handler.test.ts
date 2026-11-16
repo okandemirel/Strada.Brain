@@ -308,7 +308,6 @@ describe("handleInteractiveEndTurn", () => {
       systemPrompt: "test",
       defaultLanguage: "en",
       profileLanguage: undefined,
-      runTextConsensusIfCritical: vi.fn(async () => {}),
     };
 
     // Mock clarification to return passthrough (no intervention)
@@ -356,7 +355,6 @@ describe("handleInteractiveEndTurn", () => {
       systemPrompt: "test",
       defaultLanguage: "en",
       profileLanguage: "tr",
-      runTextConsensusIfCritical: vi.fn(async () => {}),
     };
 
     const originalModule = await import("./orchestrator-intervention-pipeline.js");
@@ -403,7 +401,6 @@ describe("handleInteractiveEndTurn", () => {
       systemPrompt: "test",
       defaultLanguage: "en",
       profileLanguage: undefined,
-      runTextConsensusIfCritical: vi.fn(async () => {}),
     };
 
     const originalModule = await import("./orchestrator-intervention-pipeline.js");
@@ -455,7 +452,6 @@ describe("handleInteractiveEndTurn", () => {
         hardCapReplan: 5,
         hardCapBlock: 8,
       } as any,
-      runTextConsensusIfCritical: vi.fn(async () => {}),
     };
 
     const originalModule = await import("./orchestrator-intervention-pipeline.js");

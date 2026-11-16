@@ -20,7 +20,6 @@ import type { TaskUsageEvent, TaskProgressSignal } from "../../tasks/types.js";
 import type { ProgressLanguage } from "../../tasks/progress-signals.js";
 import type { SupervisorExecutionStrategy, SupervisorAssignment } from "../../agents/orchestrator-supervisor-routing.js";
 import {
-  resolveConsensusReviewAssignment as resolveConsensusReviewAssignmentHelper,
   stripInternalDecisionMarkers as stripInternalDecisionMarkersHelper,
 } from "../../agents/orchestrator-supervisor-routing.js";
 import { buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel } from "../../agents/orchestrator-phase-telemetry.js";
@@ -50,10 +49,9 @@ import {
   type BgReflectionContext,
   type ReflectionLoopAction,
 } from "../../agents/orchestrator-reflection-handler.js";
-import { runConsensusVerification } from "../../agents/orchestrator-consensus.js";
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../../goals/types.js";
 import { processReflectionPreamble, handlePlanPhaseTransition } from "../../agents/orchestrator-loop-utils.js";
-import { recordExecutionTrace, recordPhaseOutcome, consensusUsageSink } from "./accounting.js";
+import { recordPhaseOutcome } from "./accounting.js";
 import { emitVisibleBoundary, sanitizeBlockedVisibleText } from "./render.js";
 import type { RenderDeps } from "./render.js";
 import type { ReviewDeps } from "./review.js";
@@ -237,10 +235,6 @@ export function buildInteractiveEndTurnContext(
   core: ReflectionCoreContext,
   runCtx: EngineRunContext,
 ): InteractiveEndTurnContext {
-  const identityKey = runCtx.identityKey;
-  const providerCaps = runCtx.lastProviderCapabilities;
-  const executionStrategy = core.executionStrategy;
-  const currentAssignment = core.currentAssignment;
   return {
     ...core,
     systemPrompt: runCtx.systemPrompt,
@@ -248,34 +242,6 @@ export function buildInteractiveEndTurnContext(
     profileLanguage: runCtx.profileLanguage,
     progressAssessmentEnabled: deps.progressAssessmentEnabled,
     controlLoopTracker: runCtx.controlLoopTracker,
-    runTextConsensusIfCritical: async (p) => {
-      if (!deps.consensusManager || !deps.confidenceEstimator) return;
-      const textTaskClass = deps.taskClassifier.classify(p.prompt);
-      if (textTaskClass.criticality !== "critical") return;
-      const textConfidence = deps.confidenceEstimator.estimate({
-        task: textTaskClass,
-        providerName: p.providerName,
-        providerCapabilities: providerCaps ?? ({} as never),
-        agentState: p.agentState,
-        responseLength: p.responseText.length,
-      });
-      await runConsensusVerification({
-        consensusManager: deps.consensusManager,
-        availableProviderCount: deps.providerManager.listAvailable().length,
-        taskClass: textTaskClass,
-        confidence: textConfidence,
-        originalOutput: { text: p.responseText },
-        originalProviderName: p.providerName,
-        prompt: p.prompt,
-        reviewAssignment: resolveConsensusReviewAssignmentHelper(deps.getSupervisorRoutingContext(), executionStrategy.reviewer, currentAssignment, identityKey),
-        chatId: core.chatId,
-        identityKey,
-        logLabel: "text-only, critical",
-        onUsage: consensusUsageSink(deps, runCtx),
-        recordExecutionTrace: (rp) => recordExecutionTrace(deps, rp as Parameters<typeof recordExecutionTrace>[1]),
-        recordPhaseOutcome: (rp) => recordPhaseOutcome(deps, rp as Parameters<typeof recordPhaseOutcome>[1]),
-      });
-    },
   };
 }
 
