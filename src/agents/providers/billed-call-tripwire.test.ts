@@ -135,16 +135,26 @@ function directCalls(path: string): { calls: Finding[]; renamedImports: Finding[
   return { calls, renamedImports, billed, selfBilled };
 }
 
-describe("direct provider calls go through the billing path (task #71)", () => {
-  const scanned = sourceFiles(SRC).map((path) => ({ file: relative(SRC, path).split(sep).join("/"), ...directCalls(path) }));
+/** The scan walks every source file: on a loaded machine it outlasts vitest's 30 s default (docs/contracts/wall-clock-assertions.md). */
+const REPO_SCAN_TIMEOUT_MS = 120_000;
 
+type Scanned = { readonly file: string } & ReturnType<typeof directCalls>;
+let scannedOnce: Scanned[] | undefined;
+
+/** The tree, parsed once and shared by the cases; each case that reaches it carries the scan's limit. */
+function scanned(): Scanned[] {
+  scannedOnce ??= sourceFiles(SRC).map((path) => ({ file: relative(SRC, path).split(sep).join("/"), ...directCalls(path) }));
+  return scannedOnce;
+}
+
+describe("direct provider calls go through the billing path (task #71)", { timeout: REPO_SCAN_TIMEOUT_MS }, () => {
   it("scans the source tree (a scan that found nothing would pass vacuously)", () => {
-    expect(scanned.length).toBeGreaterThan(500);
-    expect(scanned.find((s) => s.file === "agents/orchestrator.ts")?.calls.length).toBeGreaterThan(0);
+    expect(scanned().length).toBeGreaterThan(500);
+    expect(scanned().find((s) => s.file === "agents/orchestrator.ts")?.calls.length).toBeGreaterThan(0);
   });
 
   it("no file outside the allowlist calls a provider directly", () => {
-    const offenders = scanned
+    const offenders = scanned()
       .filter((s) => s.calls.length > 0 && !(s.file in ALLOWED))
       .map((s) => `src/${s.file}: ${s.calls.map((c) => `:${c.line} ${c.text}`).join(" | ")}`);
     expect(
@@ -154,22 +164,22 @@ describe("direct provider calls go through the billing path (task #71)", () => {
   });
 
   it("every allowlisted file makes exactly the calls its reason covers", () => {
-    const counts = Object.fromEntries(Object.keys(ALLOWED).map((f) => [f, scanned.find((s) => s.file === f)?.calls.length ?? 0]));
+    const counts = Object.fromEntries(Object.keys(ALLOWED).map((f) => [f, scanned().find((s) => s.file === f)?.calls.length ?? 0]));
     const expected = Object.fromEntries(Object.entries(ALLOWED).map(([f, a]) => [f, a.calls]));
     expect(counts, "a new direct call in an allowlisted file needs its own billing — or lower the count when one is gone").toEqual(expected);
   });
 
   it("nobody imports streamOrChatText under another name", () => {
-    expect(scanned.flatMap((s) => s.renamedImports.map((r) => `src/${s.file}:${r.line} ${r.text}`))).toEqual([]);
+    expect(scanned().flatMap((s) => s.renamedImports.map((r) => `src/${s.file}:${r.line} ${r.text}`))).toEqual([]);
   });
 
   it("no file bills one call twice: through billed-call.ts and through the engine's own billing", () => {
-    const both = scanned
+    const both = scanned()
       .filter((s) => s.billed.length > 0 && s.selfBilled.length > 0)
       .map((s) => `src/${s.file}: billed ${s.billed.map((b) => `:${b.line}`).join(",")} and self-billed ${s.selfBilled.map((b) => `:${b.line}`).join(",")}`);
     expect(both).toEqual([]);
     // The ten call sites task #71 moved onto the choke point are all still on it.
-    const onChokePoint = new Set(scanned.filter((s) => s.billed.length > 0).map((s) => s.file));
+    const onChokePoint = new Set(scanned().filter((s) => s.billed.length > 0).map((s) => s.file));
     expect([...MOVED_TO_CHOKE_POINT].filter((f) => !onChokePoint.has(f))).toEqual([]);
   });
 

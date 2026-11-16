@@ -46,3 +46,6 @@ is.
     area is touched weekly.
   - Update the pinned counts in `src/contracts.test.ts`. A count that moves
     shows up in the diff, so a rule cannot quietly stop gating.
+  - Add each rule's detector to `DETECTORS` in `scripts/ci/gates.mjs`. The
+    gates otherwise run it only when `vitest related` selects it, and a
+    detector that scans the tree imports nothing it guards.
