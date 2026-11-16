@@ -20,10 +20,16 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { createLogger } from "../../utils/logger.js";
+import { createLogger, getLoggerSafe } from "../../utils/logger.js";
 import { createBudget } from "../control/budget.js";
-import { runBudget, toBudgetUsage, withRunBudget } from "../control/budget-scope.js";
-import { consensusUsageSink, recordAuxiliaryUsage, recordProviderUsage, type AccountingDeps } from "./accounting.js";
+import { runBudget, toBudgetUsage, UNSCOPED_DEBIT_LOG, withRunBudget } from "../control/budget-scope.js";
+import {
+  consensusUsageSink,
+  createProviderUsageLedger,
+  recordAuxiliaryUsage,
+  recordProviderUsage,
+  type AccountingDeps,
+} from "./accounting.js";
 
 beforeAll(() => {
   try { createLogger("error", join(tmpdir(), "strada-accounting-run-budget-test.log")); } catch { /* already */ }
@@ -112,6 +118,40 @@ describe("the accounting funnels debit the Budget of the run they run inside", (
     });
     expect(budget.spentOutputTokens()).toBe(0);
     expect(budget.inputTokensSeen()).toBe(0);
+  });
+});
+
+describe("the direct-call ledger (billedChat, task #71) debits a call its run pays for, and only that", () => {
+  const served = { provider: "claude", model: "claude-sonnet-5", usage: usage(3_000, 500) };
+  const unscopedWarnings = (warn: ReturnType<typeof vi.spyOn>) =>
+    warn.mock.calls.filter(([message]) => message === UNSCOPED_DEBIT_LOG).length;
+
+  it("a run-billed call inside a run's scope is debited once, priced like the model that served it", () => {
+    const budget = createBudget(10_000, 10);
+    const ledger = createProviderUsageLedger({ counters: {} });
+    withRunBudget(budget, () => ledger.record(served, { purpose: "supervisor-verification", run: {} }));
+    expect(budget.spentOutputTokens(), "the run-billed call never reached the Budget in scope, or twice").toBe(500);
+    expect(budget.inputTokensSeen()).toBe(3_000);
+    expect(budget.remainingCostUsd()).toBeCloseTo(10 - (toBudgetUsage(served.usage, "claude", "claude-sonnet-5").costUsd ?? 0), 9);
+  });
+
+  it("an ownerless call inside a run's scope debits no run, is not logged unscoped, and is booked to its source", () => {
+    const budget = createBudget(10_000, 10);
+    const recordCost = vi.fn();
+    const warn = vi.spyOn(getLoggerSafe(), "warn");
+    const ledger = createProviderUsageLedger({ counters: {}, budget: { recordCost } });
+    withRunBudget(budget, () => ledger.record(served, { purpose: "session-summary", ownerless: "daemon" }));
+    expect(budget.spentOutputTokens(), "a call no run pays for was debited from the run it ran inside").toBe(0);
+    expect(unscopedWarnings(warn)).toBe(0);
+    expect(recordCost).toHaveBeenCalledWith(expect.any(Number), "daemon", expect.objectContaining({ triggerName: "session-summary" }));
+    warn.mockRestore();
+  });
+
+  it("a run-billed call with no run's Budget in scope says so", () => {
+    const warn = vi.spyOn(getLoggerSafe(), "warn");
+    createProviderUsageLedger({ counters: {} }).record(served, { purpose: "capability-triage", run: {} });
+    expect(unscopedWarnings(warn), "a run-billed call went unseen by every Budget, silently").toBe(1);
+    warn.mockRestore();
   });
 });
 
@@ -241,18 +281,44 @@ describe("tripwire: no run Budget is created where the calls it pays for cannot 
 
 // ─── Tripwire: every call of the funnels runs where a run's Budget is in scope ───────────────
 
-const FUNNELS = new Set(["recordProviderUsage", "recordAuxiliaryUsage", "consensusUsageSink", "decompositionUsageSink"]);
+/** The engine's funnels, and the direct-call ledger's entry points (billed-call.ts, task #71). */
+const FUNNELS = new Set([
+  "recordProviderUsage",
+  "recordAuxiliaryUsage",
+  "consensusUsageSink",
+  "decompositionUsageSink",
+  "billedChat",
+  "billedStreamOrChatText",
+]);
 
 const IN_RUN = "inside a V2 run's dispatch: V2AgentRunner.run opens the run's Budget scope (v2-agent-runner.run-budget.test.ts)";
 const IN_ADMISSION = "inside the supervisor admission's Budget scope (orchestrator-supervisor-run-budget.test.ts)";
 const PASS_THROUGH = "a funnel's own wrapper: it runs in its caller's scope, and its callers are pinned here";
+const OWNERLESS = (source: string) =>
+  `no run pays (OwnerlessBilling, "${source}"): booked to the cost ledger under it, never debited from a run's Budget (createProviderUsageLedger)`;
 
 /** Where each production call of a funnel runs, keyed "file › enclosing names → funnel". */
 const FUNNEL_CALLERS: Record<string, { count: number; scope: string }> = {
-  "src/agent-core/engine/accounting.ts › consensusUsageSink → recordProviderUsage": { count: 1, scope: PASS_THROUGH },
-  "src/agent-core/engine/accounting.ts › recordProviderUsage → recordProviderUsage": {
+  "src/agent-core/agent-core.ts › AgentCore.tick.response → billedChat": { count: 1, scope: OWNERLESS("daemon") },
+  "src/agents/style/style-analysis.ts › StyleAnalysis.analyze.response → billedStreamOrChatText": { count: 1, scope: OWNERLESS("chat") },
+  "src/campaign/acceptance-author.ts › AcceptanceAuthor.run → billedStreamOrChatText": { count: 1, scope: OWNERLESS("chat") },
+  "src/campaign/campaign-planner.ts › CampaignPlanner.ask → billedStreamOrChatText": { count: 1, scope: OWNERLESS("chat") },
+  "src/campaign/visual-conformance.ts › judgeVisualConformance.response → billedChat": { count: 1, scope: OWNERLESS("chat") },
+  "src/learning/chains/chain-synthesizer.ts › ChainSynthesizer.callLLM.response → billedChat": { count: 1, scope: OWNERLESS("daemon") },
+  "src/memory/unified/session-summarizer.ts › SessionSummarizer.summarize.response → billedChat": { count: 1, scope: OWNERLESS("daemon") },
+  "src/vault/symbol-summarizer.ts › summarizeSymbol.response → billedChat": { count: 1, scope: OWNERLESS("chat") },
+  "src/supervisor/capability-matcher.ts › CapabilityMatcher.matchWithTriage.response → billedChat": {
     count: 1,
-    scope: "the shared recorder under the funnel, called once and after the debit (the shared-recorder tripwire above)",
+    scope: `run-billed capability triage, before the nodes are carved: ${IN_ADMISSION}`,
+  },
+  "src/supervisor/supervisor-verification.ts › createSupervisorNodeVerifier.response → billedStreamOrChatText": {
+    count: 1,
+    scope: "run-billed node verification, called by SupervisorBrain.execute: inside the supervisor admission's Budget scope (the ledger's run path: accounting.run-budget.test.ts)",
+  },
+  "src/agent-core/engine/accounting.ts › consensusUsageSink → recordProviderUsage": { count: 1, scope: PASS_THROUGH },
+  "src/agent-core/engine/accounting.ts › recordServedCall → recordProviderUsage": {
+    count: 1,
+    scope: "the shared recorder under both paths (the funnel and the direct-call ledger), called once and after the debit (the shared-recorder tripwire above)",
   },
   "src/agent-core/engine/agent-engine.ts › AgentEngine.recordAuxiliaryUsage → recordAuxiliaryUsage": { count: 1, scope: PASS_THROUGH },
   "src/agent-core/engine/agent-engine.ts › AgentEngine.recordProviderUsage → recordProviderUsage": { count: 1, scope: PASS_THROUGH },
