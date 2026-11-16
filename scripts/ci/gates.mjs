@@ -16,7 +16,8 @@
  * a build of dist/ when a selected test runs the compiled output and dist/ is
  * missing or stale (scripts/ci/dist-build.mjs), the contracts' detectors, the
  * repo map against the imports, the tests vitest relates to the changed files,
- * and the commit layer of the test-integrity contract.
+ * the commit layer of the test-integrity contract, and a revert of every fix
+ * commit's source files under the tests it touched (docs/contracts/fix-needs-a-red-test.md).
  */
 
 import { spawnSync } from "node:child_process";
@@ -58,6 +59,8 @@ export const DETECTORS = [
   "src/agents/providers/billed-call-tripwire.test.ts",
   // Scans every script and src file, so `vitest related` never selects it.
   "src/tests/integration/entry-guard-symlink.test.ts",
+  // fix-needs-a-red-test: imports only the script it pins, which src/ never imports.
+  "src/tests/fix-guarded.test.ts",
 ];
 
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -88,6 +91,11 @@ const gates = [
     name: "test integrity",
     why: "no commit since the base weakens a test unsaid",
     cmd: [process.execPath, "scripts/ci/check-test-integrity.mjs", "--base", base, "--head", "HEAD"],
+  },
+  {
+    name: "fix guarded",
+    why: "each fix commit since the base has a test that fails without it",
+    cmd: [process.execPath, "scripts/ci/check-fix-guarded.mjs", "--base", base, "--head", "HEAD"],
   },
 ];
 

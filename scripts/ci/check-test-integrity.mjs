@@ -179,6 +179,7 @@ export function pinLoosening(pin, before, after) {
  */
 export const GOVERNED = [
   /^scripts\/ci\/check-test-integrity\.mjs$/,
+  /^scripts\/ci\/check-fix-guarded\.mjs$/,
   /^scripts\/git-hooks\//,
   /^scripts\/install-git-hooks\.mjs$/,
   /^\.github\/workflows\//,
