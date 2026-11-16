@@ -108,9 +108,8 @@ function pathSpelling(path: string): string {
 export function fileOnPath(projectRoot: string | undefined, target: string): string | null {
   if (!projectRoot) return null;
   const root = resolve(projectRoot);
-  const full = resolve(root, target);
-  if (!isStrictlyInside(root, full)) return null;
-  for (let dir = dirname(full); isStrictlyInside(root, dir); dir = dirname(dir)) {
+  // Only directories strictly inside the root are measured: a target outside it has none.
+  for (let dir = dirname(resolve(root, target)); isStrictlyInside(root, dir); dir = dirname(dir)) {
     try {
       return statSync(dir).isDirectory() ? null : relative(root, dir);
     } catch (err) {

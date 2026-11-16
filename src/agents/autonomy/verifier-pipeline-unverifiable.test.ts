@@ -692,6 +692,41 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
   });
 
+  it("a deletion under a file, followed by a deletion of the same name elsewhere: only a writer that creates a file may answer by name", async () => {
+    const startedAt = Date.now() - 48_000;
+    const root = rootWith({ "services/": "" });
+    mkdirSync(join(root, "services", "b"));
+    const plan = await verdictAfter({
+      calls: [
+        ["file_delete", "README.md/config.json", { content: "Error: ENOTDIR: not a directory", isError: true }],
+        ["file_delete", "services/b/config.json", { content: "Deleted services/b/config.json" }],
+      ],
+      draft: "Deleted the config file.",
+      tools: [...NO_CHECK_TOOLS, "file_delete"],
+      projectPath: root,
+      startedAt,
+    });
+
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a rename that failed, followed by another rename onto the same path: only the same call answers it", async () => {
+    const state = await stateAfter(
+      [["file_rename", "notes/b.txt", { content: "Error: ENOENT: no such file", isError: true }], ["file_rename", "notes/b.txt", { content: "Renamed" }]],
+      TASK,
+    );
+    // The second call renamed another file onto notes/b.txt: same tool, same target, another input.
+    const another = { ...state, stepResults: state.stepResults.map((step, i) => (i === 1 ? { ...step, inputSignature: "another-input" } : step)) };
+    const plan = planVerifierPipeline({ ...pipelineInputs(TASK, DONE, [...NO_CHECK_TOOLS, "file_rename"], project), state: another });
+
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
   it("a write under a file, followed by its file name elsewhere, with no project root to measure it in", async () => {
     const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS.filter((t) => t !== "shell_exec"), projectPath: null });
 
