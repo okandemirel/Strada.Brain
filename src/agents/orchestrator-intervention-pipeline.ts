@@ -1385,7 +1385,7 @@ export async function resolveVerifierIntervention(
     logEntries,
     chatId: params.chatId,
     taskStartedAtMs: params.taskStartedAtMs,
-    buildToolsAvailable, availableToolNames: params.availableToolNames,
+    buildToolsAvailable, availableToolNames: params.availableToolNames, projectPath: deps.projectPath,
   });
   const boundaryDecision = decideInteractionBoundary({
     prompt: params.prompt,

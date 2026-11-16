@@ -89,8 +89,10 @@ export function planVerifierPipeline(params: {
   buildToolsAvailable?: boolean;
   /** The tools this run was offered: the record "nothing here can verify" is read from. */
   availableToolNames?: readonly string[];
+  /** The project root, whose manifests say whether shell_exec has a check to run. */
+  projectPath?: string;
 }): VerifierPipelinePlan {
-  const tooling = measureVerificationTooling(params.availableToolNames, params.state.taskDescription);
+  const tooling = measureVerificationTooling(params.availableToolNames, params.state.taskDescription, params.projectPath);
   const collected = collectVerifierPipelineEvidence({
     state: params.state,
     task: params.task,

@@ -19,8 +19,9 @@
  *    path and finishes; the provider drops two calls of the next node, which
  *    is asked again at once without streaming and then on its next turn.
  * 4. A node's write fails at run time and its next write succeeds. No tool
- *    this run has can verify that, so the node is asked once to say the
- *    result is not verified, says so, and finishes: no block, no re-run.
+ *    this run has can verify that, and the project declares no check for
+ *    shell_exec to run, so the node is asked once to say the result is not
+ *    verified, says so, and finishes: no block, no re-run.
  * 5. The same failure in a run whose registry holds a tool that runs a check.
  *    The failure waits for that verification whatever the draft says, the
  *    node is blocked, and the blocked goal is resumed without waiting for a
