@@ -70,17 +70,27 @@ vi.mock("../../context/strada-knowledge.js", () => ({
 
 /**
  * The delegate's model: read the station once, then answer. A parent run (the
- * one model offered a delegate_ tool; a delegate never is) delegates once, then
- * answers with what came back.
+ * one model offered a delegate_ tool; a delegate never is) plans first, since a
+ * delegate tool declares that it writes and a write is refused while planning
+ * (phase-write-access.ts), then delegates once and answers with what came back.
  */
-const script = vi.hoisted(() => ({ systemPrompts: [] as string[], toolRan: false, parentDelegated: false }));
+const script = vi.hoisted(() => ({
+  systemPrompts: [] as string[],
+  toolRan: false,
+  parentPlanned: false,
+  parentDelegated: false,
+}));
 
 const provider = vi.hoisted(() => ({
   name: "deepseek",
   capabilities: { maxTokens: 4096, streaming: false, structuredStreaming: false, toolCalling: true, vision: false, systemPrompt: true },
-  chat: async (systemPrompt: string, _messages: unknown, tools?: Array<{ name: string }>) => {
+  chat: async (systemPrompt: string, messages: unknown[], tools?: Array<{ name: string }>) => {
     const usage = { inputTokens: 5, outputTokens: 5, totalTokens: 10 };
     if (tools?.some((tool) => tool.name === "delegate_code_review")) {
+      if (`${systemPrompt}\n${JSON.stringify(messages.at(-1) ?? "")}`.includes("## PLAN Phase")) {
+        script.parentPlanned = true;
+        return { text: "1. Delegate the north anemometer check to a reviewer.", toolCalls: [], stopReason: "end_turn", usage };
+      }
       if (script.parentDelegated) return { text: "The reviewer read 12 knots.", toolCalls: [], stopReason: "end_turn", usage };
       script.parentDelegated = true;
       return {
@@ -148,6 +158,7 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
   beforeEach(() => {
     script.systemPrompts = [];
     script.toolRan = false;
+    script.parentPlanned = false;
     script.parentDelegated = false;
     tmpDir = mkdtempSync(join(tmpdir(), "delegation-learning-"));
     mkdirSync(join(tmpDir, "weather-station"), { recursive: true });
@@ -366,13 +377,14 @@ describe("a delegated run feeds learning and uses learned instincts", () => {
     try {
       await runParentThatDelegates(buildManager(shared), shared);
 
+      expect(script.parentPlanned, "the parent run never planned").toBe(true);
       expect(script.parentDelegated, "the parent never called the delegate tool").toBe(true);
       expect(script.toolRan, "the delegate never ran its tool").toBe(true);
       const rows = storage.getTaskMetrics({});
       const parent = rows.filter((row) => row.sessionId === "parent-chat");
       expect(parent).toEqual([expect.objectContaining({ taskType: "background", parentTaskId: undefined })]);
-      // The run's loop recovery also delegates a review, through executeToolCalls with no run
-      // scope: no parent id, so it records nothing rather than a 'background' row.
+      // The parent's one delegation, its executing turn's delegate_code_review, is the only
+      // sub-agent this run starts: one 'subtask' row, under the parent's row.
       const delegated = rows.filter((row) => row.sessionId.startsWith("delegation-"));
       expect(delegated).toEqual([expect.objectContaining({ taskType: "subtask", parentTaskId: parent[0]!.id })]);
       expect(rows).toHaveLength(2);
