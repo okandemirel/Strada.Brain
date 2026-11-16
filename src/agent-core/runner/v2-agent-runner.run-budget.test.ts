@@ -25,7 +25,6 @@ import type { ProviderResponse } from "../../agents/providers/provider-core.inte
 import { GoalDecomposer } from "../../goals/goal-decomposer.js";
 import { ConsensusManager } from "../routing/consensus-manager.js";
 import { ConfidenceEstimator } from "../routing/confidence-estimator.js";
-import { TaskClassifier } from "../routing/task-classifier.js";
 
 // Logger + strada-knowledge module mocks — the same as the real-port integration test, so the
 // Orchestrator boots without a real project / SQLite / network.
@@ -299,28 +298,15 @@ const PLAN_THEN_DONE: ScriptedTurn[] = [
 ];
 
 /**
- * A real TaskClassifier never rates a PROMPT "critical" (only a destructive tool call is), and
- * both consensus call sites read the prompt's rating, so a run never reaches consensus on its
- * own. Rate the prompts naming the "pier 4 gauge" critical (type "analysis", a read-only task the
- * end-turn verifier does not ask a mutation of) and the real ConsensusManager runs; everything
- * after that decision is the real path.
+ * The turns of a run that runs one shell command, then answers. A shell command is a destructive
+ * call, so with consensus turned on ("always") its tool turn is reviewed by a second seat (#91).
  */
-function rateGaugePromptsCritical(): void {
-  const classify = TaskClassifier.prototype.classify;
-  vi.spyOn(TaskClassifier.prototype, "classify").mockImplementation(function (this: TaskClassifier, prompt: string) {
-    return prompt.includes("pier 4 gauge")
-      ? { type: "analysis", complexity: "moderate", criticality: "critical" }
-      : classify.call(this, prompt);
-  });
-}
-
-/** The turns of a run that reads one file, then answers. */
-const PLAN_READ_DONE: ScriptedTurn[] = [
+const PLAN_SHELL_DONE: ScriptedTurn[] = [
   { text: "here is the plan", stopReason: "end_turn" },
   {
     text: "",
     stopReason: "tool_use",
-    toolCalls: [{ id: "tc-read", name: "file_read", input: { path: "gauges.txt" } }],
+    toolCalls: [{ id: "tc-shell", name: "shell_exec", input: { command: "ls gauge-logs" } }],
   },
   { text: "all done", stopReason: "end_turn" },
 ];
@@ -384,9 +370,8 @@ describe("V2AgentRunner — every provider call a run makes is debited from its 
   });
 
   it("a consensus verification's calls count against the run's output-token spend", async () => {
-    rateGaugePromptsCritical();
     const h = buildHarness({ consensus: true });
-    h.ledger.setScript(PLAN_READ_DONE);
+    h.ledger.setScript(PLAN_SHELL_DONE);
 
     const result = await drive(
       h.clock,
@@ -431,9 +416,8 @@ describe("V2AgentRunner — every provider call a run makes is debited from its 
   });
 
   it("on an interactive run the finite output-token cap shrinks by the consensus spend too", async () => {
-    rateGaugePromptsCritical();
     const h = buildHarness({ consensus: true });
-    h.ledger.setScript(PLAN_READ_DONE);
+    h.ledger.setScript(PLAN_SHELL_DONE);
 
     const result = await drive(h.clock, h.runner.run(mkRequest({ prompt: GAUGE_PROMPT }), mkIO("interactive")));
 

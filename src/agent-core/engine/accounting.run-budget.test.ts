@@ -260,7 +260,6 @@ const FUNNEL_CALLERS: Record<string, { count: number; scope: string }> = {
     count: 1,
     scope: `the port's record, which the runner calls for every model turn: ${IN_RUN}`,
   },
-  "src/agent-core/engine/reflection.ts › buildInteractiveEndTurnContext.runTextConsensusIfCritical.onUsage → consensusUsageSink": { count: 1, scope: IN_RUN },
   "src/agent-core/engine/review.ts › reviewShellCommandWithProvider → recordAuxiliaryUsage": { count: 1, scope: `the shell review of a tool turn: ${IN_RUN}` },
   "src/agent-core/engine/review.ts › runVisibilityReview → recordAuxiliaryUsage": { count: 1, scope: `the end-turn visibility review: ${IN_RUN}` },
   "src/agent-core/engine/tool-turn.ts › portExecuteToolTurn.consensusVerdict.onUsage → consensusUsageSink": { count: 1, scope: IN_RUN },
