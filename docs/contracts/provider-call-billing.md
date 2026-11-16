@@ -65,7 +65,7 @@ The billing rules live in the producer, not in the callers:
   | Call | Pays |
   | --- | --- |
   | supervisor node verification, capability triage | the supervisor run (`SupervisorContext.onUsage`) |
-  | campaign planning, acceptance writer, visual conformance, style analysis | `chat`: the campaign's own tasks are origin "user", which books as chat |
+  | campaign planning, acceptance writer, visual conformance, style analysis | `chat`: the campaign's own tasks are origin "user", which books as chat. The row names its campaign (`campaignId`, task #73): CampaignManager wraps each such call in `forCampaign`, and the caller bills `campaignBilling(...)` (`src/campaign/campaign-billing.ts`) |
   | session summary, chain synthesis, agent-core reasoning, memory consolidation, the fallback chain's recovery probe | `daemon`: background work no run awaits |
   | vault symbol summary | `chat`: a user asks for it from the dashboard |
 

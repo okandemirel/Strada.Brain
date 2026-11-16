@@ -32,6 +32,7 @@ import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { subscribeTaskLiveness } from "../agents/liveness-hub.js";
 import { withRunDesignDoc, type RunDesignDoc } from "../agents/autonomy/run-design-doc.js";
 import { withRunProvenance } from "../learning/run-provenance.js";
+import { withRunBudget } from "../agent-core/control/budget-scope.js";
 import {
   deriveTestVerdict,
   runIntegrityOfNodes,
@@ -1404,15 +1405,14 @@ export class BackgroundExecutor {
         },
       };
 
-      // Set for every task, campaign or not: a task submitted from inside
-      // another one (a retry, a resumed goal) starts here in that task's
-      // context, whose document must not carry over.
-      // The run's identity rides with its document: what this task learns must
-      // record which task learned it and, when it serves one, which campaign —
-      // measured 2026-10-14, ten instincts were learned with no origin at all.
+      // Set for every task, campaign or not: a task submitted from inside another one (a retry,
+      // a resumed goal, a goal block a run handed off) starts here in that one's context, whose
+      // document and run Budget must not carry over (#87: its calls spent the sender's Budget).
+      // The run's identity rides with its document: what this task learns records which task
+      // learned it and which campaign — measured 2026-10-14, ten instincts had no origin at all.
       withRunProvenance(
         { runId: entry.task.id, ...(entry.task.campaignId === undefined ? {} : { campaignId: entry.task.campaignId }) },
-        () => withRunDesignDoc(this.designDocFor(entry.task), () => this.executeTask(timedEntry)),
+        () => withRunDesignDoc(this.designDocFor(entry.task), () => withRunBudget(null, () => this.executeTask(timedEntry))),
       )
         .catch((err) => {
           // Catch any unhandled rejection that escapes executeTask's own try/catch

@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { judgeVisualConformance } from "./visual-conformance.js";
+import { forCampaign } from "./campaign-billing.js";
 import { installUsageLedgerHarness, scriptedProvider, usage, type UsageLedgerHarness } from "../tests/helpers/usage-ledger-harness.js";
 import { expectBilledAsCampaignWork, UNMEASURED_WARNING } from "../tests/helpers/campaign-billing-assertions.js";
 
@@ -54,6 +55,15 @@ describe("the visual conformance check bills the campaign's spend", () => {
     // The frame really went out with the call that was billed.
     expect(JSON.stringify(provider.calls[0]!.messages)).toContain('"media_type":"image/png"');
     expectBilledAsCampaignWork(harness, { purpose: PURPOSE, provider: PROVIDER, calls: [{ inputTokens: 1700, outputTokens: 45 }] });
+  });
+
+  it("a check made for a campaign books its row to that campaign (task #73)", async () => {
+    const provider = scriptedProvider(PROVIDER, [{ text: "Amber lanterns over an indigo sky.\nMATCH: yes", usage: usage(1700, 45) }]);
+
+    await forCampaign("cmp_lantern", () => judgeVisualConformance({ look: LOOK, frame: { path: framePath }, visionProvider: { provider, name: PROVIDER } }));
+
+    expect(harness.booked).toHaveLength(1);
+    expect(harness.booked[0]!.metadata).toMatchObject({ triggerName: PURPOSE, campaignId: "cmp_lantern" });
   });
 
   it("two checks bill two rows, one per provider call, each at its own reply's cost", async () => {

@@ -1,0 +1,107 @@
+/**
+ * Agent Core v2 — WHICH RUN'S BUDGET a provider call spends (task #87).
+ *
+ * The v2 runner debited its model turns into the run's Budget and nothing else. A run's other
+ * provider calls — goal decomposition, reviewer calls, consensus verification — were recorded
+ * (metrics, the rate limiter, the run's onUsage) and never debited, so the token and cost gates
+ * judged "budget-exhausted" on a short count. A served call is recorded through one of three entry
+ * points in engine/accounting.ts: the engine's funnels recordProviderUsage and recordAuxiliaryUsage,
+ * and the direct-call ledger's record (createProviderUsageLedger, behind billed-call.ts, task #71).
+ * The two funnels and the ledger's run-billed call debit the Budget of the run they run inside,
+ * model turns included, so each call is counted once. An ownerless call (OwnerlessBilling) debits
+ * no run's Budget, even inside one: its cost is booked to the cost ledger under the source it
+ * names (createProviderUsageLedger says why).
+ *
+ * Ambient rather than threaded, like the run's provenance (learning/run-provenance.ts) and the
+ * chat scope (agents/providers/chat-scope.ts): a run's calls reach accounting.ts through the
+ * engine, the intervention pipeline, the decomposer, the consensus manager and billed-call.ts, and
+ * none of those is handed the run's Budget. The run's onUsage cannot carry it: a sink that is always set would end the shell
+ * review's fallback to the Orchestrator's own sink on a run that has none (review.ts).
+ *
+ * A delegated run opens its own scope, inside its parent's. Its Budget passes each debit on to the
+ * parent (createBudget's `parent`), so the parent counts the child's spend once, through that link.
+ *
+ * A call a run pays for, recorded with no run's Budget in scope, is logged: no token or cost gate
+ * sees it, which is the defect this module exists to end (QA 2026-11-16 found the supervisor's
+ * grounding call there). An ownerless call is not logged: its payer is named and its cost booked.
+ */
+
+import { AsyncLocalStorage } from "node:async_hooks";
+import { estimateCostWithCache } from "../../budget/cost-model.js";
+import type { TokenUsage as ProviderTokenUsage } from "../../agents/providers/provider-core.interface.js";
+import { getLoggerSafe } from "../../utils/logger.js";
+import type { Budget, TokenUsage } from "./budget.js";
+
+/** The log line of a call recorded with no run's Budget in scope (tests look for it). */
+export const UNSCOPED_DEBIT_LOG = "[run-budget] provider usage recorded outside any run's Budget: no token or cost gate sees it";
+
+const current = new AsyncLocalStorage<Budget | null>();
+
+/**
+ * Runs `fn` with `budget` as the Budget of every provider call recorded inside it. `null` says the
+ * work belongs to no run of its own, so it does not spend from whatever run happened to start it
+ * (a task submitted from inside another one; learning/run-provenance.ts does the same).
+ */
+export function withRunBudget<T>(budget: Budget | null, fn: () => T): T {
+  return current.run(budget, fn);
+}
+
+/** The Budget of the run this code runs inside, or undefined outside one. */
+export function runBudget(): Budget | undefined {
+  return current.getStore() ?? undefined;
+}
+
+/** Debits one served call from the running run's Budget; outside a run it debits nothing, and says so. */
+export function debitRunBudget(
+  usage: ProviderTokenUsage | undefined,
+  providerName: string,
+  modelId: string | undefined,
+): void {
+  const budget = runBudget();
+  if (budget) {
+    budget.debit(toBudgetUsage(usage, providerName, modelId));
+  } else if ((usage?.inputTokens ?? 0) > 0 || (usage?.outputTokens ?? 0) > 0) {
+    getLoggerSafe().warn(UNSCOPED_DEBIT_LOG, {
+      provider: providerName,
+      model: modelId,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+    });
+  }
+}
+
+/** Provider `TokenUsage` → control-plane `Budget` usage, with the call's estimated USD cost.
+ * The cost is an ESTIMATE (flat per-provider rate table) whose only consumer is the run-local
+ * Budget gate seeded from the unified budget manager's remaining headroom — it never persists
+ * anything (billing/recording stays with the accounting funnels), so there is no double-count.
+ * A provider with unknown/zero rates (e.g. ollama) simply gates on tokens alone.
+ * audited 2026-09-02: the model id was not passed, so estimateCost could never apply its
+ * "-free"/":free" → $0 rule and a free-tier model (opencode Zen, OpenRouter :free) was charged
+ * its provider's paid table rate against the run's cost cap — money nobody was billed, spent out
+ * of a live run's headroom. The model the call was SERVED by is the one that priced it. */
+export function toBudgetUsage(
+  usage: ProviderTokenUsage | undefined,
+  providerName: string,
+  modelId: string | undefined,
+): TokenUsage {
+  const inputTokens = usage?.inputTokens ?? 0;
+  const outputTokens = usage?.outputTokens ?? 0;
+  // CACHE-AWARE, like the ledger. The gate priced every input token at the
+  // full rate while the ledger billed cache reads at a tenth: one million
+  // cache-read tokens debited $3.00 from the run's headroom against $0.30
+  // recorded — a run stopped on phantom cost (audit 03.2 / D21, 2026-09-13).
+  return {
+    inputTokens,
+    outputTokens,
+    costUsd: estimateCostWithCache(
+      {
+        inputTokens,
+        outputTokens,
+        ...(usage?.cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens: usage.cacheCreationInputTokens }),
+        ...(usage?.cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens: usage.cacheReadInputTokens }),
+        ...(modelId === undefined ? {} : { model: modelId }),
+      },
+      providerName,
+    ),
+  };
+}

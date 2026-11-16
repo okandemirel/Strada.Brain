@@ -15,6 +15,7 @@
  *   resolveDraftClarificationIntervention, resolveVisibleDraftDecision
  */
 
+import type { ParentRunScope } from "../agent-core/runner/agent-runner.js";
 import type { AgentPhase, AgentState } from "./agent-state.js";
 import type {
   ToolCall,
@@ -127,6 +128,8 @@ export interface ToolExecutionOptions {
   projectPathOverride?: string;
   workingDirectoryOverride?: string;
   workspaceLease?: WorkspaceLease;
+  signal?: AbortSignal;
+  parentRun?: ParentRunScope;
 }
 
 // ─── InterventionDeps ─────────────────────────────────────────────────────────
@@ -427,6 +430,9 @@ async function executeLoopRecoveryDelegation(
     session: Session;
     workerCollector?: WorkerRunCollector;
     workspaceLease?: WorkspaceLease;
+    /** The calling run's scope: the delegate is cancelled with it, carved from its budget, bounded
+     *  by its clock and recorded as its subtask. */
+    parentRun?: ParentRunScope;
   },
   deps: InterventionDeps,
   options: {
@@ -484,6 +490,8 @@ async function executeLoopRecoveryDelegation(
     agentState: params.state,
     touchedFiles: options.touchedFiles,
     workspaceLease: params.workspaceLease,
+    signal: params.parentRun?.signal,
+    parentRun: params.parentRun,
   });
   const toolResult = toolResults[0];
   const delegatedWorkerResult = toolResult?.metadata?.["workerResult"] as WorkerRunResult | undefined;
@@ -673,6 +681,7 @@ async function decideBackgroundLoopRecovery(
     session: Session;
     workerCollector?: WorkerRunCollector;
     workspaceLease?: WorkspaceLease;
+    parentRun?: ParentRunScope;
     daemonMode?: boolean;
     maxRecoveryEpisodes?: number;
     progressAssessmentEnabled?: boolean;
@@ -718,23 +727,7 @@ async function decideBackgroundLoopRecovery(
         recoveryEpisode: recoveryAttempt,
         availableDelegations: [hardCapDelegationTool],
       });
-      const delegatedIntervention = await executeLoopRecoveryDelegation({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        prompt: params.prompt,
-        title: params.title,
-        language: params.language,
-        state: params.state,
-        strategy: params.strategy,
-        availableToolNames: params.availableToolNames,
-        selfVerification: params.selfVerification,
-        executionJournal: params.executionJournal,
-        usageHandler: params.usageHandler,
-        onProgress: params.onProgress,
-        session: params.session,
-        workerCollector: params.workerCollector,
-        workspaceLease: params.workspaceLease,
-      }, deps, {
+      const delegatedIntervention = await executeLoopRecoveryDelegation(params, deps, {
         brief,
         touchedFiles,
         decision: buildImmediateDelegationDecision({
@@ -784,23 +777,7 @@ async function decideBackgroundLoopRecovery(
         recoveryEpisode: recoveryAttempt,
         availableDelegations: [hardCapDelegationTool],
       });
-      const delegatedIntervention = await executeLoopRecoveryDelegation({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        prompt: params.prompt,
-        title: params.title,
-        language: params.language,
-        state: params.state,
-        strategy: params.strategy,
-        availableToolNames: params.availableToolNames,
-        selfVerification: params.selfVerification,
-        executionJournal: params.executionJournal,
-        usageHandler: params.usageHandler,
-        onProgress: params.onProgress,
-        session: params.session,
-        workerCollector: params.workerCollector,
-        workspaceLease: params.workspaceLease,
-      }, deps, {
+      const delegatedIntervention = await executeLoopRecoveryDelegation(params, deps, {
         brief,
         touchedFiles,
         decision: buildImmediateDelegationDecision({
@@ -919,23 +896,7 @@ async function decideBackgroundLoopRecovery(
                 recoveryEpisode: staleRecovery,
                 availableDelegations: [delegationTool],
               });
-              const delegatedIntervention = await executeLoopRecoveryDelegation({
-                chatId: params.chatId,
-                identityKey: params.identityKey,
-                prompt: params.prompt,
-                title: params.title,
-                language: params.language,
-                state: params.state,
-                strategy: params.strategy,
-                availableToolNames: params.availableToolNames,
-                selfVerification: params.selfVerification,
-                executionJournal: params.executionJournal,
-                usageHandler: params.usageHandler,
-                onProgress: params.onProgress,
-                session: params.session,
-                workerCollector: params.workerCollector,
-                workspaceLease: params.workspaceLease,
-              }, deps, {
+              const delegatedIntervention = await executeLoopRecoveryDelegation(params, deps, {
                 brief,
                 touchedFiles,
                 decision: buildImmediateDelegationDecision({
@@ -1036,23 +997,7 @@ async function decideBackgroundLoopRecovery(
               recoveryEpisode: recoveryAttempt,
               availableDelegations: [assessmentDelegationTool],
             });
-            const delegatedIntervention = await executeLoopRecoveryDelegation({
-              chatId: params.chatId,
-              identityKey: params.identityKey,
-              prompt: params.prompt,
-              title: params.title,
-              language: params.language,
-              state: params.state,
-              strategy: params.strategy,
-              availableToolNames: params.availableToolNames,
-              selfVerification: params.selfVerification,
-              executionJournal: params.executionJournal,
-              usageHandler: params.usageHandler,
-              onProgress: params.onProgress,
-              session: params.session,
-              workerCollector: params.workerCollector,
-              workspaceLease: params.workspaceLease,
-            }, deps, {
+            const delegatedIntervention = await executeLoopRecoveryDelegation(params, deps, {
               brief,
               touchedFiles,
               decision: buildProgressAssessmentDelegationDecision(
@@ -1116,23 +1061,7 @@ async function decideBackgroundLoopRecovery(
         recoveryEpisode: staleRecovery,
         availableDelegations: [recoveryDelegationTool],
       });
-      const delegatedIntervention = await executeLoopRecoveryDelegation({
-        chatId: params.chatId,
-        identityKey: params.identityKey,
-        prompt: params.prompt,
-        title: params.title,
-        language: params.language,
-        state: params.state,
-        strategy: params.strategy,
-        availableToolNames: params.availableToolNames,
-        selfVerification: params.selfVerification,
-        executionJournal: params.executionJournal,
-        usageHandler: params.usageHandler,
-        onProgress: params.onProgress,
-        session: params.session,
-        workerCollector: params.workerCollector,
-        workspaceLease: params.workspaceLease,
-      }, deps, {
+      const delegatedIntervention = await executeLoopRecoveryDelegation(params, deps, {
         brief: staleBrief,
         touchedFiles,
         decision: buildImmediateDelegationDecision({
@@ -1226,23 +1155,7 @@ async function decideBackgroundLoopRecovery(
 
   if (finalDecision.decision === "delegate_analysis" || finalDecision.decision === "delegate_code_review") {
     const delegationDecision = finalDecision as DelegationLoopRecoveryDecision;
-    const delegatedIntervention = await executeLoopRecoveryDelegation({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      prompt: params.prompt,
-      title: params.title,
-      language: params.language,
-      state: params.state,
-      strategy: params.strategy,
-      availableToolNames: params.availableToolNames,
-      selfVerification: params.selfVerification,
-      executionJournal: params.executionJournal,
-      usageHandler: params.usageHandler,
-      onProgress: params.onProgress,
-      session: params.session,
-      workerCollector: params.workerCollector,
-      workspaceLease: params.workspaceLease,
-    }, deps, {
+    const delegatedIntervention = await executeLoopRecoveryDelegation(params, deps, {
       brief,
       touchedFiles,
       decision: delegationDecision,
