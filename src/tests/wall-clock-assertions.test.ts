@@ -51,7 +51,7 @@ const { testFiles } = (await import(pathToFileURL(path.join(REPO, "scripts", "ci
 
 /**
  * Wall-clock upper bounds per test file, as this detector sees them. Measured
- * on main at 78500e4b (2026-11-11): 60 in 41 files. Lower a count when you
+ * on main at 9f662581 (2026-11-16): 63 in 41 files. Lower a count when you
  * replace a bound with fake timers or a counted event; delete its line at
  * zero. Never raise one, never add one.
  */
@@ -72,7 +72,6 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/channels/discord/rate-limiter.test.ts": 3,
   "src/channels/slack/__tests__/rate-limiter.test.ts": 1,
   "src/common/fetch-with-retry.test.ts": 2,
-  "src/common/project-write-lock.test.ts": 1,
   "src/core/runtime-lock.test.ts": 1,
   "src/core/status-report.test.ts": 1,
   "src/daemon/deployment/bounded-process.test.ts": 3,
@@ -84,8 +83,9 @@ const WALL_CLOCK_BASELINE: Readonly<Record<string, number>> = {
   "src/learning/pipeline/learning-queue.test.ts": 1,
   "src/rag/file-pattern.test.ts": 2,
   "src/rag/hnsw/hnsw-integration.test.ts": 1,
-  "src/rag/hnsw/hnsw-performance.test.ts": 3,
+  "src/rag/hnsw/hnsw-performance.test.ts": 6,
   "src/rag/hnsw/hnsw-vector-store.test.ts": 1,
+  "src/security/prompt-injection.test.ts": 1,
   "src/skills/bundled/file-utils/file-utils.test.ts": 1,
   "src/skills/bundled/web-search/web-search.test.ts": 1,
   "src/skills/project-files.test.ts": 1,
@@ -179,6 +179,8 @@ function isPerformance(checker: ts.TypeChecker, node: ts.Expression): boolean {
 
 /** Math functions that keep an elapsed time an elapsed time: `Math.abs(Date.now() - t)`. */
 const KEEPS_ELAPSED = new Set(["abs", "round", "floor", "ceil", "trunc"]);
+/** Array methods whose result, on an array of elapsed times, is one: a sum or average by `reduce`, an entry by `at`. */
+const ARRAY_FOLDS = new Set(["reduce", "reduceRight", "at"]);
 
 /** What a `return` of a function the file declares hands back: `timed(x)` with `const timed = (…) => { …; return Date.now() - t; }`. */
 function returnsOf(checker: ts.TypeChecker, callee: ts.Expression): ts.Expression[] {
@@ -223,6 +225,7 @@ function propertyValue(checker: ts.TypeChecker, obj: ts.ObjectLiteralExpression,
 function valueReader(checker: ts.TypeChecker) {
   const values = new Map<ts.Node, ts.Expression[]>();
   const forms = new Map<ts.Node, string | undefined>();
+  const elements = new Map<ts.Node, ts.Expression[]>();
 
   /** Property `key` of what `holder` stands for, where that is an object literal. */
   const member = (holder: ts.Expression, key: string): ts.Expression[] =>
@@ -286,19 +289,91 @@ function valueReader(checker: ts.TypeChecker) {
     forms.set(n, undefined);
     let form: string | undefined;
     for (const v of valuesOf(n)) {
-      if (ts.isBinaryExpression(v) && v.operatorToken.kind === ts.SyntaxKind.MinusToken) {
-        if (isClockRead(v.left) || elapsedForm(v.left) === "clock minus") form = "clock minus";
-        else if (ts.isIdentifier(strip(v.right)) && (isClockRead(v.right) || elapsedForm(v.right) === "clock minus")) {
-          form = "stamp minus start";
-        }
-      } else if (ts.isCallExpression(v) && ts.isPropertyAccessExpression(v.expression) && v.arguments[0]) {
-        const { expression: math, name } = v.expression;
-        if (ts.isIdentifier(math) && math.text === "Math" && KEEPS_ELAPSED.has(name.text)) form = elapsedForm(v.arguments[0]);
-      }
+      form = binaryForm(v) ?? callForm(v);
+      if (!form && ts.isElementAccessExpression(v)) form = firstForm(elementsOf(v.expression));
       if (form) break;
     }
     forms.set(n, form);
     return form;
+  }
+
+  /** `a - b` (above), an elapsed time divided by anything (an average), or one times anything (a unit change). */
+  function binaryForm(v: ts.Expression): string | undefined {
+    if (!ts.isBinaryExpression(v)) return undefined;
+    const op = v.operatorToken.kind;
+    if (op === ts.SyntaxKind.MinusToken) {
+      if (isClockRead(v.left) || elapsedForm(v.left) === "clock minus") return "clock minus";
+      if (ts.isIdentifier(strip(v.right)) && (isClockRead(v.right) || elapsedForm(v.right) === "clock minus")) {
+        return "stamp minus start";
+      }
+      return undefined;
+    }
+    if (op === ts.SyntaxKind.SlashToken) return elapsedForm(v.left);
+    if (op === ts.SyntaxKind.AsteriskToken) return elapsedForm(v.left) ?? elapsedForm(v.right);
+    return undefined;
+  }
+
+  /**
+   * Math.abs/round/floor/ceil/trunc of an elapsed time, Math.max/min over
+   * elapsed times (also spread from an array), and `.reduce(…)`, `.reduceRight(…)`
+   * or `.at(…)` on an array of them.
+   */
+  function callForm(v: ts.Expression): string | undefined {
+    if (!ts.isCallExpression(v) || !ts.isPropertyAccessExpression(v.expression)) return undefined;
+    const { expression: holder, name } = v.expression;
+    if (ts.isIdentifier(holder) && holder.text === "Math") {
+      if (KEEPS_ELAPSED.has(name.text) && v.arguments[0]) return elapsedForm(v.arguments[0]);
+      if (name.text === "max" || name.text === "min") {
+        return firstForm(v.arguments.flatMap((a) => (ts.isSpreadElement(a) ? elementsOf(a.expression) : [a])));
+      }
+      return undefined;
+    }
+    if (ARRAY_FOLDS.has(name.text)) return firstForm(elementsOf(holder));
+    return undefined;
+  }
+
+  const firstForm = (exprs: readonly ts.Expression[]): string | undefined => {
+    for (const e of exprs) {
+      const f = elapsedForm(e);
+      if (f) return f;
+    }
+    return undefined;
+  };
+
+  /**
+   * The elements an array expression holds: those of an array literal it
+   * stands for (spreads followed), and for a name, every value pushed onto it
+   * with `name.push(…)` in the file it was declared in.
+   */
+  function elementsOf(node: ts.Expression): ts.Expression[] {
+    const n = strip(node);
+    const known = elements.get(n);
+    if (known) return known;
+    elements.set(n, []);
+    const out: ts.Expression[] = [];
+    for (const v of valuesOf(n)) {
+      if (!ts.isArrayLiteralExpression(v)) continue;
+      for (const el of v.elements) out.push(...(ts.isSpreadElement(el) ? elementsOf(el.expression) : [el]));
+    }
+    const symbol = ts.isIdentifier(n) ? checker.getSymbolAtLocation(n) : undefined;
+    const decl = symbol?.declarations?.[0];
+    if (symbol && decl) {
+      const visit = (m: ts.Node): void => {
+        if (
+          ts.isCallExpression(m) &&
+          ts.isPropertyAccessExpression(m.expression) &&
+          m.expression.name.text === "push" &&
+          ts.isIdentifier(m.expression.expression) &&
+          checker.getSymbolAtLocation(m.expression.expression) === symbol
+        ) {
+          out.push(...m.arguments.map((a) => (ts.isSpreadElement(a) ? a.expression : a)));
+        }
+        ts.forEachChild(m, visit);
+      };
+      visit(decl.getSourceFile());
+    }
+    elements.set(n, out);
+    return out;
   }
 
   return { elapsedForm };
@@ -605,6 +680,16 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
         "expect(run.ms).toBeLessThan(500);",
         "function bench() { const insertMs = Date.now() - t; return { insertMs }; }",
         "expect(bench().insertMs).toBeLessThan(500);",
+        "const times: number[] = [];",
+        "for (const q of queries) { const s = performance.now(); search(q); times.push(performance.now() - s); }",
+        "const avg = times.reduce((a, b) => a + b, 0) / times.length;",
+        "expect(avg).toBeLessThan(10);",
+        "expect(Math.max(...times)).toBeLessThan(50);",
+        "expect(times[0]).toBeLessThan(50);",
+        "expect(times.at(-1)).toBeLessThan(50);",
+        "expect(((Date.now() - t) / 1000) * 1000).toBeLessThan(500);",
+        "const laps = [Date.now() - t];",
+        "expect(laps.reduce((a, b) => a + b, 0)).toBeLessThan(500);",
       ].join("\n"),
     });
     const bounds = wallClockBounds(root, testFiles(root));
@@ -625,6 +710,12 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
       "24 clock minus",
       "26 clock minus",
       "28 clock minus",
+      "32 clock minus",
+      "33 clock minus",
+      "34 clock minus",
+      "35 clock minus",
+      "36 clock minus",
+      "38 clock minus",
     ]);
   });
 
@@ -639,6 +730,11 @@ describe("wall-clock upper bounds in tests only go down (docs/contracts/wall-clo
         "const left = deadline - Date.now();",
         "expect(left).toBeLessThan(60_000);",
         "expect(rows.length - 1).toBeLessThan(5);",
+        "const insertMs = Date.now() - t;",
+        "expect(rows.length / insertMs).toBeLessThan(5);",
+        "const sizes: number[] = [];",
+        "sizes.push(rows.length);",
+        "expect(sizes.reduce((a, b) => a + b, 0)).toBeLessThan(5);",
         "const now = () => 5;",
         "function f(Date: { now(): number }) { expect(Date.now() - t).toBeLessThan(5); }",
         'import { performance } from "./fake-clock.js";',
