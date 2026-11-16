@@ -93,7 +93,8 @@ function answerFor(calls: readonly ToolCall[], followers: readonly ConversationM
   const rest: MessageContent[] = [];
   const after: ConversationMessage[] = [];
   for (const f of followers.slice(0, consumed)) {
-    if (isTaskTurn(f) && !blocksOf(f.content).some((b) => b.type === "tool_result")) {
+    // A result of another call in it is an orphan here: withoutOrphans turns it into text.
+    if (isTaskTurn(f) && !blocksOf(f.content).some((b) => b.type === "tool_result" && ids.has(b.tool_use_id))) {
       if (blocksOf(f.content).length > 0) after.push(f); // an empty turn is dropped, as everywhere
       continue;
     }
@@ -145,7 +146,7 @@ export function normalizeConversation(messages: ConversationMessage[]): Conversa
     let end = i;
     while (end < messages.length && messages[end]!.role === "user") end++;
     const { answer, after, consumed } = answerFor(calls, messages.slice(i, end));
-    out.push(answer, ...after);
+    out.push(answer, ...after.map(withoutOrphans));
     changed = true;
     i += consumed;
   }
