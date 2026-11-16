@@ -139,6 +139,7 @@ function planVerifierChecks(params: {
       lastVerificationAt: params.verificationState.lastVerificationAt,
       draft: params.draft,
       runKey,
+      prompt: params.prompt,
     })
     : undefined;
   const evidence: VerifierPipelineEvidence = {

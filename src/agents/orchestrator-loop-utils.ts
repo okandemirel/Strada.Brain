@@ -1,4 +1,4 @@
-import { AgentPhase, stepInputSignature, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
+import { AgentPhase, stepInputSignature, stepTargetPath, transitionPhase, type AgentState, type StepResult } from "./agent-state.js";
 import type { ExecutionJournal } from "./autonomy/execution-journal.js";
 import {
   buildPlanningPrompt,
@@ -286,12 +286,14 @@ export function recordStepResultsAndCheckReflection(
     const tr = toolResults[i]!;
     const isError = tr.isError ?? false;
     const summary = tr.content.slice(0, 200);
+    const targetPath = stepTargetPath(tc.input);
     newSteps.push({
       toolName: tc.name,
       success: !isError,
       summary,
       timestamp: Date.now(),
       inputSignature: stepInputSignature(tc.input),
+      ...(targetPath !== undefined ? { targetPath } : {}),
       ...(isError ? { errorCategory: classifyStepErrorCategory(summary) } : {}),
     });
     consecutiveErrors = tr.isError ? consecutiveErrors + 1 : 0;

@@ -16,9 +16,10 @@
  * soft signal that fell open when it was unsure (QA of #41, 2026-11-15/16).
  *
  * When it opens, the system tells the user itself: {@link unverifiedNotice}
- * builds "Not verified: …" from the record, and the run's final answer
- * carries it whatever the draft says (agent-core reflection.ts,
- * settleVisibleBoundary, through {@link takeUnverifiedNotice}). A draft that
+ * builds "Not verified: …" from the record, in the task's language: each
+ * failed call and its target, and the call that answered it and its target.
+ * The run's final answer carries it whatever the draft says (agent-core
+ * reflection.ts, settleVisibleBoundary, through {@link takeUnverifiedNotice}). A draft that
  * claims a check passed contradicts the record: the gate asks once for an
  * honest report. That reading can only add the ask; the notice is attached
  * either way.
@@ -31,7 +32,8 @@ import { PROGRESS_MUTATION_TOOLS, runsVerificationCheck } from "./constants.js";
 import { isNodeScopedTask, selectNodeTools } from "./node-tool-offer.js";
 import { sanitizePromptInjection } from "../../security/prompt-injection.js";
 import { measureProjectChecks, type ProjectCheckRecord } from "./verifier-pipeline-project-checks.js";
-import type { CompletionReviewEvidence } from "./completion-review.js";
+import type { CompletionReviewEvidence, FailureAnswer } from "./completion-review.js";
+import { detectSupervisorFeedbackLanguage, type SupervisorFeedbackLanguage } from "../../supervisor/supervisor-feedback.js";
 
 /** What the run's tool registry says about verification, and that it was the registry that said it. */
 export interface VerificationToolingRecord {
@@ -82,11 +84,6 @@ export function measureVerificationTooling(
   };
 }
 
-/** Something in this run can verify: a check tool is offered, or shell_exec has a declared check to run. */
-export function canVerify(tooling: VerificationToolingRecord): boolean {
-  return tooling.checkTools.length > 0 || (tooling.projectChecks?.found.length ?? 0) > 0;
-}
-
 // ─── The draft's claim: it can add one ask, never open anything ────────────
 
 /** A phrase that says a check passed. English and Turkish; the Turkish negatives are other words. */
@@ -94,13 +91,21 @@ const CHECK_PASSED_RE =
   /\b(?:verified|tested|tests?\s+(?:pass(?:ed|es|ing)?|succeed(?:ed|s)?|(?:are|is)\s+green)|all\s+tests|(?:build|compil(?:e|ation))\s+(?:pass(?:ed|es)?|succeed(?:ed|s)?|is\s+(?:clean|green))|compiles\s+(?:cleanly|without\s+errors?))\b|test\s+edildi|test\s+ettim|doğrulandı|doğruladım|testler\s+geç(?:ti|iyor)|derleme\s+başarılı/giu;
 /** A word in the three before a phrase that turns it around: "not verified", "could not be tested". */
 const NEGATION_RE = /\b(?:not|no|never|nothing|cannot|can'?t|couldn'?t|wasn'?t|weren'?t|isn'?t|aren'?t|without|none)\b/iu;
+/**
+ * Where a clause ends: a negation behind it is about something else. "No
+ * errors, verified it works" claims a check (QA of #41, 2026-11-16). The mark
+ * must be followed by a space or the end, so "lantern.txt" is one word.
+ */
+const CLAUSE_END_RE = /[,;:.!?](?=\s|$)|\n/gu;
 
 /** The draft says a check passed. Only the ask reads this. */
 export function draftClaimsCheckPassed(draft: string | null | undefined): boolean {
   const text = draft ?? "";
   for (const match of text.matchAll(CHECK_PASSED_RE)) {
-    const before = text.slice(0, match.index).split(/\s+/u).filter(Boolean).slice(-3).join(" ");
-    if (!NEGATION_RE.test(before)) return true;
+    const before = text.slice(0, match.index);
+    const clauseStart = Math.max(0, ...[...before.matchAll(CLAUSE_END_RE)].map((end) => end.index + end[0].length));
+    const window = before.slice(clauseStart).split(/\s+/u).filter(Boolean).slice(-3).join(" ");
+    if (!NEGATION_RE.test(window)) return true;
   }
   return false;
 }
@@ -124,15 +129,15 @@ export interface UnverifiableDecision {
   readonly inputs: readonly DecisionInput[];
   /** Opened, and the draft claims a check passed for the first time in this run: ask once. */
   readonly ask: boolean;
-  /** What the user is told when the exit opens without an ask. */
+  /** What the user is told when the exit opens without an ask, in the task's language. */
   readonly notice?: string;
-  /** Why nothing here can check it, from the offer: what the notice and the ask say. */
+  /** Why nothing here can check it, from the offer: what the worker's ask says. */
   readonly nothingCanCheck: string;
 }
 
 type Evidence = Pick<
   CompletionReviewEvidence,
-  "recentFailures" | "recentFailuresRetriedOk" | "recentFailureRetries" | "recentLogIssues" | "verificationStepCount"
+  "recentFailures" | "recentFailuresRetriedOk" | "recentFailureAnswers" | "recentLogIssues" | "verificationStepCount"
 > & { readonly hasTerminalFailureReport: boolean };
 
 const KEEPS = "unknown: keeps the gate" as const;
@@ -177,6 +182,8 @@ export function decideUnverifiableExit(params: {
   readonly lastVerificationAt: number | null;
   readonly draft: string;
   readonly runKey: string;
+  /** The task's prompt: the notice is written in its language. */
+  readonly prompt: string;
 }): UnverifiableDecision {
   const { evidence } = params;
   const checkRan = evidence.verificationStepCount > 0 || params.lastVerificationAt !== null;
@@ -196,11 +203,13 @@ export function decideUnverifiableExit(params: {
     },
     {
       input: "every open failure was answered by a later success",
-      source: "the run's step results and their input signatures (failureAnsweredBy)",
+      source: "the run's step results: input signatures, and the paths writers named (failureAnsweredBy)",
       value: failures === 0
         ? "no failure is open: there is nothing for this exit to close"
-        : answered ? howAnswered(evidence.recentFailureRetries) : "no: a failure was not run again, or its step has no input signature",
-      whenUnknown: "a step without an input signature is not answered: keeps the gate",
+        : answered
+          ? howAnswered(evidence.recentFailureAnswers ?? [])
+          : "no: a failed call was not run again, and no write of its path or file name followed it",
+      whenUnknown: "a step without an input signature, or a writer without a path, is not answered: keeps the gate",
       effect: failures > 0 && answered ? "allows" : "keeps the gate",
     },
     {
@@ -227,49 +236,104 @@ export function decideUnverifiableExit(params: {
     whenUnknown: "always known",
     effect: ask ? "asks once" : "no effect",
   };
-  const why = nothingCanCheckFrom(params.toolNames);
+  const offered = params.toolNames?.length ?? 0;
+  const shellOffered = params.toolNames?.includes("shell_exec") === true;
+  const language = detectSupervisorFeedbackLanguage(params.prompt);
   return {
     opens,
     inputs: [...deciding, claimRow],
     ask,
-    nothingCanCheck: why,
-    ...(opens && !ask ? { notice: unverifiedNotice(evidence, why, claims) } : {}),
+    nothingCanCheck: NOTICE.en.nothing(offered, shellOffered),
+    ...(opens && !ask
+      ? { notice: unverifiedNotice(evidence.recentFailureAnswers ?? [], { offered, shellOffered }, claims, language) }
+      : {}),
   };
 }
 
-/** "1 run again with the same input and succeeded; 1 written again by the same tool, and the write succeeded" */
-function howAnswered(retries: CompletionReviewEvidence["recentFailureRetries"]): string {
+/** "yes: 1 run again with the same input; 1 file of the same name written in another directory" */
+function howAnswered(answers: readonly FailureAnswer[]): string {
+  const count = (kind: FailureAnswer["kind"]) => answers.filter((a) => a.kind === kind).length;
   const parts = [
-    retries && retries.rerun > 0 ? `${retries.rerun} run again with the same input and succeeded` : "",
-    retries && retries.rewritten > 0 ? `${retries.rewritten} written again by the same tool, and the write succeeded` : "",
+    count("rerun") > 0 ? `${count("rerun")} run again with the same input` : "",
+    count("same-path") > 0 ? `${count("same-path")} whose path the same tool wrote later` : "",
+    count("same-name") > 0 ? `${count("same-name")} whose file name the same tool wrote later in another directory` : "",
   ].filter(Boolean);
-  return parts.join("; ");
+  return `yes: ${parts.join("; ")}`;
 }
 
-/** Why nothing here can check it, in the record's own terms: the offer, and the manifests when shell_exec could run one. */
-function nothingCanCheckFrom(toolNames: readonly string[] | undefined): string {
-  return `none of the ${toolNames?.length ?? 0} available tools runs a build or a test` +
-    (toolNames?.includes("shell_exec") ? ", and the project declares no build or test command" : "");
+type Words = {
+  readonly head: string;
+  readonly rerun: (call: string, error: string) => string;
+  readonly samePath: (call: string, error: string, tool: string, path: string) => string;
+  readonly sameName: (call: string, error: string, tool: string, path: string) => string;
+  readonly earlier: (n: number) => string;
+  readonly nothing: (offered: number, shellOffered: boolean) => string;
+  readonly why: (nothing: string) => string;
+  readonly claim: string;
+};
+
+/** The notice's words, in the languages the system speaks to the user (supervisor-feedback.ts detects which). */
+const NOTICE: Readonly<Record<SupervisorFeedbackLanguage, Words>> = {
+  en: {
+    head: "Not verified:",
+    rerun: (call, error) => `${call} failed (${error}), then the same call, with the same input, succeeded.`,
+    samePath: (call, error, tool, path) => `${call} failed (${error}), then ${tool} wrote ${path} again.`,
+    sameName: (call, error, tool, path) =>
+      `${call} failed (${error}), then ${tool} wrote ${path} (the same file name, in another directory).`,
+    earlier: (n) => `${n} earlier failed step(s) are not listed.`,
+    nothing: (offered, shellOffered) =>
+      `none of the ${offered} available tools runs a build or a test` +
+      (shellOffered ? ", and the project declares no build or test command" : ""),
+    why: (nothing) => `Nothing here could check the result: ${nothing}.`,
+    claim: "The report above mentions a check, but no check ran in this run.",
+  },
+  tr: {
+    head: "Doğrulanmadı:",
+    rerun: (call, error) => `${call} başarısız oldu (${error}); ardından aynı çağrı, aynı girdiyle, başarıyla koştu.`,
+    samePath: (call, error, tool, path) => `${call} başarısız oldu (${error}); ardından ${tool} ${path} yolunu yeniden yazdı.`,
+    sameName: (call, error, tool, path) =>
+      `${call} başarısız oldu (${error}); ardından ${tool} ${path} dosyasını yazdı (aynı dosya adı, başka bir dizinde).`,
+    earlier: (n) => `Daha önceki ${n} başarısız adım listelenmedi.`,
+    nothing: (offered, shellOffered) =>
+      `sunulan ${offered} aracın hiçbiri derleme ya da test çalıştırmıyor` +
+      (shellOffered ? " ve proje hiçbir derleme ya da test komutu bildirmiyor" : ""),
+    why: (nothing) => `Sonucu burada hiçbir şey denetleyemedi: ${nothing}.`,
+    claim: "Yukarıdaki rapor bir denetimden söz ediyor, ama bu çalışmada hiçbir denetim koşmadı.",
+  },
+};
+
+const clip = (text: string, max: number): string => sanitizePromptInjection(text).slice(0, max);
+
+/** One failure and what answered it, as recorded: the failed call's target, its error, and the answering call's target. */
+function answerSentence(answer: FailureAnswer, words: Words): string {
+  const call = answer.failedTarget ? `${answer.tool} ${clip(answer.failedTarget, 120)}` : answer.tool;
+  const error = clip(answer.error, 160);
+  const target = clip(answer.answerTarget ?? "", 120);
+  if (answer.kind === "same-path") return words.samePath(call, error, answer.tool, target);
+  if (answer.kind === "same-name") return words.sameName(call, error, answer.tool, target);
+  return words.rerun(call, error);
 }
 
 /**
- * What the user reads under the answer when the exit opens. Built from the
- * record: which steps failed, how each was answered, and why nothing here
- * could check the result.
+ * What the user reads under the answer when the exit opens, in the task's
+ * language. Built from the record: each failed call and its target, the call
+ * that answered it and its target, and why nothing here could check the
+ * result. It never says "redone": a write of another file is not a redo.
  */
 export function unverifiedNotice(
-  evidence: Pick<CompletionReviewEvidence, "recentFailures" | "recentFailureRetries">,
-  nothingCanCheck: string,
+  answers: readonly FailureAnswer[],
+  offer: { readonly offered: number; readonly shellOffered: boolean },
   draftClaimsCheck: boolean,
+  language: SupervisorFeedbackLanguage,
 ): string {
-  const failed = evidence.recentFailures
-    .slice(-3)
-    .map((f) => sanitizePromptInjection(f.split("\n")[0]!.trim()).slice(0, 160));
-  const steps = failed.length === 1 ? "A step failed" : `${failed.length} steps failed`;
+  const words = NOTICE[language];
+  const shown = answers.slice(-3);
   return [
-    `Not verified: ${steps} (${failed.join("; ")}) and ${failed.length === 1 ? "was" : "were"} then redone ` +
-      `(${howAnswered(evidence.recentFailureRetries)}), but nothing here could check the result: ${nothingCanCheck}.`,
-    draftClaimsCheck ? "The report above mentions a check, but no check ran in this run." : "",
+    words.head,
+    ...shown.map((answer) => answerSentence(answer, words)),
+    answers.length > shown.length ? words.earlier(answers.length - shown.length) : "",
+    words.why(words.nothing(offer.offered, offer.shellOffered)),
+    draftClaimsCheck ? words.claim : "",
   ].filter(Boolean).join(" ");
 }
 
@@ -283,14 +347,14 @@ export interface UnverifiableFailureCheck {
 /** The check that stands in for targeted-repro and unverified-failure once the exit opens. */
 export function unverifiableFailureCheck(
   decision: UnverifiableDecision,
-  evidence: Pick<CompletionReviewEvidence, "recentFailures" | "recentFailureRetries">,
+  evidence: Pick<CompletionReviewEvidence, "recentFailures">,
   runKey: string,
 ): UnverifiableFailureCheck {
   if (!decision.ask) {
     return {
       name: "unverifiable-failure",
       status: "issues",
-      summary: `${decision.notice ?? unverifiedNotice(evidence, decision.nothingCanCheck, false)} (every input of the decision allowed the exit: evidence.unverifiableDecision)`,
+      summary: `${decision.notice ?? ""} (every input of the decision allowed the exit: evidence.unverifiableDecision)`,
     };
   }
   claimAsks.set(runKey, (claimAsks.get(runKey) ?? 0) + 1);
@@ -301,7 +365,7 @@ export function unverifiableFailureCheck(
     status: "issues",
     summary: "The draft says a check passed, but no check ran in this run and nothing here can run one.",
     gate: [
-      "[NO VERIFICATION TOOL] Your report says a check passed, but no check ran in this run. Steps failed and were then redone:",
+      "[NO VERIFICATION TOOL] Your report says a check passed, but no check ran in this run. Steps failed, and later calls answered them:",
       ...failures,
       "",
       `Nothing here can verify that: ${decision.nothingCanCheck}.`,

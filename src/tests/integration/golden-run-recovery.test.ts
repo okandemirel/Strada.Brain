@@ -30,7 +30,7 @@
  *    starts, the chat reads only the answer however long the worker takes;
  *    with it on, the real heartbeat path sends the user a progress message
  *    before the answer.
- * 7. A short request whose write fails and is redone, and whose worker says
+ * 7. A short request whose write fails and is written where it belongs, and whose worker says
  *    it verified the work. Nothing ran a check: the worker is asked once to
  *    report honestly, still claims it, and the chat reads its answer with
  *    the system's "Not verified: …" under it.
@@ -330,14 +330,16 @@ const SIGMA_DONE = "Wrote notes/sigma.txt.";
 /** Inside the project, under a FILE: the guard lets it through, and the filesystem fails the write. */
 const UNDER_A_FILE = "README.md/kappa.txt";
 /**
- * What the system writes under an answer whose failed write was redone and
- * that nothing here could check, built from the record (the error code and
- * the tool count are the platform's and the registry's).
+ * What the system writes under an answer whose write under README.md failed,
+ * was answered by a write of the same file name under notes/, and that
+ * nothing here could check. Built from the record: both targets, the error
+ * (its code is the platform's) and the tool count (the registry's).
  */
-const notVerifiedUnder = (answer: string, tail = ""): RegExp =>
+const notVerifiedUnder = (answer: string, name: string, tail = ""): RegExp =>
   new RegExp(
-    `^${escapeRegExp(answer)}\\n\\nNot verified: A step failed \\(file_write: Error: could not write file \\(E[A-Z]+\\)\\) ` +
-      "and was then redone \\(1 written again by the same tool, and the write succeeded\\), but nothing here could check " +
+    `^${escapeRegExp(answer)}\\n\\nNot verified: file_write README\\.md/${escapeRegExp(name)} failed ` +
+      `\\(Error: could not write file \\(E[A-Z]+\\)\\), then file_write wrote notes/${escapeRegExp(name)} ` +
+      "\\(the same file name, in another directory\\)\\. Nothing here could check " +
       "the result: none of the \\d+ available tools runs a build or a test, and the project declares no build or test command\\." +
       `${escapeRegExp(tail)}$`,
   );
@@ -351,7 +353,7 @@ const RUNTIME_SCRIPT: readonly Step[] = [
   actStep("kappa: act again, after reading the failure", NODE_KAPPA,
     [writeCall("call_kappa_fixed", "notes/kappa.txt", "KAPPA\n")],
     (call) => carriesResult(call, "call_kappa_fails")),
-  // The failed write was redone and worked, none of the tools this run was
+  // The failed write's file was written where it belongs, none of the tools this run was
   // offered runs a check, and the project declares none: kappa ends here,
   // and the system writes "Not verified: …" under its answer. Measured
   // 2026-11-06, before the fix: the failure waited for a verification
@@ -365,10 +367,10 @@ const RUNTIME_SCRIPT: readonly Step[] = [
   // Cheapest node first (ResultAggregator): sigma answered in three calls, kappa in four.
   verifyStep("sigma", SIGMA_DONE),
   // The node verifier reads kappa's answer with the notice under it.
-  verifyStep("kappa", `${KAPPA_DONE}\n\nNot verified: A step failed (file_write: Error: could not write file (E`),
+  verifyStep("kappa", `${KAPPA_DONE}\n\nNot verified: file_write README.md/kappa.txt failed (Error: could not write file (E`),
 ];
 
-// ─── Run 7: a short request, a redone write, and a worker that claims a check
+// ─── Run 7: a short request, a failed write written where it belongs, and a worker that claims a check
 
 const THETA_REQUEST = "Create notes/theta.txt containing the word THETA.";
 const THETA_CLAIM = "Wrote notes/theta.txt and verified it works.";
@@ -683,7 +685,7 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
 
     // One task, completed on its first attempt: nothing blocked, nothing resumed.
     expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
-    const answer = notVerifiedUnder(KAPPA_DONE, `\n\n${SIGMA_DONE}`);
+    const answer = notVerifiedUnder(KAPPA_DONE, "kappa.txt", `\n\n${SIGMA_DONE}`);
     expect(run.task?.result).toMatch(answer);
 
     // What the user read says the failed step is not verified, and why, in
@@ -708,7 +710,7 @@ describe("golden run: failure and recovery paths through the real bootstrap", ()
     // The chat reads the worker's words and, under them, that nothing was
     // verified and that the claimed check never ran. (The interactive
     // rendering of the notice is pinned in reflection.unverified-notice.test.ts.)
-    const answer = notVerifiedUnder(THETA_CLAIM, CLAIMED_CHECK);
+    const answer = notVerifiedUnder(THETA_CLAIM, "theta.txt", CLAIMED_CHECK);
     expect(run.tasks.map((t) => t.status), `task error: ${run.task?.error ?? "none"}`).toEqual([TaskStatus.completed]);
     expect(run.task?.result).toMatch(answer);
     expect(texts(run)).toEqual([SYSTEM_STATUS, expect.stringMatching(answer)]);

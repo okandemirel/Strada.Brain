@@ -22,6 +22,21 @@ export interface StepResult {
    * Absent on states recorded before it existed.
    */
   readonly inputSignature?: string;
+  /**
+   * The path the call names (stepTargetPath), so a failed write can be told
+   * answered by a later write: the same path, or the same file name in
+   * another directory. A write to some other file answers nothing (QA of
+   * #41, 2026-11-16). Absent when the input names no path.
+   */
+  readonly targetPath?: string;
+}
+
+/** The path a call's input names: `path`/`file`/`name`, or a rename's `new_path`; undefined when none. */
+export function stepTargetPath(input: Readonly<Record<string, unknown>> | undefined): string | undefined {
+  if (!input) return undefined;
+  return [input["path"], input["file"], input["name"], input["new_path"]].find(
+    (value): value is string => typeof value === "string" && value.trim() !== "",
+  );
 }
 
 /** Sorted-key JSON of a call's input, sha1, 16 hex: equal inputs give equal signatures whatever their key order. */

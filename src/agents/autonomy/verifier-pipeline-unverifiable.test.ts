@@ -18,7 +18,7 @@
  */
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentPhase, type AgentState } from "../agent-state.js";
@@ -28,7 +28,7 @@ import { FileWriteTool } from "../tools/file-write.js";
 import type { LogEntry } from "../../utils/logger.js";
 import { NODE_SCOPE_MARKER } from "./node-tool-offer.js";
 import { planVerifierPipeline, resetNoWorkEvidenceGates } from "./verifier-pipeline.js";
-import { draftClaimsCheckPassed, takeUnverifiedNotice, withUnverifiedNotice } from "./verifier-pipeline-unverifiable.js";
+import { draftClaimsCheckPassed, takeUnverifiedNotice, unverifiedNotice, withUnverifiedNotice } from "./verifier-pipeline-unverifiable.js";
 
 const sandbox = mkdtempSync(join(tmpdir(), "unverifiable-failure-"));
 const project = join(sandbox, "project");
@@ -71,15 +71,20 @@ const NO_CHECK_TOOLS = ["file_read", "file_write", "file_edit", "list_directory"
 const NO_VERIFICATION_TOOL = "[NO VERIFICATION TOOL]";
 const CLAIM_ASK = "[NO VERIFICATION TOOL] Your report says a check passed, but no check ran in this run.";
 const CHAT = "chat-unverifiable";
-/** The notice for FAIL_THEN_FIX in the README-only project with NO_CHECK_TOOLS, as the system writes it. */
+/**
+ * The notice for FAIL_THEN_FIX in the README-only project with NO_CHECK_TOOLS, as the system writes it:
+ * the failed call's target and error, the call that answered it and its target, and why nothing could check.
+ */
 const NOTICE_RE =
-  /^Not verified: A step failed \(file_write: Error: could not write file \(E[A-Z]+\)\) and was then redone \(1 written again by the same tool, and the write succeeded\), but nothing here could check the result: none of the 7 available tools runs a build or a test, and the project declares no build or test command\.$/;
+  /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\), then file_write wrote notes\/lantern\.txt \(the same file name, in another directory\)\. Nothing here could check the result: none of the 7 available tools runs a build or a test, and the project declares no build or test command\.$/;
 /** QA's drafts, 2026-11-16: each says "unverified" and claims a check at once. */
 const CLAIMING_DRAFTS = [
   "Wrote notes/lantern.txt and verified it works; nothing is left unverified.",
   "Done: all tests pass and no unverified assumptions remain.",
   "Tamamlandı ve test edildi; doğrulanmamış bir şey kalmadı.",
 ];
+/** QA's drafts, 2026-11-16: a "No"/"Nothing" before the comma is about another word, and the claim after it stands. */
+const NEGATED_ELSEWHERE = ["No errors, verified it works.", "No problems: the build passed.", "Nothing broke; tested it by hand."];
 const rowOf = (plan: { evidence: { unverifiableDecision?: { inputs: readonly { input: string; effect: string }[] } } }, input: string) =>
   plan.evidence.unverifiableDecision?.inputs.find((row) => row.input === input);
 /** A program that crashed at run time, the same program running, and an unrelated command. */
@@ -87,8 +92,11 @@ const CRASHED = { content: "TypeError: Cannot read properties of undefined (read
 const RAN = { content: "lantern lit" };
 const LISTED = { content: "README.md\nmain.js\nnotes" };
 
-/** A tool, its path (or command for shell_exec), and what it reported when the call is not run for real. */
-type Call = readonly [tool: string, path: string, reported?: { readonly content: string; readonly isError?: boolean }];
+/**
+ * A tool, its path (or command for shell_exec), what it reported when the call is not run for real, and
+ * what file_write writes (LANTERN by default).
+ */
+type Call = readonly [tool: string, path: string, reported?: { readonly content: string; readonly isError?: boolean }, content?: string];
 const FAIL_THEN_FIX: readonly Call[] = [["file_write", FAILS_AT_RUN_TIME], ["file_write", "notes/lantern.txt"]];
 
 /** Each call run for real, in order, and recorded as the loop records it. */
@@ -106,19 +114,19 @@ async function stateAfter(calls: readonly Call[], task: string): Promise<AgentSt
     learnedInsights: [],
   };
   const tool = new FileWriteTool();
-  for (const [index, [name, path, reported]] of calls.entries()) {
+  for (const [index, [name, path, reported, content = "LANTERN\n"]] of calls.entries()) {
     const id = `call_${index}`;
     const result = reported
       ? reported
       : name === "file_write"
-      ? await tool.execute({ path, content: "LANTERN\n" }, ctx)
+      ? await tool.execute({ path, content }, ctx)
       : name === "dotnet_test"
         ? { content: "Passed! - Failed: 0, Passed: 3, Skipped: 0, Total: 3" }
         : name === "shell_exec"
           ? { content: "$ npm test\n> vitest run\n Test Files  1 passed (1)\n      Tests  3 passed (3)" }
           : { content: `Read ${path}` };
     const toolResult: ToolResult = { toolCallId: id, content: result.content, isError: "isError" in result ? result.isError : undefined };
-    const input = name === "shell_exec" ? { command: path } : { path };
+    const input = name === "shell_exec" ? { command: path } : name === "file_write" ? { path, content } : { path };
     ({ agentState } = recordStepResultsAndCheckReflection({
       agentState,
       toolCalls: [{ id, name, input }],
@@ -239,7 +247,7 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     const check = plan.checks.find((c) => c.name === "unverifiable-failure");
     expect(check?.status).toBe("issues");
     expect(check?.summary).toMatch(
-      /^Not verified: A step failed \(file_write: Error: could not write file \(E[A-Z]+\)\) and was then redone \(1 written again by the same tool, and the write succeeded\), but nothing here could check the result: none of the 7 available tools runs/,
+      /^Not verified: file_write README\.md\/lantern\.txt failed \(Error: could not write file \(E[A-Z]+\)\), then file_write wrote notes\/lantern\.txt \(the same file name, in another directory\)\. Nothing here could check the result: none of the 7 available tools runs/,
     );
     expect(check?.summary).toContain("(every input of the decision allowed the exit: evidence.unverifiableDecision)");
     expect(plan.checks.find((c) => c.name === "targeted-repro")).toBeUndefined();
@@ -283,7 +291,38 @@ describe("a re-run failure in a run whose registry holds no check tool", () => {
     expect(plan.evidence.recentFailureRetries).toEqual({ rerun: 1, rewritten: 0 });
     expect(plan.initialDecision).toBe("approve");
     expect(plan.checks.find((c) => c.name === "unverifiable-failure")?.summary).toMatch(
-      /^Not verified: A step failed \(shell_exec: TypeError: Cannot read properties of undefined \(reading 'glow'\)\) and was then redone \(1 run again with the same input and succeeded\), /,
+      /^Not verified: shell_exec failed \(TypeError: Cannot read properties of undefined \(reading 'glow'\)\), then the same call, with the same input, succeeded\. Nothing here could check/,
+    );
+  });
+
+  it("records which later call answered the failure, with both targets", async () => {
+    const plan = await verdictAfter({ draft: DONE, tools: NO_CHECK_TOOLS });
+
+    expect(plan.evidence.recentFailureAnswers).toEqual([{
+      tool: "file_write",
+      error: expect.stringMatching(/^Error: could not write file \(E[A-Z]+\)$/),
+      kind: "same-name",
+      failedTarget: FAILS_AT_RUN_TIME,
+      answerTarget: "notes/lantern.txt",
+    }]);
+    expect(rowOf(plan, "every open failure was answered by a later success")).toMatchObject({
+      value: "yes: 1 whose file name the same tool wrote later in another directory",
+      effect: "allows",
+    });
+  });
+
+  it("closes over a write that failed and was written again at the same path, and says that path was written again", async () => {
+    const denied = { content: "Error: could not write file (EACCES)", isError: true };
+    const plan = await verdictAfter({
+      calls: [["file_write", "notes/gamma.txt", denied, "GAMMA\n"], ["file_write", "./notes/gamma.txt", undefined, "GAMMA!\n"]],
+      draft: DONE,
+      tools: NO_CHECK_TOOLS,
+    });
+
+    expect(plan.evidence.recentFailureAnswers).toMatchObject([{ kind: "same-path", failedTarget: "notes/gamma.txt", answerTarget: "./notes/gamma.txt" }]);
+    expect(plan.initialDecision).toBe("approve");
+    expect(plan.evidence.unverifiableDecision?.notice).toMatch(
+      /^Not verified: file_write notes\/gamma\.txt failed \(Error: could not write file \(EACCES\)\), then file_write wrote \.\/notes\/gamma\.txt again\. Nothing here could check/,
     );
   });
 
@@ -316,6 +355,13 @@ describe("a draft that claims a check nothing ran", () => {
     expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
   });
 
+  it.each(NEGATED_ELSEWHERE)("is asked too when a negation in an earlier clause is about something else: %j", async (draft) => {
+    const plan = await verdictAfter({ draft, tools: NO_CHECK_TOOLS, startedAt: Date.now() - 35_000 - NEGATED_ELSEWHERE.indexOf(draft) });
+
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain(CLAIM_ASK);
+  });
+
   it("is asked only once in a run: the second claim is approved, and the notice says no check ran", async () => {
     const startedAt = Date.now() - 30_000;
     const first = await verdictAfter({ draft: CLAIMING_DRAFTS[0]!, tools: NO_CHECK_TOOLS, startedAt });
@@ -345,6 +391,31 @@ describe("the notice the run's answer carries", () => {
 
     expect(later.initialDecision).toBe("continue");
     expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("is written in the task's language: a Turkish task reads it in Turkish", async () => {
+    const plan = await verdictAfter({
+      task: "notes/lantern.txt dosyasını LANTERN kelimesiyle oluştur",
+      draft: "notes/lantern.txt yazıldı.",
+      tools: NO_CHECK_TOOLS,
+    });
+
+    expect(plan.initialDecision).toBe("approve");
+    expect(plan.evidence.unverifiableDecision?.notice).toMatch(
+      /^Doğrulanmadı: file_write README\.md\/lantern\.txt başarısız oldu \(Error: could not write file \(E[A-Z]+\)\); ardından file_write notes\/lantern\.txt dosyasını yazdı \(aynı dosya adı, başka bir dizinde\)\. Sonucu burada hiçbir şey denetleyemedi: sunulan 7 aracın hiçbiri derleme ya da test çalıştırmıyor ve proje hiçbir derleme ya da test komutu bildirmiyor\.$/,
+    );
+  });
+
+  it("lists the last three failures and counts the earlier ones", () => {
+    const answer = { tool: "shell_exec", error: "exit 1", kind: "rerun" as const };
+    const notice = unverifiedNotice([answer, answer, answer, answer], { offered: 4, shellOffered: false }, true, "en");
+
+    expect(notice).toBe(
+      "Not verified: " +
+        "shell_exec failed (exit 1), then the same call, with the same input, succeeded. ".repeat(3) +
+        "1 earlier failed step(s) are not listed. Nothing here could check the result: none of the 4 available tools runs a build or a test. " +
+        "The report above mentions a check, but no check ran in this run.",
+    );
   });
 
   it("goes under the answer once, after a blank line", () => {
@@ -513,6 +584,39 @@ describe("what still waits for a verification, whatever the draft says", () => {
     expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
   });
 
+  it("a write that failed, followed by a write of another file: the failed file was never written (QA 2026-11-16)", async () => {
+    const startedAt = Date.now() - 45_000;
+    const plan = await verdictAfter({
+      task: "Create notes/alpha.txt and notes/beta.txt",
+      calls: [["file_write", "README.md/alpha.txt"], ["file_write", "notes/beta.txt"]],
+      draft: "Wrote notes/beta.txt.",
+      tools: NO_CHECK_TOOLS,
+      startedAt,
+    });
+
+    expect(existsSync(join(project, "notes", "alpha.txt"))).toBe(false);
+    expect(plan.evidence.recentFailuresRetriedOk).toBe(false);
+    expect(plan.evidence.recentFailureAnswers).toBeUndefined();
+    expect(rowOf(plan, "every open failure was answered by a later success")).toMatchObject({
+      value: "no: a failed call was not run again, and no write of its path or file name followed it",
+      effect: "keeps the gate",
+    });
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+    expect(plan.gate).not.toContain(NO_VERIFICATION_TOOL);
+    expect(takeUnverifiedNotice(CHAT, startedAt)).toBeUndefined();
+  });
+
+  it("a writer recorded without a target path cannot be matched to another write", async () => {
+    const state = await stateAfter(FAIL_THEN_FIX, TASK);
+    const unnamed = { ...state, stepResults: state.stepResults.map(({ targetPath: _dropped, ...step }) => step) };
+    const plan = planVerifierPipeline({ ...pipelineInputs(TASK, DONE, NO_CHECK_TOOLS, project), state: unnamed });
+
+    expect(plan.evidence.recentFailuresRetriedOk).toBe(false);
+    expect(rowOf(plan, "every open failure was answered by a later success")?.effect).toBe("keeps the gate");
+    expect(plan.gate).toContain("[TARGETED VERIFICATION REQUIRED]");
+  });
+
   it("a step recorded without an input signature cannot be matched to a re-run", async () => {
     const state = await stateAfter([["shell_exec", "node main.js", CRASHED], ["shell_exec", "node main.js", RAN]], TASK);
     const unsigned = { ...state, stepResults: state.stepResults.map(({ inputSignature: _dropped, ...step }) => step) };
@@ -571,11 +675,20 @@ describe("draftClaimsCheckPassed: what the one ask reads, and nothing else", () 
     "Wrote notes/lantern.txt.",
     "This project has no build and no tests to run.",
     "I did not run the tests; nothing was verified.",
+    "It could not be tested.",
+    "Wrote lantern.txt, not verified.",
   ])("reads %j as claiming no check", (draft) => {
     expect(draftClaimsCheckPassed(draft)).toBe(false);
   });
 
-  it.each(["Verified: all three tests pass.", "The build passed and it compiles cleanly.", "Testler geçti.", ...CLAIMING_DRAFTS])(
+  it.each([
+    "Verified: all three tests pass.",
+    "The build passed and it compiles cleanly.",
+    "Testler geçti.",
+    ...CLAIMING_DRAFTS,
+    // A negation in an earlier clause is about something else (QA 2026-11-16).
+    ...NEGATED_ELSEWHERE,
+  ])(
     "reads %j as claiming a check passed",
     (draft) => {
       expect(draftClaimsCheckPassed(draft)).toBe(true);

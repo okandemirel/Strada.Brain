@@ -45,7 +45,8 @@ import {
 } from "../../agents/autonomy/verifier-pipeline-unverifiable.js";
 
 const STARTED_AT = 1_700_000_000_000;
-const NOTICE = "Not verified: A step failed (file_write: Error: could not write file (ENOTDIR)) and was then redone.";
+const NOTICE =
+  "Not verified: file_write README.md/lantern.txt failed (Error: could not write file (ENOTDIR)), then file_write wrote notes/lantern.txt (the same file name, in another directory).";
 const ANSWER = "Wrote notes/lantern.txt.";
 
 interface Session {
