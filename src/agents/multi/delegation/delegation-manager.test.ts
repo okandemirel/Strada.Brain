@@ -1601,6 +1601,37 @@ describe("DelegationManager", () => {
       expect(lease.release).toHaveBeenCalledTimes(1);
     });
 
+    it.each([["publishes", true], ["fails", false]] as const)(
+      "a conflict on a recorder frame %s by the recorder's marker in the sub-agent's lease",
+      async (_verb, marked) => {
+        const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+        const leaseRoot = mkdtempSync(join(tmpdir(), "recorder-deleg-"));
+        const leasePath = join(leaseRoot, "lease-1");
+        const frame = "Recordings/playthrough/frame_s00_00012.png";
+        mkdirSync(join(leasePath, "Recordings", "playthrough"), { recursive: true });
+        if (marked) writeFileSync(join(leasePath, "Recordings", "playthrough", ".strada-recording"), "Written by Strada.MCP\n");
+        try {
+          const release = vi.fn().mockResolvedValue(undefined);
+          const commit = vi.fn().mockResolvedValue({
+            written: ["Assets/Scripts/Telescope.cs"], conflicts: [frame], removed: [], failed: [], quarantined: 1,
+          });
+          const acquireLease = vi.fn().mockResolvedValue({
+            id: "lease-1", kind: "temp-copy", sourceRoot: "/test/project", leaseRoot, path: leasePath,
+            createdAt: Date.now(), commit, release,
+          });
+          manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: { acquireLease } as never }));
+
+          const outcome = await manager.delegate(request()).then(() => "ok", (e: unknown) => String(e));
+          if (marked) expect(outcome).toBe("ok");
+          else expect(outcome).toMatch(/did not publish.*frame_s00_00012/);
+        } finally {
+          rmSync(leaseRoot, { recursive: true, force: true });
+        }
+      },
+    );
+
     // swarm reports a failed member as String(reason).slice(0, 300); the
     // workspace location trailed a loss text that names up to eight files.
     it("names where the work is kept inside the 300 characters swarm reports", async () => {

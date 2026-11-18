@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { getLoggerSafe } from "../../../utils/logger.js";
-import { judgePublication } from "../../../tasks/publication.js";
+import { judgePublication, recorderOutputIn } from "../../../tasks/publication.js";
 import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
@@ -1009,7 +1009,7 @@ export class DelegationManager {
       // re-run the work at a pricier tier to lose it the same way.
       // Where the work is now goes BEFORE the loss text: swarm cuts a failed
       // member's reason to 300 characters, and a trailing location was cut off.
-      const publicationLoss = commitOutcome ? judgePublication(commitOutcome).loss : undefined;
+      const publicationLoss = commitOutcome ? judgePublication(commitOutcome, workspaceLease ? recorderOutputIn(workspaceLease.path, commitOutcome.conflicts ?? []) : undefined).loss : undefined;
       if (publicationLoss !== undefined) {
         const keptAt = workspaceLease && leaseHoldsOnlyCopy()
           ? ` (its workspace is kept at ${workspaceLease.path})`

@@ -13,6 +13,8 @@
 // The conflict-severity rule and the lease's copy rule are the SAME contract,
 // imported from its own module rather than from either caller.
 import { isDerivedBuildOutput } from "../agents/multi/derived-build-output.js";
+import { lstatSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export interface LeaseCommitResult {
   readonly written?: readonly string[];
@@ -47,6 +49,11 @@ export interface PublicationVerdict {
  *
  * Names in their place, never the bare directory: something a person put
  * under Recordings/ by hand is still authored work.
+ *
+ * LEGACY. The rule is the recorder's own marker (recorderOutputIn below).
+ * This list stays only for output the recorder still leaves unmarked, such
+ * as Recordings/tests/playmode-last.json. Do not widen it: the recorder's
+ * file names belong to Strada.MCP, not to Brain.
  */
 const RECORDING_ARTIFACT = /^(?:playmode-last\.json|playthrough-verdict\.json|frame[-_]?\d+\.(?:png|jpg)|capture-manifest\.json)$/i;
 
@@ -55,10 +62,45 @@ export function isRecordingArtifact(rel: string): boolean {
   return parts[0] === "Recordings" && parts.length >= 3 && RECORDING_ARTIFACT.test(parts[parts.length - 1] ?? "");
 }
 
+/**
+ * The file Strada.MCP's recorder writes into every capture directory it owns
+ * (`RECORDING_MARKER` in Strada.MCP src/tools/unity/capture-dir.ts). Brain
+ * does not decide which names a recorder writes; it asks the directory
+ * whether the recorder claimed it.
+ */
+const RECORDER_MARKER = ".strada-recording";
+
+/**
+ * Which of these conflicted paths are a recorder's own output: a file
+ * directly inside a directory under Recordings/ that holds the recorder's
+ * marker, as a regular file, in the lease the run wrote. A marker inside a
+ * lease is writable by the worker, so this only grades the conflict; the
+ * bytes are quarantined either way.
+ */
+export function recorderOutputIn(leasePath: string, conflicts: readonly string[]): Set<string> {
+  const owned = new Set<string>();
+  for (const rel of conflicts) {
+    const parts = rel.split(/[/\\]/);
+    if (parts[0] !== "Recordings" || parts.length < 3 || parts.includes("..")) continue;
+    try {
+      const marker = lstatSync(join(leasePath, dirname(rel), RECORDER_MARKER));
+      if (marker.isFile() && !marker.isSymbolicLink()) owned.add(rel);
+    } catch {
+      /* no marker: not the recorder's */
+    }
+  }
+  return owned;
+}
+
 /** At most this many file names in a message a person reads. */
 const NAMED = 8;
 
-export function judgePublication(raw: LeaseCommitResult): PublicationVerdict {
+/**
+ * `recorderOutput`: the conflicted paths a recorder claimed (recorderOutputIn),
+ * judged as the run's own recordings. The verdict stays a pure function of
+ * what it is given.
+ */
+export function judgePublication(raw: LeaseCommitResult, recorderOutput: ReadonlySet<string> = new Set()): PublicationVerdict {
   const written = raw.written ?? [];
   const conflicts = raw.conflicts ?? [];
   const removed = raw.removed ?? [];
@@ -84,7 +126,7 @@ export function judgePublication(raw: LeaseCommitResult): PublicationVerdict {
     // had done the real work was failed over it — twice, on the same generated
     // file (measured live 2026-09-16 19:03). Derived output is disclosed; it is
     // not work that was lost.
-    const lost = conflicts.filter((path) => !isDerivedBuildOutput(path) && !isRecordingArtifact(path));
+    const lost = conflicts.filter((path) => !isDerivedBuildOutput(path) && !isRecordingArtifact(path) && !recorderOutput.has(path));
     if (lost.length === 0) {
       return {
         note:

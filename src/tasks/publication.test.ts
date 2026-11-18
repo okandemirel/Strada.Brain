@@ -4,8 +4,11 @@
  * and both publication paths kept the task completed — the change the task
  * was about never reached the project.
  */
-import { describe, expect, it } from "vitest";
-import { judgePublication } from "./publication.js";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { judgePublication, recorderOutputIn } from "./publication.js";
 
 describe("what a lease commit delivered (Codex 2026-09-12 AE#4)", () => {
   it("calls a PARTIAL publication a loss, and names what did not land", () => {
@@ -137,5 +140,79 @@ describe("a conflict on the run's own recording", () => {
     });
 
     expect(verdict.loss).toContain("art-direction.png");
+  });
+});
+
+/**
+ * Which conflicts are a recorder's own output is the RECORDER's to say: Brain
+ * reads the marker Strada.MCP writes into each capture directory it owns,
+ * instead of keeping its own copy of the recorder's file names.
+ */
+describe("a conflict inside a directory the recorder claimed", () => {
+  const folders: string[] = [];
+  afterEach(() => {
+    for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+  });
+  const lease = (): string => {
+    const root = mkdtempSync(join(tmpdir(), "recorder-output-"));
+    folders.push(root);
+    return root;
+  };
+  const capture = (root: string, dir: string, marker: "file" | "dir" | "symlink" | "none" = "file"): void => {
+    mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(join(root, dir, "frame_s00_00012.png"), "frame");
+    if (marker === "file") writeFileSync(join(root, dir, ".strada-recording"), "Written by Strada.MCP\n");
+    if (marker === "dir") mkdirSync(join(root, dir, ".strada-recording"));
+    if (marker === "symlink") {
+      writeFileSync(join(root, "elsewhere"), "x");
+      symlinkSync(join(root, "elsewhere"), join(root, dir, ".strada-recording"));
+    }
+  };
+
+  it("is the run's own recording, whatever the recorder named the file", () => {
+    const root = lease();
+    capture(root, "Recordings/playmode");
+    const path = "Recordings/playmode/frame_s00_00012.png";
+
+    const owned = recorderOutputIn(root, [path, "Assets/Scripts/Rules.cs"]);
+    expect([...owned]).toEqual([path]);
+
+    const verdict = judgePublication({ written: ["Assets/Scripts/Other.cs"], conflicts: [path], quarantined: 1 }, owned);
+    expect(verdict.loss).toBeUndefined();
+    expect(verdict.note).toContain(path);
+  });
+
+  it("is still lost work beside authored code that conflicted", () => {
+    const root = lease();
+    capture(root, "Recordings/playmode");
+    const conflicts = ["Recordings/playmode/frame_s00_00012.png", "Assets/Scripts/Rules.cs"];
+
+    const verdict = judgePublication({ conflicts, quarantined: 2 }, recorderOutputIn(root, conflicts));
+    expect(verdict.loss).toContain("Assets/Scripts/Rules.cs");
+    expect(verdict.loss).not.toContain("frame_s00");
+  });
+
+  it.each([["no marker", "none"], ["a directory named like the marker", "dir"], ["a symlinked marker", "symlink"]] as const)(
+    "is lost work with %s",
+    (_label, marker) => {
+      const root = lease();
+      capture(root, "Recordings/takes", marker);
+      expect(recorderOutputIn(root, ["Recordings/takes/frame_s00_00012.png"]).size).toBe(0);
+    },
+  );
+
+  it("needs the marker in the file's own directory, not one above it", () => {
+    const root = lease();
+    capture(root, "Recordings/playmode");
+    mkdirSync(join(root, "Recordings/playmode/nested"), { recursive: true });
+    writeFileSync(join(root, "Recordings/playmode/nested/notes.md"), "mine");
+
+    expect(recorderOutputIn(root, ["Recordings/playmode/nested/notes.md"]).size).toBe(0);
+  });
+
+  it("never reads a marker outside Recordings/", () => {
+    const root = lease();
+    capture(root, "Assets/Art");
+    expect(recorderOutputIn(root, ["Assets/Art/frame_s00_00012.png", "Recordings/../Assets/Art/frame_s00_00012.png"]).size).toBe(0);
   });
 });

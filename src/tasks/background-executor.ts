@@ -23,7 +23,7 @@ import type {
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import { markSystemInterruption, SHUTDOWN_ABORT_REASON } from "./interruption.js";
 import { announceBlockedOnce } from "./block-announcement.js";
-import { judgePublication, type LeaseCommitResult } from "./publication.js";
+import { judgePublication, recorderOutputIn, type LeaseCommitResult } from "./publication.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync } from "node:fs";
@@ -1691,7 +1691,7 @@ export class BackgroundExecutor {
             // ONE ADJUDICATOR for both publication paths: each had its own
             // rules, and both accepted a partial publication in which the
             // file the task was about conflicted (Codex 2026-09-12 AE#4).
-            const verdict = judgePublication(raw as LeaseCommitResult);
+            const verdict = judgePublication(raw as LeaseCommitResult, recorderOutputIn(managedWorkspaceLease.path, raw.conflicts ?? []));
             if (verdict.loss !== undefined) publicationLoss = verdict.loss;
             if (verdict.note !== undefined) publicationNote = verdict.note;
           })
@@ -2287,7 +2287,7 @@ export class BackgroundExecutor {
             // THE SAME ADJUDICATOR the worker envelope uses (AE#4): nothing
             // published, a partial publication, an unpreserved conflict and a
             // failed write are all work that did not reach the project.
-            const verdict = judgePublication(raw as LeaseCommitResult);
+            const verdict = judgePublication(raw as LeaseCommitResult, recorderOutputIn(taskWorkspaceLease!.path, raw.conflicts ?? []));
             if (verdict.loss !== undefined) taskPublicationLoss = verdict.loss;
             // …AND THE NOTE REACHES THE PERSON TOO. The worker envelope
             // appends it to the output; this path dropped it, so a task whose

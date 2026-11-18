@@ -2051,6 +2051,100 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     }
   });
 
+  it.each([["releases", true], ["keeps", false]] as const)(
+    "a worker envelope %s a lease whose only conflict is a recorder frame, by the recorder's marker",
+    async (_verb, marked) => {
+      // The recorder's file names are the recorder's: the envelope asks the
+      // capture directory for Strada.MCP's marker instead of a name list.
+      const leaseRoot = mkdtempSync(join(os.tmpdir(), "recorder-env-"));
+      const leasePath = join(leaseRoot, "task-node");
+      const frame = "Recordings/playmode/frame_s00_00012.png";
+      mkdirSync(join(leasePath, "Recordings", "playmode"), { recursive: true });
+      writeFileSync(join(leasePath, frame), "frame");
+      if (marked) writeFileSync(join(leasePath, "Recordings", "playmode", ".strada-recording"), "Written by Strada.MCP\n");
+      try {
+        const release = vi.fn().mockResolvedValue(undefined);
+        const runWorkerTask = vi.fn().mockResolvedValue({
+          status: "completed", finalSummary: "ok", visibleResponse: "ok", provider: "mock",
+          catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+          verificationResults: [], reviewFindings: [], artifacts: [],
+        });
+        const workerOrchestrator = { runWorkerTask } as any;
+        const executor = new BackgroundExecutor({
+          orchestrator: workerOrchestrator,
+          workspaceLeaseManager: {
+            acquireLease: vi.fn().mockResolvedValue({
+              path: leasePath, leaseRoot, id: "lease-rec", workspaceId: "ws-rec", release,
+              commit: vi.fn().mockResolvedValue({
+                written: ["Assets/A.cs"], conflicts: [frame], removed: [], failed: [], quarantined: 1,
+              }),
+            }),
+          } as any,
+        });
+
+        await executor.runWorkerEnvelope(workerOrchestrator, {
+          mode: "delegated",
+          prompt: "node",
+          signal: new AbortController().signal,
+          onProgress: vi.fn(),
+          chatId: "chat1",
+          taskRunId: "task_rec:node1",
+          channelType: "web",
+          workspaceSourceRoot: "/tmp/parent-workspace",
+          supervisorMode: "off",
+        } as any);
+
+        if (marked) expect(release).toHaveBeenCalled();
+        else expect(release).not.toHaveBeenCalled();
+      } finally {
+        rmSync(leaseRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("a task lease whose only conflict is a marked recorder frame completes and is released", async () => {
+    const leaseRoot = mkdtempSync(join(os.tmpdir(), "recorder-task-"));
+    const leasePath = join(leaseRoot, "task-rec");
+    const frame = "Recordings/playmode/frame_s00_00012.png"; // a name the old list does not know
+    mkdirSync(join(leasePath, "Recordings", "playmode"), { recursive: true });
+    writeFileSync(join(leasePath, frame), "frame");
+    writeFileSync(join(leasePath, "Recordings", "playmode", ".strada-recording"), "Written by Strada.MCP\n");
+    try {
+      const release = vi.fn().mockResolvedValue(undefined);
+      const executor = new BackgroundExecutor({
+        orchestrator: {
+          runBackgroundTask: vi.fn().mockResolvedValue({ output: "task done" }),
+          evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ mode: "direct_worker", reason: "simple" }),
+          runWorkerTask: vi.fn().mockResolvedValue({
+            status: "completed", finalSummary: "task done", visibleResponse: "task done", provider: "mock",
+            catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+            verificationResults: [], reviewFindings: [], artifacts: [],
+          }),
+        } as any,
+        workspaceLeaseManager: {
+          acquireLease: vi.fn().mockResolvedValue({
+            path: leasePath, leaseRoot, id: "lease-rt", workspaceId: "ws-rt", release,
+            commit: vi.fn().mockResolvedValue({
+              written: ["Assets/A.cs"], conflicts: [frame], removed: [], failed: [], quarantined: 1,
+            }),
+          }),
+        } as any,
+      });
+      const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+      executor.setTaskManager(mockTaskManager as any);
+      executor.enqueue(createTestTask(undefined, { forceSharedPlanning: true } as never), new AbortController().signal, vi.fn());
+
+      await vi.waitFor(() => {
+        expect(mockTaskManager.complete.mock.calls.length + mockTaskManager.fail.mock.calls.length).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+
+      expect(mockTaskManager.fail).not.toHaveBeenCalled();
+      expect(mockTaskManager.complete).toHaveBeenCalled();
+    } finally {
+      rmSync(leaseRoot, { recursive: true, force: true });
+    }
+  });
+
   it("a cancel that lands while the workspace publishes is still a cancel (Codex 2026-09-12 Q#8)", async () => {
     const cancel = new AbortController();
     const release = vi.fn().mockResolvedValue(undefined);
