@@ -1957,6 +1957,100 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(release).not.toHaveBeenCalled(); // the lease is kept for salvage
   });
 
+  it("a lease kept for salvage drops its engine cache and keeps its work (2026-11-18)", async () => {
+    // Kept leases each held a full Unity Library/ that nothing reads.
+    const leaseRoot = mkdtempSync(join(os.tmpdir(), "kept-lease-exec-"));
+    const leasePath = join(leaseRoot, "task-kept");
+    mkdirSync(join(leasePath, "Library"), { recursive: true });
+    writeFileSync(join(leasePath, "Library", "cache.bin"), "cache");
+    mkdirSync(join(leasePath, "Assets"), { recursive: true });
+    writeFileSync(join(leasePath, "Assets", "B.cs"), "class B {}");
+    try {
+      const release = vi.fn().mockResolvedValue(undefined);
+      const executor = new BackgroundExecutor({
+        orchestrator: {
+          runBackgroundTask: vi.fn().mockResolvedValue({ output: "task done" }),
+          evaluateSupervisorAdmission: vi.fn().mockResolvedValue({ mode: "direct_worker", reason: "simple" }),
+          runWorkerTask: vi.fn().mockResolvedValue({
+            status: "completed", finalSummary: "task done", visibleResponse: "task done", provider: "mock",
+            catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+            verificationResults: [], reviewFindings: [], artifacts: [],
+          }),
+        } as any,
+        workspaceLeaseManager: {
+          acquireLease: vi.fn().mockResolvedValue({
+            path: leasePath, leaseRoot, id: "lease-kept", workspaceId: "ws-kept", release,
+            commit: vi.fn().mockResolvedValue({
+              written: ["Assets/A.cs"], conflicts: ["Assets/B.cs"], removed: [], failed: [], quarantined: 0,
+            }),
+          }),
+        } as any,
+      });
+      const mockTaskManager = { updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() };
+      executor.setTaskManager(mockTaskManager as any);
+      executor.enqueue(createTestTask(undefined, { forceSharedPlanning: true } as never), new AbortController().signal, vi.fn());
+
+      await vi.waitFor(() => {
+        expect(mockTaskManager.complete.mock.calls.length + mockTaskManager.fail.mock.calls.length).toBeGreaterThan(0);
+      }, { timeout: 5000 });
+
+      expect(release).not.toHaveBeenCalled();
+      expect(existsSync(join(leasePath, "Library"))).toBe(false);
+      expect(readFileSync(join(leasePath, "Assets", "B.cs"), "utf8")).toBe("class B {}");
+    } finally {
+      rmSync(leaseRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("a worker envelope's kept lease drops its engine cache too (2026-11-18)", async () => {
+    // This is the path a supervisor node's lease takes, and the one that held
+    // the cache in the measured run.
+    const leaseRoot = mkdtempSync(join(os.tmpdir(), "kept-lease-env-"));
+    const leasePath = join(leaseRoot, "task-node");
+    mkdirSync(join(leasePath, "Library"), { recursive: true });
+    writeFileSync(join(leasePath, "Library", "cache.bin"), "cache");
+    mkdirSync(join(leasePath, "Assets"), { recursive: true });
+    writeFileSync(join(leasePath, "Assets", "B.cs"), "class B {}");
+    try {
+      const release = vi.fn().mockResolvedValue(undefined);
+      const runWorkerTask = vi.fn().mockResolvedValue({
+        status: "completed", finalSummary: "ok", visibleResponse: "ok", provider: "mock",
+        catalogVersion: "mock:default", assignmentVersion: 0, touchedFiles: [], toolTrace: [],
+        verificationResults: [], reviewFindings: [], artifacts: [],
+      });
+      const workerOrchestrator = { runWorkerTask } as any;
+      const executor = new BackgroundExecutor({
+        orchestrator: workerOrchestrator,
+        workspaceLeaseManager: {
+          acquireLease: vi.fn().mockResolvedValue({
+            path: leasePath, leaseRoot, id: "lease-node", workspaceId: "ws-node", release,
+            commit: vi.fn().mockResolvedValue({
+              written: [], conflicts: ["Assets/B.cs"], removed: [], failed: [], quarantined: 0,
+            }),
+          }),
+        } as any,
+      });
+
+      await executor.runWorkerEnvelope(workerOrchestrator, {
+        mode: "delegated",
+        prompt: "node",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+        chatId: "chat1",
+        taskRunId: "task_kept:node1",
+        channelType: "web",
+        workspaceSourceRoot: "/tmp/parent-workspace",
+        supervisorMode: "off",
+      } as any);
+
+      expect(release).not.toHaveBeenCalled();
+      expect(existsSync(join(leasePath, "Library"))).toBe(false);
+      expect(readFileSync(join(leasePath, "Assets", "B.cs"), "utf8")).toBe("class B {}");
+    } finally {
+      rmSync(leaseRoot, { recursive: true, force: true });
+    }
+  });
+
   it("a cancel that lands while the workspace publishes is still a cancel (Codex 2026-09-12 Q#8)", async () => {
     const cancel = new AbortController();
     const release = vi.fn().mockResolvedValue(undefined);

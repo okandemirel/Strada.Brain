@@ -86,6 +86,7 @@ import { estimateCostWithCache } from "../budget/cost-model.js";
 import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
+import { keepLeaseForSalvage } from "../agents/multi/kept-lease.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
 import { decideAutoResume, type AutoResumeState , decideMissionKeepAlive, MAX_MISSION_RETRIES, missionRetryBackoffMs, stripRetryMachinery, withGoalResume, submitPromisedResume, type GoalResumeNext } from "./auto-resume.js";
 
@@ -1705,10 +1706,7 @@ export class BackgroundExecutor {
           // commit unfinished those bytes exist nowhere else — the worker's
           // work was discarded and the task still reported success (Codex
           // 2026-09-11 N#1). The boot salvage pass picks up what is left here.
-          getLogger().error("Workspace lease NOT released — its work has not been published", {
-            workspace: managedWorkspaceLease.path,
-            reason: publicationLoss,
-          });
+          keepLeaseForSalvage(managedWorkspaceLease, "Workspace lease NOT released — its work has not been published", { workspace: managedWorkspaceLease.path, reason: publicationLoss });
         } else {
           await managedWorkspaceLease.release().catch((err) => {
             getLogger().warn("Workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
@@ -2307,10 +2305,7 @@ export class BackgroundExecutor {
       if (taskPublicationLoss !== undefined) {
         // NOT RELEASED, and NOT a completed task. release() deletes the lease
         // directory, and the work exists nowhere else (Codex 2026-09-11 O#1).
-        getLogger().error("Task workspace lease NOT released — its work has not been published", {
-          taskId: task.id,
-          reason: taskPublicationLoss,
-        });
+        if (taskWorkspaceLease) keepLeaseForSalvage(taskWorkspaceLease, "Task workspace lease NOT released — its work has not been published", { taskId: task.id, reason: taskPublicationLoss });
         // The monitor was told the request succeeded while its files sat in a
         // lease nobody published (Codex 2026-09-12 Q#8).
         requestFailed = true;
