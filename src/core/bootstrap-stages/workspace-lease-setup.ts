@@ -18,16 +18,14 @@
  */
 
 import { isAbsolute } from "node:path";
-import { WorkspaceLeaseManager, DEFAULT_WORKSPACE_COPY_EXCLUDES } from "../../agents/multi/workspace-lease-manager.js";
+import { WorkspaceLeaseManager } from "../../agents/multi/workspace-lease-manager.js";
+import { workspaceCopyExcludes } from "../../agents/multi/lease-copy-excludes.js";
 
 export function createWorkspaceLeaseManager(
   projectRoot: string,
   env: NodeJS.ProcessEnv = process.env,
 ): WorkspaceLeaseManager {
-  const envExcludes = env["WORKSPACE_COPY_EXCLUDES"];
-  const additionalExcludes = envExcludes
-    ? envExcludes.split(",").map((s) => s.trim()).filter(Boolean)
-    : [...DEFAULT_WORKSPACE_COPY_EXCLUDES];
+  const additionalExcludes = workspaceCopyExcludes(env);
   const leaseRoot = env["WORKSPACE_LEASE_ROOT"]?.trim() || undefined;
   if (leaseRoot !== undefined && !isAbsolute(leaseRoot)) {
     throw new Error(`WORKSPACE_LEASE_ROOT must be an absolute path, got "${leaseRoot}"`);
