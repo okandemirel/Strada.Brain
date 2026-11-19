@@ -16,7 +16,7 @@ import { existsSync, lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { isStrictlyInside } from "../../common/path-containment.js";
 import { workspaceCopyExcludes } from "./lease-copy-excludes.js";
-import { getLogger } from "../../utils/logger.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 export interface KeptLease {
   readonly path: string;
@@ -67,5 +67,6 @@ export function keepLeaseForSalvage(lease: KeptLease, message: string, fields: R
   } catch (err) {
     shed = { removed: [], skipped: err instanceof Error ? err.message : String(err) };
   }
-  getLogger().error(message, { ...fields, cachesDropped: shed.removed, ...(shed.skipped ? { cachesKept: shed.skipped } : {}) });
+  // Safe: both callers run this in a finally, where a throw would skip cleanup.
+  getLoggerSafe().error(message, { ...fields, cachesDropped: shed.removed, ...(shed.skipped ? { cachesKept: shed.skipped } : {}) });
 }

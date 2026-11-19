@@ -18,6 +18,7 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { getLoggerSafe } from "../../../utils/logger.js";
 import { judgePublication, recorderOutputIn } from "../../../tasks/publication.js";
+import { keepLeaseForSalvage } from "../kept-lease.js";
 import { estimateCostWithCache } from "../../../budget/cost-model.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
@@ -1139,11 +1140,7 @@ export class DelegationManager {
         // lease is often released before then: that commit refuses a tree
         // that is gone and keeps the workspace again, and the next boot's
         // salvage pass commits it into the project.
-        getLoggerSafe().error("Delegated workspace NOT released — its work has not been published", {
-          subAgentId,
-          workspace: workspaceLease.path,
-          publishesInto: workspaceLease.sourceRoot,
-        });
+        keepLeaseForSalvage(workspaceLease, "Delegated workspace NOT released — its work has not been published", { subAgentId, workspace: workspaceLease.path, publishesInto: workspaceLease.sourceRoot });
       } else {
         await workspaceLease?.release().catch(() => {});
       }

@@ -1582,6 +1582,36 @@ describe("DelegationManager", () => {
       expect(lease.release).not.toHaveBeenCalled();
     });
 
+    it("a kept sub-agent lease drops its engine caches and keeps its work", async () => {
+      const { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const leaseRoot = mkdtempSync(join(tmpdir(), "kept-deleg-"));
+      const leasePath = join(leaseRoot, "lease-1");
+      mkdirSync(join(leasePath, "Library", "Artifacts"), { recursive: true });
+      mkdirSync(join(leasePath, "Assets", "Scripts"), { recursive: true });
+      writeFileSync(join(leasePath, "Library", "Artifacts", "blob"), "cache");
+      writeFileSync(join(leasePath, "Assets", "Scripts", "Telescope.cs"), "class Telescope {}");
+      try {
+        const release = vi.fn().mockResolvedValue(undefined);
+        const commit = vi.fn().mockResolvedValue({
+          written: [], conflicts: ["Assets/Scripts/Telescope.cs"], removed: [], failed: [], quarantined: 0,
+        });
+        const acquireLease = vi.fn().mockResolvedValue({
+          id: "lease-1", kind: "temp-copy", sourceRoot: "/test/project", leaseRoot, path: leasePath,
+          createdAt: Date.now(), commit, release,
+        });
+        manager = new DelegationManager(buildManagerOpts({ delegationLog, workspaceLeaseManager: { acquireLease } as never }));
+
+        await expect(manager.delegate(request())).rejects.toThrow(/could not be preserved/);
+        expect(release).not.toHaveBeenCalled();
+        expect(existsSync(join(leasePath, "Library"))).toBe(false);
+        expect(existsSync(join(leasePath, "Assets", "Scripts", "Telescope.cs"))).toBe(true);
+      } finally {
+        rmSync(leaseRoot, { recursive: true, force: true });
+      }
+    });
+
     it("a quarantined conflict fails the delegation, and the lease goes — quarantine holds the bytes", async () => {
       const commit = vi.fn().mockResolvedValue({
         written: [],
