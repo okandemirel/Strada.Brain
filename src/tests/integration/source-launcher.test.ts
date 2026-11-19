@@ -1322,7 +1322,7 @@ describe("Windows portable Node download (OPS-17)", () => {
       const sums = source.search(/Invoke-WebRequest[^\n]*SHASUMS256\.txt/);
       const hash = source.search(/SHA256\]::Create\(\)\.ComputeHash\(/);
       const mismatch = source.search(/-ne \$expected\w*\)\s*\{\s*throw\b/);
-      const extract = source.indexOf("Expand-Archive");
+      const extract = source.indexOf("ExtractToDirectory(");
       expect(sums, `${name}: SHASUMS256.txt is never downloaded`).toBeGreaterThan(-1);
       expect(hash, `${name}: the zip is never hashed`).toBeGreaterThan(sums);
       expect(mismatch, `${name}: a mismatch does not stop the install`).toBeGreaterThan(hash);
@@ -1332,6 +1332,9 @@ describe("Windows portable Node download (OPS-17)", () => {
       // Get-FileHash is not available when Windows PowerShell 5.1 inherits a
       // PowerShell 7 PSModulePath (seen on the windows-verify runner).
       expect(source, name).not.toMatch(/Get-FileHash\s+-/);
+      // Expand-Archive fails the same way there ("Cannot find an overload for
+      // ExtractToDirectory", windows-verify runner image of 2026-11-11).
+      expect(source, name).not.toMatch(/Expand-Archive\s+-/);
     }
     // The checksum list is the one published with the zip's own release.
     for (const [name, source] of [["strada.ps1", readRepoFile("strada.ps1")], ["generated strada.ps1", generated.ps1]]) {

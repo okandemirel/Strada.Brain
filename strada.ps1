@@ -86,11 +86,16 @@ function Install-StradaNode {
 
     Write-Host "Extracting..."
 
-    # Extract the zip
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $tempDir -Force
-
     # The zip contains a folder like node-v22.18.0-win-x64/
     $extractedFolder = Join-Path $tempDir "node-${nodeVersion}-win-${arch}"
+
+    # Extract with .NET rather than Expand-Archive: that cmdlet also comes
+    # from a module 5.1 mis-loads under a PowerShell 7 PSModulePath (seen on
+    # the windows-verify runner). The .NET call does not overwrite, so a folder
+    # left by a killed install goes first.
+    if (Test-Path -LiteralPath $extractedFolder) { Remove-Item -LiteralPath $extractedFolder -Recurse -Force }
+    [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem')
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $tempDir)
 
     # Copy node.exe and npm files to the target directory
     Copy-Item (Join-Path $extractedFolder "node.exe") $nodeDir -Force

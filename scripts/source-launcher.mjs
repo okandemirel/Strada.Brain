@@ -520,7 +520,7 @@ export const CMD_NODE_DOWNLOAD_POWERSHELL = [
   "if(-not $expected){throw ('SHASUMS256.txt lists no '+$zip)};",
   "$fs=[IO.File]::OpenRead($zipPath); try{$actual=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($fs)).Replace('-','')}finally{$fs.Dispose()};",
   "if($actual -ne $expected){throw ('SHA-256 mismatch for '+$zip)};",
-  "Expand-Archive -LiteralPath $zipPath -DestinationPath $dir -Force",
+  "[void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem'); [IO.Compression.ZipFile]::ExtractToDirectory($zipPath,$dir)",
 ].join(" ");
 
 function buildPowerShellWrapper() {
@@ -559,8 +559,9 @@ if (-not $nodePath) {
     # .NET rather than Get-FileHash, which is missing when PowerShell 5.1 inherits a PowerShell 7 PSModulePath.
     $fs = [IO.File]::OpenRead((Join-Path $tmp $zip)); try { $actual = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($fs)).Replace('-', '') } finally { $fs.Dispose() }
     if ($actual -ne $expected) { throw "SHA-256 mismatch for $zip" }
-    Expand-Archive -LiteralPath (Join-Path $tmp $zip) -DestinationPath $tmp -Force
-    $ex = Join-Path $tmp "node-$nodeVer-win-$arch"
+    # .NET rather than Expand-Archive, for the same PSModulePath reason; it does not overwrite, so a killed install's folder goes first.
+    $ex = Join-Path $tmp "node-$nodeVer-win-$arch"; if (Test-Path -LiteralPath $ex) { Remove-Item -LiteralPath $ex -Recurse -Force }
+    [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem'); [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $tmp $zip), $tmp)
     Copy-Item (Join-Path $ex 'node.exe') $nodeDir -Force
     foreach ($f in @('npm','npm.cmd','npx','npx.cmd','corepack','corepack.cmd')) { $s = Join-Path $ex $f; if (Test-Path $s) { Copy-Item $s $nodeDir -Force } }
     $nm = Join-Path $ex 'node_modules'; if (Test-Path $nm) { Copy-Item $nm (Join-Path $nodeDir 'node_modules') -Recurse -Force }
